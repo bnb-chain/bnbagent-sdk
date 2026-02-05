@@ -15,7 +15,7 @@ from .utils.state_file import StateFileManager
 from .wallets import WalletProvider
 from .contract import ContractInterface
 from .models import AgentEndpoint
-from .constants import TESTNET_CONFIG
+from .constants import TESTNET_CONFIG, SCAN_API_URL
 from .paymaster import Paymaster
 
 
@@ -336,8 +336,52 @@ class ERC8004Agent:
                 agent_uri=agent_uri, metadata=metadata
             )
 
-            # Add agentURI to result
-            result["agentURI"] = agent_uri
+            # Get the assigned agentId
+            agent_id = result.get("agentId")
+
+            # Regenerate agent URI with agentId and agentRegistry in registrations field
+            final_agent_uri = agent_uri
+            if agent_id is not None:
+                try:
+                    # Rebuild endpoints from parsed data
+                    endpoints = []
+                    for svc in agent_data.get("services", []):
+                        endpoints.append(
+                            AgentEndpoint(
+                                name=svc.get("name", ""),
+                                endpoint=svc.get("endpoint", ""),
+                                version=svc.get("version"),
+                            )
+                        )
+
+                    if endpoints:
+                        # Regenerate URI with agentId included
+                        final_agent_uri = self.generate_agent_uri(
+                            name=agent_data.get("name", ""),
+                            description=agent_data.get("description", ""),
+                            image=agent_data.get("image"),
+                            endpoints=endpoints,
+                            agent_id=agent_id,
+                            supported_trust=agent_data.get("supportedTrust")
+                            or agent_data.get("supportedTrusts"),
+                        )
+
+                        # Update on-chain URI with registrations field populated
+                        self._logger.debug(
+                            f"Updating agent URI with registrations for agentId={agent_id}"
+                        )
+                        self.contract.set_agent_uri(agent_id, final_agent_uri)
+                        self._logger.info(
+                            f"Updated agent URI with registrations (agentId={agent_id})"
+                        )
+                except Exception as e:
+                    self._logger.warning(
+                        f"Failed to update agent URI with registrations: {str(e)}. "
+                        "The agent is registered but registrations field may be empty."
+                    )
+
+            # Add final agentURI to result
+            result["agentURI"] = final_agent_uri
 
             # Save registered agent to state file (add to list)
             try:
@@ -352,7 +396,7 @@ class ERC8004Agent:
                         # Update existing agent info
                         registered_agents[i] = {
                             "name": agent_name,
-                            "agent_uri": agent_uri,
+                            "agent_uri": final_agent_uri,
                             "agent_id": result.get("agentId"),
                             "transaction_hash": result.get("transactionHash"),
                         }
@@ -364,7 +408,7 @@ class ERC8004Agent:
                     registered_agents.append(
                         {
                             "name": agent_name,
-                            "agent_uri": agent_uri,
+                            "agent_uri": final_agent_uri,
                             "agent_id": result.get("agentId"),
                             "transaction_hash": result.get("transactionHash"),
                         }
@@ -422,6 +466,80 @@ class ERC8004Agent:
         except Exception as e:
             self._logger.error(f"Failed to get agent info: {str(e)}")
             raise
+
+    def get_all_agents(
+        self,
+        limit: int = 10,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """
+        List all registered agents.
+
+        This method queries the indexer API to discover registered agents.
+        It does not require on-chain calls.
+
+        Args:
+            limit: Maximum number of agents to return (default: 10, max: 100)
+            offset: Number of agents to skip for pagination (default: 0)
+
+        Returns:
+            dict: Response containing:
+                - items: List of agent objects with fields like:
+                    - token_id: Agent ID
+                    - name: Agent name
+                    - description: Agent description
+                    - owner_address: Owner wallet address
+                    - services: Dict of service endpoints
+                    - total_score: Reputation score
+                - total: Total number of agents matching query
+                - limit: Limit used in query
+                - offset: Offset used in query
+
+        Raises:
+            ConnectionError: If API request fails
+
+        Example:
+            >>> # List first 10 agents
+            >>> agents = sdk.get_all_agents(limit=10)
+            >>> for agent in agents['items']:
+            ...     print(f"Agent #{agent['token_id']}: {agent['name']}")
+
+            >>> # Paginate through results
+            >>> page1 = sdk.get_all_agents(limit=10, offset=0)
+            >>> page2 = sdk.get_all_agents(limit=10, offset=10)
+        """
+        chain_id = self._network_config.get("chain_id")
+
+        self._logger.debug(
+            f"Fetching agents: chain_id={chain_id}, limit={limit}, offset={offset}"
+        )
+
+        # Build query parameters
+        params = {
+            "chain_id": chain_id,
+            "limit": min(limit, 100),  # Cap at 100
+            "offset": offset,
+        }
+
+        try:
+            response = requests.get(
+                f"{SCAN_API_URL}/agents",
+                params=params,
+                timeout=30,
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            self._logger.debug(
+                f"Retrieved {len(data.get('items', []))} agents "
+                f"(total: {data.get('total', 0)})"
+            )
+
+            return data
+
+        except requests.exceptions.RequestException as e:
+            self._logger.error(f"Failed to fetch agents from 8004scan: {str(e)}")
+            raise ConnectionError(f"8004scan API request failed: {str(e)}") from e
 
     def get_metadata(self, agent_id: int, key: str) -> str:
         """

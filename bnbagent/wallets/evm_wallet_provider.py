@@ -254,11 +254,11 @@ class EVMWalletProvider(WalletProvider):
         signable_message = encode_defunct(text=message)
         signed_message = self._account.sign_message(signable_message)
 
-        self._logger.debug(f"Message signed: hash={signed_message.messageHash.hex()}")
+        self._logger.debug(f"Message signed: hash={signed_message.message_hash.hex()}")
 
         # Return dict format for consistent interface across wallet providers
         return {
-            "messageHash": signed_message.messageHash,
+            "messageHash": signed_message.message_hash,
             "r": signed_message.r,
             "s": signed_message.s,
             "v": signed_message.v,

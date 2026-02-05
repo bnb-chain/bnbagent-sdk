@@ -2,6 +2,9 @@
 Network configuration constants.
 """
 
+# 8004scan API base URL
+SCAN_API_URL = "https://www.8004scan.io/api/v1"
+
 # BSC Testnet configuration
 TESTNET_CONFIG = {
     "name": "bsc-testnet",
