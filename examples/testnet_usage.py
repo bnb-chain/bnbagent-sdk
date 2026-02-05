@@ -48,7 +48,7 @@ def main():
     print(f"Contract: {sdk.contract_address}\n")
 
     # Define agent configuration
-    agent_name = "My Testnet Agent 03"
+    agent_name = "My Testnet Agent 06"
     agent_uri = sdk.generate_agent_uri(
         name=agent_name,
         description="A test agent running on BSC Testnet",
