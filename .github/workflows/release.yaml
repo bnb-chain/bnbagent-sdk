@@ -1,0 +1,132 @@
+name: Release bnbagent to PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.1.0)'
+        required: true
+        type: string
+      release_to_prod:
+        description: 'Release to production PyPI (unchecked = test PyPI)'
+        required: false
+        default: false
+        type: boolean
+      skip_tests:
+        description: 'Skip tests before release'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  release:
+    name: Build and Publish to PyPI
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write  # Required for trusted publishing to PyPI
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for tags
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Install dependencies
+        run: |
+          uv sync --extra dev
+
+      - name: Run tests
+        if: ${{ !inputs.skip_tests }}
+        run: |
+          uv run pytest -v
+
+      - name: Update version in pyproject.toml
+        run: |
+          # Update version in pyproject.toml
+          sed -i 's/^version = ".*"/version = "${{ inputs.version }}"/' pyproject.toml
+          echo "Updated version to ${{ inputs.version }}"
+          cat pyproject.toml | grep "^version"
+
+      - name: Build package
+        run: |
+          uv build
+
+      - name: Check package contents
+        run: |
+          ls -lh dist/
+          echo "Package files:"
+          find dist -type f
+
+      - name: Publish to Production PyPI
+        if: ${{ inputs.release_to_prod }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: ./dist/
+          print-hash: true
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          # Uses trusted publishing (OIDC) - no token needed
+          # Configure OIDC in PyPI account settings: https://pypi.org/manage/account/publishing/
+
+      - name: Publish to Test PyPI
+        if: ${{ !inputs.release_to_prod }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: ./dist/
+          print-hash: true
+          repository-url: https://test.pypi.org/legacy/
+          password: ${{ secrets.TEST_PYPI_API_TOKEN }}
+          # For Test PyPI, you can use trusted publishing or API token
+          # If using API token, set TEST_PYPI_API_TOKEN secret
+
+      - name: Commit version update
+        if: success() && inputs.release_to_prod
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml
+          git commit -m "chore: bump version to ${{ inputs.version }}" || exit 0
+          git push origin HEAD:${{ github.ref_name }} || echo "No changes to commit or branch protection"
+
+      - name: Create Git tag
+        if: success() && inputs.release_to_prod
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "bnbagent-v${{ inputs.version }}" -m "Release bnbagent v${{ inputs.version }}"
+          git push origin "bnbagent-v${{ inputs.version }}"
+
+      - name: Create GitHub Release
+        if: success() && inputs.release_to_prod
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: bnbagent-v${{ inputs.version }}
+          name: bnbagent v${{ inputs.version }}
+          body: |
+            ## bnbagent v${{ inputs.version }}
+
+            Python SDK for ERC-8004 on-chain agent registration and management.
+
+            ### Installation
+
+            ```bash
+            pip install bnbagent==${{ inputs.version }}
+            ```
+
+            ✅ Published to **Production PyPI**
+
+            ### Changes
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+          draft: false
+          prerelease: false
