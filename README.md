@@ -19,6 +19,11 @@ Python SDK for ERC-8004 on-chain agent registration and management.
 | Identity Registry | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
 | Reputation Registry | `0x8004B663056A597Dffe9eCcC1965A193B7388713` |
 
+## Prerequisites
+
+- Python 3.10 or higher
+- `uv` package manager (recommended) or `pip`
+
 ## Installation
 
 ```bash
@@ -101,10 +106,17 @@ version = sdk.get_metadata(agent_id=1, key="version")
 sdk.set_metadata(agent_id=1, key="version", value="2.0.0")
 ```
 
+## Examples
+
+See [`examples/testnet_usage.py`](examples/testnet_usage.py) for a complete working example including:
+- Wallet creation and management
+- Agent registration
+- Agent discovery and querying
+- Metadata operations
+
 ## Documentation
 
-- **[API Reference](bnbagent/README.md)** - Complete API documentation
-- **[Examples](examples/)** - Usage examples
+- **[API Reference](bnbagent/README.md)** - Complete API documentation with workflow examples
 
 ## Security
 
