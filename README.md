@@ -10,7 +10,7 @@ Python SDK for ERC-8004 on-chain agent registration and management.
 - **Agent URI Generation**: Generate EIP-8004 compliant agent metadata
 - **Extensible Wallet**: WalletProvider abstraction for EVM/MPC wallets
 
-## Contracts
+## Network
 
 ### BSC Testnet (Chain ID: 97)
 
@@ -18,6 +18,10 @@ Python SDK for ERC-8004 on-chain agent registration and management.
 |----------|---------|
 | Identity Registry | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
 | Reputation Registry | `0x8004B663056A597Dffe9eCcC1965A193B7388713` |
+
+### BSC Mainnet (Chain ID: 56)
+
+> **Note:** Mainnet support is not yet available. It will be supported soon. Stay tuned!
 
 
 ## Installation
