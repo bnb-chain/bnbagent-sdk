@@ -10,7 +10,7 @@ Python SDK for ERC-8004 on-chain agent registration and management.
 - **Keystore Encryption**: Password-protected wallet (Keystore V3, compatible with MetaMask/Geth)
 - **Extensible Wallet**: WalletProvider abstraction for EVM/MPC wallets
 
-## Contracts
+## Network
 
 ### BSC Testnet (Chain ID: 97)
 
@@ -19,12 +19,13 @@ Python SDK for ERC-8004 on-chain agent registration and management.
 | Identity Registry | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
 | Reputation Registry | `0x8004B663056A597Dffe9eCcC1965A193B7388713` |
 
-## Prerequisites
+### BSC Mainnet (Chain ID: 56)
 
-- Python 3.10 or higher
-- `uv` package manager (recommended) or `pip`
+> **Note:** Mainnet support is not yet available. It will be supported soon. Stay tuned!
 
 ## Installation
+
+> **Requirements:** Python 3.10+ and `uv` (recommended) or `pip`
 
 ```bash
 pip install git+https://github.com/bnb-chain/bnbagent-sdk.git
