@@ -1,7 +1,7 @@
 """
-ServiceManager contract interaction client.
+EscrowUpgradeable (Bazaar) contract interaction client.
 
-Provides typed Python methods wrapping the on-chain ServiceManager contract:
+Provides typed Python methods wrapping the on-chain EscrowUpgradeable contract:
   createJobAndLock, acceptJob, rejectJob, submitResult,
   settleAssertion, cancelExpired, getJob.
 """
@@ -39,15 +39,15 @@ class SettlementType(IntEnum):
     CLIENT_APPROVED = 6
 
 
-def _load_service_manager_abi() -> list:
-    abi_path = Path(__file__).parent / "abis" / "ServiceManager.json"
+def _load_escrow_abi() -> list:
+    abi_path = Path(__file__).parent / "abis" / "Escrow.json"
     with open(abi_path) as f:
         return json.load(f)
 
 
-class ServiceManagerClient:
+class EscrowClient:
     """
-    Python client for the ServiceManager contract.
+    Python client for the EscrowUpgradeable contract.
 
     Wraps all public functions for both client-side and agent-side operations.
     """
@@ -63,7 +63,7 @@ class ServiceManagerClient:
         self.address = Web3.to_checksum_address(contract_address)
 
         if abi is None:
-            abi = _load_service_manager_abi()
+            abi = _load_escrow_abi()
 
         self.contract: Contract = self.w3.eth.contract(
             address=self.address, abi=abi
