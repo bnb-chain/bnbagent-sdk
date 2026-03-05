@@ -55,13 +55,12 @@ class TermSpecification:
             "service_type": self.service_type,
             "deliverables": self.deliverables,
             "quality_standards": self.quality_standards,
+            "deadline_seconds": self.deadline_seconds,  # Always include (null if not set)
             "evaluation_required": self.evaluation_required,
             "evaluator_type": self.evaluator_type,
         }
         if self.success_criteria is not None:
             result["success_criteria"] = self.success_criteria
-        if self.deadline_seconds is not None:
-            result["deadline_seconds"] = self.deadline_seconds
         if self.price is not None:
             result["price"] = self.price
         if self.currency is not None:
@@ -90,6 +89,9 @@ class NegotiationRequest:
 
     User fills in task_description and terms (with quality_standards as the
     non-negotiable baseline). Agent must agree to standards before quoting.
+
+    The request_hash is computed by the Client and anchored on-chain at
+    createJobAndLock to prevent post-hoc tampering of the request.
     """
 
     task_description: str
@@ -99,6 +101,7 @@ class NegotiationRequest:
     request_id: Optional[str] = None
 
     def to_dict(self) -> dict:
+        """Return the request content (without hash)."""
         result = {
             "task_description": self.task_description,
             "terms": self.terms.to_dict(),
@@ -109,6 +112,32 @@ class NegotiationRequest:
             result["request_id"] = self.request_id
         return result
 
+    def compute_hash(self) -> str:
+        """
+        Compute keccak256 hash of the canonical request for on-chain anchoring.
+        Returns hex string with 0x prefix.
+        """
+        import json
+        from web3 import Web3
+
+        canonical_json = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
+        h = Web3.keccak(text=canonical_json).hex()
+        return h if h.startswith("0x") else "0x" + h
+
+    def to_envelope(self) -> dict:
+        """
+        Return wrapped structure with request content and its hash.
+
+        {
+            "request": { task_description, terms, ... },
+            "request_hash": "0x..."
+        }
+        """
+        return {
+            "request": self.to_dict(),
+            "request_hash": self.compute_hash(),
+        }
+
     @classmethod
     def from_dict(cls, data: dict) -> "NegotiationRequest":
         return cls(
@@ -118,6 +147,16 @@ class NegotiationRequest:
             request_id=data.get("request_id"),
         )
 
+    @classmethod
+    def from_envelope(cls, data: dict) -> tuple["NegotiationRequest", str]:
+        """
+        Parse from envelope structure { request: {...}, request_hash: "0x..." }.
+        Returns (NegotiationRequest, request_hash).
+        """
+        request_data = data.get("request", data)
+        request_hash = data.get("request_hash", "")
+        return cls.from_dict(request_data), request_hash
+
 
 @dataclass
 class NegotiationResponse:
@@ -126,6 +165,9 @@ class NegotiationResponse:
 
     If accepted, Agent fills in price/currency in terms.
     Agent may adjust deadline_seconds and success_criteria but NOT quality_standards.
+
+    The response_hash is computed by the Agent and anchored on-chain by the Client
+    at createJobAndLock to prevent post-hoc tampering of agreed terms.
     """
 
     accepted: bool
@@ -137,6 +179,7 @@ class NegotiationResponse:
     reason: Optional[str] = None
 
     def to_dict(self) -> dict:
+        """Return the response content (without hash)."""
         result: dict = {"accepted": self.accepted}
         if self.terms is not None:
             result["terms"] = self.terms.to_dict()
@@ -147,6 +190,41 @@ class NegotiationResponse:
         if self.reason is not None:
             result["reason"] = self.reason
         return result
+
+    def to_envelope(self) -> dict:
+        """
+        Return wrapped structure with response content and its hash.
+        The hash is of the response content, so they are at different layers.
+
+        {
+            "response": { accepted, terms, ... },
+            "response_hash": "0x..."
+        }
+        """
+        return {
+            "response": self.to_dict(),
+            "response_hash": self.compute_hash(),
+        }
+
+    def compute_hash(self) -> str:
+        """
+        Compute keccak256 hash of the canonical response for on-chain anchoring.
+        Returns hex string with 0x prefix.
+        """
+        import json
+        from web3 import Web3
+
+        canonical_data = {
+            "accepted": self.accepted,
+        }
+        if self.terms is not None:
+            canonical_data["terms"] = self.terms.to_dict()
+        if self.estimated_completion_seconds is not None:
+            canonical_data["estimated_completion_seconds"] = self.estimated_completion_seconds
+
+        canonical_json = json.dumps(canonical_data, sort_keys=True, separators=(",", ":"))
+        h = Web3.keccak(text=canonical_json).hex()
+        return h if h.startswith("0x") else "0x" + h
 
     @classmethod
     def from_dict(cls, data: dict) -> "NegotiationResponse":
@@ -160,3 +238,13 @@ class NegotiationResponse:
             reason_code=data.get("reason_code"),
             reason=data.get("reason"),
         )
+
+    @classmethod
+    def from_envelope(cls, data: dict) -> tuple["NegotiationResponse", str]:
+        """
+        Parse from envelope structure { response: {...}, response_hash: "0x..." }.
+        Returns (NegotiationResponse, response_hash).
+        """
+        response_data = data.get("response", data)
+        response_hash = data.get("response_hash", "")
+        return cls.from_dict(response_data), response_hash

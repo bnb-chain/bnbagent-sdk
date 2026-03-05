@@ -17,6 +17,10 @@ class LocalStorageProvider(IStorageProvider):
         self._base.mkdir(parents=True, exist_ok=True)
 
     async def upload(self, data: dict) -> str:
+        return self.save_sync(data)
+
+    def save_sync(self, data: dict) -> str:
+        """Synchronous save — usable from non-async contexts."""
         content = json.dumps(data, sort_keys=True, separators=(",", ":"))
         hash_hex = self.compute_hash(data).hex()
         filename = f"{hash_hex}.json"

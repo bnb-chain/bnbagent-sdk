@@ -272,7 +272,13 @@
       {
         "indexed": false,
         "internalType": "bytes32",
-        "name": "requestHash",
+        "name": "negotiationRequestHash",
+        "type": "bytes32"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes32",
+        "name": "negotiationResponseHash",
         "type": "bytes32"
       }
     ],
@@ -416,13 +422,13 @@
       {
         "indexed": false,
         "internalType": "bytes32",
-        "name": "resultHash",
+        "name": "serviceRecordHash",
         "type": "bytes32"
       },
       {
         "indexed": false,
         "internalType": "bytes32",
-        "name": "responseHash",
+        "name": "serviceResponseHash",
         "type": "bytes32"
       },
       {
@@ -604,7 +610,12 @@
       },
       {
         "internalType": "bytes32",
-        "name": "requestHash",
+        "name": "negotiationRequestHash",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "negotiationResponseHash",
         "type": "bytes32"
       },
       {
@@ -748,17 +759,22 @@
           },
           {
             "internalType": "bytes32",
-            "name": "requestHash",
+            "name": "negotiationRequestHash",
             "type": "bytes32"
           },
           {
             "internalType": "bytes32",
-            "name": "responseHash",
+            "name": "negotiationResponseHash",
             "type": "bytes32"
           },
           {
             "internalType": "bytes32",
-            "name": "resultHash",
+            "name": "serviceRecordHash",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "serviceResponseHash",
             "type": "bytes32"
           },
           {
@@ -870,6 +886,19 @@
       }
     ],
     "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "identityRegistry_",
+        "type": "address"
+      }
+    ],
+    "name": "initialize",
+    "outputs": [],
+    "stateMutability": "nonpayable",
     "type": "function"
   },
   {
@@ -1249,12 +1278,12 @@
       },
       {
         "internalType": "bytes32",
-        "name": "resultHash",
+        "name": "serviceRecordHash",
         "type": "bytes32"
       },
       {
         "internalType": "bytes32",
-        "name": "responseHash",
+        "name": "serviceResponseHash",
         "type": "bytes32"
       },
       {

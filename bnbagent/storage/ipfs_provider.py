@@ -2,14 +2,18 @@
 IPFSStorageProvider — IPFS pinning service storage.
 
 Uses HTTP API (Pinata/Infura/Web3.Storage) for upload and an IPFS gateway for download.
-Requires `httpx` or `aiohttp` (optional dependency).
+Requires `httpx` (optional dependency).
 """
 
+import asyncio
 import json
+import logging
 
 import httpx
 
 from .interface import IStorageProvider
+
+logger = logging.getLogger(__name__)
 
 
 class IPFSStorageProvider(IStorageProvider):
@@ -18,7 +22,7 @@ class IPFSStorageProvider(IStorageProvider):
 
     Args:
         pinning_api_url: e.g. "https://api.pinata.cloud/pinning/pinJSONToIPFS"
-        pinning_api_key: Bearer token or API key for the pinning service
+        pinning_api_key: Bearer token (JWT) for the pinning service
         gateway_url: e.g. "https://gateway.pinata.cloud/ipfs/"
     """
 
@@ -32,12 +36,39 @@ class IPFSStorageProvider(IStorageProvider):
         self._api_key = pinning_api_key
         self._gateway = gateway_url.rstrip("/")
 
+    def save_sync(self, data: dict) -> str:
+        """
+        Synchronous upload — compatible with EscrowClient.submit_result_with_record.
+
+        Wraps the async upload() method for use in synchronous contexts.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(asyncio.run, self.upload(data))
+                return future.result()
+        else:
+            return asyncio.run(self.upload(data))
+
     async def upload(self, data: dict) -> str:
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
         }
-        payload = {"pinataContent": data}
+
+        # Set meaningful name for Pinata dashboard (job-#{jobId})
+        job_id = data.get("job_id")
+        pin_name = f"job-{job_id}" if job_id else "service-record"
+
+        payload = {
+            "pinataContent": data,
+            "pinataMetadata": {"name": pin_name},
+        }
 
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
@@ -49,7 +80,10 @@ class IPFSStorageProvider(IStorageProvider):
         cid = result.get("IpfsHash") or result.get("cid")
         if not cid:
             raise ValueError(f"Unexpected pinning response: {result}")
-        return f"ipfs://{cid}"
+
+        ipfs_url = f"ipfs://{cid}"
+        logger.info(f"[IPFSStorageProvider] Uploaded {pin_name} to {ipfs_url}")
+        return ipfs_url
 
     async def download(self, url: str) -> dict:
         cid = self._extract_cid(url)
@@ -70,6 +104,11 @@ class IPFSStorageProvider(IStorageProvider):
                 return resp.status_code == 200
             except httpx.HTTPError:
                 return False
+
+    def get_gateway_url(self, ipfs_url: str) -> str:
+        """Convert ipfs:// URL to HTTP gateway URL for browser access."""
+        cid = self._extract_cid(ipfs_url)
+        return f"{self._gateway}/{cid}"
 
     @staticmethod
     def _extract_cid(url: str) -> str:

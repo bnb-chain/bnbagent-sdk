@@ -8,6 +8,7 @@ Provides typed Python methods wrapping the on-chain EscrowUpgradeable contract:
 
 import json
 import logging
+import time
 from enum import IntEnum
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -16,6 +17,9 @@ from web3 import Web3
 from web3.contract import Contract
 
 logger = logging.getLogger(__name__)
+
+MAX_RETRIES = 5
+RETRY_BASE_DELAY = 1.0  # seconds
 
 
 class JobPhase(IntEnum):
@@ -75,37 +79,77 @@ class EscrowClient:
             else None
         )
 
-    def _send_tx(self, fn, value: int = 0) -> Dict[str, Any]:
-        """Build, sign, and send a transaction."""
+    def _send_tx(self, fn, value: int = 0, gas: int = 500_000) -> Dict[str, Any]:
+        """Build, sign, and send a transaction with retry on rate limit."""
         if not self._private_key:
             raise RuntimeError("private_key required for write operations")
 
-        tx = fn.build_transaction({
-            "from": self._account,
-            "nonce": self.w3.eth.get_transaction_count(self._account),
-            "gas": 500_000,
-            "value": value,
-        })
-        signed = self.w3.eth.account.sign_transaction(tx, self._private_key)
-        tx_hash = self.w3.eth.send_raw_transaction(signed.raw_transaction)
-        receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash)
-        return {
-            "transactionHash": receipt["transactionHash"].hex(),
-            "status": receipt["status"],
-            "receipt": receipt,
-        }
+        last_error = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                tx = fn.build_transaction({
+                    "from": self._account,
+                    "nonce": self.w3.eth.get_transaction_count(self._account),
+                    "gas": gas,
+                    "value": value,
+                })
+                signed = self.w3.eth.account.sign_transaction(tx, self._private_key)
+                tx_hash = self.w3.eth.send_raw_transaction(signed.raw_transaction)
+                receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash)
+                return {
+                    "transactionHash": receipt["transactionHash"].hex(),
+                    "status": receipt["status"],
+                    "receipt": receipt,
+                }
+            except Exception as e:
+                last_error = e
+                error_str = str(e).lower()
+                is_rate_limit = "429" in error_str or "too many requests" in error_str
+                if is_rate_limit and attempt < MAX_RETRIES - 1:
+                    delay = RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning(
+                        f"[EscrowClient] Rate limited, retry {attempt + 1}/{MAX_RETRIES} "
+                        f"in {delay:.1f}s"
+                    )
+                    time.sleep(delay)
+                else:
+                    raise
+
+        raise last_error  # type: ignore
+
+    def _call_with_retry(self, fn):
+        """Call a read function with retry on rate limit."""
+        last_error = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                return fn.call()
+            except Exception as e:
+                last_error = e
+                error_str = str(e).lower()
+                is_rate_limit = "429" in error_str or "too many requests" in error_str
+                if is_rate_limit and attempt < MAX_RETRIES - 1:
+                    delay = RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning(
+                        f"[EscrowClient] Rate limited (read), retry {attempt + 1}/{MAX_RETRIES} "
+                        f"in {delay:.1f}s"
+                    )
+                    time.sleep(delay)
+                else:
+                    raise
+        raise last_error  # type: ignore
 
     # ── Client functions ──
 
     def create_job_and_lock(
         self,
         agent_id: int,
-        request_hash: bytes,
+        negotiation_request_hash: bytes,
+        negotiation_response_hash: bytes,
         amount: int,
     ) -> Dict[str, Any]:
         """Create a job and lock ERC20 payment. Caller must approve() first."""
         fn = self.contract.functions.createJobAndLock(
-            agent_id, request_hash, amount
+            agent_id, negotiation_request_hash, negotiation_response_hash, amount
         )
         result = self._send_tx(fn)
         logs = self.contract.events.JobCreated().process_receipt(result["receipt"])
@@ -132,14 +176,75 @@ class EscrowClient:
     def submit_result(
         self,
         job_id: int,
-        result_hash: bytes,
-        response_hash: bytes,
+        service_record_hash: bytes,
+        service_response_hash: bytes,
         data_url: str,
     ) -> Dict[str, Any]:
         fn = self.contract.functions.submitResult(
-            job_id, result_hash, response_hash, data_url
+            job_id, service_record_hash, service_response_hash, data_url
         )
-        return self._send_tx(fn)
+        return self._send_tx(fn, gas=800_000)
+
+    def submit_result_with_record(
+        self,
+        record: "ServiceRecord",
+        storage: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """
+        High-level: compute hashes, upload to storage, call submitResult on-chain.
+
+        IMPORTANT: Upload to storage FIRST to get dataUrl, then pass it to
+        submitResult so it's included in the OOv3 assertion claim.
+        """
+        from web3 import Web3
+
+        hashes = record.compute_hashes()
+        service_record_hash = Web3.keccak(text=record.canonical_json())
+        # Use service.response_content for serviceResponseHash
+        service_response_hash = (
+            Web3.keccak(text=record.service.response_content)
+            if record.service and record.service.response_content
+            else b"\x00" * 32
+        )
+
+        # Step 1: Upload to storage FIRST to get dataUrl for the assertion claim
+        record._hashes = hashes
+        data_url = ""
+        if storage:
+            d = record.to_dict()
+            d["hashes"] = hashes
+            if hasattr(storage, "save_sync"):
+                data_url = storage.save_sync(d)
+            elif hasattr(storage, "save"):
+                data_url = storage.save(record)
+            logger.info(f"[EscrowClient] ServiceRecord uploaded: {data_url}")
+
+        # Step 2: Call submitResult on-chain WITH the dataUrl
+        # The dataUrl is embedded in the OOv3 assertion claim as Evidence
+        tx_result = self.submit_result(
+            record.job_id, service_record_hash, service_response_hash, data_url
+        )
+
+        # Step 3: Update record with on-chain references
+        if record.on_chain is None:
+            from .service_record import OnChainReferences
+            record.on_chain = OnChainReferences()
+        record.on_chain.submit_result_tx_hash = tx_result["transactionHash"]
+
+        try:
+            job = self.get_job(record.job_id)
+            assertion_bytes = job.get("assertionId", b"")
+            if assertion_bytes:
+                record.on_chain.assertion_id = "0x" + assertion_bytes.hex() if isinstance(assertion_bytes, bytes) else str(assertion_bytes)
+        except Exception:
+            pass
+
+        return {
+            "transactionHash": tx_result["transactionHash"],
+            "status": tx_result["status"],
+            "hashes": hashes,
+            "dataUrl": data_url,
+        }
 
     # ── Permissionless ──
 
@@ -150,7 +255,7 @@ class EscrowClient:
     # ── View functions ──
 
     def get_job(self, job_id: int) -> Dict[str, Any]:
-        raw = self.contract.functions.getJob(job_id).call()
+        raw = self._call_with_retry(self.contract.functions.getJob(job_id))
         return {
             "jobId": raw[0],
             "client": raw[1],
@@ -160,24 +265,25 @@ class EscrowClient:
             "assertionBond": raw[5],
             "phase": JobPhase(raw[6]),
             "settlement": SettlementType(raw[7]),
-            "requestHash": raw[8],
-            "responseHash": raw[9],
-            "resultHash": raw[10],
-            "assertionId": raw[11],
-            "createdAt": raw[12],
-            "updatedAt": raw[13],
-            "acceptDeadline": raw[14],
-            "submitDeadline": raw[15],
+            "negotiationRequestHash": raw[8],
+            "negotiationResponseHash": raw[9],
+            "serviceRecordHash": raw[10],
+            "serviceResponseHash": raw[11],
+            "assertionId": raw[12],
+            "createdAt": raw[13],
+            "updatedAt": raw[14],
+            "acceptDeadline": raw[15],
+            "submitDeadline": raw[16],
         }
 
     def get_job_phase(self, job_id: int) -> JobPhase:
-        return JobPhase(self.contract.functions.getJobPhase(job_id).call())
+        return JobPhase(self._call_with_retry(self.contract.functions.getJobPhase(job_id)))
 
     def get_assertion_id_for_job(self, job_id: int) -> bytes:
-        return self.contract.functions.getAssertionIdForJob(job_id).call()
+        return self._call_with_retry(self.contract.functions.getAssertionIdForJob(job_id))
 
     def min_service_fee(self) -> int:
-        return self.contract.functions.minServiceFee().call()
+        return self._call_with_retry(self.contract.functions.minServiceFee())
 
     def next_job_id(self) -> int:
-        return self.contract.functions.nextJobId().call()
+        return self._call_with_retry(self.contract.functions.nextJobId())
