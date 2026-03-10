@@ -38,7 +38,7 @@ class IPFSStorageProvider(IStorageProvider):
 
     def save_sync(self, data: dict) -> str:
         """
-        Synchronous upload — compatible with EscrowClient.submit_result_with_record.
+        Synchronous upload — compatible with ApexClient.submit_result_with_record.
 
         Wraps the async upload() method for use in synchronous contexts.
         """

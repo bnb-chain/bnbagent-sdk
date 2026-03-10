@@ -1,7 +1,7 @@
 """
-EscrowUpgradeable (Bazaar) contract interaction client.
+APEX Protocol contract interaction client.
 
-Provides typed Python methods wrapping the on-chain EscrowUpgradeable contract:
+Provides typed Python methods wrapping the on-chain ApexUpgradeable contract:
   createJobAndLock, acceptJob, rejectJob, submitResult,
   settleAssertion, cancelExpired, getJob.
 """
@@ -43,15 +43,15 @@ class SettlementType(IntEnum):
     CLIENT_APPROVED = 6
 
 
-def _load_escrow_abi() -> list:
-    abi_path = Path(__file__).parent / "abis" / "Escrow.json"
+def _load_apex_abi() -> list:
+    abi_path = Path(__file__).parent / "abis" / "Apex.json"
     with open(abi_path) as f:
         return json.load(f)
 
 
-class EscrowClient:
+class ApexClient:
     """
-    Python client for the EscrowUpgradeable contract.
+    Python client for the APEX Protocol (ApexUpgradeable) contract.
 
     Wraps all public functions for both client-side and agent-side operations.
     """
@@ -67,7 +67,7 @@ class EscrowClient:
         self.address = Web3.to_checksum_address(contract_address)
 
         if abi is None:
-            abi = _load_escrow_abi()
+            abi = _load_apex_abi()
 
         self.contract: Contract = self.w3.eth.contract(
             address=self.address, abi=abi
@@ -108,7 +108,7 @@ class EscrowClient:
                 if is_rate_limit and attempt < MAX_RETRIES - 1:
                     delay = RETRY_BASE_DELAY * (2 ** attempt)
                     logger.warning(
-                        f"[EscrowClient] Rate limited, retry {attempt + 1}/{MAX_RETRIES} "
+                        f"[ApexClient] Rate limited, retry {attempt + 1}/{MAX_RETRIES} "
                         f"in {delay:.1f}s"
                     )
                     time.sleep(delay)
@@ -130,7 +130,7 @@ class EscrowClient:
                 if is_rate_limit and attempt < MAX_RETRIES - 1:
                     delay = RETRY_BASE_DELAY * (2 ** attempt)
                     logger.warning(
-                        f"[EscrowClient] Rate limited (read), retry {attempt + 1}/{MAX_RETRIES} "
+                        f"[ApexClient] Rate limited (read), retry {attempt + 1}/{MAX_RETRIES} "
                         f"in {delay:.1f}s"
                     )
                     time.sleep(delay)
@@ -217,7 +217,7 @@ class EscrowClient:
                 data_url = storage.save_sync(d)
             elif hasattr(storage, "save"):
                 data_url = storage.save(record)
-            logger.info(f"[EscrowClient] ServiceRecord uploaded: {data_url}")
+            logger.info(f"[ApexClient] ServiceRecord uploaded: {data_url}")
 
         # Step 2: Call submitResult on-chain WITH the dataUrl
         # The dataUrl is embedded in the OOv3 assertion claim as Evidence
@@ -283,7 +283,20 @@ class EscrowClient:
         return self._call_with_retry(self.contract.functions.getAssertionIdForJob(job_id))
 
     def min_service_fee(self) -> int:
+        """
+        Get minimum service fee from contract.
+
+        This is calculated as: minBond * 10000 / bondRate
+        With default 10% bond rate (1000 basis points): minServiceFee = minBond * 10
+
+        The minBond comes from UMA OOv3 contract (currently 1 TUSD on testnet).
+        So minServiceFee = 10 TUSD minimum.
+        """
         return self._call_with_retry(self.contract.functions.minServiceFee())
+
+    def payment_token(self) -> str:
+        """Get the payment token address configured in the Apex contract."""
+        return self._call_with_retry(self.contract.functions.paymentToken())
 
     def next_job_id(self) -> int:
         return self._call_with_retry(self.contract.functions.nextJobId())
