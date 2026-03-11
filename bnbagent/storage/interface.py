@@ -7,6 +7,7 @@ The chain only stores hashes; full data lives off-chain.
 
 import json
 from abc import ABC, abstractmethod
+from typing import Optional
 
 from web3 import Web3
 
@@ -15,8 +16,14 @@ class IStorageProvider(ABC):
     """Abstract base for pluggable off-chain storage."""
 
     @abstractmethod
-    async def upload(self, data: dict) -> str:
-        """Upload JSON data. Returns a URL (ipfs://..., file://..., etc.)."""
+    async def upload(self, data: dict, filename: Optional[str] = None) -> str:
+        """
+        Upload JSON data. Returns a URL (ipfs://..., file://..., etc.).
+        
+        Args:
+            data: JSON-serializable dict to upload
+            filename: Optional filename hint (e.g., "job-123.json")
+        """
         ...
 
     @abstractmethod

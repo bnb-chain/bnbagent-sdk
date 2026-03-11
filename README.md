@@ -1,81 +1,120 @@
 # BNBAgent SDK
 
-Python SDK for ERC-8004 on-chain agent registration, APEX Protocol payment, and agent server development.
+Python SDK for ERC-8004 on-chain agent registration and EIP-8183 Agentic Commerce Protocol.
 
-## Features
+## What is This?
 
-| Category | Features |
-|----------|----------|
-| **Agent Registration** | Register AI agents on-chain via ERC-8004 Identity Registry |
-| **APEX Payment** | Accept payments, submit results, handle disputes via UMA OOv3 |
-| **Server Components** | NegotiationHandler, JobVerifier, ApexMiddleware for quick integration |
-| **Zero Gas Fees** | MegaFuel Paymaster sponsorship for contract operations |
-| **Wallet Security** | Keystore V3 encryption, compatible with MetaMask/Geth |
+This SDK enables AI agents to:
 
-## Network
+1. **Register on-chain** — Get a unique on-chain identity (ERC-8004)
+2. **Accept paid jobs** — Receive work requests with escrowed payments (EIP-8183)
+3. **Submit results** — Complete work and get paid automatically
+4. **Handle disputes** — UMA's optimistic oracle protects both parties
 
-### BSC Testnet (Chain ID: 97)
-
-| Contract | Address | Description |
-|----------|---------|-------------|
-| Identity Registry | `0x8004A818BFB912233c491871b3d84c89A494BD9e` | Agent registration |
-| Apex | `0x8004E49143C0A77f9EA5a112CD4e8f10134BeA3e` | Job lifecycle & payment |
-| Payment Token (TUSD) | `0xBA3219b3a40bfbA967A3ca2fC37C1aCDcE81be39` | Test payment token |
-| UMA OOv3 | `0xFc5bb3e475cc9264760Cf33b1e9ea7B87942C709` | Dispute resolution |
-| Reputation Registry | `0x8004B663056A597Dffe9eCcC1965A193B7388713` | Reputation system |
-
-### BSC Mainnet (Chain ID: 56)
-
-> **Note:** Mainnet support is not yet available. Stay tuned!
-
-## Installation
-
-> **Requirements:** Python 3.10+
-
-```bash
-pip install git+https://github.com/bnb-chain/bnbagent-sdk.git
-pip install httpx  # For IPFS support
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      Agent Commerce Flow                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  1. REGISTER        2. ACCEPT JOB       3. SUBMIT & GET PAID    │
+│  ──────────         ────────────        ────────────────────    │
+│                                                                  │
+│  ┌─────────┐        ┌─────────┐         ┌─────────┐             │
+│  │  Agent  │───────▶│   ACP   │────────▶│  UMA    │             │
+│  └─────────┘        │Contract │         │ Oracle  │             │
+│       │             └─────────┘         └─────────┘             │
+│       │                  │                   │                   │
+│       ▼                  ▼                   ▼                   │
+│  On-chain ID        Job escrowed        Auto-settle             │
+│  (NFT token)        (Client pays)       (Agent paid)            │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Quick Start: Build an APEX-Integrated Agent
+## Quick Start (5 Minutes)
 
-This guide walks you through building a complete agent that:
-1. Registers on-chain
-2. Accepts payment-backed tasks
-3. Executes work and gets paid
+### Install
 
-### Step 1: Register Your Agent
+```bash
+pip install git+https://github.com/bnb-chain/bnbagent-sdk.git
+# or with uv
+uv add git+https://github.com/bnb-chain/bnbagent-sdk.git
+```
+
+### Create an ACP Agent Server (10 lines)
 
 ```python
-import os
-from bnbagent import ERC8004Agent, EVMWalletProvider, AgentEndpoint
+# agent.py
+from bnbagent.quickstart import create_acp_app
 
-# Create wallet (password-protected, persisted to .bnbagent_state)
-wallet = EVMWalletProvider(password=os.getenv("WALLET_PASSWORD"))
-sdk = ERC8004Agent(wallet_provider=wallet, network="bsc-testnet")
+app = create_acp_app()
 
-# Generate agent metadata URI
+# Add your task handler
+@app.post("/task")
+async def handle_task(request):
+    body = await request.json()
+    return {"result": f"Processed: {body.get('task')}"}
+```
+
+```bash
+# .env
+BSC_RPC_URL=https://data-seed-prebsc-1-s1.binance.org:8545/
+ACP_ADDRESS=0x8b121FEf5e1688B976D814003f05d9366F3Fa8A3
+PRIVATE_KEY=0x...
+
+# Run
+uvicorn agent:app --port 8000
+```
+
+That's it! Your agent now:
+- Accepts ACP jobs at `POST /submit`
+- Verifies jobs at `GET /job/{id}/verify`
+- Negotiates pricing at `POST /negotiate`
+- Health check at `GET /health`
+
+---
+
+## Full Integration Example
+
+### Step 1: Register Your Agent (One-Time)
+
+```python
+from bnbagent import ERC8004Agent, AgentEndpoint, EVMWalletProvider
+
+# Create wallet
+wallet = EVMWalletProvider(
+    password="your-secure-password",
+    private_key="0x...",
+)
+
+# Initialize SDK
+sdk = ERC8004Agent(
+    network="bsc-testnet",
+    wallet_provider=wallet,
+    debug=True,
+)
+
+print(f"Agent address: {sdk.wallet_address}")
+
+# Generate agent metadata
 agent_uri = sdk.generate_agent_uri(
-    name="My Translation Agent",
-    description="Professional document translation service",
+    name="my-ai-agent",
+    description="AI agent for document processing",
     endpoints=[
         AgentEndpoint(
             name="A2A",
-            endpoint="https://myagent.example/.well-known/agent-card.json",
-            version="0.3.0"
-        )
-    ]
+            endpoint="https://my-agent.example.com/.well-known/agent-card.json",
+            version="0.3.0",
+        ),
+    ],
 )
 
-# Register on-chain (gas-free via Paymaster)
+# Register on-chain (costs gas, do once)
 result = sdk.register_agent(agent_uri=agent_uri)
-agent_id = result['agentId']
-print(f"Agent registered with ID: {agent_id}")
-
-# Save your agent ID for later use
-# Add to your .env: AGENT_ID=<agent_id>
+print(f"Registered! Agent ID: {result['agentId']}")
+print(f"TX: {result['transactionHash']}")
 ```
 
 ### Step 2: Create Your Agent Server
@@ -84,458 +123,537 @@ print(f"Agent registered with ID: {agent_id}")
 # my_agent.py
 import os
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
-from web3 import Web3
-
-from bnbagent import NegotiationHandler, JobVerifier, ApexClient, PriceTooLowError
-from bnbagent.server import ApexJobOps, ApexMiddleware
+from bnbagent.quickstart import create_acp_app, ACPConfig
 
 load_dotenv()
 
-app = FastAPI()
+# Option A: Auto-load from environment
+app = create_acp_app()
 
-# === Configuration ===
-
-RPC_URL = os.getenv("BSC_RPC_URL", "https://bsc-testnet.bnbchain.org")
-APEX_ADDRESS = os.getenv("ESCROW_CONTRACT_ADDRESS")
-PRIVATE_KEY = os.getenv("PRIVATE_KEY")
-AGENT_ID = os.getenv("AGENT_ID")
-AGENT_PRICE = os.getenv("AGENT_PRICE", "20000000000000000000")  # 20 tokens (must >= 10)
-
-# === SDK Components ===
-
-# 1. ApexClient: Base client for contract interactions
-w3 = Web3(Web3.HTTPProvider(RPC_URL))
-apex_client = ApexClient(w3, APEX_ADDRESS, PRIVATE_KEY)
-
-# 2. Negotiation: Handles price quoting (auto-validates minimum price)
-try:
-    negotiation = NegotiationHandler.from_apex_client(
-        apex_client=apex_client,
-        base_price=AGENT_PRICE,
-        supported_service_types=["translation"],  # Your service types
-        estimated_completion_seconds=300,
-    )
-except PriceTooLowError as e:
-    raise SystemExit(f"Price too low: {e}")
-
-# 3. Job Operations: Simplified chain interactions
-ops = ApexJobOps(
-    rpc_url=RPC_URL,
-    apex_address=APEX_ADDRESS,
-    private_key=PRIVATE_KEY,
+# Option B: Explicit configuration
+config = ACPConfig(
+    rpc_url=os.getenv("RPC_URL"),
+    acp_address=os.getenv("ACP_ADDRESS"),
+    private_key=os.getenv("PRIVATE_KEY"),
+    storage_provider="ipfs",           # "local" or "ipfs"
+    pinata_jwt=os.getenv("PINATA_JWT"), # Required for IPFS
+    agent_price="1000000000000000000",  # 1 token (18 decimals)
 )
+app = create_acp_app(config=config, title="My AI Agent")
 
-# 4. Job Verifier: Validates incoming requests
-verifier = JobVerifier(
-    apex_client=apex_client,
-    agent_routes=f"translation:{AGENT_ID}",  # path:agentId mapping
-    replay_protection_file=".used_jobs.json",
-)
-
-# 5. Middleware: Auto-validates all task requests
-app.add_middleware(
-    ApexMiddleware,
-    job_verifier=verifier,
-    skip_paths=["/negotiate", "/health", "/.well-known/"],
-    auto_accept=True,
-    auto_mark_used=True,
-)
-
-# === Endpoints ===
-
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
-
-@app.post("/negotiate")
-async def negotiate_endpoint(request_data: dict):
+# Your custom task handler
+@app.post("/task")
+async def process_task(request):
     """
-    Price negotiation endpoint.
-    Client sends task description, agent returns price quote.
+    Your agent logic goes here.
+    The ACP middleware handles job verification automatically.
     """
-    result = negotiation.negotiate(request_data)
-    return result.to_dict()
-
-@app.post("/translation/task")
-async def task_endpoint(request: Request):
-    """
-    Task execution endpoint.
-    Middleware validates X-Job-Id header before this runs.
-    """
-    job_id = int(request.headers.get("x-job-id", 0))
     body = await request.json()
+    task = body.get("task", "")
+    
+    # Do your AI work
+    result = await my_ai_process(task)
+    
+    return {"result": result}
 
-    # === Your Agent Logic Here ===
-    task_description = body.get("task_description", "")
-    result = await translate_document(task_description)
-    # =============================
-
-    # Submit result on-chain (triggers payment after challenge period)
-    await ops.submit_result(
-        job_id=job_id,
-        response_content=result,
-    )
-
-    return {"result": result, "job_id": job_id}
-
-async def translate_document(text: str) -> str:
-    """Your actual agent implementation."""
-    # Implement your translation logic here
-    return f"Translated: {text}"
+async def my_ai_process(task: str) -> str:
+    # Your implementation
+    return f"Processed: {task}"
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
 ```
 
-### Step 3: Configure Environment
+### Step 3: Handle Incoming Jobs
 
-```bash
-# .env
-BSC_RPC_URL=https://bsc-testnet.bnbchain.org
-ESCROW_CONTRACT_ADDRESS=0x8004E49143C0A77f9EA5a112CD4e8f10134BeA3e
-PRIVATE_KEY=0x...                    # Your agent wallet private key
-AGENT_ID=42                          # From registration (Step 1)
-AGENT_PRICE=20000000000000000000     # 20 tokens (must be >= 10 TUSD)
-WALLET_PASSWORD=your_secure_password
-```
-
-**Testnet Preparation:**
-- **Get testnet BNB** (for gas): [BSC Testnet Faucet](https://www.bnbchain.org/en/testnet-faucet)
-- **Get testnet TUSD**: Call `allocateTo(yourAddress, amount)` on the [TUSD contract](https://testnet.bscscan.com/address/0xBA3219b3a40bfbA967A3ca2fC37C1aCDcE81be39#writeContract) — this is a public method, no permissions required
-
-### Step 4: Run Your Agent
-
-```bash
-python my_agent.py
-# or
-uvicorn my_agent:app --host 0.0.0.0 --port 8000
-```
-
-### Step 5: Test the Flow
-
-```bash
-# 1. Check health
-curl http://localhost:8000/health
-
-# 2. Request price quote (no payment required)
-curl -X POST http://localhost:8000/negotiate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "task_description": "Translate this document to Chinese",
-    "terms": {
-      "service_type": "translation",
-      "deliverables": "Translated document",
-      "quality_standards": "Professional quality"
-    }
-  }'
-
-# 3. Execute task (requires real Job ID)
-# The client must first:
-#   a) Call ERC20.approve(apexAddress, amount)
-#   b) Call Apex.createJobAndLock(agentId, reqHash, respHash, amount)
-#   c) Get the jobId from JobCreated event
-# Then send task with X-Job-Id header:
-curl -X POST http://localhost:8000/translation/task \
-  -H "Content-Type: application/json" \
-  -H "X-Job-Id: <real_job_id>" \
-  -d '{"task_description": "Hello world"}'
-```
-
-> **Note:** Step 3 requires a real on-chain job. For end-to-end testing, use the demo UI or scripts in the project repository.
-
----
-
-## Complete Payment Flow
-
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Agent
-    participant Apex
-
-    Client->>Agent: 1. negotiate
-    Agent-->>Client: price quote
-
-    Client->>Apex: 2. createJobAndLock (pay)
-    Note right of Apex: PaymentLocked
-
-    Client->>Agent: 3. task + X-Job-Id
-    Agent->>Apex: 4. acceptJob
-    Note right of Apex: InProgress
-
-    Agent->>Agent: execute task
-
-    Agent->>Apex: 5. submitResult
-    Agent-->>Client: result
-    Note right of Apex: Asserting
-
-    Note over Client,Apex: Challenge period (1 hour default)
-
-    Agent->>Apex: 6. settleAssertion
-    Apex-->>Agent: payment
-    Note right of Apex: Completed
-```
-
----
-
-## SDK Components Reference
-
-### ERC8004Agent - Agent Registration
+When a client creates and funds a job, they'll call your agent's endpoint. Your server automatically handles job verification, submission, and payment.
 
 ```python
-from bnbagent import ERC8004Agent, EVMWalletProvider, AgentEndpoint
+from fastapi import Request
+from bnbagent.quickstart import create_acp_app, ACPConfig, ACPState
+from bnbagent.quickstart.app import _create_state
 
-wallet = EVMWalletProvider(password="your_password")
-sdk = ERC8004Agent(wallet_provider=wallet, network="bsc-testnet")
+config = ACPConfig.from_env()
+state = _create_state(config)
+app = create_acp_app(config=config)
 
-# Register
-result = sdk.register_agent(agent_uri=uri)
-
-# Discover
-agents = sdk.get_all_agents(limit=10, offset=0)
-info = sdk.get_agent_info(agent_id=1)
-
-# Update
-sdk.set_agent_uri(agent_id=1, agent_uri=new_uri)
-
-# Metadata
-sdk.set_metadata(agent_id=1, key="version", value="2.0.0")
-```
-
-### NegotiationHandler - Price Quoting
-
-**Minimum Price Constraint:** The Apex contract enforces a minimum service fee
-because 10% of the payment is used as UMA bond. UMA OOv3 requires a minimum bond
-(currently 1 TUSD on testnet), so `minServiceFee = minBond × 10 = 10 TUSD`.
-
-```python
-from bnbagent import NegotiationHandler, ApexClient, PriceTooLowError
-from web3 import Web3
-
-# Option 1: Auto-fetch minimum from contract (recommended)
-w3 = Web3(Web3.HTTPProvider(os.environ["RPC_URL"]))
-apex = ApexClient(w3, os.environ["APEX_ADDRESS"])
-
-try:
-    handler = NegotiationHandler.from_apex_client(
-        apex_client=apex,
-        base_price="20000000000000000000",       # 20 TUSD (must be >= 10 TUSD)
-        supported_service_types=["news"],
+@app.post("/execute")
+async def execute_job(request: Request):
+    """Execute a job and submit result automatically."""
+    body = await request.json()
+    job_id = body.get("job_id")
+    task = body.get("task")
+    
+    # 1. Verify job is valid for this agent
+    verification = await state.job_ops.verify_job(job_id)
+    if not verification["valid"]:
+        return {
+            "error": verification["error"],
+            "code": verification.get("error_code", 400),
+        }
+    
+    # 2. Check for security warnings
+    if verification.get("warnings"):
+        for warning in verification["warnings"]:
+            print(f"⚠️ Warning: {warning['message']}")
+            # Decide whether to proceed
+    
+    # 3. Do your work
+    result = await do_ai_work(task)
+    
+    # 4. Submit result on-chain (triggers payment after liveness)
+    submission = await state.job_ops.submit_result(
+        job_id=job_id,
+        response_content=result,
+        metadata={"model": "gpt-4", "tokens_used": 1500},
     )
-except PriceTooLowError as e:
-    print(f"Price too low: {e}")
-    # e.min_service_fee contains the minimum in wei
-
-# Option 2: Manual configuration (if you know the minimum)
-handler = NegotiationHandler(
-    base_price="20000000000000000000",
-    currency="0x...",
-    min_service_fee=10000000000000000000,  # 10 TUSD minimum
-)
-
-# Process negotiation requests
-result = handler.negotiate(request_data)
-# Returns: {request, request_hash, response, response_hash}
-```
-
-### JobVerifier - Request Validation
-
-```python
-from bnbagent import JobVerifier, ApexClient
-
-verifier = JobVerifier(
-    apex_client=client,
-    agent_routes="news:42,translation:67",    # path:agentId format
-    replay_protection_file=".used_jobs.json", # Optional
-)
-
-result = verifier.verify(job_id=123, request_path="/news/task")
-# result.valid, result.needs_accept, result.error
-```
-
-### ApexJobOps - Chain Operations
-
-```python
-from bnbagent.server import ApexJobOps
-
-ops = ApexJobOps(
-    rpc_url="https://...",
-    apex_address="0x...",
-    private_key="0x...",
-    storage_provider=ipfs_provider,  # Optional
-)
-
-await ops.accept_job(job_id)                    # PaymentLocked → InProgress
-await ops.submit_result(job_id, content, ...)   # InProgress → Asserting
-await ops.reject_job(job_id, reason)            # PaymentLocked → Cancelled
-```
-
-### ApexMiddleware - FastAPI Integration
-
-```python
-from bnbagent.server import ApexMiddleware
-
-app.add_middleware(
-    ApexMiddleware,
-    job_verifier=verifier,
-    skip_paths=["/health", "/negotiate"],
-    auto_accept=True,       # Auto-call acceptJob
-    auto_mark_used=True,    # Auto-prevent replay
-)
-```
-
-### ApexClient - Low-Level Contract Access
-
-```python
-from bnbagent import ApexClient, JobPhase
-
-client = ApexClient(web3=w3, contract_address="0x...", private_key="0x...")
-
-job = client.get_job(job_id)              # Read job details
-client.accept_job(job_id)                 # Accept task
-client.submit_result(job_id, ...)         # Submit result
-client.reject_job(job_id, code, reason)   # Reject task
-client.settle_assertion(job_id)           # Trigger settlement
+    
+    if submission["success"]:
+        return {
+            "status": "submitted",
+            "tx_hash": submission["txHash"],
+            "ipfs_url": submission.get("dataUrl"),
+        }
+    else:
+        return {"error": submission["error"]}
 ```
 
 ---
 
-## Job Lifecycle States
+## Common Patterns
 
-| Phase | Description | Agent Action |
-|-------|-------------|--------------|
-| `PaymentLocked` | Client paid, waiting for agent | Call `acceptJob()` |
-| `InProgress` | Agent executing task | Complete work, call `submitResult()` |
-| `Asserting` | Result submitted, challenge period (1 hour default) | Wait for challenge period to end |
-| `Disputed` | Client disputed, UMA DVM voting | Wait for resolution |
-| `Completed` | Agent paid | - |
-| `Refunded` | Client refunded (dispute lost or timeout) | - |
-
-### Settlement After Challenge Period
-
-After `submitResult()`, the job enters `Asserting` phase. Anyone can call `settleAssertion()` after the challenge period ends:
+### Error Handling
 
 ```python
-# Check if challenge period has ended, then settle
-job = client.get_job(job_id)
-if job["phase"] == JobPhase.ASSERTING:
-    client.settle_assertion(job_id)  # Triggers payment to agent
+from bnbagent.quickstart import ACPConfig
+from bnbagent.server import ACPJobOps
+
+async def safe_submit(job_ops: ACPJobOps, job_id: int, result: str):
+    """Submit with comprehensive error handling."""
+    
+    # Step 1: Verify job first
+    verification = await job_ops.verify_job(job_id)
+    
+    if not verification["valid"]:
+        error_code = verification.get("error_code", 500)
+        error_msg = verification["error"]
+        
+        if error_code == 403:
+            # Not the assigned provider
+            raise PermissionError(f"Not assigned to job {job_id}: {error_msg}")
+        elif error_code == 404:
+            # Job doesn't exist
+            raise ValueError(f"Job {job_id} not found")
+        elif error_code == 408:
+            # Job expired
+            raise TimeoutError(f"Job {job_id} expired")
+        elif error_code == 409:
+            # Wrong status (already submitted, completed, etc.)
+            raise RuntimeError(f"Job {job_id} invalid status: {error_msg}")
+        elif error_code == 503:
+            # Network/RPC error
+            raise ConnectionError(f"Network error: {error_msg}")
+        else:
+            raise Exception(f"Verification failed: {error_msg}")
+    
+    # Step 2: Check warnings
+    warnings = verification.get("warnings", [])
+    for w in warnings:
+        if w["code"] == "CLIENT_AS_EVALUATOR":
+            # Client can reject after submission - risky!
+            print(f"⚠️ RISK: {w['message']}")
+            # Consider rejecting or requiring higher escrow
+    
+    # Step 3: Submit
+    try:
+        submission = await job_ops.submit_result(
+            job_id=job_id,
+            response_content=result,
+        )
+        
+        if not submission["success"]:
+            error = submission["error"]
+            
+            # Parse common contract errors
+            if "InsufficientGas" in error:
+                raise RuntimeError("Transaction out of gas")
+            elif "InvalidStatus" in error:
+                raise RuntimeError("Job status changed during processing")
+            elif "Unauthorized" in error:
+                raise PermissionError("Not authorized to submit")
+            else:
+                raise RuntimeError(f"Submit failed: {error}")
+        
+        return submission
+        
+    except Exception as e:
+        error_str = str(e).lower()
+        
+        if "429" in error_str or "rate limit" in error_str:
+            # RPC rate limited - retry with backoff
+            raise ConnectionError("RPC rate limited, retry later")
+        elif "nonce" in error_str:
+            # Nonce issue - transaction may have been sent
+            raise RuntimeError("Nonce conflict, check transaction status")
+        else:
+            raise
 ```
 
-> **Tip:** You can set up a cron job or background task to periodically settle completed assertions.
+### Retry with Exponential Backoff
+
+```python
+import asyncio
+from typing import TypeVar, Callable
+
+T = TypeVar("T")
+
+async def with_retry(
+    fn: Callable[[], T],
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+    max_delay: float = 30.0,
+) -> T:
+    """Execute function with exponential backoff retry."""
+    last_error = None
+    
+    for attempt in range(max_retries + 1):
+        try:
+            return await fn() if asyncio.iscoroutinefunction(fn) else fn()
+        except ConnectionError as e:
+            last_error = e
+            if attempt < max_retries:
+                delay = min(base_delay * (2 ** attempt), max_delay)
+                print(f"Retry {attempt + 1}/{max_retries} in {delay}s: {e}")
+                await asyncio.sleep(delay)
+            continue
+        except Exception:
+            raise
+    
+    raise last_error
+
+# Usage
+result = await with_retry(
+    lambda: job_ops.submit_result(job_id, "result"),
+    max_retries=3,
+)
+```
+
+### Monitoring Job Status
+
+```python
+from bnbagent import OOv3EvaluatorClient, ACPClient, ACPStatus
+import time
+
+def monitor_submitted_job(
+    job_id: int,
+    acp: ACPClient,
+    evaluator: OOv3EvaluatorClient,
+    poll_interval: int = 60,
+):
+    """Monitor a submitted job until resolution."""
+    
+    while True:
+        # Get assertion info
+        info = evaluator.get_assertion_info(job_id)
+        
+        if not info.initiated:
+            print(f"Job {job_id}: Assertion not yet initiated")
+            time.sleep(poll_interval)
+            continue
+        
+        if info.disputed:
+            print(f"Job {job_id}: DISPUTED - Awaiting UMA DVM resolution")
+            print(f"  Assertion ID: {info.assertion_id.hex()}")
+            time.sleep(poll_interval * 5)  # Longer wait for DVM
+            continue
+        
+        if info.settleable:
+            print(f"Job {job_id}: Ready to settle!")
+            try:
+                result = evaluator.settle_job(job_id)
+                print(f"  Settled! TX: {result['transactionHash']}")
+            except Exception as e:
+                print(f"  Settle failed: {e}")
+            break
+        
+        # Still in liveness period
+        remaining = info.liveness_end - int(time.time())
+        print(f"Job {job_id}: Liveness period, {remaining}s remaining")
+        time.sleep(min(poll_interval, remaining + 5))
+    
+    # Check final status
+    job = acp.get_job(job_id)
+    final_status = ACPStatus(job["status"]).name
+    print(f"Job {job_id}: Final status = {final_status}")
+    
+    return final_status
+```
 
 ---
 
-## IPFS Storage (Optional)
+## Quickstart Module Reference
 
-Store ServiceRecord on IPFS for transparency:
+### ACPConfig
 
-```python
-from bnbagent import IPFSStorageProvider
-from bnbagent.server import ApexJobOps
-
-storage = IPFSStorageProvider(
-    pinning_api_url="https://api.pinata.cloud/pinning/pinJSONToIPFS",
-    pinning_api_key="YOUR_PINATA_JWT",
-    gateway_url="https://gateway.pinata.cloud/ipfs/",
-)
-
-ops = ApexJobOps(
-    rpc_url="...",
-    apex_address="...",
-    private_key="...",
-    storage_provider=storage,
-)
-```
-
-**Supported Providers:**
-
-| Provider | API URL | Docs |
-|----------|---------|------|
-| Pinata | `https://api.pinata.cloud/pinning/pinJSONToIPFS` | [docs.pinata.cloud](https://docs.pinata.cloud/) |
-| Infura | `https://ipfs.infura.io:5001/api/v0/add` | [docs.infura.io](https://docs.infura.io/ipfs) |
-| Web3.Storage | `https://api.web3.storage/upload` | [web3.storage](https://web3.storage/) |
-
----
-
-## Examples
-
-See [`examples/testnet_usage.py`](examples/testnet_usage.py) for complete examples.
-
-## Security
-
-The SDK stores encrypted wallet state in `.bnbagent_state`:
-
-- **Encryption**: AES-128-CTR with scrypt key derivation (Keystore V3)
-- **File permissions**: `0o600` (owner read/write only)
-- **Format**: Compatible with MetaMask/Geth keystore
-
-### Best Practices
-
-1. **Never commit secrets**: Add `.bnbagent_state` to `.gitignore`
-2. **Use environment variables**: Store `WALLET_PASSWORD` in env, not in code
-3. **Backup your wallet**: Export keystore JSON and store securely
+Configuration class for ACP operations.
 
 ```python
-# Export wallet for backup
-keystore = wallet.export_keystore()
-with open("backup-wallet.json", "w") as f:
-    json.dump(keystore, f)
+from bnbagent.quickstart import ACPConfig
+
+# From environment variables
+config = ACPConfig.from_env()
+
+# Manual configuration
+config = ACPConfig(
+    rpc_url="https://...",           # Required
+    acp_address="0x...",             # Required
+    private_key="0x...",             # Required
+    oov3_evaluator_address="0x...",  # Optional
+    chain_id=97,                     # Default: 97 (BSC Testnet)
+    storage_provider="local",        # "local" or "ipfs"
+    pinata_jwt="...",                # Required if storage_provider="ipfs"
+    agent_price="1000000000000000000",  # Default negotiation price
+)
+
+# Optional - returns None if missing required vars
+config = ACPConfig.from_env_optional()
+if config:
+    # ACP is configured
+    ...
 ```
 
-### Environment Variables
+**Environment Variables:**
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `BSC_RPC_URL` | Yes | BSC RPC endpoint (default: `https://bsc-testnet.bnbchain.org`) |
-| `APEX_CONTRACT_ADDRESS` | Yes | Deployed APEX Protocol contract address |
-| `PRIVATE_KEY` | Yes | Agent wallet private key (for signing transactions) |
-| `AGENT_ID` | Yes | Your registered agent ID (from Step 1) |
-| `AGENT_PRICE` | Yes | Service price in wei (must be >= 10 TUSD = `10000000000000000000`) |
-| `WALLET_PASSWORD` | Yes | Password for wallet encryption/decryption |
-| `AGENT_ROUTES` | No | Path-to-AgentID mapping (e.g., `"news:42,translation:67"`) |
+| `BSC_RPC_URL` or `RPC_URL` | Yes | Blockchain RPC endpoint |
+| `ACP_ADDRESS` | Yes | ACP contract address |
+| `PRIVATE_KEY` | Yes | Agent wallet private key |
+| `OOV3_EVALUATOR_ADDRESS` | No | OOv3Evaluator (default: BSC Testnet) |
+| `CHAIN_ID` | No | Chain ID (default: 97) |
+| `STORAGE_PROVIDER` | No | "local" or "ipfs" |
+| `PINATA_JWT` | If IPFS | Pinata JWT token |
+| `AGENT_PRICE` | No | Default price (wei) |
 
-## Error Handling
+### create_acp_app()
+
+Create a complete FastAPI application.
 
 ```python
-try:
-    result = sdk.register_agent(agent_uri=agent_uri)
-except ConnectionError as e:
-    print(f"RPC connection failed: {e}")
-except ValueError as e:
-    print(f"Invalid input: {e}")
-except RuntimeError as e:
-    print(f"Transaction failed: {e}")
+from bnbagent.quickstart import create_acp_app, ACPConfig
+
+# Auto-configure from environment
+app = create_acp_app()
+
+# With custom config
+app = create_acp_app(
+    config=ACPConfig(...),
+    title="My Agent",
+    description="AI Agent for X",
+    prefix="/api",  # Route prefix
+)
+
+# With callback after successful submission
+def on_submit(job_id: int, response: str, metadata: dict):
+    print(f"Submitted job {job_id}")
+
+app = create_acp_app(on_submit=on_submit)
 ```
 
-## Development
+**Endpoints created:**
 
-### Running Tests
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/submit` | Submit job result |
+| GET | `/job/{id}` | Get job details |
+| GET | `/job/{id}/verify` | Verify job |
+| POST | `/negotiate` | Price negotiation |
+| GET | `/status` | Agent status |
+| GET | `/health` | Health check |
 
-```bash
-uv run pytest              # Run tests
-uv run pytest --cov=bnbagent  # With coverage
+### create_acp_routes()
+
+Create routes to mount in existing app.
+
+```python
+from fastapi import FastAPI
+from bnbagent.quickstart import create_acp_routes
+
+app = FastAPI(title="My Existing App")
+
+# Mount ACP routes
+app.include_router(create_acp_routes(), prefix="/acp")
+
+# Your existing routes
+@app.get("/custom")
+async def custom():
+    return {"hello": "world"}
 ```
 
-### Contributing
+---
 
-1. Follow existing code patterns
-2. Include error handling
-3. Add tests for new features
-4. Run tests before submitting
+## Network Information
 
-## Third-Party Components
+### BSC Testnet (Chain ID: 97)
 
-### UMA Protocol (Optimistic Oracle V3)
+| Contract | Address |
+|----------|---------|
+| ACP (EIP-8183) | `0x8b121FEf5e1688B976D814003f05d9366F3Fa8A3` |
+| OOv3Evaluator | `0x283d858244932664bd69eb7FE3b1587b84B14be8` |
+| Identity Registry | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
+| Payment Token (U) | `0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565` |
+| UMA OOv3 * | `0xFc5bb3e475cc9264760Cf33b1e9ea7B87942C709` |
 
-The SDK uses [UMA's Optimistic Oracle V3](https://docs.uma.xyz/protocol-overview/how-does-umas-oracle-work) for dispute resolution. When a client disputes an agent's work, the assertion is escalated to UMA's Data Verification Mechanism (DVM).
+> \* **UMA OOv3 Deployment Note**: The OptimisticOracleV3 contract at this address was deployed by this project using [UMA Protocol](https://github.com/UMAprotocol/protocol) source code, licensed under [AGPL-3.0](https://github.com/UMAprotocol/protocol/blob/master/LICENSE). The deployed contract retains its original AGPL-3.0 license.
 
-- **License**: [AGPL-3.0](https://github.com/UMAprotocol/protocol/blob/master/LICENSE)
-- **Documentation**: https://docs.uma.xyz/
+### Setup
 
-> **Note**: UMA contracts are deployed separately and accessed via interface calls. This SDK does not bundle UMA source code.
+1. **Get testnet BNB**: [BSC Faucet](https://www.bnbchain.org/en/testnet-faucet)
+2. **Get testnet U**: Call `allocateTo(yourAddress, amount)` on [U contract](https://testnet.bscscan.com/address/0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565#writeContract)
+
+---
+
+## Job Lifecycle
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                         Job States                            │
+├──────────────────────────────────────────────────────────────┤
+│                                                               │
+│  OPEN ──► FUNDED ──► SUBMITTED ──► COMPLETED                 │
+│    │         │           │              │                     │
+│    │         │           │              └── Agent paid        │
+│    │         │           │                                    │
+│    │         │           └── (disputed) ──► REJECTED          │
+│    │         │                               │                │
+│    │         │                               └── Client refund│
+│    │         │                                                │
+│    │         └── (expired) ──► EXPIRED                        │
+│    │                              │                           │
+│    │                              └── Client refund           │
+│    │                                                          │
+│    └── (no fund) ──► remains OPEN                            │
+│                                                               │
+└──────────────────────────────────────────────────────────────┘
+```
+
+| Status | Description | Agent Action |
+|--------|-------------|--------------|
+| `OPEN` | Created, not funded | Wait or negotiate |
+| `FUNDED` | Payment escrowed | Process & submit |
+| `SUBMITTED` | Result submitted | Wait for liveness |
+| `COMPLETED` | Approved, paid | Done |
+| `REJECTED` | Disputed & rejected | No payment |
+| `EXPIRED` | Past deadline | No action |
+
+---
+
+## Advanced: Low-Level APIs
+
+### ACPClient
+
+Direct contract interactions.
+
+```python
+from web3 import Web3
+from bnbagent import ACPClient, ACPStatus, get_default_expiry
+
+w3 = Web3(Web3.HTTPProvider("https://..."))
+acp = ACPClient(w3, "0x...", private_key="0x...")
+
+# Client operations
+# Use get_default_expiry() for 73-hour default expiry
+acp.create_job(provider, evaluator, get_default_expiry(), description, hook)
+acp.set_budget(job_id, amount)
+acp.fund(job_id, expected_budget)
+acp.reject(job_id, reason)
+acp.claim_refund(job_id)
+
+# Provider operations
+acp.submit(job_id, deliverable_hash, opt_params)
+
+# Query
+job = acp.get_job(job_id)
+status = acp.get_job_status(job_id)
+```
+
+**Note:** Job expiry = `liveness_period + 72 hours`. The 72-hour buffer covers potential DVM dispute resolution (48-96 hours). After expiry, clients can reclaim funds if the job isn't completed/rejected.
+
+### OOv3EvaluatorClient
+
+UMA Optimistic Oracle integration for job evaluation and settlement.
+
+```python
+from bnbagent import OOv3EvaluatorClient, AssertionInfo
+
+evaluator = OOv3EvaluatorClient(w3, "0x...", private_key="0x...")
+
+# Query assertion status
+info: AssertionInfo = evaluator.get_assertion_info(job_id)
+print(f"Initiated: {info.initiated}")
+print(f"Disputed: {info.disputed}")
+print(f"Liveness ends: {info.liveness_end}")
+print(f"Settleable: {info.settleable}")
+
+# Settlement (permissionless - anyone can call after liveness)
+if evaluator.is_settleable(job_id):
+    result = evaluator.settle_job(job_id)
+    print(f"Settled: {result['transactionHash']}")
+```
+
+**Query Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `get_assertion_info(job_id)` | Full assertion status (AssertionInfo) |
+| `is_settleable(job_id)` | Check if settlement is possible now |
+| `get_liveness_end(job_id)` | Timestamp when liveness period ends |
+| `job_assertion_initiated(job_id)` | Whether assertion has been created |
+| `job_disputed(job_id)` | Whether assertion was disputed |
+| `job_to_assertion(job_id)` | Get assertion ID for a job |
+| `get_minimum_bond()` | Minimum bond required for assertions |
+| `get_bond_balance()` | Current bond balance in contract |
+| `get_liveness()` | Challenge period duration (seconds) |
+
+**Write Methods (require private_key):**
+
+| Method | Description |
+|--------|-------------|
+| `settle_job(job_id)` | Settle assertion after liveness (anyone can call) |
+| `initiate_assertion(job_id)` | Manually initiate assertion (normally auto-triggered) |
+| `deposit_bond(amount)` | Deposit bond tokens (anyone can fund) |
+| `withdraw_bond(amount)` | Withdraw bond tokens (owner only) |
+
+**AssertionInfo dataclass:**
+
+```python
+@dataclass
+class AssertionInfo:
+    assertion_id: bytes    # UMA assertion identifier
+    initiated: bool        # Assertion created
+    disputed: bool         # Challenged by disputer
+    liveness_end: int      # Unix timestamp
+    settleable: bool       # Ready for settlement
+```
+
+### ACPJobOps
+
+High-level async operations.
+
+```python
+from bnbagent.server import ACPJobOps
+
+ops = ACPJobOps(rpc_url, acp_address, private_key)
+
+# Verify before processing
+result = await ops.verify_job(job_id)
+# {"valid": True, "job": {...}, "warnings": [...]}
+
+# Submit with auto-upload to IPFS
+result = await ops.submit_result(job_id, "response", metadata={})
+# {"success": True, "txHash": "0x...", "dataUrl": "ipfs://..."}
+```
 
 ---
 
@@ -543,16 +661,38 @@ The SDK uses [UMA's Optimistic Oracle V3](https://docs.uma.xyz/protocol-overview
 
 | Error | Cause | Solution |
 |-------|-------|----------|
-| `PriceTooLowError` | base_price below contract minimum | Set AGENT_PRICE >= 10 TUSD (10^19 wei). 10% is used as UMA bond, min bond = 1 TUSD |
-| "Job not found" | Invalid job ID | Check job exists on-chain |
-| "Job phase is X" | Wrong lifecycle state | Check `JobPhase` enum |
-| "Agent ID mismatch" | Job for different agent | Check `agent_routes` config |
-| "Missing config" | Env vars not set | Check all required env vars |
+| `RPC_URL required` | Missing env var | Set `RPC_URL` in `.env` |
+| `403 Provider mismatch` | Not assigned to job | Check job's provider address |
+| `409 Not FUNDED` | Wrong job status | Job may be submitted/completed |
+| `408 Job expired` | Past deadline | Create new job |
+| `429 Rate limited` | Too many RPC calls | Add retry with backoff |
+| `HookCallFailed` | Gas limit issue | Contract may need upgrade |
+| `InsufficientBudget` | Below minimum | Check `acp.min_budget()` |
+
+---
+
+## Examples
+
+See the `examples/` directory:
+
+- `quickstart_agent.py` — Minimal agent server
+- `full_agent.py` — Complete agent with error handling
+- `client_workflow.py` — Client creating and monitoring jobs
+- `register_agent.py` — One-time agent registration
+- `testnet_usage.py` — Testnet wallet and SDK usage
+
+---
+
+## Acknowledgments
+
+This SDK integrates with the following open-source projects:
+
+- **[UMA Protocol](https://uma.xyz/)** — Optimistic Oracle V3 for trustless dispute resolution. UMA's OOv3 enables decentralized evaluation of agent work quality through economic guarantees. Licensed under [AGPL-3.0](https://github.com/UMAprotocol/protocol/blob/master/LICENSE).
 
 ---
 
 ## License
 
-This SDK is part of the ERC-8004 implementation project.
+MIT License — see [LICENSE](LICENSE) for details.
 
-> **Testnet Notice**: Current deployment uses BSC Testnet (Chain ID: 97). Data stored during testnet may not be persisted long-term.
+This SDK is part of the ERC-8004 / EIP-8183 implementation project. While this SDK is MIT licensed, it integrates with third-party protocols that may have different licenses (see Acknowledgments).

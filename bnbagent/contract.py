@@ -265,7 +265,7 @@ class ContractInterface:
                         event_data = registered_event.process_log(log)
                         agent_id = event_data["args"]["agentId"]
                         break
-                    except:
+                    except Exception:
                         continue
 
             return {

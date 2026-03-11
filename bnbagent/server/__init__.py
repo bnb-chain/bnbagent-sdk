@@ -1,17 +1,25 @@
 """
-Server-side components for building APEX Protocol-integrated agent servers.
+Server-side components for building agent servers.
 
 Provides simplified wrappers for common agent operations:
-- ApexJobOps: Simplified job lifecycle operations (accept, submit, reject)
-- ApexMiddleware: FastAPI/Starlette middleware for job verification
-- create_apex_middleware: Factory function for middleware creation
+
+EIP-8183 Agentic Commerce Protocol:
+- ACPJobOps: Simplified job lifecycle operations (submit, verify)
+- ACPMiddleware: FastAPI/Starlette middleware for job verification
+- create_acp_middleware: Factory function for middleware creation
+
+For settlement operations, use OOv3EvaluatorClient directly:
+- settle_job(job_id): Settle after liveness period
+- is_settleable(job_id): Check if settlement is possible
+- get_assertion_info(job_id): Query assertion status
 """
 
-from .apex_job_ops import ApexJobOps
-from .middleware import ApexMiddleware, create_apex_middleware
+from .acp_job_ops import ACPJobOps
+from .acp_middleware import ACPMiddleware, create_acp_middleware
 
 __all__ = [
-    "ApexJobOps",
-    "ApexMiddleware",
-    "create_apex_middleware",
+    # EIP-8183 Agentic Commerce Protocol
+    "ACPJobOps",
+    "ACPMiddleware",
+    "create_acp_middleware",
 ]

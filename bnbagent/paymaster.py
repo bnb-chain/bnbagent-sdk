@@ -5,9 +5,12 @@ Provides methods for interacting with paymaster services to sponsor gas fees.
 """
 
 from typing import Dict, Any, Union
+import logging
 import requests
 from web3 import Web3
 from .utils.logger import get_logger
+
+logger = logging.getLogger(__name__)
 
 
 def _to_hex(value: Union[int, str, bytes, None], default: str = "0x0") -> str:
@@ -56,7 +59,8 @@ def _to_address_hex(address: Union[str, None], default: str = "0x0") -> str:
     if isinstance(address, str):
         try:
             return Web3.to_checksum_address(address)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Invalid address '{address}', using default '{default}': {e}")
             return default
     else:
         return default

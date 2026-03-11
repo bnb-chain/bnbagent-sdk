@@ -8,6 +8,7 @@ Requires `httpx` (optional dependency).
 import asyncio
 import json
 import logging
+from typing import Optional
 
 import httpx
 
@@ -36,9 +37,9 @@ class IPFSStorageProvider(IStorageProvider):
         self._api_key = pinning_api_key
         self._gateway = gateway_url.rstrip("/")
 
-    def save_sync(self, data: dict) -> str:
+    def save_sync(self, data: dict, filename: Optional[str] = None) -> str:
         """
-        Synchronous upload — compatible with ApexClient.submit_result_with_record.
+        Synchronous upload — compatible with ACPJobOps.submit_result.
 
         Wraps the async upload() method for use in synchronous contexts.
         """
@@ -50,20 +51,24 @@ class IPFSStorageProvider(IStorageProvider):
         if loop and loop.is_running():
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, self.upload(data))
+                future = pool.submit(asyncio.run, self.upload(data, filename))
                 return future.result()
         else:
-            return asyncio.run(self.upload(data))
+            return asyncio.run(self.upload(data, filename))
 
-    async def upload(self, data: dict) -> str:
+    async def upload(self, data: dict, filename: Optional[str] = None) -> str:
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
         }
 
-        # Set meaningful name for Pinata dashboard (job-#{jobId})
-        job_id = data.get("job_id")
-        pin_name = f"job-{job_id}" if job_id else "service-record"
+        # Use provided filename or extract from job.id
+        if filename:
+            pin_name = filename.replace(".json", "")
+        else:
+            job_data = data.get("job", {})
+            job_id = job_data.get("id") if isinstance(job_data, dict) else None
+            pin_name = f"job-{job_id}" if job_id else "deliverable"
 
         payload = {
             "pinataContent": data,

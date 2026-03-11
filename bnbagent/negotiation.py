@@ -322,7 +322,7 @@ class NegotiationHandler:
         # Option 1: Manual minimum (if you know it)
         handler = NegotiationHandler(
             base_price="20000000000000000000",  # 20 tokens (18 decimals)
-            currency="0xBA3219b3a40bfbA967A3ca2fC37C1aCDcE81be39",
+            currency="0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
             min_service_fee=10000000000000000000,  # 10 tokens minimum
         )
 
