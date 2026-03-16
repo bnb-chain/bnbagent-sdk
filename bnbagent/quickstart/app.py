@@ -161,6 +161,13 @@ def create_acp_routes(
         result = await state.job_ops.get_job(job_id)
         if not result.get("success"):
             return JSONResponse(result, status_code=500)
+        # Convert non-JSON-serializable fields
+        if "deliverable" in result and isinstance(result["deliverable"], bytes):
+            result["deliverable"] = "0x" + result["deliverable"].hex()
+        if "description" in result and isinstance(result["description"], bytes):
+            result["description"] = result["description"].decode("utf-8", errors="replace")
+        if "status" in result and hasattr(result["status"], "value"):
+            result["status"] = result["status"].value  # Convert enum to int
         return JSONResponse(result)
     
     @router.get("/job/{job_id}/verify")

@@ -66,6 +66,7 @@ def main():
     evaluator = OOv3EvaluatorClient(
         web3=w3,
         contract_address=evaluator_address,
+        private_key=private_key,  # Required for settle_job()
     )
     
     client_address = w3.eth.account.from_key(private_key).address

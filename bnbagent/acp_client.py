@@ -334,7 +334,7 @@ class ACPClient:
 
     def get_job_funded_events(
         self,
-        from_block: int = 0,
+        from_block: int,
         to_block: str = "latest",
         provider: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
@@ -342,6 +342,9 @@ class ACPClient:
         Get JobFunded events, optionally filtered by provider.
         
         This is useful for agents to discover jobs assigned to them.
+        
+        Note: from_block is required - caller should calculate appropriate range
+        to avoid exceeding RPC block range limits (e.g., BSC: 50000 blocks).
         """
         event_filter = {}
         if provider:
@@ -366,10 +369,15 @@ class ACPClient:
 
     def get_job_created_events(
         self,
-        from_block: int = 0,
+        from_block: int,
         to_block: str = "latest",
     ) -> List[Dict[str, Any]]:
-        """Get JobCreated events."""
+        """
+        Get JobCreated events.
+        
+        Note: from_block is required - caller should calculate appropriate range
+        to avoid exceeding RPC block range limits (e.g., BSC: 50000 blocks).
+        """
         logs = self.contract.events.JobCreated().get_logs(
             from_block=from_block,
             to_block=to_block,
@@ -401,12 +409,15 @@ class ACPClient:
         Both client and provider can call setBudget() while job is in Open status.
 
         Args:
-            job_id: Optional job ID to filter events
-            from_block: Starting block number
+            job_id: Optional job ID to filter events (indexed, so RPC can handle broader range)
+            from_block: Starting block number (when job_id is provided, 0 is usually OK)
             to_block: Ending block number or "latest"
 
         Returns:
             List of BudgetSet events with jobId, amount, blockNumber, transactionHash
+        
+        Note: When job_id is None, caller should limit from_block to avoid exceeding
+        RPC block range limits (e.g., BSC: 50000 blocks).
         """
         event_filter = {}
         if job_id is not None:

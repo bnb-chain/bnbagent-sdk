@@ -244,8 +244,9 @@ class ACPJobOps:
 
     async def get_pending_jobs(
         self,
-        from_block: int = 0,
+        from_block: int | None = None,
         to_block: str = "latest",
+        max_block_range: int = 45000,
     ) -> Dict[str, Any]:
         """
         Get funded jobs assigned to this agent.
@@ -254,8 +255,9 @@ class ACPJobOps:
         and status is FUNDED.
 
         Args:
-            from_block: Starting block number
+            from_block: Starting block number (default: latest - max_block_range)
             to_block: Ending block number or "latest"
+            max_block_range: Maximum block range to query (default: 45000, under BSC 50k limit)
 
         Returns:
             Dict with success status and list of pending job dicts, or error on failure
@@ -263,21 +265,35 @@ class ACPJobOps:
         try:
             client = self._get_client()
             my_address = self.agent_address.lower()
-            
+
+            # Calculate from_block if not specified (avoid exceeding RPC block range limits)
+            if from_block is None:
+                latest_block = await asyncio.to_thread(
+                    lambda: client.w3.eth.block_number
+                )
+                from_block = max(0, latest_block - max_block_range)
+
+            logger.info(f"[ACPJobOps] Querying JobFunded events from block {from_block}")
             events = await asyncio.to_thread(
                 client.get_job_funded_events, from_block, to_block
             )
+            logger.info(f"[ACPJobOps] Found {len(events)} JobFunded events")
             
             pending_jobs = []
             for event in events:
-                job_result = await self.get_job(event["jobId"])
+                job_id = event["jobId"]
+                job_result = await self.get_job(job_id)
                 if not job_result.get("success"):
+                    logger.warning(f"[ACPJobOps] Failed to get job #{job_id}")
                     continue
-                if (
-                    job_result.get("provider", "").lower() == my_address
-                    and job_result.get("status") == ACPStatus.FUNDED
-                ):
+                
+                provider = job_result.get("provider", "").lower()
+                status = job_result.get("status")
+                logger.info(f"[ACPJobOps] Job #{job_id}: provider={provider}, status={status}, my_address={my_address}")
+                
+                if provider == my_address and status == ACPStatus.FUNDED:
                     pending_jobs.append(job_result)
+                    logger.info(f"[ACPJobOps] Job #{job_id} matched! Adding to pending jobs")
             
             return {"success": True, "jobs": pending_jobs}
         except Exception as e:
