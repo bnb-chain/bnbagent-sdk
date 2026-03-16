@@ -47,9 +47,7 @@ DEFAULT_SKIP_PATHS = [
     "/health",
     "/metrics",
     "/.well-known/",
-    "/admin/",
     "/negotiate",
-    "/submit-result",
     "/reject-job",
 ]
 
@@ -67,7 +65,7 @@ class ApexMiddleware:
         app,
         job_verifier: "JobVerifier",
         skip_paths: Optional[List[str]] = None,
-        auto_accept: bool = True,
+        auto_accept: bool = False,
         auto_mark_used: bool = True,
     ):
         """
@@ -77,7 +75,7 @@ class ApexMiddleware:
             app: The ASGI application
             job_verifier: JobVerifier instance for verification
             skip_paths: List of path prefixes/segments to skip verification
-            auto_accept: Whether to automatically accept jobs in PaymentLocked phase
+            auto_accept: Whether to automatically accept jobs in PaymentLocked phase (default: False)
             auto_mark_used: Deprecated, ignored. On-chain phase is used for replay protection.
         """
         self.app = app
@@ -104,7 +102,8 @@ class ApexMiddleware:
             await self.app(scope, receive, send)
             return
 
-        if method != "POST":
+        # Only verify unsafe methods (POST, PUT, PATCH, DELETE)
+        if method in ("GET", "HEAD", "OPTIONS"):
             await self.app(scope, receive, send)
             return
 
@@ -193,7 +192,7 @@ class ApexMiddleware:
 def create_apex_middleware(
     job_verifier: "JobVerifier",
     skip_paths: Optional[List[str]] = None,
-    auto_accept: bool = True,
+    auto_accept: bool = False,
     auto_mark_used: bool = True,
 ):
     """

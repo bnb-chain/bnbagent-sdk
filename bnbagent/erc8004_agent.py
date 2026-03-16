@@ -7,6 +7,9 @@ for common operations.
 """
 
 from typing import Optional, Dict, Any, List
+from urllib.parse import urlparse
+import ipaddress
+import socket
 from web3 import Web3
 import requests
 from .utils.logger import get_logger
@@ -676,10 +679,27 @@ class ERC8004Agent:
             except Exception:
                 return None
 
-        # Handle HTTP/HTTPS URL
+        # Handle HTTP/HTTPS URL (with SSRF protection)
         if agent_uri.startswith("http://") or agent_uri.startswith("https://"):
             try:
-                response = requests.get(agent_uri, timeout=10)
+                # SSRF protection: block private/reserved IP ranges
+                parsed = urlparse(agent_uri)
+                hostname = parsed.hostname
+                if hostname:
+                    # Resolve hostname to IP and check against blocked ranges
+                    try:
+                        resolved_ips = socket.getaddrinfo(hostname, None)
+                        for _, _, _, _, sockaddr in resolved_ips:
+                            ip = ipaddress.ip_address(sockaddr[0])
+                            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                                return None
+                            # Block cloud metadata endpoints
+                            if str(ip) == "169.254.169.254":
+                                return None
+                    except (socket.gaierror, ValueError):
+                        return None
+
+                response = requests.get(agent_uri, timeout=10, allow_redirects=False)
                 response.raise_for_status()
                 return response.json()
             except Exception:

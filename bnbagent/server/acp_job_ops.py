@@ -108,8 +108,16 @@ class ACPJobOps:
             Dict with success status, transaction hash, and data URL
         """
         try:
+            # Defense-in-depth: verify job before submitting (SDK-H01)
+            verification = await self.verify_job(job_id)
+            if not verification.get("valid"):
+                return {
+                    "success": False,
+                    "error": f"Job verification failed: {verification.get('error', 'unknown')}",
+                }
+
             client = self._get_client()
-            
+
             data_url = ""
             submit_timestamp = int(time.time())
             

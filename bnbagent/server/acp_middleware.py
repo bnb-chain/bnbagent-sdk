@@ -40,15 +40,14 @@ from ..acp_client import ACPStatus
 logger = logging.getLogger(__name__)
 
 JOB_ID_HEADER = "x-job-id"
+JOB_VERIFY_TIMEOUT = 30  # seconds
 
 DEFAULT_SKIP_PATHS = [
     "/status",
     "/health",
     "/metrics",
     "/.well-known/",
-    "/admin/",
     "/negotiate",
-    "/submit-result",
 ]
 
 
@@ -95,7 +94,8 @@ class ACPMiddleware:
             await self.app(scope, receive, send)
             return
 
-        if method != "POST":
+        # Only verify unsafe methods (POST, PUT, PATCH, DELETE)
+        if method in ("GET", "HEAD", "OPTIONS"):
             await self.app(scope, receive, send)
             return
 
@@ -115,7 +115,18 @@ class ACPMiddleware:
             await self._send_error(send, 400, "Invalid job ID format: must be an integer.")
             return
 
-        result = await self._job_ops.verify_job(job_id)
+        try:
+            result = await asyncio.wait_for(
+                self._job_ops.verify_job(job_id),
+                timeout=JOB_VERIFY_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            await self._send_error(send, 504, "Job verification timed out")
+            return
+        except Exception as e:
+            logger.error(f"[ACPMiddleware] verify_job error: {e}")
+            await self._send_error(send, 502, f"Job verification failed: {e}")
+            return
 
         if not result["valid"]:
             await self._send_error(

@@ -7,6 +7,7 @@ Stores ServiceRecord JSON as local files. URLs use the file:// scheme.
 import json
 import logging
 import os
+import stat
 from pathlib import Path
 from typing import Optional
 
@@ -21,6 +22,8 @@ class LocalStorageProvider(IStorageProvider):
         self._base = Path(base_dir)
         try:
             self._base.mkdir(parents=True, exist_ok=True)
+            # Restrict directory permissions to owner only (rwx------)
+            os.chmod(self._base, stat.S_IRWXU)
         except OSError as e:
             raise StorageError(f"Failed to create storage directory '{base_dir}': {e}")
 
@@ -46,6 +49,8 @@ class LocalStorageProvider(IStorageProvider):
             
             filepath = self._base / fname
             filepath.write_text(content, encoding="utf-8")
+            # Restrict file permissions to owner only (rw-------)
+            os.chmod(filepath, stat.S_IRUSR | stat.S_IWUSR)
             logger.info(f"[LocalStorageProvider] Saved to {filepath}")
             return f"file://{filepath.resolve()}"
         except (OSError, IOError) as e:
