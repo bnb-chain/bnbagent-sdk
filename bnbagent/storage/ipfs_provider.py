@@ -39,22 +39,21 @@ class IPFSStorageProvider(IStorageProvider):
 
     def save_sync(self, data: dict, filename: Optional[str] = None) -> str:
         """
-        Synchronous upload — compatible with ACPJobOps.submit_result.
+        Synchronous upload for callers that are NOT in an async context.
 
-        Wraps the async upload() method for use in synchronous contexts.
+        Runs ``upload()`` in a new event loop on a background thread via
+        ``concurrent.futures.ThreadPoolExecutor``.  This is safe to call from
+        any synchronous code path regardless of whether an event loop exists
+        on the current thread.
+
+        **Async callers should use ``await upload()`` directly** — this method
+        exists only for purely synchronous call sites.
         """
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
+        import concurrent.futures
 
-        if loop and loop.is_running():
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, self.upload(data, filename))
-                return future.result()
-        else:
-            return asyncio.run(self.upload(data, filename))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(asyncio.run, self.upload(data, filename))
+            return future.result()
 
     async def upload(self, data: dict, filename: Optional[str] = None) -> str:
         headers = {

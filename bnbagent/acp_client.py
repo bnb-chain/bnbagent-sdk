@@ -3,6 +3,11 @@ EIP-8183 Agentic Commerce Protocol contract interaction client.
 
 Provides typed Python methods wrapping the on-chain AgenticCommerceUpgradeable contract:
   createJob, setBudget, fund, setProvider, submit, complete, reject, claimRefund, getJob.
+
+This client is intentionally **synchronous**.  web3.py's HTTPProvider performs
+blocking HTTP calls and there is no production-ready async transport.  Async
+callers (e.g. ACPJobOps) bridge via ``asyncio.to_thread()`` to avoid blocking
+the event loop.
 """
 
 import json

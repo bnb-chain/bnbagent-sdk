@@ -549,6 +549,159 @@ async def custom():
 
 ---
 
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────┐
+│                    Your Agent App                     │
+│              (FastAPI / custom server)                │
+├──────────────────────────────────────────────────────┤
+│                                                      │
+│   ┌────────────────────┐  ┌───────────────────────┐  │
+│   │   ACPMiddleware    │  │     ACPJobOps         │  │
+│   │   (request gate)   │  │  (job lifecycle)      │  │
+│   │                    │  │                       │  │
+│   │  • Job verification│  │  • verify_job()       │  │
+│   │  • Path filtering  │  │  • submit_result()    │  │
+│   │  • Timeout (30s)   │  │  • get_pending_jobs() │  │
+│   └────────┬───────────┘  └──────────┬────────────┘  │
+│            │                         │               │
+│            └──────────┬──────────────┘               │
+│                       ▼                              │
+│            ┌─────────────────────┐                   │
+│            │     ACPClient       │                   │
+│            │   (synchronous)     │  ◄── web3.py      │
+│            │                     │      (blocking)   │
+│            │  • create_job()     │                   │
+│            │  • fund() / submit()│                   │
+│            │  • get_job()        │                   │
+│            └──────────┬──────────┘                   │
+│                       │                              │
+│            ┌──────────┴──────────┐                   │
+│            │  IStorageProvider   │                   │
+│            │   (async primary)   │                   │
+│            ├─────────┬──────────┤                   │
+│            │ Local   │  IPFS    │                   │
+│            │ (file://)│ (ipfs://)│                   │
+│            └─────────┴──────────┘                   │
+└──────────────────────────────────────────────────────┘
+```
+
+### Async/Sync Boundary
+
+`ACPClient` is **intentionally synchronous** because `web3.py`'s `HTTPProvider` is blocking. Async callers (like `ACPJobOps` and middleware) bridge via `asyncio.to_thread()`:
+
+```python
+# ACPJobOps wraps sync ACPClient calls for async FastAPI usage
+result = await asyncio.to_thread(client.submit, job_id, deliverable_hash, opt_params)
+```
+
+This is the recommended pattern for integrating blocking I/O libraries with asyncio. If you're building a purely synchronous application, use `ACPClient` directly.
+
+---
+
+## Middleware Configuration
+
+The SDK provides `ACPMiddleware` for protecting your agent's endpoints with on-chain job verification.
+
+### Basic Setup
+
+```python
+from bnbagent.server import ACPMiddleware, ACPJobOps
+
+job_ops = ACPJobOps(rpc_url, acp_address, private_key)
+
+app.add_middleware(
+    ACPMiddleware,
+    job_ops=job_ops,
+)
+```
+
+### Custom Skip Paths
+
+By default, these paths skip job verification (read-only, no fund movement):
+
+- `/status`, `/health`, `/metrics` — Health checks
+- `/.well-known/` — Service discovery
+- `/negotiate` — Off-chain price negotiation
+
+To add your own skip paths:
+
+```python
+app.add_middleware(
+    ACPMiddleware,
+    job_ops=job_ops,
+    skip_paths=["/status", "/health", "/metrics", "/.well-known/", "/negotiate", "/docs"],
+)
+```
+
+Path matching uses **prefix matching**: `/health` matches `/health` and `/health/` but NOT `/healthcheck`.
+
+### What Gets Verified
+
+- **Safe methods** (GET, HEAD, OPTIONS) — always allowed, no verification
+- **Unsafe methods** (POST, PUT, PATCH, DELETE) — require `X-Job-Id` header + on-chain verification
+- **Verification checks:** job exists, status is FUNDED, this agent is the provider, not expired
+
+### HTTP Status Codes
+
+| Code | Meaning |
+|------|---------|
+| 400 | Invalid job ID format |
+| 402 | Missing `X-Job-Id` header |
+| 403 | Agent is not the provider for this job |
+| 408 | Job has expired |
+| 409 | Job status is not FUNDED |
+| 504 | On-chain verification timed out (30s) |
+| 502 | Verification failed (RPC error) |
+
+---
+
+## Security Considerations
+
+### Middleware Protection
+
+All endpoints that trigger on-chain transactions or process job data **must** be protected by `ACPMiddleware`. The middleware verifies that:
+
+1. The request includes a valid `X-Job-Id` header
+2. The job exists on-chain and is in `FUNDED` status
+3. This agent is the assigned provider
+4. The job has not expired
+
+**Do NOT** add security-sensitive paths to `skip_paths`. Paths like `/submit`, `/submit-result`, and `/execute` must always go through verification.
+
+### Defense in Depth
+
+Even behind middleware, `ACPJobOps.submit_result()` performs its own on-chain verification before broadcasting transactions. This protects against:
+
+- Direct invocation from scripts or internal services (bypassing HTTP middleware)
+- Race conditions between middleware check and actual submission
+
+### SSRF Protection
+
+When the SDK resolves agent URIs via HTTP (`parse_agent_uri()`), it blocks requests to:
+
+- Private networks (10.x, 172.16-31.x, 192.168.x)
+- Loopback addresses (127.x.x.x)
+- Cloud metadata endpoints (169.254.169.254, metadata.google.internal)
+- Link-local and reserved ranges
+
+Redirects are disabled (`allow_redirects=False`) to prevent redirect-based bypass.
+
+### Storage Security
+
+`LocalStorageProvider` sets restrictive file permissions:
+- Directories: `0700` (owner only)
+- Files: `0600` (owner read/write only)
+
+For production, use `IPFSStorageProvider` with a Pinata JWT token. Store the JWT in environment variables, never in code.
+
+### Bond Management (OOv3Evaluator)
+
+The evaluator contract uses an **operator-managed bond pool**. The contract owner deposits and withdraws bond tokens used for UMA assertions. `depositBond()` is permissionless (anyone can contribute), but `withdrawBond()` is owner-only. This is by design — the evaluator operator is responsible for maintaining sufficient bond balance.
+
+---
+
 ## Advanced: Low-Level APIs
 
 ### ACPClient

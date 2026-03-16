@@ -3,6 +3,16 @@ IStorageProvider — pluggable off-chain storage interface.
 
 Implementations handle upload/download of ServiceRecord JSON.
 The chain only stores hashes; full data lives off-chain.
+
+Async/Sync Design
+-----------------
+The primary interface is **async** (upload, download, exists) because storage
+I/O (HTTP calls to IPFS pinning services, etc.) is naturally async.
+
+Implementations MAY also provide a ``save_sync()`` convenience method for use
+by callers that are not running inside an async context. ``save_sync()`` is
+*not* part of the abstract interface because the async ``upload()`` method is
+the canonical API — async callers should use ``upload()`` directly.
 """
 
 import json
@@ -13,13 +23,22 @@ from web3 import Web3
 
 
 class IStorageProvider(ABC):
-    """Abstract base for pluggable off-chain storage."""
+    """
+    Abstract base for pluggable off-chain storage.
+
+    All core methods are async.  Callers running in an async context (e.g.
+    ACPJobOps) should ``await upload()`` directly.  A synchronous
+    ``save_sync()`` helper may be provided by concrete implementations for
+    use from purely synchronous code paths.
+    """
 
     @abstractmethod
     async def upload(self, data: dict, filename: Optional[str] = None) -> str:
         """
-        Upload JSON data. Returns a URL (ipfs://..., file://..., etc.).
-        
+        Upload JSON data.  Returns a URL (ipfs://..., file://..., etc.).
+
+        This is the canonical upload API — prefer this over ``save_sync()``.
+
         Args:
             data: JSON-serializable dict to upload
             filename: Optional filename hint (e.g., "job-123.json")

@@ -37,6 +37,19 @@ class ACPJobOps:
     Simplified job lifecycle operations for agents using EIP-8183.
 
     Combines ACPClient and optional storage handling into a single interface.
+
+    Async/Sync Boundary
+    --------------------
+    ACPClient is **synchronous** — web3.py's HTTPProvider performs blocking I/O
+    and there is no mature async web3 transport.  Converting ACPClient to async
+    would be a large, risky change.
+
+    ACPJobOps is **async** so it can be used from async frameworks (FastAPI, etc.)
+    without blocking the event loop.  Every call to a synchronous ACPClient method
+    is wrapped in ``asyncio.to_thread()`` to offload the blocking I/O to a thread.
+
+    Storage providers (IStorageProvider) are **async** — their ``upload()`` method
+    is awaited directly.
     """
 
     def __init__(
@@ -65,7 +78,7 @@ class ACPJobOps:
         self._client: Optional[ACPClient] = None
 
     def _get_client(self) -> ACPClient:
-        """Get or create ACPClient instance."""
+        """Get or create ACPClient instance (sync — no I/O on first call beyond ABI load)."""
         if self._client is None:
             w3 = Web3(Web3.HTTPProvider(self._rpc_url))
             try:
@@ -181,11 +194,10 @@ class ACPJobOps:
             # Use job-{jobId}.json naming convention
             filename = f"job-{job_id}.json"
             
+            # Storage providers are async — call upload() directly.
+            # Do NOT use save_sync() here; we are already in an async context.
             if self._storage:
-                if hasattr(self._storage, "save_sync"):
-                    data_url = self._storage.save_sync(deliverable_data, filename)
-                elif hasattr(self._storage, "upload"):
-                    data_url = await self._storage.upload(deliverable_data, filename)
+                data_url = await self._storage.upload(deliverable_data, filename)
                 logger.info(f"[ACPJobOps] Response uploaded: {data_url}")
             
             if data_url:

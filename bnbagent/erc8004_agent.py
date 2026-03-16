@@ -8,6 +8,7 @@ for common operations.
 
 from typing import Optional, Dict, Any, List
 from urllib.parse import urlparse
+import concurrent.futures
 import ipaddress
 import socket
 from web3 import Web3
@@ -685,21 +686,70 @@ class ERC8004Agent:
                 # SSRF protection: block private/reserved IP ranges
                 parsed = urlparse(agent_uri)
                 hostname = parsed.hostname
-                if hostname:
-                    # Resolve hostname to IP and check against blocked ranges
-                    try:
-                        resolved_ips = socket.getaddrinfo(hostname, None)
-                        for _, _, _, _, sockaddr in resolved_ips:
-                            ip = ipaddress.ip_address(sockaddr[0])
-                            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-                                return None
-                            # Block cloud metadata endpoints
-                            if str(ip) == "169.254.169.254":
-                                return None
-                    except (socket.gaierror, ValueError):
+                if not hostname:
+                    return None
+
+                # Block known cloud metadata hostnames
+                _BLOCKED_HOSTNAMES = {
+                    "metadata.google.internal",
+                    "metadata.goog",
+                    "169.254.169.254",
+                }
+                if hostname.lower() in _BLOCKED_HOSTNAMES:
+                    return None
+
+                # Resolve hostname with a timeout to avoid hanging on
+                # adversarial DNS servers
+                def _resolve():
+                    return socket.getaddrinfo(hostname, None)
+
+                try:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        resolved_ips = pool.submit(_resolve).result(timeout=5)
+                except (concurrent.futures.TimeoutError, socket.gaierror, ValueError, OSError):
+                    return None
+
+                # Pick the first resolved IP and validate it
+                if not resolved_ips:
+                    return None
+
+                safe_ip_str = None
+                for _, _, _, _, sockaddr in resolved_ips:
+                    ip = ipaddress.ip_address(sockaddr[0])
+
+                    # Unmap IPv6-mapped IPv4 (e.g. ::ffff:127.0.0.1)
+                    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+                        ip = ip.ipv4_mapped
+
+                    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                        return None
+                    # Block cloud metadata IP
+                    if str(ip) == "169.254.169.254":
                         return None
 
-                response = requests.get(agent_uri, timeout=10, allow_redirects=False)
+                    if safe_ip_str is None:
+                        safe_ip_str = str(ip)
+
+                if safe_ip_str is None:
+                    return None
+
+                # Build the request URL using the resolved IP directly to
+                # prevent DNS rebinding (a second resolution returning a
+                # different, internal IP).  The original Host header is
+                # preserved so the remote server routes correctly.
+                port = parsed.port
+                if port:
+                    netloc = f"{safe_ip_str}:{port}"
+                else:
+                    netloc = safe_ip_str
+                safe_url = parsed._replace(netloc=netloc).geturl()
+
+                response = requests.get(
+                    safe_url,
+                    timeout=10,
+                    allow_redirects=False,
+                    headers={"Host": hostname},
+                )
                 response.raise_for_status()
                 return response.json()
             except Exception:

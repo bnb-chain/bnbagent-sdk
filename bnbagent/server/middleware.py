@@ -159,9 +159,18 @@ class ApexMiddleware:
                 asyncio.create_task(self._accept_job_async(job_id))
 
     def _should_skip(self, path: str) -> bool:
-        """Check if path should skip verification."""
-        path_lower = path.lower()
-        return any(skip.lower() in path_lower for skip in self._skip_paths)
+        """Check if path should skip verification using prefix matching.
+
+        A skip entry matches when the path starts with it AND the next
+        character (if any) is ``/`` or the path ends exactly there
+        (with or without a trailing slash).
+        """
+        path_lower = path.lower().rstrip("/")
+        for skip in self._skip_paths:
+            prefix = skip.lower().rstrip("/")
+            if path_lower == prefix or path_lower.startswith(prefix + "/"):
+                return True
+        return False
 
     async def _accept_job_async(self, job_id: int) -> None:
         """Accept job in background."""
