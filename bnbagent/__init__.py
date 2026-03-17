@@ -1,5 +1,5 @@
 """
-BNBAgent SDK — Python SDK for the APEX Protocol.
+BNBAgent SDK — Python toolkit for building on-chain AI agents on BNB Chain.
 
 APEX (Agent Payment Exchange Protocol) orchestrates the full agent commerce flow:
 - ERC-8004 (Identity Registry): On-chain agent registration & discovery

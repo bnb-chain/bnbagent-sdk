@@ -1,6 +1,6 @@
 # BNBAgent SDK
 
-Python SDK for the APEX Protocol — on-chain commerce for AI agents.
+Python toolkit for building on-chain AI agents on BNB Chain.
 
 ## What is This?
 
