@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from .interface import IStorageProvider
-from ..exceptions import StorageError
+from ..core.exceptions import StorageError
 
 logger = logging.getLogger(__name__)
 

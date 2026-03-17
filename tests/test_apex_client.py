@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from web3 import Web3
 
-from bnbagent.apex_client import (
+from bnbagent.apex.client import (
     APEXClient,
     APEXStatus,
     DEFAULT_LIVENESS_SECONDS,
@@ -272,7 +272,7 @@ class TestSendTx:
         assert result["status"] == 1
         assert "transactionHash" in result
 
-    @patch("bnbagent.apex_client.time.sleep")
+    @patch("bnbagent.apex.client.time.sleep")
     def test_nonce_retry(self, mock_sleep, apex_client):
         fn = MagicMock()
         fn.build_transaction.return_value = {"nonce": 0}
@@ -283,7 +283,7 @@ class TestSendTx:
         result = apex_client._send_tx(fn)
         assert result["status"] == 1
 
-    @patch("bnbagent.apex_client.time.sleep")
+    @patch("bnbagent.apex.client.time.sleep")
     def test_rate_limit_retry(self, mock_sleep, apex_client):
         fn = MagicMock()
         fn.build_transaction.return_value = {"nonce": 0}
@@ -295,7 +295,7 @@ class TestSendTx:
         assert result["status"] == 1
         mock_sleep.assert_called_once()
 
-    @patch("bnbagent.apex_client.time.sleep")
+    @patch("bnbagent.apex.client.time.sleep")
     def test_exhausts_retries(self, mock_sleep, apex_client):
         fn = MagicMock()
         fn.build_transaction.return_value = {"nonce": 0}
@@ -318,7 +318,7 @@ class TestCallWithRetry:
         result = apex_client._call_with_retry(fn)
         assert result == 42
 
-    @patch("bnbagent.apex_client.time.sleep")
+    @patch("bnbagent.apex.client.time.sleep")
     def test_rate_limit_retry(self, mock_sleep, apex_client):
         fn = MagicMock()
         fn.call.side_effect = [Exception("429"), 99]

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from bnbagent.nonce_manager import NonceManager
+from bnbagent.core.nonce_manager import NonceManager
 from tests.conftest import FAKE_ADDRESS
 
 

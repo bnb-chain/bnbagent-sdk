@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from bnbagent.paymaster import Paymaster, _to_hex, _to_address_hex
+from bnbagent.core.paymaster import Paymaster, _to_hex, _to_address_hex
 
 
 class TestHelpers:
@@ -50,7 +50,7 @@ class TestPaymaster:
     def _make_paymaster(self):
         return Paymaster(paymaster_url="https://paymaster.example.com")
 
-    @patch("bnbagent.paymaster.requests.post")
+    @patch("bnbagent.core.paymaster.requests.post")
     def test_get_transaction_count_success(self, mock_post):
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"result": "0xa"}
@@ -61,7 +61,7 @@ class TestPaymaster:
         count = pm.eth_getTransactionCount("0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18")
         assert count == 10
 
-    @patch("bnbagent.paymaster.requests.post")
+    @patch("bnbagent.core.paymaster.requests.post")
     def test_get_transaction_count_missing_result(self, mock_post):
         mock_resp = MagicMock()
         mock_resp.json.return_value = {}
@@ -72,7 +72,7 @@ class TestPaymaster:
         with pytest.raises(ValueError, match="missing 'result'"):
             pm.eth_getTransactionCount("0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18")
 
-    @patch("bnbagent.paymaster.requests.post")
+    @patch("bnbagent.core.paymaster.requests.post")
     def test_send_raw_transaction_success(self, mock_post):
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"result": "0x" + "ab" * 32}
@@ -83,7 +83,7 @@ class TestPaymaster:
         tx_hash = pm.eth_sendRawTransaction("0xsignedtx")
         assert tx_hash.startswith("0x")
 
-    @patch("bnbagent.paymaster.requests.post")
+    @patch("bnbagent.core.paymaster.requests.post")
     def test_send_raw_transaction_missing_result(self, mock_post):
         mock_resp = MagicMock()
         mock_resp.json.return_value = {}
@@ -94,7 +94,7 @@ class TestPaymaster:
         with pytest.raises(ValueError, match="missing 'result'"):
             pm.eth_sendRawTransaction("0xsignedtx")
 
-    @patch("bnbagent.paymaster.requests.post")
+    @patch("bnbagent.core.paymaster.requests.post")
     def test_send_raw_transaction_adds_prefix(self, mock_post):
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"result": "0xhash"}
@@ -106,7 +106,7 @@ class TestPaymaster:
         call_payload = mock_post.call_args[1]["json"]
         assert call_payload["params"][0].startswith("0x")
 
-    @patch("bnbagent.paymaster.requests.post")
+    @patch("bnbagent.core.paymaster.requests.post")
     def test_is_sponsorable_true(self, mock_post):
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"result": {"sponsorable": True}}
@@ -117,7 +117,7 @@ class TestPaymaster:
         tx = {"to": "0x" + "ab" * 20, "from": "0x" + "cd" * 20, "value": 0, "data": b"", "gas": 21000}
         assert pm.isSponsorable(tx) is True
 
-    @patch("bnbagent.paymaster.requests.post")
+    @patch("bnbagent.core.paymaster.requests.post")
     def test_is_sponsorable_false(self, mock_post):
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"result": {"sponsorable": False}}
@@ -127,7 +127,7 @@ class TestPaymaster:
         pm = self._make_paymaster()
         assert pm.isSponsorable({"to": "0x" + "ab" * 20, "from": "0x" + "cd" * 20}) is False
 
-    @patch("bnbagent.paymaster.requests.post")
+    @patch("bnbagent.core.paymaster.requests.post")
     def test_is_sponsorable_missing_result(self, mock_post):
         mock_resp = MagicMock()
         mock_resp.json.return_value = {}
@@ -137,7 +137,7 @@ class TestPaymaster:
         pm = self._make_paymaster()
         assert pm.isSponsorable({"to": "0x" + "ab" * 20}) is False
 
-    @patch("bnbagent.paymaster.requests.post")
+    @patch("bnbagent.core.paymaster.requests.post")
     def test_rpc_error(self, mock_post):
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"error": {"message": "bad request", "code": -32600}}
@@ -148,7 +148,7 @@ class TestPaymaster:
         with pytest.raises(RuntimeError, match="RPC error"):
             pm.eth_getTransactionCount("0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18")
 
-    @patch("bnbagent.paymaster.requests.post")
+    @patch("bnbagent.core.paymaster.requests.post")
     def test_connection_error(self, mock_post):
         import requests
         mock_post.side_effect = requests.exceptions.ConnectionError("refused")

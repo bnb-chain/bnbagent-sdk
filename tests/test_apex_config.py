@@ -2,7 +2,7 @@
 
 import pytest
 
-from bnbagent.quickstart.config import APEXConfig
+from bnbagent.apex.config import APEXConfig
 
 
 VALID_CONFIG = {

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from bnbagent.negotiation import (
+from bnbagent.apex.negotiation import (
     TermSpecification,
     NegotiationRequest,
     NegotiationResponse,

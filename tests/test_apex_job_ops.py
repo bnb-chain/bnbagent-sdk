@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 
 import pytest
 
-from bnbagent.apex_client import APEXStatus
-from bnbagent.server.apex_job_ops import APEXJobOps
+from bnbagent.apex.client import APEXStatus
+from bnbagent.apex.server.job_ops import APEXJobOps
 from tests.conftest import FAKE_ADDRESS, FAKE_PRIVATE_KEY, FAKE_TX_HASH
 
 

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from web3 import Web3
 
-from bnbagent.apex_evaluator_client import (
+from bnbagent.apex.evaluator_client import (
     APEXEvaluatorClient,
     AssertionInfo,
 )
@@ -171,7 +171,7 @@ class TestWriteMethods:
 
 
 class TestRetry:
-    @patch("bnbagent.apex_evaluator_client.time.sleep")
+    @patch("bnbagent.apex.evaluator_client.time.sleep")
     def test_nonce_retry(self, mock_sleep, evaluator_client):
         fn = MagicMock()
         fn.build_transaction.return_value = {"nonce": 0}
@@ -182,7 +182,7 @@ class TestRetry:
         result = evaluator_client._send_tx(fn)
         assert result["status"] == 1
 
-    @patch("bnbagent.apex_evaluator_client.time.sleep")
+    @patch("bnbagent.apex.evaluator_client.time.sleep")
     def test_rate_limit_retry(self, mock_sleep, evaluator_client):
         fn = MagicMock()
         fn.build_transaction.return_value = {"nonce": 0}

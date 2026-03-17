@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from bnbagent.service_record import (
+from bnbagent.apex.service_record import (
     RequestData,
     ResponseData,
     NegotiationTerms,

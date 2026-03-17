@@ -63,7 +63,7 @@ def fake_abi():
 @pytest.fixture
 def apex_client(mock_web3, fake_abi):
     """APEXClient instance with mocked web3."""
-    from bnbagent.apex_client import APEXClient
+    from bnbagent.apex.client import APEXClient
 
     return APEXClient(mock_web3, FAKE_CONTRACT_ADDRESS, FAKE_PRIVATE_KEY, fake_abi)
 
@@ -71,7 +71,7 @@ def apex_client(mock_web3, fake_abi):
 @pytest.fixture
 def evaluator_client(mock_web3, fake_abi):
     """APEXEvaluatorClient instance with mocked web3."""
-    from bnbagent.apex_evaluator_client import APEXEvaluatorClient
+    from bnbagent.apex.evaluator_client import APEXEvaluatorClient
 
     return APEXEvaluatorClient(
         mock_web3, FAKE_CONTRACT_ADDRESS, FAKE_PRIVATE_KEY, fake_abi
@@ -92,6 +92,6 @@ def mock_storage():
 def clear_nonce_singletons():
     """Clear NonceManager singletons after each test."""
     yield
-    from bnbagent.nonce_manager import NonceManager
+    from bnbagent.core.nonce_manager import NonceManager
 
     NonceManager._clear_all()

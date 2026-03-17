@@ -1,11 +1,11 @@
-"""Tests for quickstart app factory."""
+"""Tests for APEX app factory."""
 
 from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 
-from bnbagent.quickstart.config import APEXConfig
-from bnbagent.quickstart.app import (
+from bnbagent.apex.config import APEXConfig
+from bnbagent.apex.server.routes import (
     APEXState,
     create_apex_state,
     create_apex_routes,
@@ -22,7 +22,7 @@ VALID_CONFIG = APEXConfig(
 @pytest.fixture
 def patched_web3():
     """Patch Web3 to avoid real RPC connections."""
-    with patch("bnbagent.server.apex_job_ops.Web3") as mock_web3_cls:
+    with patch("bnbagent.apex.server.job_ops.Web3") as mock_web3_cls:
         mock_w3 = MagicMock()
         mock_w3.provider.endpoint_uri = "https://fake-rpc.example.com"
         mock_w3.eth.get_transaction_count.return_value = 0

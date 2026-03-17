@@ -1,55 +1,37 @@
 """
 BNBAgent SDK — Python toolkit for building on-chain AI agents on BNB Chain.
 
-APEX (Agent Payment Exchange Protocol) orchestrates the full agent commerce flow:
-- ERC-8004 (Identity Registry): On-chain agent registration & discovery
-- ERC-8183 (Agentic Commerce): Job lifecycle & escrow
-- APEX Evaluator: Pluggable evaluation & dispute resolution
-- Negotiation + ServiceRecord: Off-chain terms & evidence
+Modules:
+- core: Shared infrastructure (exceptions, nonce manager, paymaster, module system)
+- erc8004: ERC-8004 Identity Registry — on-chain agent registration & discovery
+- apex: APEX Protocol (ERC-8183) — job lifecycle, escrow, evaluation, negotiation
+- wallets: Pluggable wallet providers (EVM, MPC)
+- storage: Pluggable storage providers (local, IPFS)
 
-Core components:
-- ERC8004Agent: Agent registration and discovery (ERC-8004)
-- APEXClient: ERC-8183 contract interaction (job lifecycle)
-- APEXEvaluatorClient: Evaluator integration (currently UMA OOv3, pluggable)
-- NegotiationHandler: Ready-to-use negotiation processing
+Module system (import from bnbagent.core):
+- BNBAgentModule: Base class for protocol modules
+- ModuleRegistry: Module discovery and lifecycle management
+- BNBAgentConfig: Unified SDK configuration
+- BNBAgentSDK: High-level facade
 
-Quickstart (import from bnbagent.quickstart):
-- create_apex_app: Create a complete FastAPI app with APEX endpoints
-- create_apex_routes: Create routes to mount in existing apps
-- APEXConfig: Unified configuration (from_env() for env vars)
-
-Server components (import from bnbagent.server):
+APEX server components (import from bnbagent.apex.server):
 - APEXJobOps: Simplified async job lifecycle operations
 - APEXMiddleware: FastAPI middleware for job verification
-
-For settlement, use APEXEvaluatorClient directly (settle_job, is_settleable, etc.)
+- create_apex_app / create_apex_routes: FastAPI application factories
+- APEXConfig: APEX-specific configuration (from bnbagent.apex.config)
 """
 
-from .erc8004_agent import ERC8004Agent
+# ERC-8004 Identity Registry
+from .erc8004 import ERC8004Agent, AgentEndpoint
+
+# Wallets
 from .wallets import WalletProvider, EVMWalletProvider, MPCWalletProvider
-from .models import AgentEndpoint
-from .constants import TESTNET_CONFIG
-from .paymaster import Paymaster
-from .apex_client import (
-    APEXClient, APEXStatus,
-    DEFAULT_LIVENESS_SECONDS, DVM_BUFFER_SECONDS, DEFAULT_JOB_EXPIRY_SECONDS,
-    get_default_expiry,
-)
-from .apex_evaluator_client import APEXEvaluatorClient, AssertionInfo
-from .service_record import (
-    ServiceRecord, RequestData, ResponseData,
-    NegotiationTerms, TimestampData, OnChainReferences,
-)
-from .negotiation import (
-    NegotiationRequest, NegotiationResponse,
-    TermSpecification, ReasonCode,
-    NegotiationHandler, NegotiationResult,
-    PriceTooLowError,
-)
-from .nonce_manager import NonceManager
-from .abi_loader import load_erc20_abi
-from .storage import LocalStorageProvider, storage_provider_from_env
-from .exceptions import (
+
+# Core infrastructure
+from .core import (
+    Paymaster,
+    NonceManager,
+    load_erc20_abi,
     BNBAgentError,
     ContractError,
     StorageError,
@@ -60,26 +42,69 @@ from .exceptions import (
     NegotiationError,
 )
 
+# Module system
+from .core import BNBAgentModule, ModuleInfo, ModuleRegistry, BNBAgentConfig, NetworkConfig, BNBAgentSDK
+
+# APEX Protocol — ERC-8183 (Agentic Commerce)
+from .apex import (
+    APEXClient, APEXStatus,
+    DEFAULT_LIVENESS_SECONDS, DVM_BUFFER_SECONDS, DEFAULT_JOB_EXPIRY_SECONDS,
+    get_default_expiry,
+    APEXEvaluatorClient, AssertionInfo,
+    NegotiationRequest, NegotiationResponse,
+    TermSpecification, ReasonCode,
+    NegotiationHandler, NegotiationResult,
+    PriceTooLowError,
+    ServiceRecord, RequestData, ResponseData,
+    NegotiationTerms, TimestampData, OnChainReferences,
+)
+
+# Storage
+from .storage import LocalStorageProvider, storage_provider_from_env
+
+# Construct unified TESTNET_CONFIG from module configs
+from .erc8004.constants import ERC8004_CONFIG
+from .apex.constants import APEX_CONFIG
+from .core.constants import _SHARED_TESTNET
+
+TESTNET_CONFIG = {
+    **_SHARED_TESTNET,
+    "registry_contract": ERC8004_CONFIG["registry_contract"],
+    "erc8183_contract": APEX_CONFIG["erc8183_contract"],
+    "apex_evaluator": APEX_CONFIG["apex_evaluator"],
+    "payment_token": APEX_CONFIG["payment_token"],
+}
+
 __version__ = "0.1.0"
 __all__ = [
+    # ERC-8004
     "ERC8004Agent",
+    "AgentEndpoint",
+    # Wallets
     "WalletProvider",
     "EVMWalletProvider",
     "MPCWalletProvider",
-    "TESTNET_CONFIG",
-    "AgentEndpoint",
+    # Core
     "Paymaster",
-    # APEX Protocol — ERC-8183 (Agentic Commerce)
+    "NonceManager",
+    "load_erc20_abi",
+    "TESTNET_CONFIG",
+    # Module system
+    "BNBAgentModule",
+    "ModuleInfo",
+    "ModuleRegistry",
+    "BNBAgentConfig",
+    "NetworkConfig",
+    "BNBAgentSDK",
+    # APEX Protocol
     "APEXClient",
     "APEXStatus",
     "DEFAULT_LIVENESS_SECONDS",
     "DVM_BUFFER_SECONDS",
     "DEFAULT_JOB_EXPIRY_SECONDS",
     "get_default_expiry",
-    # APEX Evaluator
     "APEXEvaluatorClient",
     "AssertionInfo",
-    # Service Records
     "ServiceRecord",
     "RequestData",
     "ResponseData",
@@ -93,10 +118,7 @@ __all__ = [
     "NegotiationHandler",
     "NegotiationResult",
     "PriceTooLowError",
-    # Nonce management
-    "NonceManager",
-    # ABI loaders
-    "load_erc20_abi",
+    # Storage
     "LocalStorageProvider",
     "storage_provider_from_env",
     # Exceptions

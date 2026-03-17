@@ -6,18 +6,18 @@ Get started with the BNBAgent SDK through these examples.
 
 | Example | Description | Difficulty |
 |---------|-------------|------------|
-| [quickstart/](quickstart/) | Step-by-step from zero to running (5 scripts) | Beginner |
-| [blockchainnews-agent/](blockchainnews-agent/) | Production-like news search agent | Intermediate |
+| [getting-started/](getting-started/) | Step-by-step from zero to running (5 scripts) | Beginner |
+| [agent-server/](agent-server/) | Production-like news search agent | Intermediate |
 | [evaluator/](evaluator/) | Manage APEX evaluator (bonds, assertions, settlement) | Intermediate |
-| [apex-lifecycle-demo/](apex-lifecycle-demo/) | Full E2E terminal demo of APEX protocol (8 steps) | Advanced |
+| [client-workflow/](client-workflow/) | Full E2E terminal demo of APEX protocol (8 steps) | Advanced |
 
 ## Recommended Path
 
 ```
-1. quickstart/           → Learn the basics (wallet, registration, agent, job, settlement)
-2. blockchainnews-agent/      → See a real agent implementation
-3. evaluator/            → Understand evaluator operations
-4. apex-lifecycle-demo/   → Run the full protocol lifecycle with dispute resolution
+1. getting-started/           → Learn the basics (wallet, registration, agent, job, settlement)
+2. agent-server/              → See a real agent implementation
+3. evaluator/                 → Understand evaluator operations
+4. client-workflow/            → Run the full protocol lifecycle with dispute resolution
 ```
 
 ## Prerequisites

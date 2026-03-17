@@ -58,9 +58,9 @@ class TestERC8004Agent:
     def sdk(self, mock_contract_interface, mock_wallet_provider):
         """Create SDK instance with mocked contract interface"""
         with patch(
-            "bnbagent.erc8004_agent.ContractInterface"
+            "bnbagent.erc8004.agent.ContractInterface"
         ) as mock_contract_class, patch(
-            "bnbagent.erc8004_agent.Web3"
+            "bnbagent.erc8004.agent.Web3"
         ) as mock_web3_class:
             # Mock Web3 connection check
             mock_web3 = Mock()
@@ -163,7 +163,7 @@ class TestERC8004Agent:
 
     def test_parse_agent_uri_http(self, sdk):
         """Test parsing HTTP agent URI"""
-        with patch("bnbagent.erc8004_agent.requests.get") as mock_get:
+        with patch("bnbagent.erc8004.agent.requests.get") as mock_get:
             mock_response = Mock()
             mock_response.json.return_value = {
                 "name": "Test Agent",
@@ -304,7 +304,7 @@ class TestERC8004Agent:
 
     def test_get_all_agents(self, sdk):
         """Test get_all_agents API call"""
-        with patch("bnbagent.erc8004_agent.requests.get") as mock_get:
+        with patch("bnbagent.erc8004.agent.requests.get") as mock_get:
             mock_response = Mock()
             mock_response.json.return_value = {
                 "items": [
@@ -326,7 +326,7 @@ class TestERC8004Agent:
 
     def test_get_all_agents_with_pagination(self, sdk):
         """Test get_all_agents with pagination parameters"""
-        with patch("bnbagent.erc8004_agent.requests.get") as mock_get:
+        with patch("bnbagent.erc8004.agent.requests.get") as mock_get:
             mock_response = Mock()
             mock_response.json.return_value = {
                 "items": [{"token_id": 11, "name": "Agent 11"}],
@@ -348,7 +348,7 @@ class TestERC8004Agent:
 
     def test_get_all_agents_connection_error(self, sdk):
         """Test get_all_agents handles connection errors"""
-        with patch("bnbagent.erc8004_agent.requests.get") as mock_get:
+        with patch("bnbagent.erc8004.agent.requests.get") as mock_get:
             mock_get.side_effect = requests.exceptions.ConnectionError("Network error")
 
             with pytest.raises(ConnectionError, match="8004scan API request failed"):
@@ -356,7 +356,7 @@ class TestERC8004Agent:
 
     def test_get_all_agents_uses_network_chain_id(self, sdk):
         """Test get_all_agents uses chain_id from network config"""
-        with patch("bnbagent.erc8004_agent.requests.get") as mock_get:
+        with patch("bnbagent.erc8004.agent.requests.get") as mock_get:
             mock_response = Mock()
             mock_response.json.return_value = {"items": [], "total": 0}
             mock_response.raise_for_status = Mock()
@@ -459,7 +459,7 @@ class TestERC8004AgentInitialization:
         mock_wallet.address = "0x" + "0" * 40
 
         with pytest.raises(ValueError, match="Unknown network"):
-            with patch("bnbagent.erc8004_agent.Web3") as mock_web3_class:
+            with patch("bnbagent.erc8004.agent.Web3") as mock_web3_class:
                 mock_web3 = Mock()
                 mock_web3.is_connected.return_value = True
                 mock_web3_class.return_value = mock_web3
@@ -475,7 +475,7 @@ class TestERC8004AgentInitialization:
         mock_wallet = Mock()
         mock_wallet.address = "0x" + "0" * 40
 
-        with patch("bnbagent.erc8004_agent.Web3") as mock_web3_class:
+        with patch("bnbagent.erc8004.agent.Web3") as mock_web3_class:
             mock_web3 = Mock()
             mock_web3.is_connected.return_value = False
             mock_web3_class.return_value = mock_web3

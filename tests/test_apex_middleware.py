@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from bnbagent.apex_client import APEXStatus
-from bnbagent.server.apex_middleware import (
+from bnbagent.apex.client import APEXStatus
+from bnbagent.apex.server.middleware import (
     APEXMiddleware,
     create_apex_middleware,
     DEFAULT_SKIP_PATHS,
@@ -149,7 +149,7 @@ class TestAPEXMiddleware:
         job_ops.verify_job.side_effect = slow_verify
 
         # Reduce timeout for test
-        import bnbagent.server.apex_middleware as mw_module
+        import bnbagent.apex.server.middleware as mw_module
         original_timeout = mw_module.JOB_VERIFY_TIMEOUT
         mw_module.JOB_VERIFY_TIMEOUT = 0.01
         try:

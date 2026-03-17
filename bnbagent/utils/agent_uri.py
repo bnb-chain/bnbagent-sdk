@@ -9,7 +9,7 @@ import base64
 from typing import Optional, Dict, Any, List
 from web3 import Web3
 
-from ..models import AgentEndpoint
+from ..erc8004.models import AgentEndpoint
 
 
 class AgentURIGenerator:
