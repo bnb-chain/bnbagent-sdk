@@ -4,10 +4,13 @@ Paymaster module for ERC-4337 account abstraction.
 Provides methods for interacting with paymaster services to sponsor gas fees.
 """
 
-from typing import Dict, Any, Union
+from typing import Dict, Any, Optional, Union
+import logging
 import requests
 from web3 import Web3
 from .utils.logger import get_logger
+
+logger = logging.getLogger(__name__)
 
 
 def _to_hex(value: Union[int, str, bytes, None], default: str = "0x0") -> str:
@@ -56,7 +59,8 @@ def _to_address_hex(address: Union[str, None], default: str = "0x0") -> str:
     if isinstance(address, str):
         try:
             return Web3.to_checksum_address(address)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Invalid address '{address}', using default '{default}': {e}")
             return default
     else:
         return default
@@ -99,7 +103,7 @@ class Paymaster:
         method: str,
         params: list,
         request_id: int = 1,
-        headers: Dict[str, Any] = {},
+        headers: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Make an RPC request to the paymaster service.
@@ -108,6 +112,7 @@ class Paymaster:
             method: RPC method name
             params: Method parameters
             request_id: Request ID (default: 1)
+            headers: Optional extra HTTP headers
 
         Returns:
             dict: RPC response
@@ -122,13 +127,14 @@ class Paymaster:
             "params": params,
         }
 
-        headers.update({"Content-Type": "application/json"})
+        merged_headers = dict(headers) if headers else {}
+        merged_headers.setdefault("Content-Type", "application/json")
 
         try:
             self._logger.debug(f"Making RPC request: {method} to {self.paymaster_url}")
             response = requests.post(
                 self.paymaster_url,
-                headers=headers,
+                headers=merged_headers,
                 json=payload,
                 timeout=30,
             )
@@ -194,7 +200,7 @@ class Paymaster:
     def eth_sendRawTransaction(
         self,
         signed_transaction: str,
-        tx_options: Dict[str, Any] = {},
+        tx_options: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Send a signed raw transaction to the paymaster service.

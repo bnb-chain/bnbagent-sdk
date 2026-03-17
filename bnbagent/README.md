@@ -1,6 +1,8 @@
-# API Reference
+# ERC-8004 API Reference
 
-Complete API documentation for the BNBAgent SDK.
+API documentation for agent registration and discovery (ERC-8004).
+
+For APEX protocol (evaluator, negotiation, job ops, middleware), see the [root README](../README.md#advanced-low-level-apis).
 
 ## Table of Contents
 

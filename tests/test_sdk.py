@@ -13,7 +13,7 @@ class TestERC8004Agent:
 
     # Default test configuration
     DEFAULT_NETWORK = "bsc-testnet"
-    DEFAULT_CONTRACT_ADDRESS = "0x8004A41392bdd4A4F12339447ab4B8719D562e51"
+    DEFAULT_CONTRACT_ADDRESS = "0x8004A818BFB912233c491871b3d84c89A494BD9e"
 
     @pytest.fixture
     def mock_contract_interface(self):
