@@ -11,7 +11,9 @@ Environment variables:
     BSC_RPC_URL or RPC_URL      - Blockchain RPC endpoint (overrides network default)
     ERC8183_ADDRESS             - ERC-8183 contract address (overrides network default)
     APEX_EVALUATOR_ADDRESS      - APEX Evaluator address (overrides network default)
-    PRIVATE_KEY                 - Agent wallet private key
+    PRIVATE_KEY                 - Agent wallet private key (optional; imported & encrypted
+                                  on first run, then only WALLET_PASSWORD is needed;
+                                  if omitted and no keystore exists, a new wallet is auto-generated)
     WALLET_PASSWORD             - Password for wallet encryption (required with PRIVATE_KEY)
     CHAIN_ID                    - Chain ID (overrides network default)
     AGENT_PRICE                 - Default negotiation price (default: 1e18)
@@ -87,15 +89,14 @@ class APEXConfig:
             )
             self.private_key = ""  # Clear plaintext
 
-        # Load from existing keystore when no private_key but password is given
+        # No private_key supplied — let EVMWalletProvider load keystore or generate
         elif not self.private_key and not self.wallet_provider and self.wallet_password:
             from ..wallets import EVMWalletProvider
 
-            if EVMWalletProvider.keystore_exists(address=self.wallet_address or None):
-                self.wallet_provider = EVMWalletProvider(
-                    password=self.wallet_password,
-                    address=self.wallet_address or None,
-                )
+            self.wallet_provider = EVMWalletProvider(
+                password=self.wallet_password,
+                address=self.wallet_address or None,
+            )
 
     def __repr__(self) -> str:
         """Safe repr that hides sensitive data."""
@@ -165,18 +166,15 @@ class APEXConfig:
         private_key = get_env("PRIVATE_KEY") or ""
         wallet_address = get_env("WALLET_ADDRESS") or ""
 
-        # PRIVATE_KEY is required on first run only; after that the encrypted
-        # keystore in ~/.bnbagent/wallets/ is used and PRIVATE_KEY can be removed.
+        # PRIVATE_KEY is optional: if set it is imported & encrypted on first run;
+        # if omitted, EVMWalletProvider loads the keystore or auto-generates a new wallet.
         if not private_key:
             from ..wallets import EVMWalletProvider
 
-            if not EVMWalletProvider.keystore_exists(address=wallet_address or None):
-                raise ValueError(
-                    "APEXConfig validation failed: PRIVATE_KEY is required on first run. "
-                    "After first run, the key is encrypted in ~/.bnbagent/wallets/ "
-                    "and only WALLET_PASSWORD is needed."
-                )
-            logger.info("[APEXConfig] Loading wallet from existing keystore (PRIVATE_KEY not set)")
+            if EVMWalletProvider.keystore_exists(address=wallet_address or None):
+                logger.info("[APEXConfig] Loading wallet from existing keystore (PRIVATE_KEY not set)")
+            else:
+                logger.info("[APEXConfig] No PRIVATE_KEY and no keystore found — a new wallet will be auto-generated")
 
         # Build storage from StorageConfig
         storage_config = StorageConfig.from_env()

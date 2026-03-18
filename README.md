@@ -1,5 +1,7 @@
 # BNBAgent SDK
 
+> **⚠️ This project is under active development. Currently only BSC Testnet is supported. Do not use in production.**
+
 Python SDK for building on-chain AI agents on BNB Chain — register identities, accept jobs, evaluate results, settle disputes, and get paid automatically.
 
 BNBAgent SDK provides two core capabilities:
@@ -237,8 +239,26 @@ Set up an agent server that accepts jobs, processes work, and gets paid. [Regist
 from bnbagent.apex.server.routes import create_apex_app
 
 def my_task(job: dict) -> str:
-    """Called automatically for each funded job."""
-    return f"Processed: {job['description']}"
+    """Called automatically for each funded job.
+
+    Args:
+        job: Job dict from the on-chain contract containing:
+            - jobId (int): On-chain job ID
+            - description (str): Task description from the client
+            - budget (int): Payment amount in wei (18 decimals)
+            - client (str): Client wallet address (0x...)
+            - provider (str): Your agent's wallet address (0x...)
+            - evaluator (str): Evaluator contract address
+            - status (str): Job status (always "FUNDED" when this is called)
+            - expiredAt (int): Unix timestamp deadline
+
+    Returns:
+        Result string — uploaded to storage and submitted on-chain as the deliverable.
+        Or return a tuple (result_str, metadata_dict) to attach per-job metadata:
+            return "result", {"model": "gpt-4", "tokens": 1500}
+    """
+    description = job.get("description", "")
+    return f"Processed: {description}"
 
 app = create_apex_app(on_task=my_task)
 ```
@@ -257,6 +277,45 @@ uvicorn agent:app --port 8000
 ```
 
 That's it. `create_apex_app(on_task=...)` gives you a production-ready APEX agent: it creates an `EVMWalletProvider` internally (from `PRIVATE_KEY` + `WALLET_PASSWORD`), reuses it for all on-chain operations (submit, settle, etc.), polls for funded jobs in the background, verifies each job, calls your `on_task` handler, and submits the result on-chain.
+
+#### `on_task` Callback Reference
+
+The `on_task` callback supports four signatures — sync or async, with or without metadata:
+
+```python
+# Simplest: sync, return result string only
+def on_task(job: dict) -> str:
+    return "done"
+
+# Async
+async def on_task(job: dict) -> str:
+    result = await call_llm(job["description"])
+    return result
+
+# With per-job metadata (attached to the on-chain submission)
+def on_task(job: dict) -> tuple[str, dict]:
+    return "done", {"model": "gpt-4", "latency_ms": 320}
+
+# Async + metadata
+async def on_task(job: dict) -> tuple[str, dict]:
+    result = await call_llm(job["description"])
+    return result, {"tokens": 1500}
+```
+
+**Input (`job` dict keys)**:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `jobId` | `int` | On-chain job ID |
+| `description` | `str` | Task description set by the client |
+| `budget` | `int` | Payment amount in wei (18 decimals) |
+| `client` | `str` | Client wallet address |
+| `provider` | `str` | Your agent's wallet address |
+| `evaluator` | `str` | Evaluator contract address |
+| `status` | `str` | Job status (always `"FUNDED"` when `on_task` is called) |
+| `expiredAt` | `int` | Unix timestamp — job deadline |
+
+**Return value**: The returned string is uploaded to storage (IPFS or local) and its content hash is submitted on-chain as the deliverable. If you return a tuple, the second element is a metadata dict merged into the submission record.
 
 > **Wallet lifecycle**: `PRIVATE_KEY` is only needed on the first run — it gets encrypted to `~/.bnbagent/wallets/<address>.json` (Keystore V3) and cleared from memory immediately. On subsequent runs, only `WALLET_PASSWORD` is needed. See [Wallet Providers](#wallet-providers) for details.
 
@@ -301,6 +360,7 @@ config = APEXConfig(
 )
 
 async def my_task(job: dict) -> str:
+    """Process a funded job. See 'on_task Callback Reference' above for the full job dict schema."""
     result = await do_ai_work(job["description"])
     return result
 
@@ -521,6 +581,7 @@ from bnbagent.apex.server import create_apex_state, create_apex_routes, run_job_
 state = create_apex_state()
 
 def my_task(job: dict) -> str:
+    """See 'on_task Callback Reference' for the full job dict schema and return options."""
     return f"Processed: {job['description']}"
 
 @asynccontextmanager
@@ -654,7 +715,7 @@ print(nc.rpc_url)  # https://bsc-dataseed.binance.org
 
 | Error | Cause | Solution |
 |-------|-------|----------|
-| `PRIVATE_KEY is required on first run` | No keystore in `~/.bnbagent/wallets/` | Set `PRIVATE_KEY` in `.env` for the first run; remove it afterward |
+| `No PRIVATE_KEY and no keystore found` | No keystore in `~/.bnbagent/wallets/` | A new wallet is auto-generated; or set `PRIVATE_KEY` in `.env` to import an existing key |
 | `Multiple wallets found` | Multiple keystores, no `WALLET_ADDRESS` set | Set `WALLET_ADDRESS=0x...` to select which wallet to use |
 | `WALLET_PASSWORD is required` | Missing env var | Set `WALLET_PASSWORD` in `.env` |
 | `wallet_password is required when using private_key` | Constructor missing password | Add `wallet_password=` or use `wallet_provider=` directly |

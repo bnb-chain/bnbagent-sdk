@@ -26,7 +26,16 @@ and settlement -- letting AI agents transact with each other trustlessly.
 from bnbagent.apex.server.routes import create_apex_app
 
 def my_task(job: dict) -> str:
-    """Called automatically for each funded job."""
+    """Called automatically for each funded job.
+
+    Args:
+        job: Job dict with keys: jobId (int), description (str), budget (int, wei),
+             client (str), provider (str), evaluator (str), status (str), expiredAt (int).
+
+    Returns:
+        Result string — uploaded to storage and submitted on-chain as deliverable.
+        Or tuple[str, dict] to attach per-job metadata.
+    """
     return f"Processed: {job['description']}"
 
 # on_task enables automatic job discovery, verification, and submission
@@ -126,7 +135,7 @@ and on-chain references for a completed job.
 
 | Variable | Required | Description | Default |
 |---|---|---|---|
-| `PRIVATE_KEY` | Yes | Agent wallet private key | -- |
+| `PRIVATE_KEY` | No | Agent wallet private key (imported on first run; if omitted, a new wallet is auto-generated) | Auto-generate |
 | `WALLET_PASSWORD` | Yes | Password for wallet encryption | -- |
 | `BSC_RPC_URL` / `RPC_URL` | No | JSON-RPC endpoint | Network default |
 | `CHAIN_ID` | No | Chain ID | Network default |

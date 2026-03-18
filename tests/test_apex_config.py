@@ -39,15 +39,24 @@ class TestInit:
         with pytest.raises(ValueError, match="wallet_password is required"):
             APEXConfig(private_key=VALID_PK)
 
-    def test_missing_private_key_no_keystore_in_from_env(self, monkeypatch):
+    def test_missing_private_key_no_keystore_auto_generates(self, monkeypatch, tmp_path):
+        """When no PRIVATE_KEY and no keystore, from_env() succeeds and auto-generates a wallet."""
         monkeypatch.delenv("PRIVATE_KEY", raising=False)
         monkeypatch.delenv("BSC_RPC_URL", raising=False)
         monkeypatch.delenv("RPC_URL", raising=False)
         monkeypatch.setenv("WALLET_PASSWORD", "test-pw")
-        from bnbagent.wallets import EVMWalletProvider
-        monkeypatch.setattr(EVMWalletProvider, "keystore_exists", staticmethod(lambda *a, **kw: False))
-        with pytest.raises(ValueError, match="PRIVATE_KEY is required on first run"):
-            APEXConfig.from_env()
+        import bnbagent.wallets.evm_wallet_provider as wp
+        monkeypatch.setattr(wp, "_WALLETS_DIR", tmp_path / "wallets")
+        config = APEXConfig.from_env()
+        assert config.wallet_provider is not None
+
+    def test_password_only_no_keystore_auto_generates(self, monkeypatch, tmp_path):
+        """Direct constructor: wallet_password only, no keystore → auto-generate wallet."""
+        import bnbagent.wallets.evm_wallet_provider as wp
+        monkeypatch.setattr(wp, "_WALLETS_DIR", tmp_path / "wallets")
+        config = APEXConfig(wallet_password="test-pw")
+        assert config.wallet_provider is not None
+        assert config.wallet_provider.source == "created_new"
 
     def test_missing_wallet_password_in_from_env(self, monkeypatch):
         monkeypatch.setenv("PRIVATE_KEY", VALID_PK)
