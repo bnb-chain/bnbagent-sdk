@@ -4,8 +4,9 @@ Data models for ERC8004Agent SDK.
 Defines data structures for agent registration and endpoint configurations.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Optional, List
 
 
 @dataclass
@@ -29,8 +30,8 @@ class AgentEndpoint:
 
     name: str
     endpoint: str
-    version: Optional[str] = None
-    capabilities: Optional[List[str]] = field(default_factory=list)
+    version: str | None = None
+    capabilities: list[str] | None = field(default_factory=list)
 
     def __post_init__(self):
         """Validate endpoint configuration."""
@@ -38,9 +39,7 @@ class AgentEndpoint:
             raise ValueError("name is required and must be a string")
         if not self.endpoint or not isinstance(self.endpoint, str):
             raise ValueError("endpoint is required and must be a string")
-        if not (
-            self.endpoint.startswith("http://") or self.endpoint.startswith("https://")
-        ):
+        if not (self.endpoint.startswith("http://") or self.endpoint.startswith("https://")):
             raise ValueError("endpoint must start with http:// or https://")
 
     def to_dict(self) -> dict:
@@ -56,7 +55,7 @@ class AgentEndpoint:
         return result
 
     @classmethod
-    def from_dict(cls, data: dict) -> "AgentEndpoint":
+    def from_dict(cls, data: dict) -> AgentEndpoint:
         """
         Create from dictionary.
 
@@ -67,9 +66,7 @@ class AgentEndpoint:
             AgentEndpoint instance
         """
         if "name" not in data or "endpoint" not in data:
-            raise ValueError(
-                "dictionary must contain 'name' and 'endpoint' fields"
-            )
+            raise ValueError("dictionary must contain 'name' and 'endpoint' fields")
         return cls(
             name=data["name"],
             endpoint=data["endpoint"],

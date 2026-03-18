@@ -29,6 +29,7 @@ ENV/
 # IDE
 .vscode/
 .idea/
+.claude/*.local.json
 *.swp
 *.swo
 *~
@@ -42,6 +43,8 @@ ENV/
 # Environment variables
 .env
 .env.local
+.env.*
+!.env.example
 
 # Testing
 .pytest_cache/
@@ -56,6 +59,18 @@ htmlcov/
 # Logs
 *.log
 
+# Database
+*.sqlite3
+*.db
+
+# Jupyter
+.ipynb_checkpoints/
+
 # OS
 .DS_Store
 Thumbs.db
+
+**/node_modules/
+
+.agent-data/
+.storage/

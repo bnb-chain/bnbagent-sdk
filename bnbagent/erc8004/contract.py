@@ -5,17 +5,23 @@ Handles interactions with the ERC-8004 Identity Registry smart contract.
 Provides methods for registering agents and querying agent information.
 """
 
+from __future__ import annotations
+
 import json
+import logging
 from pathlib import Path
-from typing import Optional, Dict, Any, List, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
 from web3 import Web3
 from web3.contract.contract import ContractFunction
 from web3.types import TxReceipt
-from .utils.logger import get_logger
-from .paymaster import Paymaster
+
+from ..core.paymaster import Paymaster
 
 if TYPE_CHECKING:
-    from .wallets import WalletProvider
+    from ..wallets import WalletProvider
+
+logger = logging.getLogger(__name__)
 
 
 class ContractInterface:
@@ -32,8 +38,8 @@ class ContractInterface:
         self,
         web3: Web3,
         contract_address: str,
-        wallet_provider: "WalletProvider",
-        paymaster: Optional[Paymaster] = None,
+        wallet_provider: WalletProvider,
+        paymaster: Paymaster | None = None,
         debug: bool = False,
     ):
         """
@@ -53,7 +59,6 @@ class ContractInterface:
         self.wallet_provider = wallet_provider
         self.paymaster = paymaster
         self.debug = debug
-        self._logger = get_logger(f"{__name__}.{self.__class__.__name__}", debug=debug)
 
         # Create contract instance
         self.contract = self.web3.eth.contract(
@@ -61,15 +66,18 @@ class ContractInterface:
         )
 
         if self.paymaster:
-            self._logger.debug(
-                f"Initialized contract interface at {self.contract_address} with paymaster: {self.paymaster.paymaster_url}"
+            logger.debug(
+                "Initialized contract interface at %s with paymaster: %s",
+                self.contract_address,
+                self.paymaster.paymaster_url,
             )
         else:
-            self._logger.debug(
-                f"Initialized contract interface at {self.contract_address} without paymaster (using standard Web3)"
+            logger.debug(
+                "Initialized contract interface at %s without paymaster (using standard Web3)",
+                self.contract_address,
             )
 
-    def _get_default_abi(self) -> List[Dict[str, Any]]:
+    def _get_default_abi(self) -> list[dict[str, Any]]:
         """
         Get the default ERC-8004 Identity Registry ABI from file.
 
@@ -80,16 +88,16 @@ class ContractInterface:
         abi_file_path = Path(__file__).parent / "abis" / "IdentityRegistry.json"
 
         try:
-            with open(abi_file_path, "r") as f:
+            with open(abi_file_path) as f:
                 return json.load(f)
         except Exception as e:
-            raise ValueError(f"Failed to load ABI from file {abi_file_path}: {str(e)}")
+            raise ValueError(f"Failed to load ABI from file {abi_file_path}: {str(e)}") from e
 
     def _execute_transaction(
         self,
         function: ContractFunction,
         description: str = "transaction",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Execute a contract transaction: build, sign, send, and wait for receipt.
 
@@ -105,19 +113,16 @@ class ContractInterface:
                 - receipt: TransactionReceipt - The transaction receipt
         """
         try:
-
             wallet_address = self.wallet_provider.address
             gas_estimate = function.estimate_gas({"from": wallet_address})
-            self._logger.debug(f"Gas estimate: {gas_estimate}")
+            logger.debug(f"Gas estimate: {gas_estimate}")
             gas_limit = int(gas_estimate * 1.2)  # Add 20% buffer
 
             # Use paymaster if available, otherwise use standard Web3
             if self.paymaster:
                 # Get nonce from paymaster
-                nonce = self.paymaster.eth_getTransactionCount(
-                    wallet_address, "pending"
-                )
-                self._logger.debug(f"Got nonce from paymaster: {nonce}")
+                nonce = self.paymaster.eth_getTransactionCount(wallet_address, "pending")
+                logger.debug(f"Got nonce from paymaster: {nonce}")
 
                 # Build transaction
                 transaction = function.build_transaction(
@@ -130,15 +135,15 @@ class ContractInterface:
                     }
                 )
 
-                self._logger.debug(f"Building {description} transaction: {transaction}")
+                logger.debug(f"Building {description} transaction: {transaction}")
 
                 # Check if transaction is sponsorable
                 is_sponsorable = self.paymaster.isSponsorable(transaction)
                 if not is_sponsorable:
-                    self._logger.error(f"Transaction is not sponsorable")
+                    logger.error("Transaction is not sponsorable")
                     raise ValueError("Transaction is not sponsorable")
                 else:
-                    self._logger.debug(f"Transaction is sponsorable")
+                    logger.debug("Transaction is sponsorable")
                     transaction["gasPrice"] = 0
 
                 # Sign transaction via wallet provider
@@ -153,18 +158,16 @@ class ContractInterface:
                 if not tx_hash_hex.startswith("0x"):
                     tx_hash_hex = "0x" + tx_hash_hex
                 tx_hash = bytes.fromhex(tx_hash_hex[2:])  # Remove 0x prefix
-                self._logger.debug(f"Transaction sent via paymaster: {tx_hash_hex}")
+                logger.debug(f"Transaction sent via paymaster: {tx_hash_hex}")
             else:
                 # Use standard Web3 transaction flow (no paymaster)
                 # Get nonce from Web3
-                nonce = self.web3.eth.get_transaction_count(
-                    wallet_address, "pending"
-                )
-                self._logger.debug(f"Got nonce from Web3: {nonce}")
+                nonce = self.web3.eth.get_transaction_count(wallet_address, "pending")
+                logger.debug(f"Got nonce from Web3: {nonce}")
 
                 # Get gas price from network
                 gas_price = self.web3.eth.gas_price
-                self._logger.debug(f"Gas price: {gas_price}")
+                logger.debug(f"Gas price: {gas_price}")
 
                 # Build transaction
                 transaction = function.build_transaction(
@@ -177,7 +180,7 @@ class ContractInterface:
                     }
                 )
 
-                self._logger.debug(f"Building {description} transaction: {transaction}")
+                logger.debug(f"Building {description} transaction: {transaction}")
 
                 # Sign transaction via wallet provider
                 signed_txn = self.wallet_provider.sign_transaction(transaction)
@@ -189,12 +192,12 @@ class ContractInterface:
                 # Ensure 0x prefix (defensive programming, though Web3 usually includes it)
                 if not tx_hash_hex.startswith("0x"):
                     tx_hash_hex = "0x" + tx_hash_hex
-                self._logger.debug(f"Transaction sent via Web3: {tx_hash_hex}")
+                logger.debug(f"Transaction sent via Web3: {tx_hash_hex}")
 
             # Wait for receipt (always use Web3 for receipt waiting)
             receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash)
 
-            self._logger.debug(f"Transaction confirmed: {receipt}")
+            logger.debug(f"Transaction confirmed: {receipt}")
 
             return {
                 "transactionHash": tx_hash_hex,
@@ -202,14 +205,14 @@ class ContractInterface:
             }
 
         except Exception as e:
-            self._logger.error(f"Failed to execute {description}: {str(e)}")
+            logger.error(f"Failed to execute {description}: {str(e)}")
             raise
 
     def register_agent(
         self,
         agent_uri: str,
-        metadata: Optional[List[Dict[str, str]]] = None,
-    ) -> Dict[str, Any]:
+        metadata: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
         """
         Register a new agent on-chain.
 
@@ -232,23 +235,19 @@ class ContractInterface:
                     }
                     for entry in metadata
                 ]
-                self._logger.debug(
+                logger.debug(
                     f"Registering with agentURI and {len(metadata_bytes)} metadata entries"
                 )
                 # Register with agentURI and metadata
                 function = self.contract.functions.register(agent_uri, metadata_bytes)
             else:
-                self._logger.debug(
-                    f"Registering with agentURI only: {agent_uri[:50]}..."
-                )
+                logger.debug(f"Registering with agentURI only: {agent_uri[:50]}...")
                 # Register with agentURI only
                 function = self.contract.functions.register(agent_uri)
 
             # Log function selector for debugging
-            self._logger.debug(
-                f"Function selector: {function.abi.get('name', 'unknown')}"
-            )
-            self._logger.debug(f"Contract address: {self.contract_address}")
+            logger.debug(f"Function selector: {function.abi.get('name', 'unknown')}")
+            logger.debug(f"Contract address: {self.contract_address}")
 
             # Execute transaction
             result = self._execute_transaction(function, description="registration")
@@ -265,7 +264,7 @@ class ContractInterface:
                         event_data = registered_event.process_log(log)
                         agent_id = event_data["args"]["agentId"]
                         break
-                    except:
+                    except Exception:
                         continue
 
             return {
@@ -276,10 +275,10 @@ class ContractInterface:
             }
 
         except Exception as e:
-            self._logger.error(f"Failed to register agent: {str(e)}")
-            raise RuntimeError(f"Agent registration failed: {str(e)}")
+            logger.error(f"Failed to register agent: {str(e)}")
+            raise RuntimeError(f"Agent registration failed: {str(e)}") from e
 
-    def get_agent_info(self, agent_id: int) -> Dict[str, Any]:
+    def get_agent_info(self, agent_id: int) -> dict[str, Any]:
         """
         Get information about an agent.
 
@@ -290,7 +289,7 @@ class ContractInterface:
             dict: Agent information including wallet, owner, agentURI
         """
         try:
-            self._logger.debug(f"Fetching agent info for agentId: {agent_id}")
+            logger.debug(f"Fetching agent info for agentId: {agent_id}")
 
             # Get agent wallet (address associated with the agent)
             agent_wallet = self.contract.functions.getAgentWallet(agent_id).call()
@@ -310,8 +309,8 @@ class ContractInterface:
             }
 
         except Exception as e:
-            self._logger.error(f"Failed to get agent info: {str(e)}")
-            raise RuntimeError(f"Failed to get agent info: {str(e)}")
+            logger.error(f"Failed to get agent info: {str(e)}")
+            raise RuntimeError(f"Failed to get agent info: {str(e)}") from e
 
     def get_metadata(self, agent_id: int, key: str) -> str:
         """
@@ -325,17 +324,17 @@ class ContractInterface:
             str: The metadata value (decoded from bytes)
         """
         try:
-            self._logger.debug(f"Getting metadata for agentId={agent_id}, key={key}")
+            logger.debug(f"Getting metadata for agentId={agent_id}, key={key}")
 
             value_bytes = self.contract.functions.getMetadata(agent_id, key).call()
             # Convert bytes to string
             return value_bytes.decode("utf-8")
 
         except Exception as e:
-            self._logger.error(f"Failed to get metadata: {str(e)}")
-            raise RuntimeError(f"Failed to get metadata: {str(e)}")
+            logger.error(f"Failed to get metadata: {str(e)}")
+            raise RuntimeError(f"Failed to get metadata: {str(e)}") from e
 
-    def set_metadata(self, agent_id: int, key: str, value: str) -> Dict[str, Any]:
+    def set_metadata(self, agent_id: int, key: str, value: str) -> dict[str, Any]:
         """
         Set metadata for an agent.
 
@@ -348,7 +347,7 @@ class ContractInterface:
             dict: Transaction receipt
         """
         try:
-            self._logger.debug(f"Setting metadata for agentId={agent_id}, key={key}")
+            logger.debug(f"Setting metadata for agentId={agent_id}, key={key}")
 
             # Convert string to bytes for on-chain storage
             value_bytes = value.encode("utf-8")
@@ -366,10 +365,10 @@ class ContractInterface:
             }
 
         except Exception as e:
-            self._logger.error(f"Failed to set metadata: {str(e)}")
-            raise RuntimeError(f"Failed to set metadata: {str(e)}")
+            logger.error(f"Failed to set metadata: {str(e)}")
+            raise RuntimeError(f"Failed to set metadata: {str(e)}") from e
 
-    def set_agent_uri(self, agent_id: int, agent_uri: str) -> Dict[str, Any]:
+    def set_agent_uri(self, agent_id: int, agent_uri: str) -> dict[str, Any]:
         """
         Set agent URI for an agent using the setAgentURI function.
 
@@ -385,9 +384,7 @@ class ContractInterface:
             which updates the tokenURI directly as per EIP-8004 specification.
         """
         try:
-            self._logger.debug(
-                f"Setting agent URI for agentId={agent_id}: {agent_uri[:50]}..."
-            )
+            logger.debug(f"Setting agent URI for agentId={agent_id}: {agent_uri[:50]}...")
 
             # Execute transaction
             function = self.contract.functions.setAgentURI(agent_id, agent_uri)
@@ -395,7 +392,7 @@ class ContractInterface:
             tx_hash = result["transactionHash"]
             receipt = result["receipt"]
 
-            self._logger.debug(f"Agent URI set successfully: {tx_hash}")
+            logger.debug(f"Agent URI set successfully: {tx_hash}")
 
             return {
                 "success": True,
@@ -404,5 +401,5 @@ class ContractInterface:
             }
 
         except Exception as e:
-            self._logger.error(f"Failed to set agent URI: {str(e)}")
-            raise RuntimeError(f"Failed to set agent URI: {str(e)}")
+            logger.error(f"Failed to set agent URI: {str(e)}")
+            raise RuntimeError(f"Failed to set agent URI: {str(e)}") from e

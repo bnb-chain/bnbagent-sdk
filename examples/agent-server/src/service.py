@@ -1,0 +1,226 @@
+"""
+Blockchain News Agent — APEX Protocol Provider.
+
+Built with bnbagent-sdk.
+
+A news search agent that:
+  1. Receives search queries from clients via APEX
+  2. Searches DuckDuckGo for blockchain news
+  3. Returns formatted news results
+
+Usage:
+    cd agents
+    uv run python -m agent_server.service
+
+Environment (agent-server/.env):
+    RPC_URL, ERC8183_ADDRESS, PRIVATE_KEY      — Required (ERC-8183)
+    APEX_EVALUATOR_ADDRESS                     — Required (evaluator)
+    STORAGE_PROVIDER=ipfs, STORAGE_API_KEY     — Required (IPFS upload)
+    AGENT_PRICE=1000000000000000000            — Negotiation price (1 U)
+    PAYMENT_TOKEN_ADDRESS                      — BEP20 payment token
+    PORT=8003                                  — Server port
+    POLL_INTERVAL=15                           — Job polling interval
+"""
+
+import logging
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+from fastapi import HTTPException
+from pydantic import BaseModel
+from ddgs import DDGS
+
+# Load .env from project root (one level up from src/)
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+# SDK imports
+from bnbagent.apex.config import APEXConfig
+from bnbagent.apex.server.routes import create_apex_app
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+)
+logger = logging.getLogger("blockchain_news")
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+config = APEXConfig.from_env()
+PORT = int(os.getenv("PORT", "8003"))
+
+# ---------------------------------------------------------------------------
+# Core news search function
+# ---------------------------------------------------------------------------
+
+
+def search_news(query: str, max_results: int = 10) -> list[dict]:
+    """Search news using DuckDuckGo."""
+    ddgs = DDGS()
+
+    results = list(ddgs.news(query, max_results=max_results))
+    if not results:
+        results = list(ddgs.text(query, max_results=max_results))
+
+    return results
+
+
+def format_news_results(query: str, raw_results: list[dict]) -> str:
+    """Format news results into a readable report."""
+    if not raw_results:
+        return f"No news found for query: {query}"
+
+    report = f"# Blockchain News Search Results\n\n"
+    report += f"**Query:** {query}\n"
+    report += f"**Results:** {len(raw_results)} items\n\n"
+    report += "---\n\n"
+
+    for i, r in enumerate(raw_results, 1):
+        title = r.get("title", "No title")
+        body = r.get("body", r.get("snippet", ""))
+        url = r.get("url", r.get("href", ""))
+        date = r.get("date", "")
+        source = r.get("source", "")
+
+        report += f"## {i}. {title}\n\n"
+        if source or date:
+            report += f"*{source}*"
+            if date:
+                report += f" | {date}"
+            report += "\n\n"
+        report += f"{body}\n\n"
+        if url:
+            report += f"[Read more]({url})\n\n"
+        report += "---\n\n"
+
+    return report
+
+
+# ---------------------------------------------------------------------------
+# APEX task handler — the ONLY function you need to write
+# ---------------------------------------------------------------------------
+
+
+def process_task(job: dict) -> tuple[str, dict]:
+    """
+    Process a funded APEX job and return the result.
+
+    The SDK calls this for each funded job automatically.
+    Receives the full job dict, returns (result_string, metadata).
+    """
+    query = job.get("description", "blockchain news")
+    logger.info(f"Searching news for: {query[:80]}...")
+
+    raw_results = search_news(query, max_results=10)
+    logger.info(f"Found {len(raw_results)} news items")
+
+    report = format_news_results(query, raw_results)
+    return report, {"agent": "blockchain-news", "query": query}
+
+
+# ---------------------------------------------------------------------------
+# App — create_apex_app handles routes, polling, and lifecycle
+# ---------------------------------------------------------------------------
+
+app = create_apex_app(
+    config=config,
+    on_task=process_task,
+    prefix="/apex",
+    middleware=False,  # Disable middleware for direct endpoints below
+)
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models for direct /search endpoint
+# ---------------------------------------------------------------------------
+
+
+class SearchRequest(BaseModel):
+    query: str
+    max_results: int = 10
+
+
+class NewsItem(BaseModel):
+    title: str
+    body: str
+    url: str
+    date: str
+    source: str
+
+
+class SearchResponse(BaseModel):
+    success: bool
+    query: str
+    results_count: int
+    results: list[NewsItem]
+
+
+# ---------------------------------------------------------------------------
+# Direct HTTP endpoints (for testing without APEX)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/search", response_model=SearchResponse)
+async def search_endpoint(request: SearchRequest):
+    """
+    Direct HTTP search endpoint (for testing).
+    For production, use APEX protocol via /apex/* endpoints.
+    """
+    try:
+        raw_results = search_news(request.query, request.max_results)
+
+        results = []
+        for r in raw_results:
+            results.append(
+                NewsItem(
+                    title=r.get("title", ""),
+                    body=r.get("body", r.get("snippet", "")),
+                    url=r.get("url", r.get("href", "")),
+                    date=r.get("date", ""),
+                    source=r.get("source", ""),
+                )
+            )
+
+        return SearchResponse(
+            success=True,
+            query=request.query,
+            results_count=len(results),
+            results=results,
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import uvicorn
+
+    print(f"""
+{'='*55}
+  Blockchain News Agent (APEX Provider)
+{'='*55}
+  Port:           {PORT}
+  ERC-8183:       {config.effective_erc8183_address}
+  Evaluator:      {config.effective_evaluator_address}
+  Storage:        {type(config.storage).__name__ if config.storage else "local (default)"}
+  Price:          {int(config.agent_price) / 10**18} U tokens
+
+  APEX endpoints:
+    POST /apex/negotiate   — Negotiation
+    POST /apex/submit      — Submit result
+    GET  /apex/job/{{id}}    — Job details
+    GET  /apex/status      — Agent status
+
+  Direct endpoints (testing):
+    POST /search          — Direct news search
+    GET  /health          — Health check
+{'='*55}
+""")
+
+    uvicorn.run(app, host="0.0.0.0", port=PORT)

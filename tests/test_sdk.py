@@ -2,10 +2,12 @@
 Test cases for ERC8004Agent SDK based on examples/basic_usage.py
 """
 
+from unittest.mock import Mock, patch
+
 import pytest
-from unittest.mock import Mock, patch, MagicMock
-from bnbagent import ERC8004Agent, AgentEndpoint
 import requests
+
+from bnbagent import AgentEndpoint, ERC8004Agent
 
 
 class TestERC8004Agent:
@@ -13,7 +15,7 @@ class TestERC8004Agent:
 
     # Default test configuration
     DEFAULT_NETWORK = "bsc-testnet"
-    DEFAULT_CONTRACT_ADDRESS = "0x8004A41392bdd4A4F12339447ab4B8719D562e51"
+    DEFAULT_CONTRACT_ADDRESS = "0x8004A818BFB912233c491871b3d84c89A494BD9e"
 
     @pytest.fixture
     def mock_contract_interface(self):
@@ -57,11 +59,10 @@ class TestERC8004Agent:
     @pytest.fixture
     def sdk(self, mock_contract_interface, mock_wallet_provider):
         """Create SDK instance with mocked contract interface"""
-        with patch(
-            "bnbagent.erc8004_agent.ContractInterface"
-        ) as mock_contract_class, patch(
-            "bnbagent.erc8004_agent.Web3"
-        ) as mock_web3_class:
+        with (
+            patch("bnbagent.erc8004.agent.ContractInterface") as mock_contract_class,
+            patch("bnbagent.erc8004.agent.Web3") as mock_web3_class,
+        ):
             # Mock Web3 connection check
             mock_web3 = Mock()
             mock_web3.is_connected.return_value = True
@@ -154,7 +155,11 @@ class TestERC8004Agent:
 
     def test_parse_agent_uri_base64(self, sdk):
         """Test parsing base64 agent URI"""
-        base64_uri = "data:application/json;base64,eyJuYW1lIjoiTXkgVGVzdCBBZ2VudCIsImRlc2NyaXB0aW9uIjoiQSB0ZXN0IGFnZW50In0="
+        base64_uri = (
+            "data:application/json;base64,"
+            "eyJuYW1lIjoiTXkgVGVzdCBBZ2VudCIsImRl"
+            "c2NyaXB0aW9uIjoiQSB0ZXN0IGFnZW50In0="
+        )
         agent_data = sdk.parse_agent_uri(base64_uri)
 
         assert agent_data is not None
@@ -163,7 +168,7 @@ class TestERC8004Agent:
 
     def test_parse_agent_uri_http(self, sdk):
         """Test parsing HTTP agent URI"""
-        with patch("bnbagent.erc8004_agent.requests.get") as mock_get:
+        with patch("bnbagent.erc8004.agent.requests.get") as mock_get:
             mock_response = Mock()
             mock_response.json.return_value = {
                 "name": "Test Agent",
@@ -256,10 +261,7 @@ class TestERC8004Agent:
         # Test to_dict
         endpoint_dict = endpoint.to_dict()
         assert endpoint_dict["name"] == "A2A"
-        assert (
-            endpoint_dict["endpoint"]
-            == "https://agent.example/.well-known/agent-card.json"
-        )
+        assert endpoint_dict["endpoint"] == "https://agent.example/.well-known/agent-card.json"
         assert endpoint_dict["version"] == "0.3.0"
 
         # Test from_dict
@@ -268,9 +270,7 @@ class TestERC8004Agent:
         assert endpoint2.endpoint == endpoint.endpoint
 
         # Test validation - invalid URL
-        with pytest.raises(
-            ValueError, match="endpoint must start with http:// or https://"
-        ):
+        with pytest.raises(ValueError, match="endpoint must start with http:// or https://"):
             AgentEndpoint(name="A2A", endpoint="invalid-url")
 
         # Test validation - missing name
@@ -304,7 +304,7 @@ class TestERC8004Agent:
 
     def test_get_all_agents(self, sdk):
         """Test get_all_agents API call"""
-        with patch("bnbagent.erc8004_agent.requests.get") as mock_get:
+        with patch("bnbagent.erc8004.agent.requests.get") as mock_get:
             mock_response = Mock()
             mock_response.json.return_value = {
                 "items": [
@@ -326,7 +326,7 @@ class TestERC8004Agent:
 
     def test_get_all_agents_with_pagination(self, sdk):
         """Test get_all_agents with pagination parameters"""
-        with patch("bnbagent.erc8004_agent.requests.get") as mock_get:
+        with patch("bnbagent.erc8004.agent.requests.get") as mock_get:
             mock_response = Mock()
             mock_response.json.return_value = {
                 "items": [{"token_id": 11, "name": "Agent 11"}],
@@ -348,7 +348,7 @@ class TestERC8004Agent:
 
     def test_get_all_agents_connection_error(self, sdk):
         """Test get_all_agents handles connection errors"""
-        with patch("bnbagent.erc8004_agent.requests.get") as mock_get:
+        with patch("bnbagent.erc8004.agent.requests.get") as mock_get:
             mock_get.side_effect = requests.exceptions.ConnectionError("Network error")
 
             with pytest.raises(ConnectionError, match="8004scan API request failed"):
@@ -356,7 +356,7 @@ class TestERC8004Agent:
 
     def test_get_all_agents_uses_network_chain_id(self, sdk):
         """Test get_all_agents uses chain_id from network config"""
-        with patch("bnbagent.erc8004_agent.requests.get") as mock_get:
+        with patch("bnbagent.erc8004.agent.requests.get") as mock_get:
             mock_response = Mock()
             mock_response.json.return_value = {"items": [], "total": 0}
             mock_response.raise_for_status = Mock()
@@ -370,21 +370,21 @@ class TestERC8004Agent:
 
     def test_get_local_agent_info_not_found(self, sdk):
         """Test get_local_agent_info returns None for non-existent agent"""
-        with patch.object(sdk.state_manager, "get", return_value=[]):
+        with patch.object(sdk, "get_all_agents", return_value={"items": []}):
             result = sdk.get_local_agent_info("NonExistent Agent")
             assert result is None
 
-    def test_get_local_agent_info_found(self, sdk):
+    def test_get_local_agent_info_found(self, sdk, mock_wallet_provider):
         """Test get_local_agent_info returns agent info when found"""
-        registered_agents = [
+        items = [
             {
+                "owner_address": mock_wallet_provider.address,
                 "name": "Test Agent",
+                "token_id": 1,
                 "agent_uri": "data:application/json;base64,xxx",
-                "agent_id": 1,
-                "transaction_hash": "0x123",
             }
         ]
-        with patch.object(sdk.state_manager, "get", return_value=registered_agents):
+        with patch.object(sdk, "get_all_agents", return_value={"items": items}):
             result = sdk.get_local_agent_info("Test Agent")
             assert result is not None
             assert result["name"] == "Test Agent"
@@ -459,7 +459,7 @@ class TestERC8004AgentInitialization:
         mock_wallet.address = "0x" + "0" * 40
 
         with pytest.raises(ValueError, match="Unknown network"):
-            with patch("bnbagent.erc8004_agent.Web3") as mock_web3_class:
+            with patch("bnbagent.erc8004.agent.Web3") as mock_web3_class:
                 mock_web3 = Mock()
                 mock_web3.is_connected.return_value = True
                 mock_web3_class.return_value = mock_web3
@@ -475,7 +475,7 @@ class TestERC8004AgentInitialization:
         mock_wallet = Mock()
         mock_wallet.address = "0x" + "0" * 40
 
-        with patch("bnbagent.erc8004_agent.Web3") as mock_web3_class:
+        with patch("bnbagent.erc8004.agent.Web3") as mock_web3_class:
             mock_web3 = Mock()
             mock_web3.is_connected.return_value = False
             mock_web3_class.return_value = mock_web3

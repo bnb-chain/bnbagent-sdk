@@ -4,8 +4,10 @@ Wallet Provider Abstract Base Class
 Defines the interface that all wallet providers must implement.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Any
 
 
 class WalletProvider(ABC):
@@ -28,7 +30,7 @@ class WalletProvider(ABC):
         pass
 
     @abstractmethod
-    def sign_transaction(self, transaction: Dict[str, Any]) -> Dict[str, Any]:
+    def sign_transaction(self, transaction: dict[str, Any]) -> dict[str, Any]:
         """
         Sign a transaction.
 
@@ -42,7 +44,7 @@ class WalletProvider(ABC):
         pass
 
     @abstractmethod
-    def sign_message(self, message: str) -> Dict[str, Any]:
+    def sign_message(self, message: str) -> dict[str, Any]:
         """
         Sign a message using EIP-191 personal sign.
 

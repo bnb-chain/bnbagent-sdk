@@ -6,17 +6,27 @@ Handles wallet management, contract interactions, and provides convenient method
 for common operations.
 """
 
-from typing import Optional, Dict, Any, List
-from web3 import Web3
+from __future__ import annotations
+
+import concurrent.futures
+import ipaddress
+import logging
+import socket
+from typing import Any
+from urllib.parse import urlparse
+
 import requests
-from .utils.logger import get_logger
-from .utils.agent_uri import AgentURIGenerator
-from .utils.state_file import StateFileManager
-from .wallets import WalletProvider
+from web3 import Web3
+
+from ..constants import SCAN_API_URL
+from ..core.paymaster import Paymaster
+from ..utils.agent_uri import AgentURIGenerator
+from ..wallets import WalletProvider
+from .constants import get_erc8004_config
 from .contract import ContractInterface
 from .models import AgentEndpoint
-from .constants import TESTNET_CONFIG, SCAN_API_URL
-from .paymaster import Paymaster
+
+logger = logging.getLogger(__name__)
 
 
 class ERC8004Agent:
@@ -69,17 +79,11 @@ class ERC8004Agent:
             )
 
         self.debug = debug
-        self._logger = get_logger(f"{__name__}.{self.__class__.__name__}", debug=debug)
 
-        self._logger.debug("Initializing ERC8004Agent SDK...")
+        logger.debug("Initializing ERC8004Agent SDK...")
 
         # Handle network configuration
-        if network == "bsc-testnet":
-            self._network_config = TESTNET_CONFIG.copy()
-        else:
-            raise ValueError(
-                f"Unknown network '{network}'. Currently only 'bsc-testnet' is supported."
-            )
+        self._network_config = get_erc8004_config(network)
 
         rpc_url = self._network_config.get("rpc_url")
         network_name = self._network_config.get("name")
@@ -88,24 +92,21 @@ class ERC8004Agent:
         if not contract_address:
             raise ValueError(f"registry_contract not found in {network_name} config")
 
-        self._logger.debug(f"Using network: {network_name} ({rpc_url})")
-        self._logger.debug(f"Contract address: {contract_address}")
+        logger.debug(f"Using network: {network_name} ({rpc_url})")
+        logger.debug(f"Contract address: {contract_address}")
 
         # Initialize Web3 connection
         self.web3 = Web3(Web3.HTTPProvider(rpc_url))
 
-        # Initialize state file manager
-        self.state_manager = StateFileManager(debug=debug)
-
         if not self.web3.is_connected():
             raise ConnectionError(f"Failed to connect to RPC: {rpc_url}")
 
-        self._logger.debug(f"Connected to blockchain: {rpc_url}")
+        logger.debug(f"Connected to blockchain: {rpc_url}")
 
         # Use provided wallet provider
         self.wallet_provider = wallet_provider
-        self._logger.debug(f"Using wallet provider: {type(wallet_provider).__name__}")
-        self._logger.debug(f"Wallet address: {self.wallet_provider.address}")
+        logger.debug(f"Using wallet provider: {type(wallet_provider).__name__}")
+        logger.debug(f"Wallet address: {self.wallet_provider.address}")
 
         # Initialize paymaster (optional, not required for local network)
         paymaster = None
@@ -114,12 +115,14 @@ class ERC8004Agent:
             paymaster_url = self._network_config.get("paymaster_url")
             if not paymaster_url:
                 raise ValueError(
-                    f"paymaster_url not found in {network_name} config. Paymaster is required for this network."
+                    f"paymaster_url not found in {network_name}"
+                    " config. Paymaster is required for"
+                    " this network."
                 )
             paymaster = Paymaster(paymaster_url=paymaster_url, debug=debug)
-            self._logger.debug(f"Initialized paymaster: {paymaster_url}")
+            logger.debug(f"Initialized paymaster: {paymaster_url}")
         else:
-            self._logger.debug("Paymaster not used for local network")
+            logger.debug("Paymaster not used for local network")
 
         # Initialize contract interface (uses default ABI)
         # Note: paymaster can be None for local network
@@ -131,16 +134,16 @@ class ERC8004Agent:
             debug=debug,
         )
 
-        self._logger.debug("SDK initialized successfully")
+        logger.debug("SDK initialized successfully")
 
     def generate_agent_uri(
         self,
         name: str,
         description: str,
-        endpoints: List[AgentEndpoint],
-        image: Optional[str] = None,
-        agent_id: Optional[int] = None,
-        supported_trust: Optional[List[str]] = None,
+        endpoints: list[AgentEndpoint],
+        image: str | None = None,
+        agent_id: int | None = None,
+        supported_trust: list[str] | None = None,
     ) -> str:
         """
         Generate agent URI for agent registration.
@@ -180,11 +183,9 @@ class ERC8004Agent:
             >>> print(f"Agent URI: {agent_uri}")
         """
         if not endpoints or len(endpoints) == 0:
-            raise ValueError(
-                "endpoints is required and must contain at least one endpoint"
-            )
+            raise ValueError("endpoints is required and must contain at least one endpoint")
 
-        self._logger.debug("Generating agent URI...")
+        logger.debug("Generating agent URI...")
 
         # Get chain ID from network config
         chain_id = self._network_config.get("chain_id")
@@ -193,7 +194,7 @@ class ERC8004Agent:
             try:
                 chain_id = self.web3.eth.chain_id
             except Exception:
-                self._logger.warning("Could not determine chain ID")
+                logger.warning("Could not determine chain ID")
 
         # Get contract address for registrations field
         identity_registry = self.contract.contract_address
@@ -209,83 +210,50 @@ class ERC8004Agent:
             supported_trust=supported_trust,
         )
 
-        self._logger.debug(f"Agent URI generated: {agent_uri}")
+        logger.debug(f"Agent URI generated: {agent_uri}")
 
         return agent_uri
 
-    def get_local_agent_info(self, name: str) -> Optional[Dict[str, Any]]:
+    def get_local_agent_info(self, name: str) -> dict[str, Any] | None:
         """
-        Get agent info from local state file by name.
+        Find an agent registered by this wallet, by name.
 
-        This only reads the local .bnbagent_state file; it does not check on-chain data.
-        Use it to see if a name is present in your local state and to get stored
-        agent_uri / agent_id (e.g. to compare URI and call set_agent_uri if needed).
+        Queries the on-chain registry (via indexer API) and returns the first
+        agent whose name matches and whose owner is this wallet's address.
 
         Args:
-            name: The agent name to look up in local state
+            name: The agent name to look up
 
         Returns:
-            Optional[Dict[str, Any]]: If the name exists in local state, dict with
-                'name', 'agent_uri', 'agent_id', 'transaction_hash'; otherwise None.
-            To check "is in local state?" use: get_local_agent_info(name) is not None.
-
-        Example:
-            >>> info = sdk.get_local_agent_info("My Agent")
-            >>> if info:
-            ...     new_uri = sdk.generate_agent_uri(...)
-            ...     if info["agent_uri"] != new_uri:
-            ...         sdk.set_agent_uri(info["agent_id"], new_uri)
-            ... else:
-            ...     sdk.register_agent(agent_uri=sdk.generate_agent_uri(...))
+            Dict with 'name', 'agent_id', 'agent_uri', 'owner_address'
+            if found, otherwise None.
         """
         if not name:
             return None
 
         try:
-            registered_agents = self.state_manager.get("registered_agents", [])
-            if not isinstance(registered_agents, list):
-                return None
-
-            for agent in registered_agents:
-                if isinstance(agent, dict) and agent.get("name") == name:
-                    return agent
+            my_address = self.wallet_address.lower()
+            result = self.get_all_agents(limit=100, offset=0)
+            for agent in result.get("items", []):
+                if (
+                    agent.get("owner_address", "").lower() == my_address
+                    and agent.get("name", "").lower() == name.lower()
+                ):
+                    return {
+                        "name": agent.get("name"),
+                        "agent_id": agent.get("token_id"),
+                        "agent_uri": agent.get("agent_uri", ""),
+                        "owner_address": agent.get("owner_address"),
+                    }
             return None
         except Exception:
             return None
 
-    def _update_agent_uri_in_state(self, agent_id: int, agent_uri: str) -> None:
-        """
-        Update agent_uri for an agent in state file by agent_id.
-        No-op if state file does not exist or agent_id is not in registered_agents.
-        """
-        try:
-            if not self.state_manager.exists():
-                return
-            registered_agents = self.state_manager.get("registered_agents", [])
-            if not isinstance(registered_agents, list):
-                return
-            for i, agent in enumerate(registered_agents):
-                if not isinstance(agent, dict):
-                    continue
-                # Compare agent_id (may be int from chain or from JSON)
-                aid = agent.get("agent_id")
-                if aid is None:
-                    continue
-                if int(aid) == int(agent_id):
-                    registered_agents[i] = {**agent, "agent_uri": agent_uri}
-                    self.state_manager.set("registered_agents", registered_agents)
-                    self._logger.debug(
-                        f"Updated agent_uri for agentId={agent_id} in state file"
-                    )
-                    return
-        except Exception as e:
-            self._logger.warning(f"Failed to update agent_uri in state file: {str(e)}")
-
     def register_agent(
         self,
         agent_uri: str,
-        metadata: Optional[List[Dict[str, str]]] = None,
-    ) -> Dict[str, Any]:
+        metadata: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
         """
         Register a new agent on-chain.
 
@@ -320,7 +288,7 @@ class ERC8004Agent:
         if not agent_uri:
             raise ValueError("agent_uri is required")
 
-        self._logger.debug("Registering agent on-chain...")
+        logger.debug("Registering agent on-chain...")
 
         # Parse agent URI to get name
         agent_data = self.parse_agent_uri(agent_uri)
@@ -332,9 +300,7 @@ class ERC8004Agent:
             raise ValueError("Agent URI does not contain a name field")
 
         try:
-            result = self.contract.register_agent(
-                agent_uri=agent_uri, metadata=metadata
-            )
+            result = self.contract.register_agent(agent_uri=agent_uri, metadata=metadata)
 
             # Get the assigned agentId
             agent_id = result.get("agentId")
@@ -367,15 +333,13 @@ class ERC8004Agent:
                         )
 
                         # Update on-chain URI with registrations field populated
-                        self._logger.debug(
+                        logger.debug(
                             f"Updating agent URI with registrations for agentId={agent_id}"
                         )
                         self.contract.set_agent_uri(agent_id, final_agent_uri)
-                        self._logger.info(
-                            f"Updated agent URI with registrations (agentId={agent_id})"
-                        )
+                        logger.info(f"Updated agent URI with registrations (agentId={agent_id})")
                 except Exception as e:
-                    self._logger.warning(
+                    logger.warning(
                         f"Failed to update agent URI with registrations: {str(e)}. "
                         "The agent is registered but registrations field may be empty."
                     )
@@ -383,47 +347,7 @@ class ERC8004Agent:
             # Add final agentURI to result
             result["agentURI"] = final_agent_uri
 
-            # Save registered agent to state file (add to list)
-            try:
-                registered_agents = self.state_manager.get("registered_agents", [])
-                if not isinstance(registered_agents, list):
-                    registered_agents = []
-
-                # Check if agent already exists in list (shouldn't happen, but be safe)
-                agent_exists = False
-                for i, agent in enumerate(registered_agents):
-                    if agent.get("name") == agent_name:
-                        # Update existing agent info
-                        registered_agents[i] = {
-                            "name": agent_name,
-                            "agent_uri": final_agent_uri,
-                            "agent_id": result.get("agentId"),
-                            "transaction_hash": result.get("transactionHash"),
-                        }
-                        agent_exists = True
-                        break
-
-                if not agent_exists:
-                    # Add new agent info
-                    registered_agents.append(
-                        {
-                            "name": agent_name,
-                            "agent_uri": final_agent_uri,
-                            "agent_id": result.get("agentId"),
-                            "transaction_hash": result.get("transactionHash"),
-                        }
-                    )
-
-                self.state_manager.set("registered_agents", registered_agents)
-                self._logger.debug(
-                    f"Saved registered agent '{agent_name}' (agentId={result.get('agentId')}) to state file"
-                )
-            except Exception as e:
-                self._logger.warning(
-                    f"Failed to save registered agent to state file: {str(e)}"
-                )
-
-            self._logger.info(
+            logger.info(
                 f"Agent registered successfully: "
                 f"agentId={result['agentId']}, "
                 f"txHash={result['transactionHash']}"
@@ -432,10 +356,10 @@ class ERC8004Agent:
             return result
 
         except Exception as e:
-            self._logger.error(f"Agent registration failed: {str(e)}")
+            logger.error(f"Agent registration failed: {str(e)}")
             raise
 
-    def get_agent_info(self, agent_id: int) -> Dict[str, Any]:
+    def get_agent_info(self, agent_id: int) -> dict[str, Any]:
         """
         Get information about a registered agent.
 
@@ -454,24 +378,24 @@ class ERC8004Agent:
             >>> print(f"Agent owner: {info['owner']}")
             >>> print(f"Agent URI: {info['agentURI']}")
         """
-        self._logger.debug(f"Fetching agent info for agentId: {agent_id}")
+        logger.debug(f"Fetching agent info for agentId: {agent_id}")
 
         try:
             info = self.contract.get_agent_info(agent_id)
 
-            self._logger.debug(f"Agent info retrieved: {info}")
+            logger.debug(f"Agent info retrieved: {info}")
 
             return info
 
         except Exception as e:
-            self._logger.error(f"Failed to get agent info: {str(e)}")
+            logger.error(f"Failed to get agent info: {str(e)}")
             raise
 
     def get_all_agents(
         self,
         limit: int = 10,
         offset: int = 0,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         List all registered agents.
 
@@ -510,9 +434,7 @@ class ERC8004Agent:
         """
         chain_id = self._network_config.get("chain_id")
 
-        self._logger.debug(
-            f"Fetching agents: chain_id={chain_id}, limit={limit}, offset={offset}"
-        )
+        logger.debug(f"Fetching agents: chain_id={chain_id}, limit={limit}, offset={offset}")
 
         # Build query parameters
         params = {
@@ -530,15 +452,14 @@ class ERC8004Agent:
             response.raise_for_status()
 
             data = response.json()
-            self._logger.debug(
-                f"Retrieved {len(data.get('items', []))} agents "
-                f"(total: {data.get('total', 0)})"
+            logger.debug(
+                f"Retrieved {len(data.get('items', []))} agents (total: {data.get('total', 0)})"
             )
 
             return data
 
         except requests.exceptions.RequestException as e:
-            self._logger.error(f"Failed to fetch agents from 8004scan: {str(e)}")
+            logger.error(f"Failed to fetch agents from 8004scan: {str(e)}")
             raise ConnectionError(f"8004scan API request failed: {str(e)}") from e
 
     def get_metadata(self, agent_id: int, key: str) -> str:
@@ -556,15 +477,15 @@ class ERC8004Agent:
             >>> value = sdk.get_metadata(agent_id=1, key="description")
             >>> print(value)
         """
-        self._logger.debug(f"Getting metadata for agentId={agent_id}, key={key}")
+        logger.debug(f"Getting metadata for agentId={agent_id}, key={key}")
 
         try:
             return self.contract.get_metadata(agent_id, key)
         except Exception as e:
-            self._logger.error(f"Failed to get metadata: {str(e)}")
+            logger.error(f"Failed to get metadata: {str(e)}")
             raise
 
-    def set_metadata(self, agent_id: int, key: str, value: str) -> Dict[str, Any]:
+    def set_metadata(self, agent_id: int, key: str, value: str) -> dict[str, Any]:
         """
         Set metadata for an agent (must be owner or operator).
 
@@ -586,19 +507,19 @@ class ERC8004Agent:
             ...     value="My agent description"
             ... )
         """
-        self._logger.debug(f"Setting metadata for agentId={agent_id}, key={key}")
+        logger.debug(f"Setting metadata for agentId={agent_id}, key={key}")
 
         try:
             return self.contract.set_metadata(agent_id, key, value)
         except Exception as e:
-            self._logger.error(f"Failed to set metadata: {str(e)}")
+            logger.error(f"Failed to set metadata: {str(e)}")
             raise
 
     def set_agent_uri(
         self,
         agent_id: int,
         agent_uri: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Set agent URI for an agent.
 
@@ -628,24 +549,20 @@ class ERC8004Agent:
         if not agent_uri:
             raise ValueError("agent_uri is required")
 
-        self._logger.debug(f"Setting agent URI for agentId: {agent_id}")
+        logger.debug(f"Setting agent URI for agentId: {agent_id}")
 
         try:
             # Set agent URI using setAgentURI function
             result = self.contract.set_agent_uri(agent_id, agent_uri)
             result["agentURI"] = agent_uri
-
-            # Update state file so stored agent_uri stays in sync with on-chain
-            self._update_agent_uri_in_state(agent_id, agent_uri)
-
             return result
 
         except Exception as e:
-            self._logger.error(f"Failed to set agent URI: {str(e)}")
+            logger.error(f"Failed to set agent URI: {str(e)}")
             raise
 
     @staticmethod
-    def parse_agent_uri(agent_uri: str) -> Optional[Dict[str, Any]]:
+    def parse_agent_uri(agent_uri: str) -> dict[str, Any] | None:
         """
         Parse agent URI to JSON.
 
@@ -676,10 +593,76 @@ class ERC8004Agent:
             except Exception:
                 return None
 
-        # Handle HTTP/HTTPS URL
+        # Handle HTTP/HTTPS URL (with SSRF protection)
         if agent_uri.startswith("http://") or agent_uri.startswith("https://"):
             try:
-                response = requests.get(agent_uri, timeout=10)
+                # SSRF protection: block private/reserved IP ranges
+                parsed = urlparse(agent_uri)
+                hostname = parsed.hostname
+                if not hostname:
+                    return None
+
+                # Block known cloud metadata hostnames
+                _BLOCKED_HOSTNAMES = {
+                    "metadata.google.internal",
+                    "metadata.goog",
+                    "169.254.169.254",
+                }
+                if hostname.lower() in _BLOCKED_HOSTNAMES:
+                    return None
+
+                # Resolve hostname with a timeout to avoid hanging on
+                # adversarial DNS servers
+                def _resolve():
+                    return socket.getaddrinfo(hostname, None)
+
+                try:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        resolved_ips = pool.submit(_resolve).result(timeout=5)
+                except (concurrent.futures.TimeoutError, socket.gaierror, ValueError, OSError):
+                    return None
+
+                # Pick the first resolved IP and validate it
+                if not resolved_ips:
+                    return None
+
+                safe_ip_str = None
+                for _, _, _, _, sockaddr in resolved_ips:
+                    ip = ipaddress.ip_address(sockaddr[0])
+
+                    # Unmap IPv6-mapped IPv4 (e.g. ::ffff:127.0.0.1)
+                    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+                        ip = ip.ipv4_mapped
+
+                    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                        return None
+                    # Block cloud metadata IP
+                    if str(ip) == "169.254.169.254":
+                        return None
+
+                    if safe_ip_str is None:
+                        safe_ip_str = str(ip)
+
+                if safe_ip_str is None:
+                    return None
+
+                # Build the request URL using the resolved IP directly to
+                # prevent DNS rebinding (a second resolution returning a
+                # different, internal IP).  The original Host header is
+                # preserved so the remote server routes correctly.
+                port = parsed.port
+                if port:
+                    netloc = f"{safe_ip_str}:{port}"
+                else:
+                    netloc = safe_ip_str
+                safe_url = parsed._replace(netloc=netloc).geturl()
+
+                response = requests.get(
+                    safe_url,
+                    timeout=10,
+                    allow_redirects=False,
+                    headers={"Host": hostname},
+                )
                 response.raise_for_status()
                 return response.json()
             except Exception:
@@ -709,7 +692,7 @@ class ERC8004Agent:
         return self.contract.contract_address
 
     @property
-    def network(self) -> Dict[str, Any]:
+    def network(self) -> dict[str, Any]:
         """
         Get the network configuration.
 
