@@ -414,7 +414,7 @@ All configuration can be set via environment variables. The SDK resolves values 
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `PRIVATE_KEY` | First run only | — | Agent wallet private key (hex). After first import, the key is encrypted to `~/.bnbagent/wallets/` and this variable can be removed. |
+| `PRIVATE_KEY` | Recommended | Auto-generate | Agent wallet private key (hex). If provided, imported & encrypted to `~/.bnbagent/wallets/` on first run (can be removed afterward). If omitted and no keystore exists, a new wallet is auto-generated. |
 | `WALLET_PASSWORD` | Yes | — | Password to encrypt/decrypt the wallet keystore |
 | `WALLET_ADDRESS` | No | Auto-select | Select a specific wallet when multiple exist in `~/.bnbagent/wallets/` |
 | `NETWORK` | No | `bsc-testnet` | Network name (`bsc-testnet` or `bsc-mainnet`) |
@@ -434,7 +434,7 @@ All configuration can be set via environment variables. The SDK resolves values 
 
 ```bash
 WALLET_PASSWORD=your-secure-password
-PRIVATE_KEY=0x...          # remove after first run
+PRIVATE_KEY=0x...          # optional; omit to auto-generate a new wallet
 ```
 
 ### Production `.env`
@@ -481,7 +481,7 @@ print(EVMWalletProvider.list_wallets())  # ["0x1234...abcd", "0x5678...ef01"]
 wallet = EVMWalletProvider(password="secure-pw", private_key="0x...", persist=False)
 ```
 
-> **Security**: `PRIVATE_KEY` should only be provided on the first run. After that, the key is encrypted in `~/.bnbagent/wallets/` (Keystore V3, MetaMask/Geth compatible) and you should remove `PRIVATE_KEY` from your `.env` file. Only `WALLET_PASSWORD` is needed for subsequent runs.
+> **Security**: `PRIVATE_KEY` is optional. If provided, it is encrypted to `~/.bnbagent/wallets/` (Keystore V3, MetaMask/Geth compatible) on the first run — remove it from `.env` afterward. If omitted and no keystore exists, a new wallet is auto-generated. Only `WALLET_PASSWORD` is needed for subsequent runs.
 
 #### Custom Wallet
 

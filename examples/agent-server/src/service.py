@@ -13,7 +13,8 @@ Usage:
     uv run python -m agent_server.service
 
 Environment (agent-server/.env):
-    RPC_URL, ERC8183_ADDRESS, PRIVATE_KEY      — Required (ERC-8183)
+    RPC_URL, ERC8183_ADDRESS                   — Required (ERC-8183)
+    PRIVATE_KEY                                — Recommended (imported on first run; auto-generates if omitted)
     APEX_EVALUATOR_ADDRESS                     — Required (evaluator)
     STORAGE_PROVIDER=ipfs, STORAGE_API_KEY     — Required (IPFS upload)
     AGENT_PRICE=1000000000000000000            — Negotiation price (1 U)

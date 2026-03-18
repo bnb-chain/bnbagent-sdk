@@ -135,7 +135,7 @@ and on-chain references for a completed job.
 
 | Variable | Required | Description | Default |
 |---|---|---|---|
-| `PRIVATE_KEY` | No | Agent wallet private key (imported on first run; if omitted, a new wallet is auto-generated) | Auto-generate |
+| `PRIVATE_KEY` | Recommended | Agent wallet private key (imported on first run; if omitted, a new wallet is auto-generated) | Auto-generate |
 | `WALLET_PASSWORD` | Yes | Password for wallet encryption | -- |
 | `BSC_RPC_URL` / `RPC_URL` | No | JSON-RPC endpoint | Network default |
 | `CHAIN_ID` | No | Chain ID | Network default |
