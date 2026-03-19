@@ -1,235 +1,293 @@
 """
 EVM Wallet Provider Implementation
 
-Manages traditional EVM wallets with Keystore V3 encryption.
-All private keys are stored encrypted using password-based encryption.
-Compatible with MetaMask/Geth Keystore format.
+Manages EVM wallets with Keystore V3 encryption.
+Keystores are stored in ~/.bnbagent/wallets/<address>.json.
+
+Security:
+- scrypt KDF + AES-128-CTR encryption (Keystore V3 / MetaMask / Geth compatible)
+- File permissions 0o600 (owner read/write only)
+- Directory permissions 0o700 (owner only)
+- Private key only needed on first import; subsequent runs use password only
 """
 
-from typing import Optional, Dict, Any
-from eth_account import Account
-from eth_account.signers.local import LocalAccount
-from eth_account.messages import encode_defunct
+from __future__ import annotations
 
-from ..utils.logger import get_logger
-from ..utils.state_file import StateFileManager
+import json
+import logging
+import os
+import tempfile
+from pathlib import Path
+from typing import Any
+
+from eth_account import Account
+from eth_account.messages import encode_defunct
+from eth_account.signers.local import LocalAccount
+
 from .wallet_provider import WalletProvider
+
+logger = logging.getLogger(__name__)
+
+# Default wallet directory
+_WALLETS_DIR = Path.home() / ".bnbagent" / "wallets"
 
 
 class EVMWalletProvider(WalletProvider):
     """
-    EVM wallet provider with mandatory Keystore encryption.
+    EVM wallet provider with Keystore V3 encryption.
 
-    All wallets are stored using Keystore V3 format with password protection.
-    This ensures private keys are never stored in plain text.
+    Wallets are stored as individual JSON files in ``~/.bnbagent/wallets/``,
+    named by address (e.g. ``0x1234...abcd.json``).
 
-    Security features:
-    - Password-based encryption using scrypt KDF
-    - AES-128-CTR encryption for private keys
-    - File permissions set to 0o600 (owner read/write only)
-    - Compatible with MetaMask/Geth keystore format
+    Typical lifecycle::
+
+        # First run — import and encrypt
+        wallet = EVMWalletProvider(password="pw", private_key="0x...")
+
+        # Subsequent runs — load from keystore (no private key needed)
+        wallet = EVMWalletProvider(password="pw", address="0x1234...abcd")
+
+        # Auto-select — if only one wallet exists
+        wallet = EVMWalletProvider(password="pw")
     """
 
     def __init__(
         self,
         password: str,
-        private_key: Optional[str] = None,
-        debug: bool = False,
+        private_key: str | None = None,
+        address: str | None = None,
+        persist: bool = True,
+        wallets_dir: str | Path | None = None,
     ):
         """
-        Initialize the EVM wallet provider with Keystore encryption.
+        Initialize the EVM wallet provider.
 
         Args:
             password: Password for Keystore encryption/decryption (REQUIRED).
-                     Used to encrypt new wallets and decrypt existing ones.
-            private_key: Optional private key string (hex format with or without 0x prefix).
-                        If provided, imports and encrypts this key.
-                        If not provided, loads existing keystore or creates new wallet.
-            debug: Enable debug logging
+            private_key: Private key to import (hex, with or without 0x).
+                        Only needed on first run; encrypted to disk afterward.
+            address: Address of an existing keystore to load. If omitted and
+                    no private_key is given, auto-selects if exactly one
+                    keystore exists.
+            persist: Save encrypted keystore to disk (default: True).
+                    Set False for in-memory-only (e.g. tests).
+            wallets_dir: Override wallet directory (default: ~/.bnbagent/wallets/).
 
         Raises:
-            ValueError: If password is empty or None
-
-        Example:
-            >>> # Create new encrypted wallet (auto-generates key)
-            >>> wallet = EVMWalletProvider(password="my-secure-password")
-
-            >>> # Import existing private key with encryption
-            >>> wallet = EVMWalletProvider(
-            ...     password="my-secure-password",
-            ...     private_key="0x..."
-            ... )
-
-            >>> # Load existing encrypted wallet
-            >>> wallet = EVMWalletProvider(password="my-secure-password")
+            ValueError: If password is empty, private_key is invalid, or
+                       no wallet can be resolved.
         """
         if not password:
             raise ValueError(
-                "Password is required for wallet encryption. "
-                "Please provide a secure password."
+                "Password is required for wallet encryption. Please provide a secure password."
             )
 
-        self.debug = debug
-        self._logger = get_logger(f"{__name__}.{self.__class__.__name__}", debug=debug)
         self._password = password
+        self._persist = persist
+        self._wallets_dir = Path(wallets_dir) if wallets_dir else _WALLETS_DIR
+        self._account: LocalAccount | None = None
+        self._source: str = ""  # "imported", "loaded_keystore", "created_new"
 
-        # Initialize state file manager
-        self.state_manager = StateFileManager(debug=debug)
-
-        self._account: Optional[LocalAccount] = None
-
-        # Load or create wallet
         if private_key:
             self._import_private_key(private_key)
+        elif persist:
+            self._load_wallet(address)
         else:
-            self._load_or_create_wallet()
+            raise ValueError("private_key is required when persist=False (in-memory-only mode)")
 
-    def _import_private_key(self, private_key: str) -> None:
-        """
-        Import and encrypt a private key.
+    # ── Static helpers ──
+
+    @staticmethod
+    def keystore_exists(
+        address: str | None = None,
+        wallets_dir: str | Path | None = None,
+    ) -> bool:
+        """Check if an encrypted keystore exists on disk.
 
         Args:
-            private_key: Private key in hex format (with or without 0x prefix)
+            address: Check for a specific address. If None, returns True
+                    if *any* keystore file exists.
+            wallets_dir: Override wallet directory.
+
+        Returns:
+            True if a matching keystore file is found.
         """
+        d = Path(wallets_dir) if wallets_dir else _WALLETS_DIR
+        if not d.is_dir():
+            return False
+        if address:
+            return (d / f"{address}.json").is_file()
+        return any(d.glob("0x*.json"))
+
+    @staticmethod
+    def list_wallets(wallets_dir: str | Path | None = None) -> list[str]:
+        """List all wallet addresses that have keystores on disk.
+
+        Returns:
+            List of checksummed addresses (e.g. ["0x1234...abcd"]).
+        """
+        d = Path(wallets_dir) if wallets_dir else _WALLETS_DIR
+        if not d.is_dir():
+            return []
+        return [p.stem for p in sorted(d.glob("0x*.json"))]
+
+    @property
+    def source(self) -> str:
+        """How the wallet was initialized: 'imported', 'loaded_keystore', or 'created_new'."""
+        return self._source
+
+    # ── Private key import ──
+
+    def _import_private_key(self, private_key: str) -> None:
+        """Import and encrypt a private key."""
         try:
-            # Remove 0x prefix if present
             if private_key.startswith("0x"):
                 private_key = private_key[2:]
-
-            # Validate private key format
             if len(private_key) != 64:
                 raise ValueError("Private key must be 64 hex characters (32 bytes)")
 
             self._account = Account.from_key(private_key)
-            self._logger.debug(
-                f"Imported private key for address: {self._account.address}"
-            )
+            self._source = "imported"
 
-            # Save as encrypted keystore
-            self._save_wallet()
-
-        except Exception as e:
-            raise ValueError(f"Invalid private key: {str(e)}")
-
-    def _load_or_create_wallet(self) -> None:
-        """
-        Load wallet from file or create a new one.
-        Only creates wallet once - if file exists, loads from it.
-        """
-        if self.state_manager.exists():
-            self._load_from_file()
-        else:
-            self._create_wallet()
-
-    def _load_from_file(self) -> None:
-        """
-        Load and decrypt wallet from Keystore file.
-        Also supports migrating legacy plain text format to encrypted.
-        """
-        try:
-            # Try to load encrypted keystore
-            keystore = self.state_manager.get("keystore")
-
-            if keystore:
-                # Decrypt keystore
-                try:
-                    private_key = Account.decrypt(keystore, self._password)
-                    self._account = Account.from_key(private_key)
-                    self._logger.debug(
-                        f"Loaded encrypted wallet: {self._account.address}"
-                    )
-                except ValueError as e:
-                    raise ValueError(f"Failed to decrypt keystore (wrong password?): {e}")
-            else:
-                # Check for legacy plain text format and migrate
-                private_key = self.state_manager.get("private_key")
-
-                if not private_key:
-                    raise ValueError(
-                        "Invalid state file: missing keystore. "
-                        "Please create a new wallet."
-                    )
-
-                # Remove 0x prefix if present
-                if private_key.startswith("0x"):
-                    private_key = private_key[2:]
-
-                self._account = Account.from_key(private_key)
-                self._logger.info(
-                    f"Migrating legacy wallet to encrypted format: {self._account.address}"
+            if self._persist:
+                self._save_keystore()
+                logger.info(
+                    "Private key imported and encrypted: %s "
+                    "(PRIVATE_KEY can be removed from env)",
+                    self._account.address,
                 )
-
-                # Migrate to encrypted format
-                self._save_wallet()
-
         except Exception as e:
-            raise RuntimeError(f"Failed to load wallet: {str(e)}")
+            raise ValueError(f"Invalid private key: {str(e)}") from e
+
+    # ── Load from disk ──
+
+    def _load_wallet(self, address: str | None) -> None:
+        """Load a wallet from keystore, or create a new one if none exists."""
+        if address:
+            self._load_keystore(address)
+        else:
+            wallets = self.list_wallets(self._wallets_dir)
+            if len(wallets) == 1:
+                self._load_keystore(wallets[0])
+            elif len(wallets) > 1:
+                raise ValueError(
+                    f"Multiple wallets found in {self._wallets_dir}: {wallets}. "
+                    "Set WALLET_ADDRESS to specify which one to use."
+                )
+            else:
+                # Check for legacy .bnbagent_state in CWD and migrate
+                if self._try_migrate_legacy():
+                    return
+                self._create_wallet()
+
+    def _load_keystore(self, address: str) -> None:
+        """Load and decrypt a keystore file by address."""
+        ks_path = self._wallets_dir / f"{address}.json"
+        if not ks_path.is_file():
+            raise ValueError(f"Keystore not found: {ks_path}")
+
+        try:
+            with open(ks_path) as f:
+                keystore = json.load(f)
+            private_key = Account.decrypt(keystore, self._password)
+            self._account = Account.from_key(private_key)
+            self._source = "loaded_keystore"
+            logger.info("Wallet loaded from keystore: %s", self._account.address)
+        except ValueError as e:
+            raise ValueError(f"Failed to decrypt keystore (wrong password?): {e}") from e
+        except Exception as e:
+            raise RuntimeError(f"Failed to load keystore {ks_path}: {e}") from e
 
     def _create_wallet(self) -> None:
-        """Create a new wallet and save encrypted."""
+        """Generate a new wallet and save encrypted."""
         try:
-            # Generate new account
             self._account = Account.create()
-            self._logger.debug(f"Created new wallet: {self._account.address}")
-
-            # Save encrypted
-            self._save_wallet()
-
+            self._source = "created_new"
+            if self._persist:
+                self._save_keystore()
+            logger.info("Created new wallet: %s", self._account.address)
         except Exception as e:
-            raise RuntimeError(f"Failed to create wallet: {str(e)}")
+            raise RuntimeError(f"Failed to create wallet: {e}") from e
 
-    def _save_wallet(self) -> None:
-        """Save wallet as encrypted Keystore V3 format."""
-        # Encrypt private key using Keystore V3 format
+    # ── Save to disk ──
+
+    def _save_keystore(self) -> None:
+        """Save wallet as ~/.bnbagent/wallets/<address>.json (Keystore V3)."""
+        self._wallets_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(self._wallets_dir, 0o700)
+
         keystore = Account.encrypt(self._account.key, self._password)
+        ks_path = self._wallets_dir / f"{self._account.address}.json"
 
-        # Save keystore to state file
-        self.state_manager.set("keystore", keystore)
-        self.state_manager.set("address", self._account.address)
-        self.state_manager.set("encrypted", True)
-
-        # Remove plain text private_key if it exists (security cleanup)
+        # Atomic write
+        fd, temp_path = tempfile.mkstemp(
+            dir=self._wallets_dir, prefix=".ks_", suffix=".tmp",
+        )
         try:
-            data = self.state_manager.load()
-            if "private_key" in data:
-                del data["private_key"]
-                self.state_manager.save(data)
-                self._logger.debug("Removed legacy plain text key from state file")
+            with os.fdopen(fd, "w") as f:
+                json.dump(keystore, f)
+            os.chmod(temp_path, 0o600)
+            os.replace(temp_path, ks_path)
         except Exception:
-            pass
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+            raise
 
-        self._logger.debug(f"Saved encrypted wallet (Keystore V3)")
+        logger.debug("Saved keystore: %s", ks_path)
+
+    # ── Legacy migration ──
+
+    def _try_migrate_legacy(self) -> bool:
+        """Migrate .bnbagent_state (CWD) to ~/.bnbagent/wallets/. Returns True if migrated."""
+        legacy_path = Path.cwd() / ".bnbagent_state"
+        if not legacy_path.is_file():
+            return False
+
+        try:
+            with open(legacy_path) as f:
+                data = json.load(f)
+
+            keystore = data.get("keystore")
+            if keystore:
+                private_key = Account.decrypt(keystore, self._password)
+            else:
+                pk_hex = data.get("private_key", "")
+                if not pk_hex:
+                    return False
+                if pk_hex.startswith("0x"):
+                    pk_hex = pk_hex[2:]
+                private_key = bytes.fromhex(pk_hex)
+
+            self._account = Account.from_key(private_key)
+            self._source = "loaded_keystore"
+            self._save_keystore()
+
+            # Remove legacy file after successful migration
+            legacy_path.unlink()
+            logger.info(
+                "Migrated wallet from .bnbagent_state to %s/%s.json",
+                self._wallets_dir,
+                self._account.address,
+            )
+            return True
+        except Exception as e:
+            logger.warning("Failed to migrate legacy .bnbagent_state: %s", e)
+            return False
+
+    # ── Public API ──
 
     @property
     def address(self) -> str:
-        """
-        Get the wallet address.
-
-        Returns:
-            str: The Ethereum address of the wallet
-        """
+        """Get the wallet address."""
         if self._account is None:
             raise RuntimeError("Account not initialized")
         return self._account.address
 
-    def sign_transaction(self, transaction: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Sign a transaction.
-
-        Args:
-            transaction: Transaction dictionary with fields like 'to', 'value', 'gas',
-                        'gasPrice', 'nonce', 'data', 'chainId'
-
-        Returns:
-            dict: Signed transaction with 'rawTransaction', 'hash', 'r', 's', 'v'
-        """
-        self._logger.debug(f"Signing transaction: {transaction}")
-
+    def sign_transaction(self, transaction: dict[str, Any]) -> dict[str, Any]:
+        """Sign a transaction. Returns dict with 'rawTransaction', 'hash', 'r', 's', 'v'."""
         signed_txn = self._account.sign_transaction(transaction)
-
-        self._logger.debug(f"Transaction signed: hash={signed_txn.hash.hex()}")
-
-        # Return dict format for consistent interface across wallet providers
         return {
             "rawTransaction": signed_txn.raw_transaction,
             "hash": signed_txn.hash,
@@ -238,25 +296,10 @@ class EVMWalletProvider(WalletProvider):
             "v": signed_txn.v,
         }
 
-    def sign_message(self, message: str) -> Dict[str, Any]:
-        """
-        Sign a message using EIP-191 personal sign.
-
-        Args:
-            message: Message string to sign
-
-        Returns:
-            dict: Signature with 'messageHash', 'r', 's', 'v', 'signature'
-        """
-        self._logger.debug(f"Signing message: {message[:50]}...")
-
-        # Use EIP-191 personal sign format
+    def sign_message(self, message: str) -> dict[str, Any]:
+        """Sign a message using EIP-191 personal sign."""
         signable_message = encode_defunct(text=message)
         signed_message = self._account.sign_message(signable_message)
-
-        self._logger.debug(f"Message signed: hash={signed_message.message_hash.hex()}")
-
-        # Return dict format for consistent interface across wallet providers
         return {
             "messageHash": signed_message.message_hash,
             "r": signed_message.r,
@@ -266,59 +309,14 @@ class EVMWalletProvider(WalletProvider):
         }
 
     def export_private_key(self) -> str:
-        """
-        Export the private key in hex format.
-
-        WARNING: Handle with care! Never share or expose your private key.
-        Anyone with access to your private key can control your wallet.
-
-        Returns:
-            str: Private key with 0x prefix
-
-        Example:
-            >>> wallet = EVMWalletProvider(password="my-password")
-            >>> private_key = wallet.export_private_key()
-            >>> print(f"Private Key: {private_key}")
-        """
-        self._logger.warning(
-            "Exporting private key. Handle with extreme care - "
-            "never share or expose your private key!"
-        )
+        """Export the private key in hex format. Handle with extreme care."""
+        logger.warning("Exporting private key — never share or expose it!")
         return f"0x{self._account.key.hex()}"
 
-    def export_keystore(self) -> Dict[str, Any]:
-        """
-        Export the wallet as Keystore V3 JSON.
+    def export_keystore(self) -> dict[str, Any]:
+        """Export the wallet as Keystore V3 JSON (MetaMask/Geth compatible)."""
+        return Account.encrypt(self._account.key, self._password)
 
-        The exported keystore is encrypted with the current password.
-        This format is compatible with MetaMask, Geth, and other wallets.
-
-        Returns:
-            dict: Keystore V3 JSON object
-
-        Example:
-            >>> wallet = EVMWalletProvider(password="my-password")
-            >>> keystore = wallet.export_keystore()
-            >>> import json
-            >>> with open("my-wallet.json", "w") as f:
-            ...     json.dump(keystore, f)
-        """
-        keystore = Account.encrypt(self._account.key, self._password)
-        self._logger.debug(f"Exported keystore for address: {self._account.address}")
-        return keystore
-
-    def get_wallet_info(self) -> Dict[str, str]:
-        """
-        Get wallet information (address only, no sensitive data).
-
-        Returns:
-            dict: Wallet info with 'address'
-
-        Example:
-            >>> wallet = EVMWalletProvider(password="my-password")
-            >>> info = wallet.get_wallet_info()
-            >>> print(f"Address: {info['address']}")
-        """
-        return {
-            "address": self.address,
-        }
+    def get_wallet_info(self) -> dict[str, str]:
+        """Get wallet information (address only, no sensitive data)."""
+        return {"address": self.address}

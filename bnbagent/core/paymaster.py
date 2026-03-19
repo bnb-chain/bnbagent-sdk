@@ -4,13 +4,18 @@ Paymaster module for ERC-4337 account abstraction.
 Provides methods for interacting with paymaster services to sponsor gas fees.
 """
 
-from typing import Dict, Any, Union
+from __future__ import annotations
+
+import logging
+from typing import Any
+
 import requests
 from web3 import Web3
-from .utils.logger import get_logger
+
+logger = logging.getLogger(__name__)
 
 
-def _to_hex(value: Union[int, str, bytes, None], default: str = "0x0") -> str:
+def _to_hex(value: int | str | bytes | None, default: str = "0x0") -> str:
     """
     Convert a value to hex string format.
 
@@ -39,7 +44,7 @@ def _to_hex(value: Union[int, str, bytes, None], default: str = "0x0") -> str:
         return default
 
 
-def _to_address_hex(address: Union[str, None], default: str = "0x0") -> str:
+def _to_address_hex(address: str | None, default: str = "0x0") -> str:
     """
     Convert an address to checksummed hex string format.
 
@@ -56,7 +61,8 @@ def _to_address_hex(address: Union[str, None], default: str = "0x0") -> str:
     if isinstance(address, str):
         try:
             return Web3.to_checksum_address(address)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Invalid address '{address}', using default '{default}': {e}")
             return default
     else:
         return default
@@ -90,17 +96,16 @@ class Paymaster:
         """
         self.paymaster_url = paymaster_url
         self.debug = debug
-        self._logger = get_logger(f"{__name__}.{self.__class__.__name__}", debug=debug)
 
-        self._logger.debug(f"Initialized Paymaster with URL: {paymaster_url}")
+        logger.debug(f"Initialized Paymaster with URL: {paymaster_url}")
 
     def _make_rpc_request(
         self,
         method: str,
         params: list,
         request_id: int = 1,
-        headers: Dict[str, Any] = {},
-    ) -> Dict[str, Any]:
+        headers: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Make an RPC request to the paymaster service.
 
@@ -108,6 +113,7 @@ class Paymaster:
             method: RPC method name
             params: Method parameters
             request_id: Request ID (default: 1)
+            headers: Optional extra HTTP headers
 
         Returns:
             dict: RPC response
@@ -122,13 +128,14 @@ class Paymaster:
             "params": params,
         }
 
-        headers.update({"Content-Type": "application/json"})
+        merged_headers = dict(headers) if headers else {}
+        merged_headers.setdefault("Content-Type", "application/json")
 
         try:
-            self._logger.debug(f"Making RPC request: {method} to {self.paymaster_url}")
+            logger.debug(f"Making RPC request: {method} to {self.paymaster_url}")
             response = requests.post(
                 self.paymaster_url,
-                headers=headers,
+                headers=merged_headers,
                 json=payload,
                 timeout=30,
             )
@@ -139,16 +146,16 @@ class Paymaster:
                 error_msg = result["error"].get("message", "Unknown error")
                 error_data = result["error"].get("data", {})
                 error_code = result["error"].get("code", -1)
-                self._logger.error(f"RPC error [{error_code}]: {error_msg}")
+                logger.error(f"RPC error [{error_code}]: {error_msg}")
                 if error_data:
-                    self._logger.error(f"Error data: {error_data}")
+                    logger.error(f"Error data: {error_data}")
                 raise RuntimeError(f"RPC error [{error_code}]: {error_msg}")
 
             return result
         except requests.exceptions.RequestException as e:
-            self._logger.error(f"Failed to make RPC request: {e}")
+            logger.error(f"Failed to make RPC request: {e}")
             if hasattr(e, "response") and e.response is not None:
-                self._logger.error(f"Response: {e.response.text}")
+                logger.error(f"Response: {e.response.text}")
             raise
 
     def eth_getTransactionCount(
@@ -187,14 +194,14 @@ class Paymaster:
 
         # Convert hex to int
         nonce = int(nonce_hex, 16)
-        self._logger.debug(f"Transaction count for {address}: {nonce}")
+        logger.debug(f"Transaction count for {address}: {nonce}")
 
         return nonce
 
     def eth_sendRawTransaction(
         self,
         signed_transaction: str,
-        tx_options: Dict[str, Any] = {},
+        tx_options: dict[str, Any] | None = None,
     ) -> str:
         """
         Send a signed raw transaction to the paymaster service.
@@ -212,7 +219,7 @@ class Paymaster:
         if not signed_transaction.startswith("0x"):
             signed_transaction = "0x" + signed_transaction
 
-        self._logger.debug(f"Sending raw transaction: {signed_transaction[:100]}...")
+        logger.debug(f"Sending raw transaction: {signed_transaction[:100]}...")
         result = self._make_rpc_request(
             method="eth_sendRawTransaction",
             params=[signed_transaction],
@@ -223,11 +230,11 @@ class Paymaster:
         if tx_hash is None:
             raise ValueError("Failed to send raw transaction: missing 'result' field")
 
-        self._logger.debug(f"Transaction sent: {tx_hash}")
+        logger.debug(f"Transaction sent: {tx_hash}")
 
         return tx_hash
 
-    def isSponsorable(self, tx: Dict[str, Any]) -> bool:
+    def isSponsorable(self, tx: dict[str, Any]) -> bool:
         """
         Check if a transaction is sponsorable by the paymaster.
 
@@ -244,8 +251,10 @@ class Paymaster:
         data_hex = _to_hex(tx.get("data", b""))
         gas_hex = _to_hex(tx.get("gas", 0))
 
-        self._logger.debug(
-            f"Checking if transaction is sponsorable: {to_hex}, {from_hex}, {value_hex}, {data_hex}, {gas_hex}"
+        logger.debug(
+            "Checking if transaction is sponsorable:"
+            f" {to_hex}, {from_hex},"
+            f" {value_hex}, {data_hex}, {gas_hex}"
         )
         result = self._make_rpc_request(
             method="pm_isSponsorable",
@@ -261,6 +270,6 @@ class Paymaster:
         )
         res = result.get("result")
         if res is None:
-            self._logger.error(f"Invalid response: missing 'result' field")
+            logger.error("Invalid response: missing 'result' field")
             return False
         return res.get("sponsorable", False)

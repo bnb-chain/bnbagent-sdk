@@ -1,11 +1,9 @@
-"""
-Utility modules for ERC8004Agent SDK.
-"""
+"""Utility modules for bnbagent SDK."""
 
-from .logger import get_logger
+from __future__ import annotations
+
 from .agent_uri import AgentURIGenerator
 
 __all__ = [
-    "get_logger",
     "AgentURIGenerator",
 ]

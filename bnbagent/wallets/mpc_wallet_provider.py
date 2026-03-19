@@ -6,10 +6,14 @@ MPC wallets use distributed key generation and signing, providing
 enhanced security without storing a single private key.
 """
 
-from typing import Optional, Dict, Any
+from __future__ import annotations
 
-from ..utils.logger import get_logger
+import logging
+from typing import Any
+
 from .wallet_provider import WalletProvider
+
+logger = logging.getLogger(__name__)
 
 
 class MPCWalletProvider(WalletProvider):
@@ -23,26 +27,20 @@ class MPCWalletProvider(WalletProvider):
     Note: This is a stub implementation. Full MPC support will be added in the future.
     """
 
-    def __init__(
-        self, mpc_config: Optional[Dict[str, Any]] = None, debug: bool = False
-    ):
+    def __init__(self, mpc_config: dict[str, Any] | None = None):
         """
         Initialize the MPC wallet provider.
 
         Args:
             mpc_config: Optional MPC configuration dictionary
-            debug: Enable debug logging
 
         Raises:
             NotImplementedError: MPC wallet support is not yet implemented
         """
-        self.debug = debug
-        self._logger = get_logger(f"{__name__}.{self.__class__.__name__}", debug=debug)
         self.mpc_config = mpc_config or {}
 
         raise NotImplementedError(
-            "MPC wallet support is not yet implemented. "
-            "Please use EVMWalletProvider for now."
+            "MPC wallet support is not yet implemented. Please use EVMWalletProvider for now."
         )
 
     @property
@@ -50,10 +48,10 @@ class MPCWalletProvider(WalletProvider):
         """Get the wallet address."""
         raise NotImplementedError("MPC wallet not implemented")
 
-    def sign_transaction(self, transaction: Dict[str, Any]) -> Dict[str, Any]:
+    def sign_transaction(self, transaction: dict[str, Any]) -> dict[str, Any]:
         """Sign a transaction."""
         raise NotImplementedError("MPC wallet not implemented")
 
-    def sign_message(self, message: str) -> Dict[str, Any]:
+    def sign_message(self, message: str) -> dict[str, Any]:
         """Sign a message."""
         raise NotImplementedError("MPC wallet not implemented")

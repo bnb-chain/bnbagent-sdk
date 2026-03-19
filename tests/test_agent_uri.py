@@ -2,9 +2,11 @@
 Test cases for AgentURI generation and parsing
 """
 
-import pytest
 import base64
 import json
+
+import pytest
+
 from bnbagent import AgentEndpoint
 from bnbagent.utils.agent_uri import AgentURIGenerator
 
@@ -125,9 +127,7 @@ class TestAgentURIGenerator:
         }
 
         # Encode
-        base64_str = AgentURIGenerator.encode_registration_file_to_base64(
-            registration_file
-        )
+        base64_str = AgentURIGenerator.encode_registration_file_to_base64(registration_file)
         assert isinstance(base64_str, str)
 
         # Decode
@@ -141,9 +141,7 @@ class TestAgentURIGenerator:
             "name": "Test Agent",
             "description": "A test agent",
         }
-        base64_str = AgentURIGenerator.encode_registration_file_to_base64(
-            registration_file
-        )
+        base64_str = AgentURIGenerator.encode_registration_file_to_base64(registration_file)
         data_uri = f"data:application/json;base64,{base64_str}"
 
         decoded = AgentURIGenerator.decode_registration_file_from_base64(data_uri)

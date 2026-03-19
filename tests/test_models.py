@@ -3,6 +3,7 @@ Test cases for data models
 """
 
 import pytest
+
 from bnbagent import AgentEndpoint
 
 

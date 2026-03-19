@@ -4,12 +4,16 @@ Agent URI generation utility.
 Generates EIP-8004 compliant agent registration files and agent URIs.
 """
 
-import json
+from __future__ import annotations
+
 import base64
-from typing import Optional, Dict, Any, List
+import json
+from typing import TYPE_CHECKING, Any
+
 from web3 import Web3
 
-from ..models import AgentEndpoint
+if TYPE_CHECKING:
+    from ..erc8004.models import AgentEndpoint
 
 
 class AgentURIGenerator:
@@ -21,20 +25,20 @@ class AgentURIGenerator:
     def generate_registration_file(
         name: str,
         description: str,
-        endpoints: List[AgentEndpoint],
-        image: Optional[str] = None,
-        agent_id: Optional[int] = None,
-        identity_registry: Optional[str] = None,
-        chain_id: Optional[int] = None,
-        supported_trust: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
+        endpoints: list[AgentEndpoint | dict[str, Any]],
+        image: str | None = None,
+        agent_id: int | None = None,
+        identity_registry: str | None = None,
+        chain_id: int | None = None,
+        supported_trust: list[str] | None = None,
+    ) -> dict[str, Any]:
         """
         Generate an EIP-8004 compliant agent registration file.
 
         Args:
             name: Agent name (required)
             description: Agent description (required)
-            endpoints: List of AgentEndpoint instances (required, at least one)
+            endpoints: List of AgentEndpoint instances or dicts (required, at least one)
             image: Optional agent image URL
             agent_id: Optional agent ID for registrations field
             identity_registry: Optional registry address for registrations field
@@ -66,16 +70,17 @@ class AgentURIGenerator:
             raise ValueError("name and description are required")
 
         if not endpoints or len(endpoints) == 0:
-            raise ValueError(
-                "endpoints is required and must contain at least one endpoint"
-            )
+            raise ValueError("endpoints is required and must contain at least one endpoint")
 
-        # Convert endpoints to dictionaries
+        # Convert endpoints to dictionaries (duck-typed: AgentEndpoint or dict)
         endpoint_dicts = []
         for endpoint in endpoints:
-            if not isinstance(endpoint, AgentEndpoint):
-                raise ValueError("endpoints must be a list of AgentEndpoint instances")
-            endpoint_dicts.append(endpoint.to_dict())
+            if hasattr(endpoint, "to_dict"):
+                endpoint_dicts.append(endpoint.to_dict())
+            elif isinstance(endpoint, dict):
+                endpoint_dicts.append(endpoint)
+            else:
+                raise TypeError(f"Expected AgentEndpoint or dict, got {type(endpoint).__name__}")
 
         # Build registrations array
         registrations = []
@@ -104,7 +109,7 @@ class AgentURIGenerator:
         return registration_file
 
     @staticmethod
-    def calculate_file_hash(registration_file: Dict[str, Any]) -> str:
+    def calculate_file_hash(registration_file: dict[str, Any]) -> str:
         """
         Calculate the hash of a registration file.
 
@@ -123,12 +128,12 @@ class AgentURIGenerator:
     def generate_agent_uri(
         name: str,
         description: str,
-        endpoints: List[AgentEndpoint],
-        image: Optional[str] = None,
-        agent_id: Optional[int] = None,
-        identity_registry: Optional[str] = None,
-        chain_id: Optional[int] = None,
-        supported_trust: Optional[List[str]] = None,
+        endpoints: list[AgentEndpoint | dict[str, Any]],
+        image: str | None = None,
+        agent_id: int | None = None,
+        identity_registry: str | None = None,
+        chain_id: int | None = None,
+        supported_trust: list[str] | None = None,
     ) -> str:
         """
         Generate agent URI for an agent registration.
@@ -173,15 +178,13 @@ class AgentURIGenerator:
         )
 
         # Generate base64 data URI (always)
-        base64_str = AgentURIGenerator.encode_registration_file_to_base64(
-            registration_file
-        )
+        base64_str = AgentURIGenerator.encode_registration_file_to_base64(registration_file)
         agent_uri = f"data:application/json;base64,{base64_str}"
 
         return agent_uri
 
     @staticmethod
-    def encode_registration_file_to_base64(registration_file: Dict[str, Any]) -> str:
+    def encode_registration_file_to_base64(registration_file: dict[str, Any]) -> str:
         """
         Encode registration file to base64 string.
 
@@ -201,7 +204,7 @@ class AgentURIGenerator:
         return base64_str
 
     @staticmethod
-    def decode_registration_file_from_base64(base64_str: str) -> Dict[str, Any]:
+    def decode_registration_file_from_base64(base64_str: str) -> dict[str, Any]:
         """
         Decode base64 string to registration file.
 
