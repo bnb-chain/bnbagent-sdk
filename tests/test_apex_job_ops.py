@@ -262,44 +262,39 @@ class TestGetJobStatus:
 
 
 class TestGetPendingJobs:
-    """Tests for the progressive event scanning path (post-startup)."""
+    """Tests for the progressive Multicall3 scanning path (post-startup)."""
 
     @pytest.mark.asyncio
     async def test_funded_jobs_for_provider(self):
         ops = _make_job_ops()
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_scanned_block = 500
-        client.get_job_funded_events.return_value = [
-            {
-                "jobId": 1,
-                "client": "0xabc",
-                "amount": 100,
-                "blockNumber": 50,
-                "transactionHash": "0xhash",
-            },
+        ops._last_known_next_id = 5
+
+        future_ts = int(time.time()) + 3600
+        # next_job_id returns 6 → one new job (ID 5)
+        client.next_job_id.return_value = 6
+        client.get_jobs_batch.return_value = [
+            {"jobId": 5, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "new job"},
         ]
         result = await ops.get_pending_jobs()
         assert result["success"] is True
         assert len(result["jobs"]) == 1
+        assert result["jobs"][0]["jobId"] == 5
 
     @pytest.mark.asyncio
     async def test_skips_non_funded(self):
         ops = _make_job_ops()
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_scanned_block = 500
-        job_data = client.get_job.return_value.copy()
-        job_data["status"] = APEXStatus.COMPLETED
-        client.get_job.return_value = job_data
-        client.get_job_funded_events.return_value = [
-            {
-                "jobId": 1,
-                "client": "0xabc",
-                "amount": 100,
-                "blockNumber": 50,
-                "transactionHash": "0xhash",
-            },
+        ops._last_known_next_id = 5
+
+        future_ts = int(time.time()) + 3600
+        client.next_job_id.return_value = 6
+        client.get_jobs_batch.return_value = [
+            {"jobId": 5, "provider": FAKE_ADDRESS, "status": APEXStatus.COMPLETED,
+             "expiredAt": future_ts, "description": "completed"},
         ]
         result = await ops.get_pending_jobs()
         assert len(result["jobs"]) == 0
@@ -309,45 +304,65 @@ class TestGetPendingJobs:
         ops = _make_job_ops()
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_scanned_block = 500
-        job_data = client.get_job.return_value.copy()
-        job_data["provider"] = "0x" + "ff" * 20  # Different provider
-        client.get_job.return_value = job_data
-        client.get_job_funded_events.return_value = [
-            {
-                "jobId": 1,
-                "client": "0xabc",
-                "amount": 100,
-                "blockNumber": 50,
-                "transactionHash": "0xhash",
-            },
+        ops._last_known_next_id = 5
+
+        future_ts = int(time.time()) + 3600
+        client.next_job_id.return_value = 6
+        client.get_jobs_batch.return_value = [
+            {"jobId": 5, "provider": "0x" + "ff" * 20, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "other provider"},
         ]
         result = await ops.get_pending_jobs()
         assert len(result["jobs"]) == 0
 
     @pytest.mark.asyncio
-    async def test_auto_from_block(self):
-        """Progressive scanning uses _last_scanned_block - 5 as from_block."""
+    async def test_no_new_jobs_zero_multicall(self):
+        """When next_job_id hasn't changed, no Multicall3 call is made."""
         ops = _make_job_ops()
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_scanned_block = 500
-        client.w3.eth.block_number = 1000
-        client.get_job_funded_events.return_value = []
-        await ops.get_pending_jobs()
-        call_args = client.get_job_funded_events.call_args[0]
-        assert call_args[0] == 500 - 5  # _last_scanned_block - reorg overlap
+        ops._last_known_next_id = 5
+        client.next_job_id.return_value = 5  # unchanged
+
+        result = await ops.get_pending_jobs()
+        assert result["success"] is True
+        assert result["jobs"] == []
+        client.get_jobs_batch.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_error_returns_empty(self):
+    async def test_new_jobs_multicall_scans_range(self):
+        """When new jobs exist, Multicall3 scans only the new ID range."""
         ops = _make_job_ops()
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_scanned_block = 500
-        client.get_job_funded_events.side_effect = Exception("rpc error")
+        ops._last_known_next_id = 10
+
+        future_ts = int(time.time()) + 3600
+        client.next_job_id.return_value = 13  # 3 new jobs: 10, 11, 12
+        client.get_jobs_batch.return_value = [
+            {"jobId": 10, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "job 10"},
+            None,  # job 11 failed
+            {"jobId": 12, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "job 12"},
+        ]
+
+        result = await ops.get_pending_jobs()
+        assert result["success"] is True
+        assert len(result["jobs"]) == 2
+        # Verify get_jobs_batch was called with [10, 11, 12]
+        client.get_jobs_batch.assert_called_once_with([10, 11, 12])
+        assert ops._last_known_next_id == 13
+
+    @pytest.mark.asyncio
+    async def test_error_propagates(self):
+        ops = _make_job_ops()
+        client = _mock_client(ops)
+        ops._startup_scan_done = True
+        ops._last_known_next_id = 5
+        client.next_job_id.side_effect = Exception("rpc error")
         result = await ops.get_pending_jobs()
         assert result["success"] is False
-        assert result["jobs"] == []
 
 
 class TestStartupScan:
@@ -469,59 +484,64 @@ class TestStartupScan:
 
 
 class TestProgressiveScanning:
-    """Tests for the progressive (incremental) event scanning after startup."""
+    """Tests for the progressive Multicall3 scanning after startup."""
 
     @pytest.mark.asyncio
-    async def test_scans_from_last_block(self):
+    async def test_no_new_jobs_returns_empty(self):
+        """When next_job_id unchanged, return empty without calling get_jobs_batch."""
         ops = _make_job_ops()
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_scanned_block = 1000
-        client.w3.eth.block_number = 1010
-        client.get_job_funded_events.return_value = []
-
-        await ops.get_pending_jobs()
-        call_args = client.get_job_funded_events.call_args[0]
-        assert call_args[0] == 1000 - 5  # 5-block reorg overlap
-
-    @pytest.mark.asyncio
-    async def test_no_new_blocks(self):
-        ops = _make_job_ops()
-        client = _mock_client(ops)
-        ops._startup_scan_done = True
-        ops._last_scanned_block = 1000
-        client.w3.eth.block_number = 1004  # scan_from (995) < 1004, so scan proceeds
-
-        client.get_job_funded_events.return_value = []
-        result = await ops.get_pending_jobs()
-        assert result["success"] is True
-        assert result["jobs"] == []
-
-    @pytest.mark.asyncio
-    async def test_no_new_blocks_exact(self):
-        """When scan_from >= latest_block, skip event query."""
-        ops = _make_job_ops()
-        client = _mock_client(ops)
-        ops._startup_scan_done = True
-        ops._last_scanned_block = 1000
-        client.w3.eth.block_number = 995  # scan_from=995, latest=995
+        ops._last_known_next_id = 10
+        client.next_job_id.return_value = 10
 
         result = await ops.get_pending_jobs()
         assert result["success"] is True
         assert result["jobs"] == []
-        client.get_job_funded_events.assert_not_called()
+        client.next_job_id.assert_called_once()
+        client.get_jobs_batch.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_updates_last_scanned(self):
+    async def test_new_jobs_scanned_via_multicall(self):
+        """New jobs trigger Multicall3 scan of only the new range."""
         ops = _make_job_ops()
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_scanned_block = 1000
-        client.w3.eth.block_number = 1010
-        client.get_job_funded_events.return_value = []
+        ops._last_known_next_id = 5
+
+        future_ts = int(time.time()) + 3600
+        client.next_job_id.return_value = 8
+        client.get_jobs_batch.return_value = [
+            {"jobId": 5, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "job 5"},
+            {"jobId": 6, "provider": "0x" + "ff" * 20, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "job 6"},  # wrong provider
+            {"jobId": 7, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "job 7"},
+        ]
+
+        result = await ops.get_pending_jobs()
+        assert result["success"] is True
+        assert len(result["jobs"]) == 2
+        client.get_jobs_batch.assert_called_once_with([5, 6, 7])
+
+    @pytest.mark.asyncio
+    async def test_updates_last_known_next_id(self):
+        ops = _make_job_ops()
+        client = _mock_client(ops)
+        ops._startup_scan_done = True
+        ops._last_known_next_id = 5
+
+        future_ts = int(time.time()) + 3600
+        client.next_job_id.return_value = 7
+        client.get_jobs_batch.return_value = [
+            {"jobId": 5, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "job 5"},
+            None,
+        ]
 
         await ops.get_pending_jobs()
-        assert ops._last_scanned_block == 1010
+        assert ops._last_known_next_id == 7
 
     @pytest.mark.asyncio
     async def test_explicit_from_block_honored(self):
@@ -529,7 +549,7 @@ class TestProgressiveScanning:
         ops = _make_job_ops()
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_scanned_block = 1000
+        ops._last_known_next_id = 10
         client.get_job_funded_events.return_value = []
 
         await ops.get_pending_jobs(from_block=500)
@@ -538,15 +558,15 @@ class TestProgressiveScanning:
 
     @pytest.mark.asyncio
     async def test_explicit_from_block_no_state_update(self):
-        """Explicit from_block does NOT update _last_scanned_block."""
+        """Explicit from_block does NOT update _last_known_next_id."""
         ops = _make_job_ops()
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_scanned_block = 1000
+        ops._last_known_next_id = 10
         client.get_job_funded_events.return_value = []
 
         await ops.get_pending_jobs(from_block=500)
-        assert ops._last_scanned_block == 1000  # unchanged
+        assert ops._last_known_next_id == 10  # unchanged
 
 
 class TestVerifyJob:
@@ -655,17 +675,21 @@ class TestRunJobLoop:
         ops = _make_job_ops(service_price=10**18)
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_scanned_block = 500
+        ops._last_known_next_id = 1
 
         # Job with insufficient budget
         job_data = client.get_job.return_value.copy()
         job_data["budget"] = 100  # way below service_price
         client.get_job.return_value = job_data
 
-        # get_pending_jobs returns same job twice (two polling cycles)
-        client.get_job_funded_events.return_value = [
-            {"jobId": 1, "client": "0xabc", "amount": 100,
-             "blockNumber": 50, "transactionHash": "0xhash"},
+        future_ts = int(time.time()) + 3600
+        # Progressive Multicall3 path: next_job_id=2 means 1 new job
+        client.next_job_id.return_value = 2
+        client.get_jobs_batch.return_value = [
+            {"jobId": 1, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "test job", "budget": 100,
+             "client": "0x" + "cc" * 20, "evaluator": "0x" + "ee" * 20,
+             "hook": "0x" + "00" * 20, "deliverable": b"\x00" * 32},
         ]
 
         poll_count = 0
@@ -675,6 +699,8 @@ class TestRunJobLoop:
             poll_count += 1
             if poll_count > 2:
                 raise KeyboardInterrupt  # stop loop
+            # Reset next_id so the multicall path returns the same job again
+            ops._last_known_next_id = 1
             return await ops._original_get_pending()
 
         # Save original and patch
@@ -691,7 +717,7 @@ class TestRunJobLoop:
             )
 
         # verify_job called only once (skipped on second poll)
-        assert client.get_job.call_count <= 3  # get_pending calls get_job, then verify calls get_job once
+        assert client.get_job.call_count <= 2  # verify calls get_job once
 
     @pytest.mark.asyncio
     async def test_on_job_skipped_sync_callback(self):
@@ -699,14 +725,19 @@ class TestRunJobLoop:
         ops = _make_job_ops(service_price=10**18)
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_scanned_block = 500
+        ops._last_known_next_id = 1
 
         job_data = client.get_job.return_value.copy()
         job_data["budget"] = 100
         client.get_job.return_value = job_data
-        client.get_job_funded_events.return_value = [
-            {"jobId": 1, "client": "0xabc", "amount": 100,
-             "blockNumber": 50, "transactionHash": "0xhash"},
+
+        future_ts = int(time.time()) + 3600
+        client.next_job_id.return_value = 2
+        client.get_jobs_batch.return_value = [
+            {"jobId": 1, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "test job", "budget": 100,
+             "client": "0x" + "cc" * 20, "evaluator": "0x" + "ee" * 20,
+             "hook": "0x" + "00" * 20, "deliverable": b"\x00" * 32},
         ]
 
         callback_calls = []
@@ -743,14 +774,19 @@ class TestRunJobLoop:
         ops = _make_job_ops(service_price=10**18)
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_scanned_block = 500
+        ops._last_known_next_id = 1
 
         job_data = client.get_job.return_value.copy()
         job_data["budget"] = 100
         client.get_job.return_value = job_data
-        client.get_job_funded_events.return_value = [
-            {"jobId": 1, "client": "0xabc", "amount": 100,
-             "blockNumber": 50, "transactionHash": "0xhash"},
+
+        future_ts = int(time.time()) + 3600
+        client.next_job_id.return_value = 2
+        client.get_jobs_batch.return_value = [
+            {"jobId": 1, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "test job", "budget": 100,
+             "client": "0x" + "cc" * 20, "evaluator": "0x" + "ee" * 20,
+             "hook": "0x" + "00" * 20, "deliverable": b"\x00" * 32},
         ]
 
         callback_calls = []

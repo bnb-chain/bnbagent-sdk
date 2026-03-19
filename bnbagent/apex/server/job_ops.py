@@ -101,6 +101,8 @@ class APEXJobOps:
         self._deliverable_urls: dict[int, str] = {}  # job_id → data_url
         self._last_scanned_block: int | None = None
         self._startup_scan_done: bool = False
+        self._last_known_next_id: int = 0
+        self._pending_open_ids: set[int] = set()  # OPEN jobs assigned to this agent
 
     def _get_client(self) -> APEXClient:
         """Get or create APEXClient instance (sync — no I/O on first call beyond ABI load)."""
@@ -324,6 +326,58 @@ class APEXJobOps:
             logger.error(f"[APEXJobOps] get_job_status({job_id}) failed: {e}")
             return {"success": False, "error": str(e)}
 
+    async def _multicall_scan(self, job_ids: list[int]) -> dict[str, Any]:
+        """Scan a list of job IDs via Multicall3 and return funded jobs for this agent.
+
+        Uses a single ``eth_call`` (via ``get_jobs_batch``) instead of
+        ``eth_getLogs``, avoiding BSC public node rate limits on log queries.
+
+        Also tracks OPEN jobs assigned to this agent in ``_pending_open_ids``
+        so they can be re-checked on subsequent polls (a job may transition
+        from OPEN → FUNDED between polls without changing ``next_job_id``).
+
+        Args:
+            job_ids: Job IDs to check.
+
+        Returns:
+            ``{"success": True, "jobs": [...]}`` with funded, non-expired jobs
+            assigned to this agent.
+        """
+        if not job_ids:
+            return {"success": True, "jobs": []}
+
+        client = self._get_client()
+        my_address = self.agent_address.lower()
+
+        all_jobs = await asyncio.to_thread(client.get_jobs_batch, list(job_ids))
+
+        now = int(time.time())
+        pending_jobs = []
+        for job in all_jobs:
+            if job is None:
+                continue
+            provider = job.get("provider", "").lower()
+            status = job.get("status")
+            expired_at = job.get("expiredAt", 0)
+            job_id = job.get("jobId")
+
+            if provider != my_address:
+                # Not our job — stop tracking if we were
+                self._pending_open_ids.discard(job_id)
+                continue
+
+            if status == APEXStatus.FUNDED and expired_at > now:
+                pending_jobs.append({"success": True, **job})
+                self._pending_open_ids.discard(job_id)
+            elif status == APEXStatus.OPEN:
+                # Track OPEN jobs so we re-check them next poll
+                self._pending_open_ids.add(job_id)
+            else:
+                # Terminal state (COMPLETED, REJECTED, EXPIRED, etc.)
+                self._pending_open_ids.discard(job_id)
+
+        return {"success": True, "jobs": pending_jobs}
+
     async def _startup_scan(self) -> dict[str, Any]:
         """One-time batch scan of all jobs via Multicall3.
 
@@ -333,13 +387,12 @@ class APEXJobOps:
 
         After completing, sets ``_startup_scan_done = True`` and records the
         block number at the time of the snapshot so that subsequent calls can
-        do progressive event scanning from that point forward.
+        do progressive Multicall3 scanning from that point forward.
 
         If the Multicall3 batch read fails, falls back to the original
         event-based scan for this one call.
         """
         client = self._get_client()
-        my_address = self.agent_address.lower()
 
         # Record block BEFORE scanning so progressive scanning picks up
         # any events emitted during or after the batch read.
@@ -352,33 +405,16 @@ class APEXJobOps:
                 self._startup_scan_done = True
                 return {"success": True, "jobs": []}
 
-            all_jobs = await asyncio.to_thread(
-                client.get_jobs_batch, list(range(next_id))
-            )
-
-            now = int(time.time())
-            pending_jobs = []
-            for job in all_jobs:
-                if job is None:
-                    continue
-                provider = job.get("provider", "").lower()
-                status = job.get("status")
-                expired_at = job.get("expiredAt", 0)
-                if (
-                    provider == my_address
-                    and status == APEXStatus.FUNDED
-                    and expired_at > now
-                ):
-                    # Add success key for consistency with get_job() wrapper
-                    pending_jobs.append({"success": True, **job})
+            result = await self._multicall_scan(list(range(next_id)))
 
             self._last_scanned_block = snapshot_block
+            self._last_known_next_id = next_id
             self._startup_scan_done = True
             logger.info(
-                f"[APEXJobOps] Startup scan complete: {len(pending_jobs)} pending"
+                f"[APEXJobOps] Startup scan complete: {len(result['jobs'])} pending"
                 f" out of {next_id} total jobs (snapshot block {snapshot_block})"
             )
-            return {"success": True, "jobs": pending_jobs}
+            return result
 
         except Exception as e:
             logger.warning(
@@ -386,6 +422,7 @@ class APEXJobOps:
                 " falling back to event scan"
             )
             # Fall back to original event-based scan
+            my_address = self.agent_address.lower()
             try:
                 latest_block = snapshot_block
                 from_block = max(0, latest_block - 45000)
@@ -446,19 +483,19 @@ class APEXJobOps:
         """
         Get funded jobs assigned to this agent.
 
-        Uses a two-phase hybrid approach to avoid ``eth_getLogs`` rate limits:
+        Uses Multicall3 ``eth_call`` exclusively to avoid ``eth_getLogs`` rate
+        limits on BSC public nodes:
 
         1. **Startup** (first call): Multicall3 batch scan of all existing jobs.
-           Uses cheap ``eth_call`` instead of ``eth_getLogs`` over a large range.
-        2. **Runtime** (subsequent calls): Progressive event scanning — only
-           queries new blocks since the last poll (~3 blocks per 10s interval).
+        2. **Runtime** (subsequent calls): Check ``next_job_id()`` — if unchanged,
+           no new jobs exist (0 extra RPCs).  If new jobs exist, scan only the
+           new ID range via Multicall3 (1 ``eth_call``).
 
-        If the caller explicitly passes ``from_block``, the value is honored
-        directly and ``_last_scanned_block`` is NOT updated (preserving the
-        progressive scanning state for the next automatic call).
+        If the caller explicitly passes ``from_block``, the original event-based
+        scan is used instead (for backwards compatibility).
 
         Args:
-            from_block: Starting block number. When None, uses progressive
+            from_block: Starting block number. When None, uses Multicall3
                 scanning (startup scan on first call, then incremental).
             to_block: Ending block number or "latest"
             max_block_range: Maximum block range for fallback queries
@@ -477,34 +514,22 @@ class APEXJobOps:
             if not self._startup_scan_done:
                 return await self._startup_scan()
 
-            # Subsequent calls: progressive event scanning
+            # Subsequent calls: progressive Multicall3 scanning
             client = self._get_client()
-            my_address = self.agent_address.lower()
-            latest_block = await asyncio.to_thread(lambda: client.w3.eth.block_number)
+            next_id = await asyncio.to_thread(client.next_job_id)
 
-            # 5-block overlap for reorg safety
-            scan_from = max(0, self._last_scanned_block - 5)
+            # Collect IDs to scan: new job IDs + previously-seen OPEN jobs
+            scan_set: set[int] = set()
+            if next_id > self._last_known_next_id:
+                scan_set.update(range(self._last_known_next_id, next_id))
+            scan_set.update(self._pending_open_ids)
 
-            if scan_from >= latest_block:
+            if not scan_set:
                 return {"success": True, "jobs": []}
 
-            try:
-                result = await self._event_scan(scan_from, to_block, my_address)
-                self._consecutive_scan_failures = 0
-                return result
-            except Exception as e:
-                self._consecutive_scan_failures = getattr(
-                    self, "_consecutive_scan_failures", 0
-                ) + 1
-                logger.warning(
-                    f"[APEXJobOps] Progressive scan failed ({e}),"
-                    f" will retry after backoff"
-                    f" (failures={self._consecutive_scan_failures})"
-                )
-                return {"success": False, "error": str(e), "jobs": []}
-            finally:
-                # Always advance so we don't re-scan the same range
-                self._last_scanned_block = latest_block
+            result = await self._multicall_scan(sorted(scan_set))
+            self._last_known_next_id = next_id
+            return result
 
         except Exception as e:
             logger.error(f"[APEXJobOps] get_pending_jobs failed: {e}")
@@ -660,20 +685,8 @@ async def run_job_loop(
 
     skipped_jobs: set[int] = set()
 
-    max_backoff = poll_interval * 12  # cap at ~2 minutes for 10s base
-
     while True:
         try:
-            # Backoff when rate-limited: exponential up to max_backoff
-            consecutive_failures = getattr(job_ops, "_consecutive_scan_failures", 0)
-            if consecutive_failures > 0:
-                backoff = min(poll_interval * (2 ** consecutive_failures), max_backoff)
-                logger.debug(
-                    f"[JobRunner] Backing off {backoff}s"
-                    f" (consecutive failures: {consecutive_failures})"
-                )
-                await asyncio.sleep(backoff)
-
             result = await job_ops.get_pending_jobs()
 
             if not result.get("success"):
