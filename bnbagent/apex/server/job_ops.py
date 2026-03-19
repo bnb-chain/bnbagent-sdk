@@ -525,10 +525,25 @@ class APEXJobOps:
             scan_set.update(self._pending_open_ids)
 
             if not scan_set:
+                logger.debug(
+                    f"[APEXJobOps] Progressive scan: no changes"
+                    f" (next_id={next_id}, open={len(self._pending_open_ids)})"
+                )
                 return {"success": True, "jobs": []}
 
-            result = await self._multicall_scan(sorted(scan_set))
+            scan_ids = sorted(scan_set)
+            logger.info(
+                f"[APEXJobOps] Progressive scan: checking {len(scan_ids)} job(s)"
+                f" (new={next_id - self._last_known_next_id},"
+                f" open={len(self._pending_open_ids)})"
+            )
+            result = await self._multicall_scan(scan_ids)
             self._last_known_next_id = next_id
+            found = len(result.get("jobs", []))
+            if found:
+                logger.info(
+                    f"[APEXJobOps] Progressive scan found {found} pending job(s)"
+                )
             return result
 
         except Exception as e:
