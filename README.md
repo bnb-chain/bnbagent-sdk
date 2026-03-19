@@ -326,7 +326,7 @@ async def on_job(job: dict) -> tuple[str, dict]:
 
 ### What You Get
 
-`create_apex_app()` gives you a complete FastAPI application with routes mounted at `/apex/*`. For custom prefixes, use `create_apex_routes()` with `app.include_router(prefix=...)` (see [Mount on an Existing App](#mount-on-an-existing-app)).
+`create_apex_app()` gives you a complete FastAPI application with routes mounted at `/apex/*`. For custom prefixes, use `create_apex_routes()` with `app.include_router(prefix="/your-prefix")` (see [Mount on an Existing App](#mount-on-an-existing-app)).
 
 | Method | Path | What it does |
 |--------|------|--------------|
@@ -335,7 +335,7 @@ async def on_job(job: dict) -> tuple[str, dict]:
 | `GET` | `/apex/job/{id}` | Look up on-chain job details (status, budget, provider, expiry, deliverable hash). |
 | `GET` | `/apex/job/{id}/verify` | Verify a job is `FUNDED`, assigned to your agent, not expired, and budget meets service price. |
 | `GET` | `/apex/status` | Agent wallet address, ERC-8183 contract, service price, payment token, and decimals. |
-| `GET` | `/health` | Health check for load balancers and monitoring. |
+| `GET` | `/apex/health` | Health check for load balancers and monitoring. |
 
 > **Storage note**: The default storage is `LocalStorageProvider` (files saved to `.agent-data/`). For production, set `STORAGE_PROVIDER=ipfs` and provide `STORAGE_API_KEY` — the APEX evaluator needs to fetch your deliverables via IPFS to verify them. Local storage only works for development/testing.
 
@@ -391,15 +391,15 @@ config = APEXConfig.from_env_optional()
 
 ### Mount on an Existing App
 
-If you already have a FastAPI application, you can mount APEX routes with an optional prefix:
+If you already have a FastAPI application, you can mount APEX routes with your own prefix:
 
 ```python
 from fastapi import FastAPI
 from bnbagent.apex.server.routes import create_apex_routes
 
 existing_app = FastAPI()
-existing_app.include_router(create_apex_routes(), prefix="/apex")
-# Routes available at /apex/negotiate, /apex/submit, /apex/job/{id}, etc.
+existing_app.include_router(create_apex_routes(), prefix="/your-prefix")
+# Routes available at /your-prefix/negotiate, /your-prefix/submit, /your-prefix/job/{id}, /your-prefix/health, etc.
 ```
 
 ---
@@ -589,7 +589,7 @@ async def lifespan(app):
     task.cancel()
 
 app = FastAPI(lifespan=lifespan)
-app.include_router(create_apex_routes(state=state), prefix="/apex")
+app.include_router(create_apex_routes(state=state), prefix="/your-prefix")
 ```
 
 ### Pricing & Budget Validation

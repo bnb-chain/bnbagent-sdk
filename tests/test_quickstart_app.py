@@ -106,6 +106,7 @@ class TestCreateApexRoutes:
         assert "/job/{job_id}/verify" in paths
         assert "/negotiate" in paths
         assert "/status" in paths
+        assert "/health" in paths
 
     def test_on_submit_callback(self, patched_web3, tmp_path):
         config = APEXConfig(
@@ -156,7 +157,7 @@ class TestCreateApexApp:
         )
         app = create_apex_app(config=config)
         routes = [r.path for r in app.routes]
-        assert "/health" in routes
+        assert "/apex/health" in routes
 
     def test_fixed_apex_prefix(self, patched_web3, tmp_path):
         config = APEXConfig(

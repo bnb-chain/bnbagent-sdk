@@ -36,7 +36,7 @@ python scripts/run_agent.py
 | GET | /apex/job/{id} | Job details |
 | GET | /apex/status | Agent status |
 | POST | /search | Direct news search (testing) |
-| GET | /health | Health check |
+| GET | /apex/health | Health check |
 
 ## Testing Without APEX
 

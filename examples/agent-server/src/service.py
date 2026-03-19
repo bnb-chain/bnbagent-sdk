@@ -219,7 +219,7 @@ if __name__ == "__main__":
 
   Direct endpoints (testing):
     POST /search          — Direct news search
-    GET  /health          — Health check
+    GET  /apex/health     — Health check
 {'='*55}
 """)
 

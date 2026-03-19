@@ -93,7 +93,7 @@ def create_apex_routes(
 
     Can be mounted to an existing FastAPI app:
 
-        app.include_router(create_apex_routes(), prefix="/apex")
+        app.include_router(create_apex_routes(), prefix="/your-prefix")
 
     Args:
         config: APEXConfig instance (default: loads from env)
@@ -102,7 +102,7 @@ def create_apex_routes(
                    Called with (job_id, response_content, metadata)
 
     Returns:
-        APIRouter with /submit, /job/{id}, /job/{id}/verify, /negotiate endpoints
+        APIRouter with /submit, /job/{id}, /job/{id}/verify, /negotiate, /status, /health endpoints
     """
     # Resolve config and state
     if state is None:
@@ -203,6 +203,11 @@ def create_apex_routes(
             "decimals": state.config.payment_token_decimals,
         }
 
+    @router.get("/health")
+    async def health():
+        """Health check for load balancers and monitoring."""
+        return {"status": "ok", "service": "APEX Agent"}
+
     return router
 
 
@@ -244,11 +249,11 @@ def create_apex_app(
     Middleware is **enabled by default** (secure-by-default). All POST/PUT/DELETE
     requests must include a valid ``X-Job-Id`` header whose on-chain job is
     FUNDED and assigned to this agent. Safe methods (GET/HEAD/OPTIONS) and
-    standard paths (``/health``, ``/status``, ``/negotiate``, etc.) are always
+    standard paths (``/status``, ``/negotiate``, ``/health``, etc.) are always
     allowed.
 
     Routes are mounted at ``/apex/*``. For custom prefixes, use
-    ``create_apex_routes()`` with ``app.include_router(prefix=...)``.
+    ``create_apex_routes()`` with ``app.include_router(prefix="/your-prefix")``.
 
     Args:
         config: APEXConfig instance (default: loads from env)
@@ -321,10 +326,6 @@ def create_apex_app(
 
         app.add_middleware(APEXMiddleware, job_ops=state.job_ops, skip_paths=effective_skip)
 
-    @app.get("/health")
-    async def health():
-        return {"status": "ok", "service": "APEX Agent"}
-
     @app.get("/")
     async def root():
         return {
@@ -336,7 +337,7 @@ def create_apex_app(
                 "verify": f"{prefix}/job/{{job_id}}/verify",
                 "negotiate": f"{prefix}/negotiate",
                 "status": f"{prefix}/status",
-                "health": "/health",
+                "health": f"{prefix}/health",
             },
         }
 

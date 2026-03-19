@@ -236,7 +236,7 @@ async def start_agent_server() -> asyncio.Event:
         try:
             import httpx
             async with httpx.AsyncClient() as client:
-                resp = await client.get(f"http://127.0.0.1:{AGENT_PORT}/health", timeout=2)
+                resp = await client.get(f"http://127.0.0.1:{AGENT_PORT}/apex/health", timeout=2)
                 if resp.status_code == 200:
                     logger.info(f"Agent server running on port {AGENT_PORT}")
                     logger.info("Step 3 PASSED")
