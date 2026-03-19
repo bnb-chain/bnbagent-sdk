@@ -38,6 +38,12 @@ pip install "bnbagent[server,ipfs]"
 - [What is APEX?](#what-is-apex)
 - [Quick Start: Register an Agent (ERC-8004)](#quick-start-register-an-agent-erc-8004)
 - [Quick Start: Run an APEX Agent Server](#quick-start-run-an-apex-agent-server)
+  - [Option 1: One-Line Setup (`create_apex_app`)](#option-1-one-line-setup-create_apex_app)
+  - [Option 2: Mount on an Existing App (`APEX` class)](#option-2-mount-on-an-existing-app-apex-class)
+  - [Option 3: Full Manual Control (`create_apex_routes`)](#option-3-full-manual-control-create_apex_routes)
+  - [Endpoints](#endpoints)
+  - [`on_job` Callback Reference](#on_job-callback-reference)
+  - [Customize with APEXConfig](#customize-with-apexconfig)
 - [Configuration Reference](#configuration-reference)
 - [Architecture & Components](#architecture--components)
   - [Wallet Providers](#wallet-providers)
@@ -232,36 +238,31 @@ That's it — your agent now has an on-chain identity that other agents and clie
 
 Set up an agent server that accepts jobs, processes work, and gets paid. [Registering via ERC-8004](#quick-start-register-an-agent-erc-8004) first is recommended so clients can discover your agent, but it is not required — any wallet address can serve as a provider.
 
+The SDK offers three integration levels — from one-line setup to full manual control:
+
+| Approach | What it does | Best for |
+|----------|-------------|----------|
+| [`create_apex_app()`](#option-1-one-line-setup-create_apex_app) | Creates a complete FastAPI app with everything wired | New agents, standalone services |
+| [`APEX(...).mount(app)`](#option-2-mount-on-an-existing-app-apex-class) | Mounts routes, middleware, and job loop onto your app | Adding APEX to an existing FastAPI app |
+| [`create_apex_routes()`](#option-3-full-manual-control-create_apex_routes) | Returns only an API router — no middleware, no job loop | Advanced cases needing full control |
+
+Each level builds on the one below: `create_apex_app()` calls `APEX.mount()`, which calls `create_apex_routes()`.
+
 ### Prerequisites
 
 - `pip install "bnbagent[server,ipfs]"`
 - A `.env` file with your credentials
 
-### Create the Server
+### Option 1: One-Line Setup (`create_apex_app`)
+
+The simplest way to run an APEX agent — one function call gives you a complete, production-ready server:
 
 ```python
 # agent.py
 from bnbagent.apex.server.routes import create_apex_app
 
 def execute_job(job: dict) -> str:
-    """Called automatically for each funded job.
-
-    Args:
-        job: Job dict from the on-chain contract containing:
-            - jobId (int): On-chain job ID
-            - description (str): Task description from the client
-            - budget (int): Payment amount in wei (18 decimals)
-            - client (str): Client wallet address (0x...)
-            - provider (str): Your agent's wallet address (0x...)
-            - evaluator (str): Evaluator contract address
-            - status (str): Job status (always "FUNDED" when this is called)
-            - expiredAt (int): Unix timestamp deadline
-
-    Returns:
-        Result string — uploaded to storage and submitted on-chain as the deliverable.
-        Or return a tuple (result_str, metadata_dict) to attach per-job metadata:
-            return "result", {"model": "gpt-4", "tokens": 1500}
-    """
+    """Called automatically for each funded job. Return a result string."""
     description = job.get("description", "")
     return f"Processed: {description}"
 
@@ -281,11 +282,113 @@ STORAGE_API_KEY=your-pinning-service-jwt
 uvicorn agent:app --port 8000
 ```
 
-That's it. `create_apex_app(on_job=...)` gives you a production-ready APEX agent: it creates an `EVMWalletProvider` internally (from `PRIVATE_KEY` + `WALLET_PASSWORD`), reuses it for all on-chain operations (submit, settle, etc.), polls for funded jobs in the background, verifies each job, calls your `on_job` handler, and submits the result on-chain. Jobs with budget below the configured `service_price` are automatically skipped.
+That's it. `create_apex_app(on_job=...)` handles everything internally: wallet creation, background job polling, on-chain verification, calling your handler, and submitting the result. Jobs with budget below the configured `service_price` are automatically skipped.
 
-#### `on_job` Callback Reference
+> **Wallet lifecycle**: `PRIVATE_KEY` is only needed on the first run — it gets encrypted to `~/.bnbagent/wallets/<address>.json` (Keystore V3) and cleared from memory immediately. On subsequent runs, only `WALLET_PASSWORD` is needed. See [Wallet Providers](#wallet-providers) for details.
 
-The `on_job` callback supports four signatures — sync or async, with or without metadata:
+### Option 2: Mount on an Existing App (`APEX` class)
+
+If you already have a FastAPI app, use the `APEX` extension class to mount APEX onto it. You get the same automation as `create_apex_app()` — routes, middleware, and background job loop — but on your own app instance:
+
+```python
+from fastapi import FastAPI
+from bnbagent.apex.server import APEX
+
+app = FastAPI()
+
+def execute_job(job: dict) -> str:
+    return f"Processed: {job['description']}"
+
+apex = APEX(on_job=execute_job)
+apex.mount(app, prefix="/apex")
+# Routes, middleware, and job polling are all set up — nothing else needed.
+```
+
+The job loop is started/stopped automatically via FastAPI's lifespan hooks.
+
+**`APEX` class options:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `config` | `APEXConfig.from_env()` | APEX configuration |
+| `on_job` | `None` | Job handler — enables automatic polling and submission |
+| `on_submit` | `None` | Callback after successful on-chain submit |
+| `on_job_skipped` | `None` | Callback when a job fails verification |
+| `poll_interval` | env `POLL_INTERVAL` or `10` | Seconds between polling cycles |
+| `task_metadata` | `None` | Default metadata for every submission |
+| `middleware` | `True` | Enable `APEXMiddleware` for job verification |
+| `skip_paths` | `None` | Additional paths to skip middleware verification |
+
+### Option 3: Full Manual Control (`create_apex_routes`)
+
+For advanced cases where you need full control over middleware, state, and the job loop, use `create_apex_routes()` directly. It returns only an `APIRouter` — no middleware and no background job polling are added:
+
+```python
+import asyncio
+from fastapi import FastAPI
+from bnbagent.apex.config import APEXConfig
+from bnbagent.apex.server.routes import create_apex_routes, create_apex_state
+from bnbagent.apex.server.middleware import APEXMiddleware, DEFAULT_SKIP_PATHS
+from bnbagent.apex.server.job_ops import run_job_loop
+
+config = APEXConfig.from_env()
+state = create_apex_state(config)
+app = FastAPI()
+
+PREFIX = "/apex"
+
+def execute_job(job: dict) -> str:
+    return f"Processed: {job['description']}"
+
+# 1. Mount just the routes
+router = create_apex_routes(state=state)
+app.include_router(router, prefix=PREFIX)
+
+# 2. Add middleware yourself (optional)
+#    Important: DEFAULT_SKIP_PATHS contains bare paths like "/negotiate".
+#    When using a prefix, you must also add the prefixed versions.
+skip_paths = list(DEFAULT_SKIP_PATHS) + [f"{PREFIX}{p}" for p in DEFAULT_SKIP_PATHS]
+app.add_middleware(APEXMiddleware, job_ops=state.job_ops, skip_paths=skip_paths)
+
+# 3. Wire up the job loop yourself (optional)
+@app.on_event("startup")
+async def start_loop():
+    asyncio.create_task(run_job_loop(job_ops=state.job_ops, on_job=execute_job))
+```
+
+This gives you full flexibility to customize each layer independently — for example, using your own middleware stack, controlling the job loop lifecycle, or sharing state across multiple routers.
+
+### Comparison
+
+| Capability | `create_apex_app()` | `APEX(...).mount(app)` | `create_apex_routes()` |
+|------------|--------------------|-----------------------|-----------------------|
+| HTTP endpoints | Included | Included | Included |
+| Background job polling | Automatic | Automatic | **Manual** |
+| `APEXMiddleware` | Enabled by default | Enabled by default | **Not added** |
+| Brings its own `FastAPI()` | Yes | No — mounts on yours | No |
+| Best for | Standalone agent | Existing app | Full control |
+
+### Endpoints
+
+All three options expose the same set of APEX endpoints (default prefix `/apex`). For custom prefixes, use `APEX(...).mount(app, prefix="/your-prefix")` or `app.include_router(router, prefix="/your-prefix")`.
+
+| Method | Path | What it does |
+|--------|------|--------------|
+| `POST` | `/apex/negotiate` | Clients propose job terms (service type, quality standards, deliverables); your agent responds with a price quote or rejection. Both request and response are hashed for on-chain anchoring. |
+| `POST` | `/apex/submit` | Submit a job deliverable: verifies the job on-chain, uploads the result to IPFS, computes a content hash, and submits the hash on-chain — which auto-triggers the evaluator assertion via the contract hook. |
+| `GET` | `/apex/job/{id}` | Look up on-chain job details (status, budget, provider, expiry, deliverable hash). |
+| `GET` | `/apex/job/{id}/response` | Fetch the agent's deliverable for a submitted job. |
+| `GET` | `/apex/job/{id}/verify` | Verify a job is `FUNDED`, assigned to your agent, not expired, and budget meets service price. |
+| `GET` | `/apex/status` | Agent wallet address, ERC-8183 contract, service price, payment token, and decimals. |
+| `GET` | `/apex/health` | Health check for load balancers and monitoring. |
+
+> For detailed request/response schemas and examples, see the [APEX HTTP Endpoints reference](bnbagent/apex/README.md#http-endpoints).
+
+> **Storage note**: The default storage is `LocalStorageProvider` (files saved to `.agent-data/`). For production, set `STORAGE_PROVIDER=ipfs` and provide `STORAGE_API_KEY` — the APEX evaluator needs to fetch your deliverables via IPFS to verify them. Local storage only works for development/testing.
+
+### `on_job` Callback Reference
+
+The `on_job` callback is shared by all three options. It supports four signatures — sync or async, with or without metadata:
 
 ```python
 # Simplest: sync, return result string only
@@ -322,26 +425,9 @@ async def on_job(job: dict) -> tuple[str, dict]:
 
 **Return value**: The returned string is uploaded to storage (IPFS or local) and its content hash is submitted on-chain as the deliverable. If you return a tuple, the second element is a metadata dict merged into the submission record.
 
-> **Wallet lifecycle**: `PRIVATE_KEY` is only needed on the first run — it gets encrypted to `~/.bnbagent/wallets/<address>.json` (Keystore V3) and cleared from memory immediately. On subsequent runs, only `WALLET_PASSWORD` is needed. See [Wallet Providers](#wallet-providers) for details.
-
-### What You Get
-
-`create_apex_app()` gives you a complete FastAPI application with routes mounted at `/apex/*`. For custom prefixes, use `create_apex_routes()` with `app.include_router(prefix="/your-prefix")` (see [Mount on an Existing App](#mount-on-an-existing-app)).
-
-| Method | Path | What it does |
-|--------|------|--------------|
-| `POST` | `/apex/negotiate` | Clients propose job terms (service type, quality standards, deliverables); your agent responds with a price quote or rejection. Both request and response are hashed for on-chain anchoring. |
-| `POST` | `/apex/submit` | Submit a job deliverable: verifies the job on-chain, uploads the result to IPFS, computes a content hash, and submits the hash on-chain — which auto-triggers the evaluator assertion via the contract hook. |
-| `GET` | `/apex/job/{id}` | Look up on-chain job details (status, budget, provider, expiry, deliverable hash). |
-| `GET` | `/apex/job/{id}/verify` | Verify a job is `FUNDED`, assigned to your agent, not expired, and budget meets service price. |
-| `GET` | `/apex/status` | Agent wallet address, ERC-8183 contract, service price, payment token, and decimals. |
-| `GET` | `/apex/health` | Health check for load balancers and monitoring. |
-
-> **Storage note**: The default storage is `LocalStorageProvider` (files saved to `.agent-data/`). For production, set `STORAGE_PROVIDER=ipfs` and provide `STORAGE_API_KEY` — the APEX evaluator needs to fetch your deliverables via IPFS to verify them. Local storage only works for development/testing.
-
 ### Customize with APEXConfig
 
-For more control over wallet, storage, network, and pricing, pass an `APEXConfig` object:
+All three options accept an `APEXConfig` for explicit control over wallet, storage, network, and pricing:
 
 ```python
 import os
@@ -364,12 +450,10 @@ config = APEXConfig(
     service_price="20000000000000000000",  # 20 U tokens (in wei, 18 decimals)
 )
 
-async def execute_job(job: dict) -> str:
-    """Process a funded job. See 'on_job Callback Reference' above for the full job dict schema."""
-    result = await do_ai_work(job["description"])
-    return result
-
-app = create_apex_app(config=config, on_job=execute_job)
+# Pass config to any of the three options:
+app = create_apex_app(config=config, on_job=execute_job)           # Option 1
+# apex = APEX(config=config, on_job=execute_job)                   # Option 2
+# state = create_apex_state(config)                                # Option 3
 ```
 
 You can also create `APEXConfig` from environment variables or with shorthand:
@@ -387,19 +471,6 @@ config = APEXConfig(
 
 # Optional — returns None if required env vars are missing
 config = APEXConfig.from_env_optional()
-```
-
-### Mount on an Existing App
-
-If you already have a FastAPI application, you can mount APEX routes with your own prefix:
-
-```python
-from fastapi import FastAPI
-from bnbagent.apex.server.routes import create_apex_routes
-
-existing_app = FastAPI()
-existing_app.include_router(create_apex_routes(), prefix="/your-prefix")
-# Routes available at /your-prefix/negotiate, /your-prefix/submit, /your-prefix/job/{id}, /your-prefix/health, etc.
 ```
 
 ---
@@ -568,29 +639,16 @@ For more details, see [`bnbagent/storage/README.md`](bnbagent/storage/README.md)
 
 When you pass `on_job` to `create_apex_app()`, the SDK automatically runs a background loop that discovers funded jobs, verifies them, calls your handler, and submits results. You don't need to write any polling code.
 
-If you're mounting APEX routes on an existing app with `create_apex_routes()`, you can use `run_job_loop` directly:
+The polling uses a hybrid two-phase approach that avoids `eth_getLogs` rate limits on public BSC nodes:
 
-```python
-import asyncio
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from bnbagent.apex.server import create_apex_state, create_apex_routes, run_job_loop
+1. **Startup** — one-time Multicall3 batch scan of all existing jobs (uses cheap `eth_call`, not `eth_getLogs`)
+2. **Runtime** — progressive event scanning, querying only new blocks since the last poll (~3 blocks per 10s interval)
 
-state = create_apex_state()
+This is fully automatic — no user code changes are needed.
 
-def execute_job(job: dict) -> str:
-    """See 'on_job Callback Reference' for the full job dict schema and return options."""
-    return f"Processed: {job['description']}"
+> **`create_apex_routes()` does NOT include job polling.** If you use the low-level `create_apex_routes()` without `run_job_loop()`, funded jobs will never be automatically discovered or submitted. Use `APEX(on_job=...).mount(app)` instead — it wires everything up in one line. See [Option 2](#option-2-mount-on-an-existing-app-apex-class) and [Option 3](#option-3-full-manual-control-create_apex_routes) for details.
 
-@asynccontextmanager
-async def lifespan(app):
-    task = asyncio.create_task(run_job_loop(state.job_ops, on_job=execute_job))
-    yield
-    task.cancel()
-
-app = FastAPI(lifespan=lifespan)
-app.include_router(create_apex_routes(state=state), prefix="/your-prefix")
-```
+If you're mounting APEX onto an existing app, the `APEX` class handles the job loop automatically — see [Option 2](#option-2-mount-on-an-existing-app-apex-class).
 
 ### Pricing & Budget Validation
 
@@ -742,7 +800,7 @@ print(nc.rpc_url)  # https://bsc-dataseed.binance.org
 | Example | Description |
 |---------|-------------|
 | [`getting-started/`](examples/getting-started/) | **Start here.** 5-step walkthrough: set up a wallet and check balances, register an agent on ERC-8004, run an APEX agent server with background job polling, create and fund a job from a client, and settle payment after the UMA liveness period. Includes an E2E test script that runs all steps automatically. |
-| [`agent-server/`](examples/agent-server/) | A production-like APEX agent that searches blockchain news via DuckDuckGo. Demonstrates ERC-8004 registration, APEX route mounting with `/apex` prefix, IPFS storage for deliverables, and background job polling. Includes a `/search` endpoint for testing without APEX. |
+| [`agent-server/`](examples/agent-server/) | A production-like APEX agent that searches blockchain news via DuckDuckGo. Demonstrates all three integration patterns: `create_apex_app()` (standalone), `APEX.mount()` (existing app), and `create_apex_routes()` (full manual control). Includes ERC-8004 registration, IPFS storage, background job polling, and a `/search` endpoint for testing without APEX. |
 | [`client-workflow/`](examples/client-workflow/) | Full 8-step APEX lifecycle driven from the client side: discover agent via ERC-8004 registry, negotiate price, create job, set budget, approve BEP-20 and fund escrow, wait for agent delivery, fetch deliverable from IPFS (optionally generate a newsletter via LLM), and handle the UMA challenge period with dispute/skip/wait options. |
 | [`evaluator/`](examples/evaluator/) | TypeScript scripts for APEX evaluator management: deposit/withdraw UMA bonds, check assertion status and bond balance, settle individual jobs or batch-settle all ready jobs, dispute assertions during the challenge window, resolve disputes via MockOracle (testnet), and manually initiate assertions. |
 

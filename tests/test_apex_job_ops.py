@@ -175,6 +175,74 @@ class TestGetJob:
         assert result["success"] is False
 
 
+class TestGetResponse:
+    @pytest.mark.asyncio
+    async def test_from_cache(self):
+        """get_response returns data when URL is in the in-memory cache."""
+        storage = AsyncMock()
+        stored_data = {"response": "agent output", "job": {"id": 1}}
+        storage.download.return_value = stored_data
+        ops = _make_job_ops(storage=storage)
+        _mock_client(ops)
+
+        # Simulate submit_result populating the cache
+        ops._deliverable_urls[1] = "file:///tmp/job-1.json"
+
+        result = await ops.get_response(1)
+        assert result["success"] is True
+        assert result["response"] == "agent output"
+        storage.download.assert_called_once_with("file:///tmp/job-1.json")
+
+    @pytest.mark.asyncio
+    async def test_from_local_file(self, tmp_path):
+        """get_response falls back to reading job-{id}.json from local storage base dir."""
+        from bnbagent.storage.local_provider import LocalStorageProvider
+
+        storage = LocalStorageProvider(str(tmp_path))
+        ops = _make_job_ops(storage=storage)
+        _mock_client(ops)
+
+        # Write a job file directly
+        job_file = tmp_path / "job-42.json"
+        job_file.write_text('{"response":"from file","job":{"id":42}}')
+
+        result = await ops.get_response(42)
+        assert result["success"] is True
+        assert result["response"] == "from file"
+
+    @pytest.mark.asyncio
+    async def test_not_found(self):
+        """get_response returns error when no stored response exists."""
+        storage = AsyncMock()
+        ops = _make_job_ops(storage=storage)
+        _mock_client(ops)
+
+        result = await ops.get_response(999)
+        assert result["success"] is False
+        assert "not found" in result["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_no_storage(self):
+        """get_response returns error when storage is not configured."""
+        ops = _make_job_ops(storage=None)
+        _mock_client(ops)
+
+        result = await ops.get_response(1)
+        assert result["success"] is False
+        assert "storage" in result["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_submit_populates_cache(self):
+        """submit_result stores the data URL in _deliverable_urls."""
+        storage = AsyncMock()
+        storage.upload.return_value = "ipfs://QmTest123"
+        ops = _make_job_ops(storage=storage)
+        _mock_client(ops)
+
+        await ops.submit_result(5, "response text")
+        assert ops._deliverable_urls[5] == "ipfs://QmTest123"
+
+
 class TestGetJobStatus:
     @pytest.mark.asyncio
     async def test_success(self):
@@ -194,10 +262,14 @@ class TestGetJobStatus:
 
 
 class TestGetPendingJobs:
+    """Tests for the progressive event scanning path (post-startup)."""
+
     @pytest.mark.asyncio
     async def test_funded_jobs_for_provider(self):
         ops = _make_job_ops()
         client = _mock_client(ops)
+        ops._startup_scan_done = True
+        ops._last_scanned_block = 500
         client.get_job_funded_events.return_value = [
             {
                 "jobId": 1,
@@ -215,6 +287,8 @@ class TestGetPendingJobs:
     async def test_skips_non_funded(self):
         ops = _make_job_ops()
         client = _mock_client(ops)
+        ops._startup_scan_done = True
+        ops._last_scanned_block = 500
         job_data = client.get_job.return_value.copy()
         job_data["status"] = APEXStatus.COMPLETED
         client.get_job.return_value = job_data
@@ -234,6 +308,8 @@ class TestGetPendingJobs:
     async def test_skips_other_providers(self):
         ops = _make_job_ops()
         client = _mock_client(ops)
+        ops._startup_scan_done = True
+        ops._last_scanned_block = 500
         job_data = client.get_job.return_value.copy()
         job_data["provider"] = "0x" + "ff" * 20  # Different provider
         client.get_job.return_value = job_data
@@ -251,22 +327,226 @@ class TestGetPendingJobs:
 
     @pytest.mark.asyncio
     async def test_auto_from_block(self):
+        """Progressive scanning uses _last_scanned_block - 5 as from_block."""
         ops = _make_job_ops()
         client = _mock_client(ops)
-        client.w3.eth.block_number = 50000
+        ops._startup_scan_done = True
+        ops._last_scanned_block = 500
+        client.w3.eth.block_number = 1000
         client.get_job_funded_events.return_value = []
         await ops.get_pending_jobs()
         call_args = client.get_job_funded_events.call_args[0]
-        assert call_args[0] == 50000 - 45000  # max_block_range default
+        assert call_args[0] == 500 - 5  # _last_scanned_block - reorg overlap
 
     @pytest.mark.asyncio
     async def test_error_returns_empty(self):
         ops = _make_job_ops()
         client = _mock_client(ops)
+        ops._startup_scan_done = True
+        ops._last_scanned_block = 500
         client.get_job_funded_events.side_effect = Exception("rpc error")
         result = await ops.get_pending_jobs()
         assert result["success"] is False
         assert result["jobs"] == []
+
+
+class TestStartupScan:
+    """Tests for the one-time Multicall3 startup scan."""
+
+    @pytest.mark.asyncio
+    async def test_finds_funded_jobs(self):
+        ops = _make_job_ops()
+        client = _mock_client(ops)
+        client.next_job_id.return_value = 5
+
+        future_ts = int(time.time()) + 3600
+        jobs_batch = [
+            None,  # job 0 failed
+            {"jobId": 1, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "job 1"},
+            {"jobId": 2, "provider": "0x" + "ff" * 20, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "job 2"},  # wrong provider
+            {"jobId": 3, "provider": FAKE_ADDRESS, "status": APEXStatus.COMPLETED,
+             "expiredAt": future_ts, "description": "job 3"},  # not funded
+            {"jobId": 4, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "job 4"},
+        ]
+        client.get_jobs_batch.return_value = jobs_batch
+
+        result = await ops.get_pending_jobs()
+        assert result["success"] is True
+        assert len(result["jobs"]) == 2
+        job_ids = {j["jobId"] for j in result["jobs"]}
+        assert job_ids == {1, 4}
+
+    @pytest.mark.asyncio
+    async def test_empty_contract(self):
+        ops = _make_job_ops()
+        client = _mock_client(ops)
+        client.next_job_id.return_value = 0
+
+        result = await ops.get_pending_jobs()
+        assert result["success"] is True
+        assert result["jobs"] == []
+        assert ops._startup_scan_done is True
+
+    @pytest.mark.asyncio
+    async def test_filters_wrong_provider(self):
+        ops = _make_job_ops()
+        client = _mock_client(ops)
+        client.next_job_id.return_value = 1
+
+        future_ts = int(time.time()) + 3600
+        client.get_jobs_batch.return_value = [
+            {"jobId": 0, "provider": "0x" + "ff" * 20, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "other agent's job"},
+        ]
+
+        result = await ops.get_pending_jobs()
+        assert result["success"] is True
+        assert result["jobs"] == []
+
+    @pytest.mark.asyncio
+    async def test_filters_non_funded(self):
+        ops = _make_job_ops()
+        client = _mock_client(ops)
+        client.next_job_id.return_value = 1
+
+        future_ts = int(time.time()) + 3600
+        client.get_jobs_batch.return_value = [
+            {"jobId": 0, "provider": FAKE_ADDRESS, "status": APEXStatus.COMPLETED,
+             "expiredAt": future_ts, "description": "completed job"},
+        ]
+
+        result = await ops.get_pending_jobs()
+        assert result["success"] is True
+        assert result["jobs"] == []
+
+    @pytest.mark.asyncio
+    async def test_filters_expired(self):
+        ops = _make_job_ops()
+        client = _mock_client(ops)
+        client.next_job_id.return_value = 1
+
+        past_ts = int(time.time()) - 100
+        client.get_jobs_batch.return_value = [
+            {"jobId": 0, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
+             "expiredAt": past_ts, "description": "expired job"},
+        ]
+
+        result = await ops.get_pending_jobs()
+        assert result["success"] is True
+        assert result["jobs"] == []
+
+    @pytest.mark.asyncio
+    async def test_sets_last_scanned_block(self):
+        ops = _make_job_ops()
+        client = _mock_client(ops)
+        client.w3.eth.block_number = 12345
+        client.next_job_id.return_value = 0
+
+        await ops.get_pending_jobs()
+        assert ops._last_scanned_block == 12345
+        assert ops._startup_scan_done is True
+
+    @pytest.mark.asyncio
+    async def test_multicall_fallback(self):
+        """When multicall fails, falls back to event scan."""
+        ops = _make_job_ops()
+        client = _mock_client(ops)
+        client.w3.eth.block_number = 50000
+        client.next_job_id.side_effect = Exception("multicall revert")
+        client.get_job_funded_events.return_value = [
+            {"jobId": 1, "client": "0xabc", "amount": 100,
+             "blockNumber": 50, "transactionHash": "0xhash"},
+        ]
+
+        result = await ops.get_pending_jobs()
+        assert result["success"] is True
+        assert len(result["jobs"]) == 1
+        assert ops._startup_scan_done is True
+        assert ops._last_scanned_block == 50000
+
+
+class TestProgressiveScanning:
+    """Tests for the progressive (incremental) event scanning after startup."""
+
+    @pytest.mark.asyncio
+    async def test_scans_from_last_block(self):
+        ops = _make_job_ops()
+        client = _mock_client(ops)
+        ops._startup_scan_done = True
+        ops._last_scanned_block = 1000
+        client.w3.eth.block_number = 1010
+        client.get_job_funded_events.return_value = []
+
+        await ops.get_pending_jobs()
+        call_args = client.get_job_funded_events.call_args[0]
+        assert call_args[0] == 1000 - 5  # 5-block reorg overlap
+
+    @pytest.mark.asyncio
+    async def test_no_new_blocks(self):
+        ops = _make_job_ops()
+        client = _mock_client(ops)
+        ops._startup_scan_done = True
+        ops._last_scanned_block = 1000
+        client.w3.eth.block_number = 1004  # scan_from (995) < 1004, so scan proceeds
+
+        client.get_job_funded_events.return_value = []
+        result = await ops.get_pending_jobs()
+        assert result["success"] is True
+        assert result["jobs"] == []
+
+    @pytest.mark.asyncio
+    async def test_no_new_blocks_exact(self):
+        """When scan_from >= latest_block, skip event query."""
+        ops = _make_job_ops()
+        client = _mock_client(ops)
+        ops._startup_scan_done = True
+        ops._last_scanned_block = 1000
+        client.w3.eth.block_number = 995  # scan_from=995, latest=995
+
+        result = await ops.get_pending_jobs()
+        assert result["success"] is True
+        assert result["jobs"] == []
+        client.get_job_funded_events.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_updates_last_scanned(self):
+        ops = _make_job_ops()
+        client = _mock_client(ops)
+        ops._startup_scan_done = True
+        ops._last_scanned_block = 1000
+        client.w3.eth.block_number = 1010
+        client.get_job_funded_events.return_value = []
+
+        await ops.get_pending_jobs()
+        assert ops._last_scanned_block == 1010
+
+    @pytest.mark.asyncio
+    async def test_explicit_from_block_honored(self):
+        """Caller passes from_block → used directly for event scan."""
+        ops = _make_job_ops()
+        client = _mock_client(ops)
+        ops._startup_scan_done = True
+        ops._last_scanned_block = 1000
+        client.get_job_funded_events.return_value = []
+
+        await ops.get_pending_jobs(from_block=500)
+        call_args = client.get_job_funded_events.call_args[0]
+        assert call_args[0] == 500
+
+    @pytest.mark.asyncio
+    async def test_explicit_from_block_no_state_update(self):
+        """Explicit from_block does NOT update _last_scanned_block."""
+        ops = _make_job_ops()
+        client = _mock_client(ops)
+        ops._startup_scan_done = True
+        ops._last_scanned_block = 1000
+        client.get_job_funded_events.return_value = []
+
+        await ops.get_pending_jobs(from_block=500)
+        assert ops._last_scanned_block == 1000  # unchanged
 
 
 class TestVerifyJob:
@@ -374,6 +654,8 @@ class TestRunJobLoop:
         """Same job should only be verified once after being skipped."""
         ops = _make_job_ops(service_price=10**18)
         client = _mock_client(ops)
+        ops._startup_scan_done = True
+        ops._last_scanned_block = 500
 
         # Job with insufficient budget
         job_data = client.get_job.return_value.copy()
@@ -416,6 +698,8 @@ class TestRunJobLoop:
         """Sync on_job_skipped callback is called with job and reason."""
         ops = _make_job_ops(service_price=10**18)
         client = _mock_client(ops)
+        ops._startup_scan_done = True
+        ops._last_scanned_block = 500
 
         job_data = client.get_job.return_value.copy()
         job_data["budget"] = 100
@@ -458,6 +742,8 @@ class TestRunJobLoop:
         """Async on_job_skipped callback is awaited."""
         ops = _make_job_ops(service_price=10**18)
         client = _mock_client(ops)
+        ops._startup_scan_done = True
+        ops._last_scanned_block = 500
 
         job_data = client.get_job.return_value.copy()
         job_data["budget"] = 100

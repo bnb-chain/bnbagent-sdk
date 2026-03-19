@@ -206,32 +206,45 @@ def main():
     deliverable_hash = job["deliverable"]
     print(f"  On-chain deliverable hash: 0x{deliverable_hash.hex()}")
 
-    # Fetch deliverable using SDK storage provider
-    import asyncio
-    from bnbagent.storage import storage_provider_from_env
+    # --- Method 1: Fetch via agent's HTTP API (recommended) ---
+    # In production, client and agent are on different machines.
+    # The agent exposes GET /apex/job/{id}/response for clients to retrieve results.
+    import json
+    import urllib.request
 
-    storage = storage_provider_from_env()
-    data_url = f"file://.agent-data/job-{job_id}.json"
+    agent_url = os.getenv("AGENT_URL", "http://localhost:8000")
+    response_url = f"{agent_url}/apex/job/{job_id}/response"
+    deliverable_data = None
+
     try:
-        deliverable_data = asyncio.run(storage.download(data_url))
+        req = urllib.request.Request(response_url)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            deliverable_data = json.loads(resp.read())
+        print(f"  Fetched via agent API: {response_url}")
+    except Exception as e:
+        print(f"  Agent API unavailable ({e}), trying local storage...")
 
-        # Verify hash
-        computed_hash = Web3.keccak(text=data_url)
+    # --- Method 2: Fallback to local storage (same-machine only) ---
+    if deliverable_data is None:
+        import asyncio
+        from bnbagent.storage import storage_provider_from_env
 
-        if computed_hash == deliverable_hash:
-            print("  Hash verification: PASSED")
-        else:
-            print("  Hash verification: MISMATCH (expected on-chain != computed)")
+        storage = storage_provider_from_env()
+        data_url = f"file://.agent-data/job-{job_id}.json"
+        try:
+            deliverable_data = asyncio.run(storage.download(data_url))
+            print(f"  Fetched from local storage: {data_url}")
+        except Exception:
+            print("  Could not fetch deliverable from storage")
+            print("  (This is expected if agent uses IPFS or runs on a different machine)")
 
-        # Display agent response
+    # --- Display result ---
+    if deliverable_data:
         response_content = deliverable_data.get("response", "")
         print()
         print("  Agent response:")
         for line in response_content.split("\n"):
             print(f"    {line}")
-    except Exception:
-        print(f"  Could not fetch deliverable from storage")
-        print("  (This is expected if agent uses IPFS or runs on a different machine)")
 
     print()
     print(f"Job #{job_id} is submitted and ready for settlement.")

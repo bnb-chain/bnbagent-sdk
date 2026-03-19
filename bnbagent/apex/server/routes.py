@@ -2,6 +2,7 @@
 FastAPI application factory for APEX agents.
 
 Provides:
+- APEX: Extension class — one-line mount for existing apps
 - create_apex_app(): Create a complete FastAPI app with APEX endpoints
 - create_apex_routes(): Create an APIRouter to mount in existing apps
 """
@@ -157,6 +158,14 @@ def create_apex_routes(
             result["status"] = result["status"].value
         return JSONResponse(result)
 
+    @router.get("/job/{job_id}/response")
+    async def get_job_response(job_id: int):
+        """Get stored deliverable response for a job."""
+        result = await state.job_ops.get_response(job_id)
+        if not result.get("success"):
+            return JSONResponse(result, status_code=404)
+        return JSONResponse(result)
+
     @router.get("/job/{job_id}/verify")
     async def verify_job(job_id: int):
         """Verify if a job can be processed by this agent."""
@@ -209,6 +218,145 @@ def create_apex_routes(
         return {"status": "ok", "service": "APEX Agent"}
 
     return router
+
+
+class APEX:
+    """APEX extension for FastAPI — one-line mount.
+
+    Bundles routes, middleware, and background job loop into a single object
+    that can be mounted onto any existing FastAPI application::
+
+        apex = APEX(on_job=execute_job)
+        apex.mount(app, prefix="/apex")
+
+    This is equivalent to manually wiring ``create_apex_routes()``,
+    ``APEXMiddleware``, and ``run_job_loop()`` — but without the boilerplate.
+    """
+
+    def __init__(
+        self,
+        config: APEXConfig | None = None,
+        on_job: Callable[..., Any] | None = None,
+        on_submit: Callable[[int, str, dict], Any] | None = None,
+        on_job_skipped: Callable[[dict, str], Any] | None = None,
+        poll_interval: int | None = None,
+        task_metadata: dict[str, Any] | None = None,
+        middleware: bool = True,
+        skip_paths: list[str] | None = None,
+    ):
+        if config is None:
+            config = APEXConfig.from_env()
+        self._config = config
+        self._state = create_apex_state(config)
+        self._on_job = on_job
+        self._on_submit = on_submit
+        self._on_job_skipped = on_job_skipped
+        self._poll_interval = poll_interval
+        self._task_metadata = task_metadata
+        self._middleware = middleware
+        self._skip_paths = skip_paths
+        self._mounted = False
+        self._job_loop_task: asyncio.Task | None = None
+
+    @property
+    def state(self) -> APEXState:
+        return self._state
+
+    @property
+    def job_ops(self) -> APEXJobOps:
+        return self._state.job_ops
+
+    async def startup(self) -> None:
+        """Start the background job loop.
+
+        Call this from your own ``lifespan`` context manager if the app uses one,
+        since FastAPI ignores ``on_startup`` hooks when ``lifespan`` is set::
+
+            @asynccontextmanager
+            async def lifespan(app):
+                await apex.startup()
+                yield
+                await apex.shutdown()
+
+        If the app does **not** use ``lifespan``, :meth:`mount` registers these
+        hooks automatically via ``app.router.on_startup`` / ``on_shutdown``.
+        """
+        if not self._on_job:
+            return
+        interval = self._poll_interval or int(os.getenv("POLL_INTERVAL", "10"))
+        self._job_loop_task = asyncio.create_task(
+            run_job_loop(
+                job_ops=self._state.job_ops,
+                on_job=self._on_job,
+                poll_interval=interval,
+                metadata=self._task_metadata,
+                on_job_skipped=self._on_job_skipped,
+            )
+        )
+        logger.info("[APEX] Job loop started: poll_interval=%ds", interval)
+
+    async def shutdown(self) -> None:
+        """Stop the background job loop. See :meth:`startup`."""
+        if self._job_loop_task:
+            self._job_loop_task.cancel()
+            try:
+                await self._job_loop_task
+            except asyncio.CancelledError:
+                pass
+            self._job_loop_task = None
+
+    def mount(self, app: FastAPI, prefix: str = "/apex") -> None:
+        """Mount APEX onto *app*: routes, middleware, and job-loop lifecycle.
+
+        Args:
+            app: The FastAPI application to mount onto.
+            prefix: URL prefix for all APEX routes (default ``/apex``).
+
+        Raises:
+            RuntimeError: If called more than once on the same ``APEX`` instance.
+        """
+        if self._mounted:
+            raise RuntimeError("APEX already mounted")
+        self._mounted = True
+
+        # 1. Routes
+        router = create_apex_routes(state=self._state, on_submit=self._on_submit)
+        app.include_router(router, prefix=prefix)
+
+        # 2. Middleware
+        if self._middleware:
+            from .middleware import DEFAULT_SKIP_PATHS, APEXMiddleware
+
+            effective_skip = list(DEFAULT_SKIP_PATHS)
+            effective_skip.extend(f"{prefix}{p}" for p in DEFAULT_SKIP_PATHS)
+            if self._skip_paths:
+                effective_skip.extend(self._skip_paths)
+            app.add_middleware(
+                APEXMiddleware,
+                job_ops=self._state.job_ops,
+                skip_paths=effective_skip,
+            )
+
+        # 3. Job loop lifecycle — wrap the app's lifespan so it works
+        #    regardless of whether the user set a custom lifespan or not.
+        if self._on_job:
+            original_lifespan = app.router.lifespan_context
+
+            @asynccontextmanager
+            async def _apex_lifespan(app: FastAPI):
+                await self.startup()
+                async with original_lifespan(app) as state:
+                    yield state
+                await self.shutdown()
+
+            app.router.lifespan_context = _apex_lifespan
+
+        logger.info(
+            "[APEX] Mounted: prefix=%s, middleware=%s, job_loop=%s",
+            prefix,
+            "enabled" if self._middleware else "disabled",
+            "enabled" if self._on_job else "disabled",
+        )
 
 
 def create_apex_app(
@@ -272,81 +420,39 @@ def create_apex_app(
     Returns:
         FastAPI application instance
     """
-    if config is None:
-        config = APEXConfig.from_env()
-
-    state = create_apex_state(config)
-
-    # Resolve poll interval: explicit > env > default
-    effective_interval = poll_interval or int(os.getenv("POLL_INTERVAL", "10"))
-
-    # Build lifespan — manages background job loop if on_job is provided
-    if on_job:
-        @asynccontextmanager
-        async def lifespan(app: FastAPI):
-            task = asyncio.create_task(
-                run_job_loop(
-                    job_ops=state.job_ops,
-                    on_job=on_job,
-                    poll_interval=effective_interval,
-                    metadata=task_metadata,
-                    on_job_skipped=on_job_skipped,
-                )
-            )
-            logger.info(
-                "[APEX] Job loop started: poll_interval=%ds", effective_interval
-            )
-            yield
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-    else:
-        lifespan = None
+    apex = APEX(
+        config=config,
+        on_job=on_job,
+        on_submit=on_submit,
+        on_job_skipped=on_job_skipped,
+        poll_interval=poll_interval,
+        task_metadata=task_metadata,
+        middleware=middleware,
+        skip_paths=skip_paths,
+    )
 
     app = FastAPI(
         title="APEX Agent",
         description="APEX (Agent Payment Exchange Protocol) Agent",
-        lifespan=lifespan,
     )
+    apex.mount(app)
 
     prefix = "/apex"
-    router = create_apex_routes(config=config, state=state, on_submit=on_submit)
-    app.include_router(router, prefix=prefix)
-
-    # Middleware — enabled by default for secure-by-default posture.
-    if middleware:
-        from .middleware import DEFAULT_SKIP_PATHS, APEXMiddleware
-
-        effective_skip = list(DEFAULT_SKIP_PATHS)
-        effective_skip.extend(f"{prefix}{p}" for p in DEFAULT_SKIP_PATHS)
-        if skip_paths:
-            effective_skip.extend(skip_paths)
-
-        app.add_middleware(APEXMiddleware, job_ops=state.job_ops, skip_paths=effective_skip)
 
     @app.get("/")
     async def root():
         return {
             "service": "APEX Agent",
-            "agent_address": state.job_ops.agent_address,
+            "agent_address": apex.state.job_ops.agent_address,
             "endpoints": {
                 "submit": f"{prefix}/submit",
                 "job": f"{prefix}/job/{{job_id}}",
+                "response": f"{prefix}/job/{{job_id}}/response",
                 "verify": f"{prefix}/job/{{job_id}}/verify",
                 "negotiate": f"{prefix}/negotiate",
                 "status": f"{prefix}/status",
                 "health": f"{prefix}/health",
             },
         }
-
-    logger.info(
-        "[APEX] Agent created: address=%s, erc8183=%s, middleware=%s, job_loop=%s",
-        state.job_ops.agent_address,
-        config.effective_erc8183_address,
-        "enabled" if middleware else "disabled",
-        "enabled" if on_job else "disabled",
-    )
 
     return app
