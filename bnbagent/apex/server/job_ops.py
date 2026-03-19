@@ -386,12 +386,20 @@ class APEXJobOps:
                 " falling back to event scan"
             )
             # Fall back to original event-based scan
-            latest_block = snapshot_block
-            from_block = max(0, latest_block - 45000)
-            result = await self._event_scan(from_block, "latest", my_address)
-            self._last_scanned_block = snapshot_block
-            self._startup_scan_done = True
-            return result
+            try:
+                latest_block = snapshot_block
+                from_block = max(0, latest_block - 45000)
+                result = await self._event_scan(from_block, "latest", my_address)
+                return result
+            except Exception as fallback_err:
+                logger.warning(
+                    f"[APEXJobOps] Event scan fallback also failed ({fallback_err}),"
+                    " will retry next poll"
+                )
+                return {"success": False, "error": str(fallback_err), "jobs": []}
+            finally:
+                self._last_scanned_block = snapshot_block
+                self._startup_scan_done = True
 
     async def _event_scan(
         self,

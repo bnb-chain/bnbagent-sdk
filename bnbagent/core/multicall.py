@@ -25,10 +25,26 @@ import logging
 import time
 from typing import Any
 
+from eth_abi import decode as abi_decode
 from web3 import Web3
 from web3.contract import Contract
 
 logger = logging.getLogger(__name__)
+
+
+def _encode_call(contract: Contract, function_name: str, args: list) -> str:
+    """Encode a contract function call, compatible with web3.py 6.x and 7.x."""
+    if hasattr(contract, "encodeABI"):
+        return contract.encodeABI(fn_name=function_name, args=args)
+    return contract.encode_abi(abi_element_identifier=function_name, args=args)
+
+
+def _get_output_types(contract: Contract, function_name: str) -> list[str]:
+    """Extract output types for a function from the contract ABI."""
+    for item in contract.abi:
+        if item.get("type") == "function" and item.get("name") == function_name:
+            return [o["type"] for o in item.get("outputs", [])]
+    raise ValueError(f"Function {function_name} not found in ABI")
 
 # Canonical Multicall3 address — same on all EVM chains
 MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11"
@@ -107,7 +123,7 @@ def multicall_read(
     # Encode all calldata upfront
     encoded_calls = []
     for args in call_args_list:
-        calldata = contract.encodeABI(fn_name=function_name, args=list(args))
+        calldata = _encode_call(contract, function_name, list(args))
         encoded_calls.append(
             {
                 "target": target,
@@ -115,6 +131,8 @@ def multicall_read(
                 "callData": calldata,
             }
         )
+
+    output_types = _get_output_types(contract, function_name)
 
     # Split into batches
     results: list[tuple[bool, Any]] = []
@@ -125,8 +143,8 @@ def multicall_read(
         for j, (success, return_data) in enumerate(raw_results):
             if success and return_data:
                 try:
-                    decoded = contract.decode_function_result(function_name, return_data)
-                    # decode_function_result returns a tuple; unwrap single-value results
+                    decoded = abi_decode(output_types, return_data)
+                    # unwrap single-value results
                     if len(decoded) == 1:
                         decoded = decoded[0]
                     results.append((True, decoded))
