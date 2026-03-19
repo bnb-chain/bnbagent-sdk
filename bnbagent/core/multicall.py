@@ -39,11 +39,23 @@ def _encode_call(contract: Contract, function_name: str, args: list) -> str:
     return contract.encode_abi(abi_element_identifier=function_name, args=args)
 
 
+def _abi_type(output: dict) -> str:
+    """Build the full eth_abi type string for an ABI output, handling tuples recursively."""
+    base = output["type"]
+    if base == "tuple" and "components" in output:
+        inner = ",".join(_abi_type(c) for c in output["components"])
+        return f"({inner})"
+    if base == "tuple[]" and "components" in output:
+        inner = ",".join(_abi_type(c) for c in output["components"])
+        return f"({inner})[]"
+    return base
+
+
 def _get_output_types(contract: Contract, function_name: str) -> list[str]:
     """Extract output types for a function from the contract ABI."""
     for item in contract.abi:
         if item.get("type") == "function" and item.get("name") == function_name:
-            return [o["type"] for o in item.get("outputs", [])]
+            return [_abi_type(o) for o in item.get("outputs", [])]
     raise ValueError(f"Function {function_name} not found in ABI")
 
 # Canonical Multicall3 address — same on all EVM chains

@@ -136,6 +136,8 @@ class TestRealContract:
     """Smoke tests using a real web3 Contract object (no RPC needed).
 
     These catch API changes in web3.py that mocked tests would miss.
+    Uses a tuple-struct output (like ERC-8183 getJob) to cover the
+    real-world ABI shape.
     """
 
     SAMPLE_ABI = [
@@ -144,8 +146,17 @@ class TestRealContract:
             "name": "getJob",
             "inputs": [{"name": "jobId", "type": "uint256"}],
             "outputs": [
-                {"name": "client", "type": "address"},
-                {"name": "budget", "type": "uint256"},
+                {
+                    "name": "",
+                    "type": "tuple",
+                    "components": [
+                        {"name": "client", "type": "address"},
+                        {"name": "provider", "type": "address"},
+                        {"name": "budget", "type": "uint256"},
+                        {"name": "status", "type": "uint8"},
+                        {"name": "description", "type": "string"},
+                    ],
+                }
             ],
             "stateMutability": "view",
         }
@@ -166,10 +177,10 @@ class TestRealContract:
         assert isinstance(calldata, (str, bytes))
         assert len(calldata) > 0
 
-    def test_get_output_types(self):
+    def test_get_output_types_tuple(self):
         contract = self._make_contract()
         types = _get_output_types(contract, "getJob")
-        assert types == ["address", "uint256"]
+        assert types == ["(address,address,uint256,uint8,string)"]
 
     def test_decode_roundtrip(self):
         """Encode args, then decode return data — full path without RPC."""
@@ -183,9 +194,14 @@ class TestRealContract:
 
         # Simulate ABI-encoded return data and decode it
         output_types = _get_output_types(contract, "getJob")
+        addr = "0xcA11bde05977b3631167028862bE2a173976CA11"
         fake_return = _abi_encode(
             output_types,
-            ["0xcA11bde05977b3631167028862bE2a173976CA11", 100],
+            [(addr, addr, 100, 1, "test job")],
         )
         decoded = abi_decode(output_types, fake_return)
-        assert decoded[1] == 100
+        # decoded is ((addr, addr, 100, 1, "test job"),) — unwrap tuple
+        job = decoded[0]
+        assert job[2] == 100
+        assert job[3] == 1
+        assert job[4] == "test job"

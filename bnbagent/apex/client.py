@@ -289,10 +289,10 @@ class APEXClient(ContractClientMixin):
                     jobs.append(
                         {
                             "jobId": job_ids[idx],
-                            "client": raw[0],
-                            "provider": raw[1],
-                            "evaluator": raw[2],
-                            "hook": raw[3],
+                            "client": Web3.to_checksum_address(raw[0]),
+                            "provider": Web3.to_checksum_address(raw[1]),
+                            "evaluator": Web3.to_checksum_address(raw[2]),
+                            "hook": Web3.to_checksum_address(raw[3]),
                             "budget": raw[4],
                             "expiredAt": raw[5],
                             "status": APEXStatus(raw[6]),

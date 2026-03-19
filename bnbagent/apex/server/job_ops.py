@@ -488,9 +488,23 @@ class APEXJobOps:
             if scan_from >= latest_block:
                 return {"success": True, "jobs": []}
 
-            result = await self._event_scan(scan_from, to_block, my_address)
-            self._last_scanned_block = latest_block
-            return result
+            try:
+                result = await self._event_scan(scan_from, to_block, my_address)
+                self._consecutive_scan_failures = 0
+                return result
+            except Exception as e:
+                self._consecutive_scan_failures = getattr(
+                    self, "_consecutive_scan_failures", 0
+                ) + 1
+                logger.warning(
+                    f"[APEXJobOps] Progressive scan failed ({e}),"
+                    f" will retry after backoff"
+                    f" (failures={self._consecutive_scan_failures})"
+                )
+                return {"success": False, "error": str(e), "jobs": []}
+            finally:
+                # Always advance so we don't re-scan the same range
+                self._last_scanned_block = latest_block
 
         except Exception as e:
             logger.error(f"[APEXJobOps] get_pending_jobs failed: {e}")
@@ -646,8 +660,20 @@ async def run_job_loop(
 
     skipped_jobs: set[int] = set()
 
+    max_backoff = poll_interval * 12  # cap at ~2 minutes for 10s base
+
     while True:
         try:
+            # Backoff when rate-limited: exponential up to max_backoff
+            consecutive_failures = getattr(job_ops, "_consecutive_scan_failures", 0)
+            if consecutive_failures > 0:
+                backoff = min(poll_interval * (2 ** consecutive_failures), max_backoff)
+                logger.debug(
+                    f"[JobRunner] Backing off {backoff}s"
+                    f" (consecutive failures: {consecutive_failures})"
+                )
+                await asyncio.sleep(backoff)
+
             result = await job_ops.get_pending_jobs()
 
             if not result.get("success"):
