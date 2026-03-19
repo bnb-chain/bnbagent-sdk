@@ -68,10 +68,12 @@ def create_apex_state(config: APEXConfig | None = None) -> APEXState:
         storage_provider=storage,
         chain_id=config.effective_chain_id,
         wallet_provider=config.wallet_provider,
+        service_price=int(config.service_price),
+        payment_token_decimals=config.payment_token_decimals,
     )
 
     negotiation_handler = NegotiationHandler(
-        base_price=config.agent_price,
+        service_price=config.service_price,
         currency=config.effective_payment_token,
     )
 
@@ -196,6 +198,9 @@ def create_apex_routes(
             "status": "ok",
             "agent_address": state.job_ops.agent_address,
             "erc8183_address": state.config.effective_erc8183_address,
+            "service_price": state.config.service_price,
+            "currency": state.config.effective_payment_token,
+            "decimals": state.config.payment_token_decimals,
         }
 
     return router
@@ -203,9 +208,9 @@ def create_apex_routes(
 
 def create_apex_app(
     config: APEXConfig | None = None,
-    prefix: str = "",
-    on_task: Callable[..., Any] | None = None,
+    on_job: Callable[..., Any] | None = None,
     on_submit: Callable[[int, str, dict], Any] | None = None,
+    on_job_skipped: Callable[[dict, str], Any] | None = None,
     poll_interval: int | None = None,
     task_metadata: dict[str, Any] | None = None,
     middleware: bool = True,
@@ -215,25 +220,25 @@ def create_apex_app(
 
     The simplest way to deploy an APEX agent::
 
-        async def my_task(job: dict) -> str:
+        async def execute_job(job: dict) -> str:
             return f"Processed: {job['description']}"
 
-        app = create_apex_app(on_task=my_task)
+        app = create_apex_app(on_job=execute_job)
 
     Run with: ``uvicorn myagent:app``
 
-    When ``on_task`` is provided, the app automatically polls for funded jobs
+    When ``on_job`` is provided, the app automatically polls for funded jobs
     in the background, verifies them, calls your handler, and submits results
     on-chain. You only write the business logic.
 
-    The ``on_task`` callback supports four signatures::
+    The ``on_job`` callback supports four signatures::
 
-        def on_task(job: dict) -> str                    # sync
-        async def on_task(job: dict) -> str              # async
-        def on_task(job: dict) -> tuple[str, dict]       # sync + per-job metadata
-        async def on_task(job: dict) -> tuple[str, dict] # async + per-job metadata
+        def on_job(job: dict) -> str                    # sync
+        async def on_job(job: dict) -> str              # async
+        def on_job(job: dict) -> tuple[str, dict]       # sync + per-job metadata
+        async def on_job(job: dict) -> tuple[str, dict] # async + per-job metadata
 
-    Without ``on_task``, the app only exposes HTTP endpoints (negotiate, submit,
+    Without ``on_job``, the app only exposes HTTP endpoints (negotiate, submit,
     job query, etc.) and you must handle job discovery yourself.
 
     Middleware is **enabled by default** (secure-by-default). All POST/PUT/DELETE
@@ -242,13 +247,18 @@ def create_apex_app(
     standard paths (``/health``, ``/status``, ``/negotiate``, etc.) are always
     allowed.
 
+    Routes are mounted at ``/apex/*``. For custom prefixes, use
+    ``create_apex_routes()`` with ``app.include_router(prefix=...)``.
+
     Args:
         config: APEXConfig instance (default: loads from env)
-        prefix: URL prefix for APEX routes (default: no prefix)
-        on_task: Task handler called for each funded job. The SDK handles
-                 discovery, verification, and submission automatically.
+        on_job: Job handler called for each funded job. The SDK handles
+                discovery, verification, and submission automatically.
         on_submit: Optional callback after successful submit (lower-level;
-                   prefer ``on_task`` for most use cases)
+                   prefer ``on_job`` for most use cases)
+        on_job_skipped: Optional callback when a job fails verification and is
+                        skipped. Called with ``(job_dict, reason_string)``.
+                        Supports both sync and async callables.
         poll_interval: Seconds between polling cycles (default: env POLL_INTERVAL or 10)
         task_metadata: Default metadata attached to every submission
         middleware: Enable APEXMiddleware for job verification (default: True)
@@ -265,16 +275,17 @@ def create_apex_app(
     # Resolve poll interval: explicit > env > default
     effective_interval = poll_interval or int(os.getenv("POLL_INTERVAL", "10"))
 
-    # Build lifespan — manages background job loop if on_task is provided
-    if on_task:
+    # Build lifespan — manages background job loop if on_job is provided
+    if on_job:
         @asynccontextmanager
         async def lifespan(app: FastAPI):
             task = asyncio.create_task(
                 run_job_loop(
                     job_ops=state.job_ops,
-                    on_task=on_task,
+                    on_job=on_job,
                     poll_interval=effective_interval,
                     metadata=task_metadata,
+                    on_job_skipped=on_job_skipped,
                 )
             )
             logger.info(
@@ -295,18 +306,16 @@ def create_apex_app(
         lifespan=lifespan,
     )
 
+    prefix = "/apex"
     router = create_apex_routes(config=config, state=state, on_submit=on_submit)
-    app.include_router(router, prefix=prefix if prefix else "")
+    app.include_router(router, prefix=prefix)
 
     # Middleware — enabled by default for secure-by-default posture.
-    # When a prefix is used, auto-generate prefixed skip paths so that
-    # e.g. /api/negotiate is also skipped, not just /negotiate.
     if middleware:
         from .middleware import DEFAULT_SKIP_PATHS, APEXMiddleware
 
         effective_skip = list(DEFAULT_SKIP_PATHS)
-        if prefix:
-            effective_skip.extend(f"{prefix}{p}" for p in DEFAULT_SKIP_PATHS)
+        effective_skip.extend(f"{prefix}{p}" for p in DEFAULT_SKIP_PATHS)
         if skip_paths:
             effective_skip.extend(skip_paths)
 
@@ -336,7 +345,7 @@ def create_apex_app(
         state.job_ops.agent_address,
         config.effective_erc8183_address,
         "enabled" if middleware else "disabled",
-        "enabled" if on_task else "disabled",
+        "enabled" if on_job else "disabled",
     )
 
     return app

@@ -6,11 +6,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from bnbagent.apex.client import APEXStatus
-from bnbagent.apex.server.job_ops import APEXJobOps
+from bnbagent.apex.server.job_ops import APEXJobOps, run_job_loop
 from tests.conftest import FAKE_ADDRESS, FAKE_PRIVATE_KEY, FAKE_TX_HASH
 
 
-def _make_job_ops(storage=None):
+def _make_job_ops(storage=None, service_price=0, payment_token_decimals=18):
     """Create APEXJobOps with mocked Web3/APEXClient."""
     ops = APEXJobOps(
         rpc_url="https://fake-rpc.example.com",
@@ -18,6 +18,8 @@ def _make_job_ops(storage=None):
         private_key=FAKE_PRIVATE_KEY,
         storage_provider=storage,
         chain_id=97,
+        service_price=service_price,
+        payment_token_decimals=payment_token_decimals,
     )
     return ops
 
@@ -319,3 +321,175 @@ class TestVerifyJob:
         assert result["valid"] is True
         assert result["warnings"] is not None
         assert any("CLIENT_AS_EVALUATOR" in w["code"] for w in result["warnings"])
+
+    @pytest.mark.asyncio
+    async def test_budget_below_service_price(self):
+        ops = _make_job_ops(service_price=10**18)
+        client = _mock_client(ops)
+        job_data = client.get_job.return_value.copy()
+        job_data["budget"] = 5 * 10**17  # 0.5 tokens < 1 token
+        client.get_job.return_value = job_data
+        result = await ops.verify_job(1)
+        assert result["valid"] is False
+        assert result["error_code"] == 402
+        assert result["service_price"] == str(10**18)
+        assert result["decimals"] == 18
+
+    @pytest.mark.asyncio
+    async def test_budget_sufficient(self):
+        ops = _make_job_ops(service_price=10**18)
+        client = _mock_client(ops)
+        job_data = client.get_job.return_value.copy()
+        job_data["budget"] = 2 * 10**18  # 2 tokens >= 1 token
+        client.get_job.return_value = job_data
+        result = await ops.verify_job(1)
+        assert result["valid"] is True
+
+    @pytest.mark.asyncio
+    async def test_budget_check_skipped_when_service_price_zero(self):
+        """service_price=0 (default) → no budget check, backward compatible."""
+        ops = _make_job_ops(service_price=0)
+        client = _mock_client(ops)
+        job_data = client.get_job.return_value.copy()
+        job_data["budget"] = 0
+        client.get_job.return_value = job_data
+        result = await ops.verify_job(1)
+        assert result["valid"] is True
+
+    @pytest.mark.asyncio
+    async def test_budget_check_custom_decimals(self):
+        ops = _make_job_ops(service_price=10**6, payment_token_decimals=6)
+        client = _mock_client(ops)
+        job_data = client.get_job.return_value.copy()
+        job_data["budget"] = 5 * 10**5  # 0.5 tokens < 1 token
+        client.get_job.return_value = job_data
+        result = await ops.verify_job(1)
+        assert result["valid"] is False
+        assert result["decimals"] == 6
+
+
+class TestRunJobLoop:
+    @pytest.mark.asyncio
+    async def test_skipped_jobs_not_re_verified(self):
+        """Same job should only be verified once after being skipped."""
+        ops = _make_job_ops(service_price=10**18)
+        client = _mock_client(ops)
+
+        # Job with insufficient budget
+        job_data = client.get_job.return_value.copy()
+        job_data["budget"] = 100  # way below service_price
+        client.get_job.return_value = job_data
+
+        # get_pending_jobs returns same job twice (two polling cycles)
+        client.get_job_funded_events.return_value = [
+            {"jobId": 1, "client": "0xabc", "amount": 100,
+             "blockNumber": 50, "transactionHash": "0xhash"},
+        ]
+
+        poll_count = 0
+
+        async def _patched_get_pending(from_block=None, to_block="latest", max_block_range=45000):
+            nonlocal poll_count
+            poll_count += 1
+            if poll_count > 2:
+                raise KeyboardInterrupt  # stop loop
+            return await ops._original_get_pending()
+
+        # Save original and patch
+        ops._original_get_pending = ops.get_pending_jobs
+        ops.get_pending_jobs = _patched_get_pending
+
+        import asyncio
+
+        with pytest.raises(KeyboardInterrupt):
+            await run_job_loop(
+                job_ops=ops,
+                on_job=lambda job: "result",
+                poll_interval=0,
+            )
+
+        # verify_job called only once (skipped on second poll)
+        assert client.get_job.call_count <= 3  # get_pending calls get_job, then verify calls get_job once
+
+    @pytest.mark.asyncio
+    async def test_on_job_skipped_sync_callback(self):
+        """Sync on_job_skipped callback is called with job and reason."""
+        ops = _make_job_ops(service_price=10**18)
+        client = _mock_client(ops)
+
+        job_data = client.get_job.return_value.copy()
+        job_data["budget"] = 100
+        client.get_job.return_value = job_data
+        client.get_job_funded_events.return_value = [
+            {"jobId": 1, "client": "0xabc", "amount": 100,
+             "blockNumber": 50, "transactionHash": "0xhash"},
+        ]
+
+        callback_calls = []
+
+        def on_skipped(job, reason):
+            callback_calls.append((job, reason))
+
+        poll_count = 0
+
+        async def _patched_get_pending(from_block=None, to_block="latest", max_block_range=45000):
+            nonlocal poll_count
+            poll_count += 1
+            if poll_count > 1:
+                raise KeyboardInterrupt
+            return await ops._original_get_pending()
+
+        ops._original_get_pending = ops.get_pending_jobs
+        ops.get_pending_jobs = _patched_get_pending
+
+        with pytest.raises(KeyboardInterrupt):
+            await run_job_loop(
+                job_ops=ops,
+                on_job=lambda job: "result",
+                poll_interval=0,
+                on_job_skipped=on_skipped,
+            )
+
+        assert len(callback_calls) == 1
+        assert "budget" in callback_calls[0][1].lower() or "service price" in callback_calls[0][1].lower()
+
+    @pytest.mark.asyncio
+    async def test_on_job_skipped_async_callback(self):
+        """Async on_job_skipped callback is awaited."""
+        ops = _make_job_ops(service_price=10**18)
+        client = _mock_client(ops)
+
+        job_data = client.get_job.return_value.copy()
+        job_data["budget"] = 100
+        client.get_job.return_value = job_data
+        client.get_job_funded_events.return_value = [
+            {"jobId": 1, "client": "0xabc", "amount": 100,
+             "blockNumber": 50, "transactionHash": "0xhash"},
+        ]
+
+        callback_calls = []
+
+        async def on_skipped(job, reason):
+            callback_calls.append((job, reason))
+
+        poll_count = 0
+
+        async def _patched_get_pending(from_block=None, to_block="latest", max_block_range=45000):
+            nonlocal poll_count
+            poll_count += 1
+            if poll_count > 1:
+                raise KeyboardInterrupt
+            return await ops._original_get_pending()
+
+        ops._original_get_pending = ops.get_pending_jobs
+        ops.get_pending_jobs = _patched_get_pending
+
+        with pytest.raises(KeyboardInterrupt):
+            await run_job_loop(
+                job_ops=ops,
+                on_job=lambda job: "result",
+                poll_interval=0,
+                on_job_skipped=on_skipped,
+            )
+
+        assert len(callback_calls) == 1

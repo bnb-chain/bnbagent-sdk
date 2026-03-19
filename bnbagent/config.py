@@ -224,7 +224,7 @@ class BNBAgentConfig:
                         "PAYMENT_TOKEN_ADDRESS",
                         "0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
                     ),
-                    "agent_price": os.getenv("AGENT_PRICE", "1000000000000000000"),
+                    "service_price": os.getenv("SERVICE_PRICE", "1000000000000000000"),
                 },
             },
         )

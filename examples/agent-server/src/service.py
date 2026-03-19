@@ -17,7 +17,7 @@ Environment (agent-server/.env):
     PRIVATE_KEY                                — Recommended (imported on first run; auto-generates if omitted)
     APEX_EVALUATOR_ADDRESS                     — Required (evaluator)
     STORAGE_PROVIDER=ipfs, STORAGE_API_KEY     — Required (IPFS upload)
-    AGENT_PRICE=1000000000000000000            — Negotiation price (1 U)
+    SERVICE_PRICE=1000000000000000000           — Negotiation price (1 U)
     PAYMENT_TOKEN_ADDRESS                      — BEP20 payment token
     PORT=8003                                  — Server port
     POLL_INTERVAL=15                           — Job polling interval
@@ -127,8 +127,7 @@ def process_task(job: dict) -> tuple[str, dict]:
 
 app = create_apex_app(
     config=config,
-    on_task=process_task,
-    prefix="/apex",
+    on_job=process_task,
     middleware=False,  # Disable middleware for direct endpoints below
 )
 
@@ -210,7 +209,7 @@ if __name__ == "__main__":
   ERC-8183:       {config.effective_erc8183_address}
   Evaluator:      {config.effective_evaluator_address}
   Storage:        {type(config.storage).__name__ if config.storage else "local (default)"}
-  Price:          {int(config.agent_price) / 10**18} U tokens
+  Price:          {int(config.service_price) / 10**18} U tokens
 
   APEX endpoints:
     POST /apex/negotiate   — Negotiation

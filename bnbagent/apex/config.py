@@ -16,7 +16,7 @@ Environment variables:
                                   if omitted and no keystore exists, a new wallet is auto-generated)
     WALLET_PASSWORD             - Password for wallet encryption (required with PRIVATE_KEY)
     CHAIN_ID                    - Chain ID (overrides network default)
-    AGENT_PRICE                 - Default negotiation price (default: 1e18)
+    SERVICE_PRICE               - Default negotiation price (default: 1e18)
     PAYMENT_TOKEN_ADDRESS       - BEP20 token for payments (overrides network default)
 """
 
@@ -53,7 +53,8 @@ class APEXConfig:
     network: str = "bsc-testnet"
     wallet_provider: WalletProvider | None = field(default=None, repr=False)
     storage: StorageProvider | None = field(default=None, repr=False)
-    agent_price: str = "1000000000000000000"  # 1 token (18 decimals)
+    service_price: str = "1000000000000000000"  # 1 token (18 decimals)
+    payment_token_decimals: int = 18
 
     # Convenience: auto-wrapped into EVMWalletProvider
     private_key: str = field(default="", repr=False)
@@ -188,7 +189,7 @@ class APEXConfig:
             wallet_password=wallet_password,
             wallet_address=wallet_address,
             storage=storage,
-            agent_price=get_env("AGENT_PRICE", "1000000000000000000"),
+            service_price=get_env("SERVICE_PRICE", "1000000000000000000"),
             rpc_url=get_env("BSC_RPC_URL") or get_env("RPC_URL") or "",
             chain_id=int(get_env("CHAIN_ID", "0")),
             erc8183_address=get_env("ERC8183_ADDRESS") or "",

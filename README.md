@@ -43,6 +43,7 @@ pip install "bnbagent[server,ipfs]"
   - [Wallet Providers](#wallet-providers)
   - [Storage Providers](#storage-providers)
   - [Background Job Polling](#background-job-polling)
+  - [Pricing & Budget Validation](#pricing--budget-validation)
   - [Job Verification Middleware](#job-verification-middleware-enabled-by-default)
   - [Module System](#module-system)
 - [Network & Contracts](#network--contracts)
@@ -84,6 +85,8 @@ Together, they enable agents to negotiate pricing, accept jobs, deliver work, an
 | **Provider** | The agent that performs the work and submits a deliverable |
 | **Escrow** | Payment tokens locked in the ERC-8183 contract until the job is settled |
 | **Negotiation** | Off-chain HTTP exchange where client and agent agree on price, terms, and deliverables. The agreed price is then used to set the on-chain budget. Negotiation hashes are anchored on-chain to prevent post-hoc tampering. |
+| **Service Price** | The agent's asking price for a job, configured via `SERVICE_PRICE` env var or `APEXConfig.service_price`. Returned in negotiation responses and `/status`. |
+| **Budget** | The amount of payment tokens a client locks in escrow for a job via `setBudget()` + `fund()`. The SDK automatically rejects jobs where `budget < service_price`. |
 | **Deliverable** | The work output, stored off-chain (IPFS); only the content hash goes on-chain |
 | **Evaluator** | A contract that verifies deliverables and triggers settlement (currently UMA OOv3) |
 | **Assertion** | An on-chain claim by the evaluator that the deliverable is valid, automatically initiated when the agent submits work |
@@ -103,6 +106,8 @@ Client                        Contract (ERC-8183)             Agent (Provider)  
   │  3. set_budget(price) ───►    │  (use negotiated price)       │                         │
   │  4. fund() ──────────────►    │  (tokens locked in escrow)    │                         │
   │                               │  ─── status: FUNDED ─────►    │                         │
+  │                               │                               │  4b. verify: budget ≥    │
+  │                               │                               │      service_price?      │
   │                               │                               │                         │
   │                               │                               │  5. Do the work          │
   │                               │                     submit()  │                         │
@@ -238,7 +243,7 @@ Set up an agent server that accepts jobs, processes work, and gets paid. [Regist
 # agent.py
 from bnbagent.apex.server.routes import create_apex_app
 
-def my_task(job: dict) -> str:
+def execute_job(job: dict) -> str:
     """Called automatically for each funded job.
 
     Args:
@@ -260,7 +265,7 @@ def my_task(job: dict) -> str:
     description = job.get("description", "")
     return f"Processed: {description}"
 
-app = create_apex_app(on_task=my_task)
+app = create_apex_app(on_job=execute_job)
 ```
 
 ```bash
@@ -276,28 +281,28 @@ STORAGE_API_KEY=your-pinning-service-jwt
 uvicorn agent:app --port 8000
 ```
 
-That's it. `create_apex_app(on_task=...)` gives you a production-ready APEX agent: it creates an `EVMWalletProvider` internally (from `PRIVATE_KEY` + `WALLET_PASSWORD`), reuses it for all on-chain operations (submit, settle, etc.), polls for funded jobs in the background, verifies each job, calls your `on_task` handler, and submits the result on-chain.
+That's it. `create_apex_app(on_job=...)` gives you a production-ready APEX agent: it creates an `EVMWalletProvider` internally (from `PRIVATE_KEY` + `WALLET_PASSWORD`), reuses it for all on-chain operations (submit, settle, etc.), polls for funded jobs in the background, verifies each job, calls your `on_job` handler, and submits the result on-chain. Jobs with budget below the configured `service_price` are automatically skipped.
 
-#### `on_task` Callback Reference
+#### `on_job` Callback Reference
 
-The `on_task` callback supports four signatures — sync or async, with or without metadata:
+The `on_job` callback supports four signatures — sync or async, with or without metadata:
 
 ```python
 # Simplest: sync, return result string only
-def on_task(job: dict) -> str:
+def on_job(job: dict) -> str:
     return "done"
 
 # Async
-async def on_task(job: dict) -> str:
+async def on_job(job: dict) -> str:
     result = await call_llm(job["description"])
     return result
 
 # With per-job metadata (attached to the on-chain submission)
-def on_task(job: dict) -> tuple[str, dict]:
+def on_job(job: dict) -> tuple[str, dict]:
     return "done", {"model": "gpt-4", "latency_ms": 320}
 
 # Async + metadata
-async def on_task(job: dict) -> tuple[str, dict]:
+async def on_job(job: dict) -> tuple[str, dict]:
     result = await call_llm(job["description"])
     return result, {"tokens": 1500}
 ```
@@ -312,7 +317,7 @@ async def on_task(job: dict) -> tuple[str, dict]:
 | `client` | `str` | Client wallet address |
 | `provider` | `str` | Your agent's wallet address |
 | `evaluator` | `str` | Evaluator contract address |
-| `status` | `str` | Job status (always `"FUNDED"` when `on_task` is called) |
+| `status` | `str` | Job status (always `"FUNDED"` when `on_job` is called) |
 | `expiredAt` | `int` | Unix timestamp — job deadline |
 
 **Return value**: The returned string is uploaded to storage (IPFS or local) and its content hash is submitted on-chain as the deliverable. If you return a tuple, the second element is a metadata dict merged into the submission record.
@@ -321,15 +326,15 @@ async def on_task(job: dict) -> tuple[str, dict]:
 
 ### What You Get
 
-`create_apex_app()` gives you a complete FastAPI application with these built-in routes:
+`create_apex_app()` gives you a complete FastAPI application with routes mounted at `/apex/*`. For custom prefixes, use `create_apex_routes()` with `app.include_router(prefix=...)` (see [Mount on an Existing App](#mount-on-an-existing-app)).
 
 | Method | Path | What it does |
 |--------|------|--------------|
-| `POST` | `/negotiate` | Clients propose job terms (service type, quality standards, deliverables); your agent responds with a price quote or rejection. Both request and response are hashed for on-chain anchoring. |
-| `POST` | `/submit` | Submit a job deliverable: verifies the job on-chain, uploads the result to IPFS, computes a content hash, and submits the hash on-chain — which auto-triggers the evaluator assertion via the contract hook. |
-| `GET` | `/job/{id}` | Look up on-chain job details (status, budget, provider, expiry, deliverable hash). |
-| `GET` | `/job/{id}/verify` | Verify a job is `FUNDED`, assigned to your agent, and not expired — used before processing work. |
-| `GET` | `/status` | Agent wallet address and ERC-8183 contract address. |
+| `POST` | `/apex/negotiate` | Clients propose job terms (service type, quality standards, deliverables); your agent responds with a price quote or rejection. Both request and response are hashed for on-chain anchoring. |
+| `POST` | `/apex/submit` | Submit a job deliverable: verifies the job on-chain, uploads the result to IPFS, computes a content hash, and submits the hash on-chain — which auto-triggers the evaluator assertion via the contract hook. |
+| `GET` | `/apex/job/{id}` | Look up on-chain job details (status, budget, provider, expiry, deliverable hash). |
+| `GET` | `/apex/job/{id}/verify` | Verify a job is `FUNDED`, assigned to your agent, not expired, and budget meets service price. |
+| `GET` | `/apex/status` | Agent wallet address, ERC-8183 contract, service price, payment token, and decimals. |
 | `GET` | `/health` | Health check for load balancers and monitoring. |
 
 > **Storage note**: The default storage is `LocalStorageProvider` (files saved to `.agent-data/`). For production, set `STORAGE_PROVIDER=ipfs` and provide `STORAGE_API_KEY` — the APEX evaluator needs to fetch your deliverables via IPFS to verify them. Local storage only works for development/testing.
@@ -356,15 +361,15 @@ wallet = EVMWalletProvider(
 config = APEXConfig(
     wallet_provider=wallet,
     storage=create_storage_provider(StorageConfig(type="ipfs", api_key=os.getenv("STORAGE_API_KEY"))),
-    agent_price="20000000000000000000",  # 20 U tokens (in wei, 18 decimals)
+    service_price="20000000000000000000",  # 20 U tokens (in wei, 18 decimals)
 )
 
-async def my_task(job: dict) -> str:
-    """Process a funded job. See 'on_task Callback Reference' above for the full job dict schema."""
+async def execute_job(job: dict) -> str:
+    """Process a funded job. See 'on_job Callback Reference' above for the full job dict schema."""
     result = await do_ai_work(job["description"])
     return result
 
-app = create_apex_app(config=config, on_task=my_task)
+app = create_apex_app(config=config, on_job=execute_job)
 ```
 
 You can also create `APEXConfig` from environment variables or with shorthand:
@@ -377,7 +382,7 @@ config = APEXConfig.from_env()
 config = APEXConfig(
     private_key="0x...",
     wallet_password="your-password",
-    agent_price="20000000000000000000",
+    service_price="20000000000000000000",
 )
 
 # Optional — returns None if required env vars are missing
@@ -395,13 +400,6 @@ from bnbagent.apex.server.routes import create_apex_routes
 existing_app = FastAPI()
 existing_app.include_router(create_apex_routes(), prefix="/apex")
 # Routes available at /apex/negotiate, /apex/submit, /apex/job/{id}, etc.
-```
-
-`create_apex_app()` also accepts a `prefix` parameter:
-
-```python
-app = create_apex_app(prefix="/api/v1")
-# Routes at /api/v1/negotiate, /api/v1/submit, etc.
 ```
 
 ---
@@ -422,7 +420,7 @@ All configuration can be set via environment variables. The SDK resolves values 
 | `CHAIN_ID` | No | `97` | Chain ID (auto-resolved from network if not set) |
 | `ERC8183_ADDRESS` | No | Network default | ERC-8183 contract address override |
 | `APEX_EVALUATOR_ADDRESS` | No | Network default | APEX Evaluator contract address override |
-| `AGENT_PRICE` | No | `1000000000000000000` (1 U) | Default negotiation price in wei (18 decimals) |
+| `SERVICE_PRICE` | No | `1000000000000000000` (1 U) | Default negotiation price in wei (18 decimals) |
 | `PAYMENT_TOKEN_ADDRESS` | No | Network default | BEP-20 payment token address |
 | `STORAGE_PROVIDER` | No | `local` | Storage backend: `"local"` or `"ipfs"` |
 | `STORAGE_API_KEY` | If IPFS | — | API key / JWT for IPFS pinning service |
@@ -443,7 +441,7 @@ PRIVATE_KEY=0x...          # optional; omit to auto-generate a new wallet
 WALLET_PASSWORD=your-secure-password
 STORAGE_PROVIDER=ipfs
 STORAGE_API_KEY=your-pinning-service-jwt
-AGENT_PRICE=20000000000000000000    # 20 U tokens
+SERVICE_PRICE=20000000000000000000    # 20 U tokens
 ```
 
 ---
@@ -568,7 +566,7 @@ For more details, see [`bnbagent/storage/README.md`](bnbagent/storage/README.md)
 
 ### Background Job Polling
 
-When you pass `on_task` to `create_apex_app()`, the SDK automatically runs a background loop that discovers funded jobs, verifies them, calls your handler, and submits results. You don't need to write any polling code.
+When you pass `on_job` to `create_apex_app()`, the SDK automatically runs a background loop that discovers funded jobs, verifies them, calls your handler, and submits results. You don't need to write any polling code.
 
 If you're mounting APEX routes on an existing app with `create_apex_routes()`, you can use `run_job_loop` directly:
 
@@ -580,19 +578,66 @@ from bnbagent.apex.server import create_apex_state, create_apex_routes, run_job_
 
 state = create_apex_state()
 
-def my_task(job: dict) -> str:
-    """See 'on_task Callback Reference' for the full job dict schema and return options."""
+def execute_job(job: dict) -> str:
+    """See 'on_job Callback Reference' for the full job dict schema and return options."""
     return f"Processed: {job['description']}"
 
 @asynccontextmanager
 async def lifespan(app):
-    task = asyncio.create_task(run_job_loop(state.job_ops, on_task=my_task))
+    task = asyncio.create_task(run_job_loop(state.job_ops, on_job=execute_job))
     yield
     task.cancel()
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(create_apex_routes(state=state), prefix="/apex")
 ```
+
+### Pricing & Budget Validation
+
+The SDK distinguishes three pricing values:
+
+| Term | Set by | Where it lives |
+|------|--------|----------------|
+| **`service_price`** | Agent operator | `SERVICE_PRICE` env var → `APEXConfig.service_price` |
+| **`budget`** | Client | On-chain escrow via `setBudget()` + `fund()` |
+| **`agreed_price`** | Negotiation | Per-job record from the `/negotiate` round |
+
+**Data flow**: `SERVICE_PRICE` env → `APEXConfig` → used by `NegotiationHandler` (to quote prices) and `APEXJobOps.verify_job()` (to gate work).
+
+#### SDK Budget Protection
+
+`verify_job()` automatically checks `budget >= service_price` before the agent starts work. If the budget is insufficient, the job is rejected with HTTP 402 and the response includes `service_price` and `decimals` so the client knows exactly how much is required.
+
+This check runs in three places:
+
+1. **Background job loop** — funded jobs are verified before calling `on_job`
+2. **`/job/{id}/verify` endpoint** — clients can pre-check before funding
+3. **`submit_result()` pre-check** — defense-in-depth before on-chain submission
+
+#### Skipped Jobs & `on_job_skipped` Callback
+
+When a job fails budget validation in the background loop, it is added to a `skipped_jobs` set — the same job is only verified once, preventing log spam from repeated polling cycles. Register an `on_job_skipped` callback to be notified:
+
+```python
+# Sync callback
+def on_skipped(job: dict, reason: str):
+    print(f"Skipped job {job['jobId']}: {reason}")
+
+app = create_apex_app(on_job=execute_job, on_job_skipped=on_skipped)
+
+# Async callback
+async def on_skipped(job: dict, reason: str):
+    await notify_monitoring(job["jobId"], reason)
+
+app = create_apex_app(on_job=execute_job, on_job_skipped=on_skipped)
+```
+
+The `reason` string describes why the job was skipped (e.g. `"budget 5000000000000000000 < service_price 20000000000000000000"`).
+
+#### Client-Side Visibility
+
+- **`GET /status`** — Returns the agent's `service_price`, `payment_token`, and `decimals`, so clients know the minimum budget before creating a job.
+- **`GET /job/{id}/verify`** — Returns HTTP 402 with `service_price` and `decimals` if the job's budget is too low.
 
 ### Job Verification Middleware (Enabled by Default)
 
@@ -602,7 +647,7 @@ app.include_router(create_apex_routes(state=state), prefix="/apex")
 
 - **GET/HEAD/OPTIONS** — Always allowed (read-only operations)
 - **POST/PUT/DELETE** — Require a valid `X-Job-Id` header; the middleware verifies on-chain that the job is `FUNDED` and assigned to your agent before the request reaches your handler
-- **Skip paths** — `/status`, `/health`, `/metrics`, `/.well-known/`, `/negotiate` are always open (including prefixed versions like `/api/negotiate`)
+- **Skip paths** — `/status`, `/health`, `/metrics`, `/.well-known/`, `/negotiate` are always open (including prefixed versions like `/apex/negotiate`)
 
 | HTTP Code | Meaning |
 |-----------|---------|
@@ -610,6 +655,8 @@ app.include_router(create_apex_routes(state=state), prefix="/apex")
 | 403 | You are not the assigned provider for this job |
 | 408 | Job has expired |
 | 409 | Job is not in `FUNDED` status |
+
+> **Note**: `verify_job()` also uses HTTP 402 to indicate insufficient budget (`budget < service_price`). The middleware's 402 means a missing `X-Job-Id` header — these are different layers with different meanings.
 
 **Adding custom public endpoints** that don't require job verification:
 
@@ -707,6 +754,7 @@ print(nc.rpc_url)  # https://bsc-dataseed.binance.org
 - **Middleware protection** — `APEXMiddleware` is enabled by default in `create_apex_app()`, verifying on-chain job status before allowing write operations.
 - **Defense in depth** — `APEXJobOps.submit_result()` re-verifies on-chain even behind middleware.
 - **SSRF protection** — `parse_agent_uri()` blocks private networks, loopback, and cloud metadata endpoints.
+- **Budget validation** — `verify_job()` rejects jobs where `budget < service_price`, preventing agents from doing unpaid work. This check runs in the middleware, job loop, and submit pre-check.
 - **Storage permissions** — `LocalStorageProvider` uses `0600`/`0700` file permissions.
 
 ---
@@ -723,7 +771,8 @@ print(nc.rpc_url)  # https://bsc-dataseed.binance.org
 | `409 Not FUNDED` | Wrong job status | Job may already be submitted/completed |
 | `408 Job expired` | Past deadline | Create a new job |
 | `429 Rate limited` | Too many RPC calls | Add retry with backoff |
-| `InsufficientBudget` | Below minimum | Check `apex.min_budget()` |
+| `402 Budget below service price` | Job budget < agent's `service_price` | Client should create a new job with budget >= `service_price` (visible at `GET /status`) |
+| `service_price below minBudget` | `ValueError` at startup | Increase `SERVICE_PRICE` to at least the contract's `minBudget` |
 
 ---
 

@@ -18,7 +18,6 @@ from .negotiation import (
     NegotiationRequest,
     NegotiationResponse,
     NegotiationResult,
-    PriceTooLowError,
     ReasonCode,
     TermSpecification,
 )
@@ -46,7 +45,6 @@ __all__ = [
     "ReasonCode",
     "NegotiationHandler",
     "NegotiationResult",
-    "PriceTooLowError",
     "ServiceRecord",
     "RequestData",
     "ResponseData",

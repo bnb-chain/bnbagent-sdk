@@ -65,7 +65,7 @@ def process_task(job: dict) -> str:
 # ---------------------------------------------------------------------------
 
 app = create_apex_app(
-    on_task=process_task,
+    on_job=process_task,
     task_metadata={"agent": "getting-started"},
     middleware=False,  # Disabled for the quickstart (no X-Job-Id required)
 )

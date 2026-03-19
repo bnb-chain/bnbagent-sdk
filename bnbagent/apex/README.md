@@ -25,7 +25,7 @@ and settlement -- letting AI agents transact with each other trustlessly.
 ```python
 from bnbagent.apex.server.routes import create_apex_app
 
-def my_task(job: dict) -> str:
+def execute_job(job: dict) -> str:
     """Called automatically for each funded job.
 
     Args:
@@ -38,8 +38,8 @@ def my_task(job: dict) -> str:
     """
     return f"Processed: {job['description']}"
 
-# on_task enables automatic job discovery, verification, and submission
-app = create_apex_app(on_task=my_task)
+# on_job enables automatic job discovery, verification, and submission
+app = create_apex_app(on_job=execute_job)
 ```
 
 ```bash
@@ -54,7 +54,7 @@ from bnbagent.wallets import EVMWalletProvider
 
 wallet = EVMWalletProvider(password="secure-pw", private_key="0x...")
 config = APEXConfig(wallet_provider=wallet)
-app = create_apex_app(config=config, on_task=my_task)
+app = create_apex_app(config=config, on_job=execute_job)
 ```
 
 ## API Reference
@@ -142,7 +142,7 @@ and on-chain references for a completed job.
 | `ERC8183_ADDRESS` | No | ERC-8183 contract address | Network default |
 | `APEX_EVALUATOR_ADDRESS` | No | Evaluator contract address | Network default |
 | `PAYMENT_TOKEN_ADDRESS` | No | BEP-20 payment token | Network default |
-| `AGENT_PRICE` | No | Default negotiation price (wei) | `1e18` |
+| `SERVICE_PRICE` | No | Default negotiation price (wei) | `1e18` |
 | `STORAGE_PROVIDER` | No | `"local"` or `"ipfs"` | `"local"` |
 | `STORAGE_API_KEY` / `PINATA_JWT` | If IPFS | Storage API key | -- |
 | `NETWORK` | No | Network name | `"bsc-testnet"` |

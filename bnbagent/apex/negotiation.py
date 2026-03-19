@@ -8,7 +8,7 @@ The TermSpecification follows APEX's structured terms:
   Agreed Service + Constraints + Compensation + Evaluation.
 
 NegotiationHandler provides a ready-to-use negotiation processor for agents:
-  handler = NegotiationHandler(base_price="20e18", currency="0x...")
+  handler = NegotiationHandler(service_price="20e18", currency="0x...")
   result = handler.negotiate(request_data)
 """
 
@@ -285,24 +285,6 @@ class NegotiationResult:
         }
 
 
-class PriceTooLowError(ValueError):
-    """Raised when agent's base_price is below the contract's minimum service fee."""
-
-    def __init__(self, base_price: int, min_service_fee: int, decimals: int = 18):
-        self.base_price = base_price
-        self.min_service_fee = min_service_fee
-        self.decimals = decimals
-
-        base_human = base_price / (10**decimals)
-        min_human = min_service_fee / (10**decimals)
-        super().__init__(
-            f"base_price ({base_human:.4f} tokens) is below minimum service fee "
-            f"({min_human:.4f} tokens). The minimum exists because 10% of the payment "
-            f"is used as UMA bond, and UMA requires a minimum bond of "
-            f"{min_human / 10:.4f} tokens."
-        )
-
-
 class NegotiationHandler:
     """
     Ready-to-use negotiation handler for agents.
@@ -311,29 +293,18 @@ class NegotiationHandler:
     - Validates incoming requests
     - Checks service type support
     - Validates required fields (quality_standards)
-    - Enforces minimum price (from ERC-8183 contract)
     - Returns properly structured response with hashes
 
-    Minimum Price Constraint:
-        UMA OOv3 requires a minimum bond (currently 1 TUSD on testnet).
-        The ERC-8183 contract takes 10% of the payment as bond, so:
-        minServiceFee = minBond * 10 = 10 TUSD
-
-        You can pass min_service_fee directly or use from_apex_client()
-        to fetch it automatically from the contract.
-
     Example:
-        # Option 1: Manual minimum (if you know it)
         handler = NegotiationHandler(
-            base_price="20000000000000000000",  # 20 tokens (18 decimals)
+            service_price="20000000000000000000",  # 20 tokens (18 decimals)
             currency="0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
-            min_service_fee=10000000000000000000,  # 10 tokens minimum
         )
 
-        # Option 2: Auto-fetch from contract (recommended)
+        # Or auto-fetch currency from contract:
         handler = NegotiationHandler.from_apex_client(
             apex_client=apex_client,
-            base_price="20000000000000000000",
+            service_price="20000000000000000000",
             supported_service_types=["blockchain-news"],
         )
 
@@ -344,73 +315,57 @@ class NegotiationHandler:
 
     def __init__(
         self,
-        base_price: str,
+        service_price: str,
         currency: str,
         supported_service_types: list[str] | None = None,
         estimated_completion_seconds: int = 120,
         require_quality_standards: bool = True,
-        min_service_fee: int | None = None,
-        validate_price: bool = True,
     ):
         """
         Initialize the negotiation handler.
 
         Args:
-            base_price: Price in token smallest unit (e.g., "20000000000000000000" for 20 tokens)
+            service_price: Price in token smallest unit (e.g., "20000000000000000000" for 20 tokens)
             currency: BEP20 token contract address
             supported_service_types: List of supported service types (None = accept all)
             estimated_completion_seconds: Estimated time to complete the service
             require_quality_standards: Whether to require quality_standards in request
-            min_service_fee: Minimum allowed service fee (from ERC-8183 contract)
-            validate_price: If True and min_service_fee provided, raise PriceTooLowError
-                           if base_price < min_service_fee
-
-        Raises:
-            PriceTooLowError: If validate_price=True and base_price < min_service_fee
         """
-        self._base_price = base_price
+        self._service_price = service_price
         self._currency = currency
-        self._min_service_fee = min_service_fee
         self._supported_types: set[str] | None = None
         if supported_service_types:
             self._supported_types = {t.lower() for t in supported_service_types}
         self._estimated_completion = estimated_completion_seconds
         self._require_quality_standards = require_quality_standards
 
-        if validate_price and min_service_fee is not None:
-            base_int = int(base_price)
-            if base_int < min_service_fee:
-                raise PriceTooLowError(base_int, min_service_fee)
-
     @classmethod
     def from_apex_client(
         cls,
         apex_client: APEXClient,
-        base_price: str,
+        service_price: str,
         supported_service_types: list[str] | None = None,
         estimated_completion_seconds: int = 120,
         require_quality_standards: bool = True,
-        validate_price: bool = True,
     ) -> NegotiationHandler:
         """
-        Create a NegotiationHandler with min_service_fee fetched from the ERC-8183 contract.
+        Create a NegotiationHandler with currency fetched from the ERC-8183 contract.
 
-        This is the recommended way to create a handler as it ensures your price
-        meets the minimum required by the UMA bond mechanism.
+        Validates that service_price >= contract's minBudget. If not, clients
+        won't be able to fund jobs at this price (setBudget will revert).
 
         Args:
             apex_client: APEXClient instance for on-chain queries
-            base_price: Price in token smallest unit
+            service_price: Price in token smallest unit
             supported_service_types: List of supported service types
             estimated_completion_seconds: Estimated completion time
             require_quality_standards: Whether to require quality_standards
-            validate_price: If True, raise PriceTooLowError if base_price < min
 
         Returns:
-            NegotiationHandler with min_service_fee configured
+            NegotiationHandler with currency from contract
 
         Raises:
-            PriceTooLowError: If validate_price=True and price is too low
+            ValueError: If service_price is below the contract's minBudget
 
         Example:
             from bnbagent import APEXClient, NegotiationHandler
@@ -421,27 +376,26 @@ class NegotiationHandler:
 
             handler = NegotiationHandler.from_apex_client(
                 apex_client=apex,
-                base_price=os.environ["AGENT_PRICE"],
+                service_price=os.environ["SERVICE_PRICE"],
                 supported_service_types=["translation"],
             )
         """
-        min_fee = apex_client.min_service_fee()
         currency = apex_client.payment_token()
 
+        min_budget = apex_client.min_budget()
+        if min_budget > 0 and int(service_price) < min_budget:
+            raise ValueError(
+                f"service_price ({service_price}) is below contract minBudget "
+                f"({min_budget}). Clients won't be able to fund jobs at this price."
+            )
+
         return cls(
-            base_price=base_price,
+            service_price=service_price,
             currency=currency,
             supported_service_types=supported_service_types,
             estimated_completion_seconds=estimated_completion_seconds,
             require_quality_standards=require_quality_standards,
-            min_service_fee=min_fee,
-            validate_price=validate_price,
         )
-
-    @property
-    def min_service_fee(self) -> int | None:
-        """Return the minimum service fee (None if not configured)."""
-        return self._min_service_fee
 
     @staticmethod
     def _ensure_hex_prefix(h: str) -> str:
@@ -495,7 +449,7 @@ class NegotiationHandler:
             quality_standards=req.terms.quality_standards,
             success_criteria=req.terms.success_criteria,
             deadline_seconds=req.terms.deadline_seconds,
-            price=self._base_price,
+            price=self._service_price,
             currency=self._currency,
         )
 

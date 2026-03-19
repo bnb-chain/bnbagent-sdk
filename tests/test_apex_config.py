@@ -69,6 +69,14 @@ class TestInit:
         config = APEXConfig()
         assert config.wallet_provider is None
 
+    def test_payment_token_decimals_default(self):
+        config = APEXConfig()
+        assert config.payment_token_decimals == 18
+
+    def test_payment_token_decimals_custom(self):
+        config = APEXConfig(payment_token_decimals=6)
+        assert config.payment_token_decimals == 6
+
     def test_normalizes_private_key_and_wraps(self):
         config = APEXConfig(
             private_key="cd" * 32,  # No 0x prefix
@@ -129,10 +137,10 @@ class TestFromEnv:
         monkeypatch.setenv("PRIVATE_KEY", VALID_PK)
         monkeypatch.setenv("WALLET_PASSWORD", VALID_PASSWORD)
         monkeypatch.setenv("CHAIN_ID", "56")
-        monkeypatch.setenv("AGENT_PRICE", "5000000000000000000")
+        monkeypatch.setenv("SERVICE_PRICE", "5000000000000000000")
         config = APEXConfig.from_env()
         assert config.chain_id == 56
-        assert config.agent_price == "5000000000000000000"
+        assert config.service_price == "5000000000000000000"
 
     def test_wallet_provider_auto_created(self, monkeypatch):
         monkeypatch.setenv("PRIVATE_KEY", VALID_PK)

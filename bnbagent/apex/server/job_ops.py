@@ -66,6 +66,8 @@ class APEXJobOps:
         storage_provider: StorageProvider | None = None,
         chain_id: int = 97,
         wallet_provider: WalletProvider | None = None,
+        service_price: int = 0,
+        payment_token_decimals: int = 18,
     ):
         """
         Initialize job operations.
@@ -77,6 +79,12 @@ class APEXJobOps:
             storage_provider: Optional storage provider for response upload
             chain_id: Chain ID (default: 97 for BSC Testnet)
             wallet_provider: Optional wallet provider for signing transactions (preferred)
+            service_price: Agent's service price in token smallest unit.
+                           Jobs with budget below this are rejected by verify_job().
+                           0 means no budget check (default).
+            payment_token_decimals: Decimal places of the payment token (default: 18).
+                                   Included in verify_job() 402 responses so clients
+                                   can interpret the amounts.
         """
         self._rpc_url = rpc_url
         self._erc8183_address = erc8183_address
@@ -87,6 +95,8 @@ class APEXJobOps:
         self._storage = storage_provider
         self._chain_id = chain_id
         self._wallet_provider = wallet_provider
+        self._service_price = service_price
+        self._payment_token_decimals = payment_token_decimals
         self._client: APEXClient | None = None
 
     def _get_client(self) -> APEXClient:
@@ -389,6 +399,21 @@ class APEXJobOps:
                     "error_code": 408,
                 }
 
+            # Budget check
+            if self._service_price > 0:
+                job_budget = job_result.get("budget", 0)
+                if job_budget < self._service_price:
+                    return {
+                        "valid": False,
+                        "error": (
+                            f"Job budget ({job_budget}) is below agent's "
+                            f"service price ({self._service_price})"
+                        ),
+                        "error_code": 402,
+                        "service_price": str(self._service_price),
+                        "decimals": self._payment_token_decimals,
+                    }
+
             # Security warnings
             warnings = []
             evaluator = job_result.get("evaluator", "").lower()
@@ -431,32 +456,40 @@ class APEXJobOps:
 
 async def run_job_loop(
     job_ops: APEXJobOps,
-    on_task: Callable[..., Any],
+    on_job: Callable[..., Any],
     poll_interval: int = 10,
     metadata: dict[str, Any] | None = None,
+    on_job_skipped: Callable[[dict, str], Any] | None = None,
 ) -> None:
     """Background loop: discover funded jobs → verify → process → submit.
 
-    Encapsulates the standard APEX agent polling pattern. Users provide a task
+    Encapsulates the standard APEX agent polling pattern. Users provide a job
     handler; the SDK handles discovery, verification, submission, and errors.
 
     Args:
         job_ops: APEXJobOps instance (from APEXState.job_ops)
-        on_task: Callback invoked for each funded job. Receives the job dict
-                 and returns the result. Supports four signatures::
+        on_job: Callback invoked for each funded job. Receives the job dict
+                and returns the result. Supports four signatures::
 
-                     def on_task(job: dict) -> str                    # sync
-                     async def on_task(job: dict) -> str              # async
-                     def on_task(job: dict) -> tuple[str, dict]       # sync + per-job metadata
-                     async def on_task(job: dict) -> tuple[str, dict] # async + per-job metadata
+                    def on_job(job: dict) -> str                    # sync
+                    async def on_job(job: dict) -> str              # async
+                    def on_job(job: dict) -> tuple[str, dict]       # sync + per-job metadata
+                    async def on_job(job: dict) -> tuple[str, dict] # async + per-job metadata
 
         poll_interval: Seconds between polling cycles (default: 10)
         metadata: Default metadata attached to every submission.
-                  Per-job metadata from ``on_task`` is merged on top.
+                  Per-job metadata from ``on_job`` is merged on top.
+        on_job_skipped: Optional callback when a job fails verification.
+                        Called with ``(job_dict, reason_string)``.
+                        Supports both sync and async callables. Each job
+                        triggers the callback at most once (tracked via
+                        ``skipped_jobs`` set, reset on process restart).
     """
-    is_async = inspect.iscoroutinefunction(on_task)
+    is_async = inspect.iscoroutinefunction(on_job)
     agent_addr = job_ops.agent_address
     logger.info(f"[JobRunner] Starting job loop for {agent_addr}, poll every {poll_interval}s")
+
+    skipped_jobs: set[int] = set()
 
     while True:
         try:
@@ -469,26 +502,39 @@ async def run_job_loop(
 
             for job in result.get("jobs", []):
                 job_id = job["jobId"]
+
+                if job_id in skipped_jobs:
+                    continue
+
                 description = job.get("description", "")
                 logger.info(f"[JobRunner] Processing job #{job_id}: {description[:80]}")
 
                 # Verify
                 verification = await job_ops.verify_job(job_id)
                 if not verification["valid"]:
+                    skipped_jobs.add(job_id)
+                    reason = verification.get("error", "unknown")
                     logger.warning(
-                        f"[JobRunner] Job #{job_id} verification failed: "
-                        f"{verification.get('error')}"
+                        f"[JobRunner] Job #{job_id} skipped: {reason}"
                     )
+                    if on_job_skipped:
+                        try:
+                            if inspect.iscoroutinefunction(on_job_skipped):
+                                await on_job_skipped(job, reason)
+                            else:
+                                await asyncio.to_thread(on_job_skipped, job, reason)
+                        except Exception as e:
+                            logger.error(f"[JobRunner] on_job_skipped callback error: {e}")
                     continue
 
-                # Process — call user's task handler
+                # Process — call user's job handler
                 try:
                     if is_async:
-                        task_result = await on_task(job)
+                        task_result = await on_job(job)
                     else:
-                        task_result = await asyncio.to_thread(on_task, job)
+                        task_result = await asyncio.to_thread(on_job, job)
                 except Exception as e:
-                    logger.error(f"[JobRunner] on_task failed for job #{job_id}: {e}")
+                    logger.error(f"[JobRunner] on_job failed for job #{job_id}: {e}")
                     continue
 
                 # Parse result: str or (str, dict)

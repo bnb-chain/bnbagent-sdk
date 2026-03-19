@@ -9,7 +9,6 @@ from bnbagent.apex.negotiation import (
     NegotiationRequest,
     NegotiationResponse,
     NegotiationResult,
-    PriceTooLowError,
     ReasonCode,
     TermSpecification,
 )
@@ -190,22 +189,10 @@ class TestNegotiationResult:
         assert d["response"] == {"accepted": False}
 
 
-class TestPriceTooLowError:
-    def test_is_value_error(self):
-        err = PriceTooLowError(1, 10)
-        assert isinstance(err, ValueError)
-
-    def test_message_format(self):
-        err = PriceTooLowError(10**18, 10 * 10**18)
-        msg = str(err)
-        assert "below minimum" in msg
-        assert "UMA bond" in msg
-
-
 class TestNegotiationHandler:
     def _make_handler(self, **kwargs):
         defaults = {
-            "base_price": "20000000000000000000",
+            "service_price": "20000000000000000000",
             "currency": "0xToken",
         }
         defaults.update(kwargs)
@@ -261,23 +248,32 @@ class TestNegotiationHandler:
         assert result.accepted is False
         assert result.response.get("reason_code") == ReasonCode.AMBIGUOUS_TERMS
 
-    def test_price_too_low_at_init(self):
-        with pytest.raises(PriceTooLowError):
-            NegotiationHandler(
-                base_price="1",
-                currency="0xToken",
-                min_service_fee=10**18,
-                validate_price=True,
-            )
-
     def test_from_apex_client(self):
         mock_client = MagicMock()
-        mock_client.min_service_fee.return_value = 10**18
         mock_client.payment_token.return_value = "0xTokenAddr"
+        mock_client.min_budget.return_value = 0
         handler = NegotiationHandler.from_apex_client(
             apex_client=mock_client,
-            base_price="20000000000000000000",
-            validate_price=True,
+            service_price="20000000000000000000",
         )
         assert handler._currency == "0xTokenAddr"
-        assert handler.min_service_fee == 10**18
+
+    def test_from_apex_client_min_budget_ok(self):
+        mock_client = MagicMock()
+        mock_client.payment_token.return_value = "0xTokenAddr"
+        mock_client.min_budget.return_value = 10 * 10**18
+        handler = NegotiationHandler.from_apex_client(
+            apex_client=mock_client,
+            service_price="20000000000000000000",  # 20 tokens >= 10 tokens
+        )
+        assert handler._service_price == "20000000000000000000"
+
+    def test_from_apex_client_below_min_budget_raises(self):
+        mock_client = MagicMock()
+        mock_client.payment_token.return_value = "0xTokenAddr"
+        mock_client.min_budget.return_value = 10 * 10**18
+        with pytest.raises(ValueError, match="below contract minBudget"):
+            NegotiationHandler.from_apex_client(
+                apex_client=mock_client,
+                service_price="5000000000000000000",  # 5 tokens < 10 tokens
+            )

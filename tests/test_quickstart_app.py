@@ -158,7 +158,7 @@ class TestCreateApexApp:
         routes = [r.path for r in app.routes]
         assert "/health" in routes
 
-    def test_custom_prefix(self, patched_web3, tmp_path):
+    def test_fixed_apex_prefix(self, patched_web3, tmp_path):
         config = APEXConfig(
             rpc_url="https://rpc.example.com",
             erc8183_address="0x" + "ab" * 20,
@@ -166,7 +166,7 @@ class TestCreateApexApp:
             wallet_password="test-pw",
             storage=LocalStorageProvider(str(tmp_path / "data")),
         )
-        app = create_apex_app(config=config, prefix="/apex")
+        app = create_apex_app(config=config)
         routes = [r.path for r in app.routes]
         assert any("/apex/submit" in r for r in routes)
 
@@ -205,7 +205,7 @@ class TestCreateApexApp:
         )
         assert not has_middleware
 
-    def test_middleware_with_prefix_includes_prefixed_skip_paths(self, patched_web3, tmp_path):
+    def test_middleware_includes_prefixed_skip_paths(self, patched_web3, tmp_path):
         from bnbagent.apex.server.middleware import APEXMiddleware
 
         config = APEXConfig(
@@ -215,12 +215,12 @@ class TestCreateApexApp:
             wallet_password="test-pw",
             storage=LocalStorageProvider(str(tmp_path / "data")),
         )
-        app = create_apex_app(config=config, prefix="/api")
+        app = create_apex_app(config=config)
         mw_entry = next(m for m in app.user_middleware if m.cls is APEXMiddleware)
         skip = mw_entry.kwargs.get("skip_paths", [])
-        # Both /negotiate and /api/negotiate should be in skip paths
+        # Both /negotiate and /apex/negotiate should be in skip paths
         assert "/negotiate" in skip
-        assert "/api/negotiate" in skip
+        assert "/apex/negotiate" in skip
 
     def test_custom_skip_paths(self, patched_web3, tmp_path):
         from bnbagent.apex.server.middleware import APEXMiddleware
@@ -236,3 +236,40 @@ class TestCreateApexApp:
         mw_entry = next(m for m in app.user_middleware if m.cls is APEXMiddleware)
         skip = mw_entry.kwargs.get("skip_paths", [])
         assert "/my-public" in skip
+
+    def test_status_endpoint_includes_pricing(self, patched_web3, tmp_path):
+        from fastapi.testclient import TestClient
+
+        config = APEXConfig(
+            rpc_url="https://rpc.example.com",
+            erc8183_address="0x" + "ab" * 20,
+            private_key="0x" + "cd" * 32,
+            wallet_password="test-pw",
+            service_price="20000000000000000000",
+            payment_token_decimals=18,
+            storage=LocalStorageProvider(str(tmp_path / "data")),
+        )
+        app = create_apex_app(config=config, middleware=False)
+        client = TestClient(app)
+        resp = client.get("/apex/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["service_price"] == "20000000000000000000"
+        assert data["decimals"] == 18
+        assert "currency" in data
+
+    def test_on_job_skipped_parameter_accepted(self, patched_web3, tmp_path):
+        config = APEXConfig(
+            rpc_url="https://rpc.example.com",
+            erc8183_address="0x" + "ab" * 20,
+            private_key="0x" + "cd" * 32,
+            wallet_password="test-pw",
+            storage=LocalStorageProvider(str(tmp_path / "data")),
+        )
+        callback = MagicMock()
+        app = create_apex_app(
+            config=config,
+            on_job=lambda job: "result",
+            on_job_skipped=callback,
+        )
+        assert app is not None

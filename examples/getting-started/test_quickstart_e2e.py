@@ -200,9 +200,9 @@ async def start_agent_server() -> asyncio.Event:
 
     server_ready = asyncio.Event()
 
-    # Use create_apex_app with on_task — SDK handles polling automatically
+    # Use create_apex_app with on_job — SDK handles polling automatically
     app = create_apex_app(
-        on_task=process_task,
+        on_job=process_task,
         poll_interval=POLL_INTERVAL,
         task_metadata={"agent": "e2e-test"},
         middleware=False,
