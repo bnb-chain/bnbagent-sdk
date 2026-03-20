@@ -122,7 +122,7 @@ def process_task(job: dict) -> tuple[str, dict]:
 
 
 # ---------------------------------------------------------------------------
-# App — create_apex_app handles routes, polling, and lifecycle
+# App — create_apex_app handles routes, startup scan, and lifecycle
 # ---------------------------------------------------------------------------
 
 app = create_apex_app(config=config, on_job=process_task)

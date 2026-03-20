@@ -447,3 +447,99 @@ class TestCreateApexApp:
         """app.state.startup is not set when on_job is not provided."""
         app = create_apex_app(config=self._make_config(tmp_path))
         assert not hasattr(app.state, "startup")
+
+    # ── Startup scan & dedup & custom timeout ────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_startup_scan_runs_on_startup_call(self, patched_web3, tmp_path):
+        """Calling state.startup() triggers startup scan (get_pending_jobs)."""
+        import asyncio
+
+        app = create_apex_app(
+            config=self._make_config(tmp_path),
+            on_job=lambda job: "result",
+        )
+        with patch.object(
+            app.state.apex.job_ops, "get_pending_jobs", new_callable=AsyncMock,
+            return_value={"success": True, "jobs": []},
+        ) as mock_scan:
+            await app.state.startup()
+            # Let background task complete
+            await asyncio.sleep(0.1)
+            mock_scan.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_job_execute_dedup_returns_409(self, patched_web3, tmp_path):
+        """Second /job/execute for same job_id returns 409 while first is processing."""
+        import asyncio as _asyncio
+
+        import httpx
+
+        async def slow_handler(job):
+            await _asyncio.sleep(5)
+            return "result"
+
+        app = create_apex_app(
+            config=self._make_config(tmp_path),
+            on_job=slow_handler,
+            job_timeout=0.1,
+        )
+
+        mock_job = {
+            "jobId": 42, "description": "test", "budget": 10**18,
+            "client": "0x" + "11" * 20,
+            "provider": app.state.apex.job_ops.agent_address,
+            "evaluator": "0x" + "33" * 20,
+            "status": "FUNDED", "expiredAt": 9999999999,
+        }
+
+        with (
+            patch.object(app.state.apex.job_ops, "verify_job", new_callable=AsyncMock,
+                         return_value={"valid": True, "job": mock_job}),
+            patch.object(app.state.apex.job_ops, "submit_result", new_callable=AsyncMock,
+                         return_value={"success": True, "txHash": "0xabc"}),
+        ):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                # First request: 202 (timeout while processing)
+                resp1 = await client.post("/apex/job/execute", json={"job_id": 42})
+                assert resp1.status_code == 202
+
+                # Second request: 409 (already processing)
+                resp2 = await client.post("/apex/job/execute", json={"job_id": 42})
+                assert resp2.status_code == 409
+                assert "already being processed" in resp2.json()["error"]
+
+    def test_job_execute_custom_timeout(self, patched_web3, tmp_path):
+        """Request body timeout=0.05 overrides default job_timeout."""
+        import asyncio as _asyncio
+        from fastapi.testclient import TestClient
+
+        async def slow_handler(job):
+            await _asyncio.sleep(5)
+            return "slow"
+
+        app = create_apex_app(
+            config=self._make_config(tmp_path),
+            on_job=slow_handler,
+            job_timeout=300.0,  # very long default
+        )
+        client = TestClient(app)
+
+        mock_job = {
+            "jobId": 55, "description": "test", "budget": 10**18,
+            "client": "0x" + "11" * 20,
+            "provider": app.state.apex.job_ops.agent_address,
+            "evaluator": "0x" + "33" * 20,
+            "status": "FUNDED", "expiredAt": 9999999999,
+        }
+
+        with (
+            patch.object(app.state.apex.job_ops, "verify_job", new_callable=AsyncMock,
+                         return_value={"valid": True, "job": mock_job}),
+            patch.object(app.state.apex.job_ops, "submit_result", new_callable=AsyncMock,
+                         return_value={"success": True, "txHash": "0xabc"}),
+        ):
+            # Custom short timeout in request body → 202
+            resp = client.post("/apex/job/execute", json={"job_id": 55, "timeout": 0.05})
+            assert resp.status_code == 202

@@ -2,9 +2,9 @@
 Step 3: Run Agent Server
 
 Starts a minimal APEX agent server that:
-  - Exposes APEX endpoints (negotiate, submit, job query)
-  - Polls for funded jobs in the background
-  - Automatically processes and submits results
+  - Exposes APEX endpoints (negotiate, submit, job/execute, job query)
+  - Scans for pending funded jobs on startup
+  - Accepts client-driven job execution via /job/execute
 
 Keep this running in Terminal 1, then open Terminal 2 for step4.
 
@@ -61,7 +61,7 @@ def process_task(job: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# App — one call does everything: routes + polling + lifecycle
+# App — one call does everything: routes + startup scan + lifecycle
 # ---------------------------------------------------------------------------
 
 app = create_apex_app(

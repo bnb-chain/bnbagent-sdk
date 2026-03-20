@@ -41,11 +41,18 @@ uvicorn myagent:app --port 8000
 ### Mount on an existing app
 
 ```python
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from bnbagent.apex.server import create_apex_app
 
-app = FastAPI()
 apex_app = create_apex_app(on_job=execute_job)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await apex_app.state.startup()  # trigger startup scan
+    yield
+
+app = FastAPI(lifespan=lifespan)
 app.mount("/apex", apex_app)
 ```
 

@@ -6,7 +6,7 @@ A production-like APEX agent that searches for blockchain news using DuckDuckGo.
 
 1. Agent registers on ERC-8004 identity registry
 2. Clients create funded APEX jobs with search queries
-3. Agent polls for funded jobs, searches news, submits results to IPFS
+3. Agent scans for funded jobs on startup, accepts /job/execute requests, submits results to IPFS
 4. APEX Evaluator handles settlement after liveness period
 
 ## Setup
