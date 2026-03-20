@@ -394,6 +394,51 @@ class APEXClient(ContractClientMixin):
             for log in logs
         ]
 
+    def get_submit_data_url(self, job_id: int) -> str | None:
+        """Recover the data URL from a submit transaction's calldata.
+
+        Queries the JobSubmitted event (indexed by jobId) to find the tx hash,
+        then decodes ``optParams`` from the transaction input. This is the only
+        way to recover the IPFS/storage URL after a process restart, since the
+        URL is not stored on-chain (only its keccak256 hash is).
+
+        Args:
+            job_id: The job ID.
+
+        Returns:
+            The data URL string, or None if not found or not decodable.
+        """
+        # from_block=0 is OK here: jobId is indexed so the RPC filters via
+        # bloom filter without scanning every block. Same approach as
+        # get_budget_set_events(). If the RPC rejects the range, the caller
+        # (APEXJobOps.get_response) catches the exception and returns 404.
+        logs = self.contract.events.JobSubmitted().get_logs(
+            from_block=0,
+            to_block="latest",
+            argument_filters={"jobId": job_id},
+        )
+        if not logs:
+            return None
+
+        tx_hash = logs[0]["transactionHash"]
+        tx = self.w3.eth.get_transaction(tx_hash)
+
+        try:
+            _, params = self.contract.decode_function_input(tx.input)
+        except (ValueError, KeyError) as e:
+            logger.warning(f"[APEXClient] Failed to decode submit tx for job {job_id}: {e}")
+            return None
+
+        opt_params: bytes = params.get("optParams", b"")
+        if not opt_params:
+            return None
+
+        try:
+            return opt_params.decode("utf-8")
+        except UnicodeDecodeError:
+            logger.warning(f"[APEXClient] optParams for job {job_id} is not valid UTF-8")
+            return None
+
     def get_budget_set_events(
         self,
         job_id: int | None = None,

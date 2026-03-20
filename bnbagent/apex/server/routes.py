@@ -371,6 +371,9 @@ def create_apex_app(
                     metadata=merged_meta or None,
                 )
 
+                if submission.get("success"):
+                    submission["response_content"] = response_content
+
                 status_code = 200 if submission.get("success") else 500
                 return JSONResponse(submission, status_code=status_code)
             finally:

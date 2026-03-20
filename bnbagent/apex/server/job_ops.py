@@ -274,8 +274,16 @@ class APEXJobOps:
         """
         Get stored deliverable response for a job.
 
-        Looks up the data URL from in-memory cache (populated by submit_result),
-        then falls back to reading by convention filename for local storage.
+        Resolution order:
+        1. In-memory cache (populated by submit_result in the same process)
+        2. Convention filename for local storage (``job-{id}.json``)
+        3. On-chain fallback: decode ``optParams`` from the submit tx calldata
+           to recover the data URL, then download from storage.
+
+        The on-chain fallback (step 3) costs 2 RPC calls (``eth_getLogs`` on
+        the indexed ``JobSubmitted`` event + ``eth_getTransactionByHash``) and
+        only triggers when steps 1 and 2 miss — typically after a process
+        restart with IPFS storage.
 
         Args:
             job_id: The job ID
@@ -286,7 +294,7 @@ class APEXJobOps:
         if not self._storage:
             return {"success": False, "error": "No storage configured"}
 
-        # Try in-memory cache first (populated by submit_result)
+        # 1. In-memory cache (populated by submit_result)
         url = self._deliverable_urls.get(job_id)
         if url:
             try:
@@ -295,7 +303,7 @@ class APEXJobOps:
             except Exception as e:
                 logger.warning(f"[APEXJobOps] get_response({job_id}) download failed: {e}")
 
-        # Fallback: try convention filename for local storage
+        # 2. Convention filename for local storage
         if hasattr(self._storage, "_base"):
             try:
                 filepath = self._storage._base / f"job-{job_id}.json"
@@ -305,6 +313,21 @@ class APEXJobOps:
                     return {"success": True, **data}
             except Exception as e:
                 logger.warning(f"[APEXJobOps] get_response({job_id}) file read failed: {e}")
+
+        # 3. On-chain fallback: recover data URL from submit tx calldata
+        try:
+            client = self._get_client()
+            data_url = await asyncio.to_thread(client.get_submit_data_url, job_id)
+            if data_url:
+                logger.info(
+                    f"[APEXJobOps] get_response({job_id}) recovered URL from chain: {data_url}"
+                )
+                # Cache for subsequent requests
+                self._deliverable_urls[job_id] = data_url
+                data = await self._storage.download(data_url)
+                return {"success": True, **data}
+        except Exception as e:
+            logger.warning(f"[APEXJobOps] get_response({job_id}) on-chain fallback failed: {e}")
 
         return {"success": False, "error": f"Response not found for job {job_id}"}
 

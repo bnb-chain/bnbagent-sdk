@@ -190,9 +190,12 @@ Client-initiated synchronous job execution. The agent verifies the job on-chain,
   "success": true,
   "txHash": "0x123...",
   "dataUrl": "ipfs://Qm.../job-42.json",
-  "deliverableHash": "0xabc..."
+  "deliverableHash": "0xabc...",
+  "response_content": "Agent's actual output text..."
 }
 ```
+
+The `response_content` field contains the agent's execution result, so clients can get the full outcome in a single request without needing to call `GET /job/{id}/response` separately.
 
 **Response — already processing (409):**
 

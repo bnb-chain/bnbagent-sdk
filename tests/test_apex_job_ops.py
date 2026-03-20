@@ -54,6 +54,7 @@ def _mock_client(ops, job_data=None):
     }
     client.w3.eth.block_number = 1000
     client.get_job_funded_events.return_value = []
+    client.get_submit_data_url.return_value = None
 
     ops._client = client
     return client
@@ -220,6 +221,23 @@ class TestGetResponse:
         result = await ops.get_response(999)
         assert result["success"] is False
         assert "not found" in result["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_from_chain_fallback(self):
+        """get_response recovers data URL from submit tx calldata."""
+        storage = AsyncMock()
+        stored_data = {"response": "ipfs result", "job": {"id": 7}}
+        storage.download.return_value = stored_data
+        ops = _make_job_ops(storage=storage)
+        client = _mock_client(ops)
+        client.get_submit_data_url.return_value = "ipfs://QmRecovered"
+
+        result = await ops.get_response(7)
+        assert result["success"] is True
+        assert result["response"] == "ipfs result"
+        storage.download.assert_called_once_with("ipfs://QmRecovered")
+        # Should be cached for next time
+        assert ops._deliverable_urls[7] == "ipfs://QmRecovered"
 
     @pytest.mark.asyncio
     async def test_no_storage(self):

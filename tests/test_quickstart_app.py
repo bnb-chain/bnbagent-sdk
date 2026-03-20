@@ -281,6 +281,54 @@ class TestCreateApexApp:
             resp = client.post("/apex/job/execute", json={"job_id": 42})
             assert resp.status_code == 400
 
+    def test_process_endpoint_success_includes_response_content(
+        self, patched_web3, tmp_path
+    ):
+        """Successful /job/execute response includes response_content."""
+        from fastapi.testclient import TestClient
+
+        app = create_apex_app(
+            config=self._make_config(tmp_path),
+            on_job=lambda job: "my agent output",
+        )
+        client = TestClient(app)
+
+        mock_job = {
+            "jobId": 42,
+            "description": "test",
+            "budget": 10**18,
+            "client": "0x" + "11" * 20,
+            "provider": app.state.apex.job_ops.agent_address,
+            "evaluator": "0x" + "33" * 20,
+            "status": "FUNDED",
+            "expiredAt": 9999999999,
+        }
+
+        with (
+            patch.object(
+                app.state.apex.job_ops,
+                "verify_job",
+                new_callable=AsyncMock,
+                return_value={"valid": True, "job": mock_job},
+            ),
+            patch.object(
+                app.state.apex.job_ops,
+                "submit_result",
+                new_callable=AsyncMock,
+                return_value={
+                    "success": True,
+                    "txHash": "0xabc",
+                    "dataUrl": "ipfs://Qm...",
+                    "deliverableHash": "0xdef",
+                },
+            ),
+        ):
+            resp = client.post("/apex/job/execute", json={"job_id": 42})
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["success"] is True
+            assert data["response_content"] == "my agent output"
+
     def test_process_endpoint_mounted_mode(self, patched_web3, tmp_path):
         """With prefix='', /job/execute is at root level for mounting."""
         app = create_apex_app(
