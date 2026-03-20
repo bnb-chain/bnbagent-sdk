@@ -106,9 +106,9 @@ ordering.
 | Variable | Description | Default |
 |---|---|---|
 | `STORAGE_PROVIDER` | `"local"` or `"ipfs"` | `"local"` |
-| `LOCAL_STORAGE_PATH` | Directory for local storage | `".agent-data"` |
+| `STORAGE_LOCAL_PATH` | Directory for local storage | `".agent-data"` |
 | `STORAGE_API_KEY` | Pinning API key (fallback: `PINATA_JWT`) | -- |
-| `STORAGE_API_URL` | Pinning API URL | -- |
+| `STORAGE_API_URL` | Storage API URL | -- |
 | `STORAGE_GATEWAY_URL` | IPFS gateway URL (fallback: `PINATA_GATEWAY`) | -- |
 
 ## Related

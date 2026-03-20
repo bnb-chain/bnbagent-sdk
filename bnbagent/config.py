@@ -59,7 +59,7 @@ def resolve_network(network: str = "bsc-testnet") -> NetworkConfig:
     """Resolve network with env var overrides.
 
     Env overrides:
-        BSC_RPC_URL — override rpc_url
+        RPC_URL — override rpc_url
         IDENTITY_REGISTRY_ADDRESS — override registry_contract
         ERC8183_ADDRESS — override erc8183_contract
         APEX_EVALUATOR_ADDRESS — override apex_evaluator
@@ -70,7 +70,7 @@ def resolve_network(network: str = "bsc-testnet") -> NetworkConfig:
         raise ValueError(f"Unknown network: {network}")
 
     overrides: dict[str, Any] = {}
-    rpc_override = os.environ.get("BSC_RPC_URL", "")
+    rpc_override = os.environ.get("RPC_URL", "")
     if rpc_override:
         overrides["rpc_url"] = rpc_override
         overrides["use_paymaster"] = not rpc_override.startswith("http://localhost")

@@ -192,7 +192,7 @@ async def start_agent_server() -> asyncio.Event:
     from contextlib import asynccontextmanager
     from fastapi import FastAPI
     from bnbagent.apex.config import APEXConfig
-    from bnbagent.apex.server.routes import create_apex_app
+    from bnbagent.apex.server import create_apex_app
 
     # Simple task processor — same pattern as step3
     def process_task(job: dict) -> str:
@@ -205,7 +205,6 @@ async def start_agent_server() -> asyncio.Event:
         on_job=process_task,
         poll_interval=POLL_INTERVAL,
         task_metadata={"agent": "e2e-test"},
-        middleware=False,
     )
 
     # Wrap lifespan to also signal server_ready
@@ -377,7 +376,7 @@ def step4f_verify_deliverable(job_id: int) -> None:
     logger.info(f"On-chain deliverable hash: 0x{deliverable_hash.hex()}")
 
     # Read from local storage
-    storage_path = os.getenv("LOCAL_STORAGE_PATH", "./.agent-data")
+    storage_path = os.getenv("STORAGE_LOCAL_PATH", "./.agent-data")
     deliverable_file = os.path.join(storage_path, f"job-{job_id}.json")
 
     if not os.path.isfile(deliverable_file):

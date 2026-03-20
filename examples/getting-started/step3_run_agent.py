@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 # Load .env from this script's directory
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
-from bnbagent.apex.server.routes import create_apex_app
+from bnbagent.apex.server import create_apex_app
 
 logging.basicConfig(
     level=logging.INFO,
@@ -67,7 +67,6 @@ def process_task(job: dict) -> str:
 app = create_apex_app(
     on_job=process_task,
     task_metadata={"agent": "getting-started"},
-    middleware=False,  # Disabled for the quickstart (no X-Job-Id required)
 )
 
 

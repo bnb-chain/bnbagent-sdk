@@ -42,13 +42,11 @@ uvicorn myagent:app --port 8000
 
 ```python
 from fastapi import FastAPI
-from bnbagent.apex.server import APEX
+from bnbagent.apex.server import create_apex_app
 
 app = FastAPI()
-
-apex = APEX(on_job=execute_job)
-apex.init_app(app, prefix="/apex")
-# Routes, middleware, and job loop — all wired up.
+apex_app = create_apex_app(on_job=execute_job)
+app.mount("/apex", apex_app)
 ```
 
 ### With explicit configuration
@@ -168,6 +166,39 @@ Submit a job deliverable. Verifies the job on-chain, uploads the result to stora
 {
   "success": false,
   "error": "Job verification failed: Job status is SUBMITTED, expected FUNDED"
+}
+```
+
+---
+
+#### `POST /job/execute`
+
+Client-initiated synchronous job execution. The agent verifies the job on-chain, processes it via the `on_job` callback, and submits the result. Returns `409` if the job is already being processed.
+
+**Request body:**
+
+```json
+{
+  "job_id": 42
+}
+```
+
+**Response — success (200):**
+
+```json
+{
+  "success": true,
+  "txHash": "0x123...",
+  "dataUrl": "ipfs://Qm.../job-42.json",
+  "deliverableHash": "0xabc..."
+}
+```
+
+**Response — already processing (409):**
+
+```json
+{
+  "error": "Job 42 is already being processed"
 }
 ```
 
@@ -321,18 +352,6 @@ Health check for load balancers and monitoring.
 
 ---
 
-### `APEX`
-
-Extension class for initializing APEX onto an existing FastAPI app. Bundles routes,
-middleware, and background job loop into a single `.init_app(app)` call.
-
-| Method / Property | Description |
-|---|---|
-| `APEX(config=..., on_job=..., middleware=True, ...)` | Constructor — same parameters as `create_apex_app()` |
-| `.init_app(app, prefix="/apex")` | Initialize routes, middleware, and job-loop lifecycle onto *app* |
-| `.state` | `APEXState` — shared state (config, job\_ops, negotiation handler) |
-| `.job_ops` | Shortcut for `state.job_ops` |
-
 ### `APEXClient`
 
 Synchronous client wrapping the on-chain `AgenticCommerceUpgradeable`
@@ -423,7 +442,7 @@ and on-chain references for a completed job.
 |---|---|---|---|
 | `PRIVATE_KEY` | Recommended | Agent wallet private key (imported on first run; if omitted, a new wallet is auto-generated) | Auto-generate |
 | `WALLET_PASSWORD` | Yes | Password for wallet encryption | -- |
-| `BSC_RPC_URL` / `RPC_URL` | No | JSON-RPC endpoint | Network default |
+| `RPC_URL` | No | JSON-RPC endpoint | Network default |
 | `CHAIN_ID` | No | Chain ID | Network default |
 | `ERC8183_ADDRESS` | No | ERC-8183 contract address | Network default |
 | `APEX_EVALUATOR_ADDRESS` | No | Evaluator contract address | Network default |

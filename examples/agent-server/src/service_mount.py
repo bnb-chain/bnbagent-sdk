@@ -1,10 +1,10 @@
 """
 Blockchain News Agent — Mount on an existing FastAPI app.
 
-Demonstrates using the APEX class to initialize APEX routes onto an existing
-FastAPI application that already has its own endpoints and lifespan.
+Demonstrates mounting the APEX sub-app onto an existing FastAPI application
+that already has its own endpoints and lifespan.
 
-Compare with service.py which uses create_apex_app() for a standalone agent.
+Compare with service.py which also uses create_apex_app() mounted on /apex.
 
 Usage:
     cd examples/agent-server
@@ -35,7 +35,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 # SDK imports
 from bnbagent.apex.config import APEXConfig
-from bnbagent.apex.server import APEX
+from bnbagent.apex.server import create_apex_app
 
 logging.basicConfig(
     level=logging.INFO,
@@ -130,15 +130,11 @@ app = FastAPI(
 
 
 # ---------------------------------------------------------------------------
-# Mount APEX onto the existing app — one line
+# Mount APEX sub-app onto the existing app
 # ---------------------------------------------------------------------------
 
-apex = APEX(
-    config=config,
-    on_job=process_task,
-    middleware=False,
-)
-apex.init_app(app, prefix="/apex")
+apex_app = create_apex_app(config=config, on_job=process_task, prefix="")
+app.mount("/apex", apex_app)
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +166,7 @@ class SearchResponse(BaseModel):
 async def root():
     return {
         "service": "Blockchain News Agent",
-        "agent_address": apex.job_ops.agent_address,
+        "agent_address": apex_app.state.apex.job_ops.agent_address,
         "endpoints": {
             "search": "/search",
             "apex_status": "/apex/status",

@@ -99,9 +99,8 @@ Not part of the public API. Provides shared plumbing for protocol modules.
 
 | File | Purpose |
 |------|---------|
-| `routes.py` | `create_apex_app()` / `create_apex_routes()` — FastAPI router factory; `APEXState` |
+| `routes.py` | `create_apex_app()` — FastAPI app factory; `APEXState` |
 | `job_ops.py` | `APEXJobOps` — async wrapper over synchronous `APEXClient` via `asyncio.to_thread()`; includes `get_response()` for retrieving stored deliverables and `run_job_loop()` for background job polling |
-| `middleware.py` | `APEXMiddleware` — job verification middleware for incoming requests |
 
 ### `bnbagent/wallets/` — Wallet Providers
 
@@ -208,7 +207,7 @@ BNBAgentConfig
 
 | Variable | Overrides |
 |----------|-----------|
-| `BSC_RPC_URL` | `rpc_url` |
+| `RPC_URL` | `rpc_url` |
 | `IDENTITY_REGISTRY_ADDRESS` | `registry_contract` |
 | `ERC8183_ADDRESS` | `erc8183_contract` |
 | `APEX_EVALUATOR_ADDRESS` | `apex_evaluator` |
@@ -267,7 +266,6 @@ Other agents discover via `get_all_agents()` / `get_agent_info()`.
 
 ```
 HTTP request
-  → APEXMiddleware (job verification)
   → Route handler (routes.py)
   → APEXJobOps (async) → asyncio.to_thread() → APEXClient (sync/web3)
   → Response

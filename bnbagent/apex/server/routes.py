@@ -2,14 +2,14 @@
 FastAPI application factory for APEX agents.
 
 Provides:
-- APEX: Extension class — one-line init for existing apps
-- create_apex_app(): Create a complete FastAPI app with APEX endpoints
-- create_apex_routes(): Create an APIRouter for use in existing apps
+- create_apex_app(): Create a self-contained FastAPI sub-app with APEX endpoints
+- _create_apex_routes(): Internal — build an APIRouter with APEX endpoints
 """
 
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import os
 from collections.abc import Callable
@@ -85,32 +85,22 @@ def create_apex_state(config: APEXConfig | None = None) -> APEXState:
     )
 
 
-def create_apex_routes(
-    config: APEXConfig | None = None,
-    state: APEXState | None = None,
+def _create_apex_routes(
+    state: APEXState,
     on_submit: Callable[[int, str, dict], Any] | None = None,
 ) -> APIRouter:
-    """Create an APIRouter with APEX endpoints.
+    """Create an APIRouter with APEX endpoints (internal).
 
-    Can be included in an existing FastAPI app:
-
-        app.include_router(create_apex_routes(), prefix="/your-prefix")
+    Used by ``create_apex_app()`` to build the route layer.
 
     Args:
-        config: APEXConfig instance (default: loads from env)
-        state: Pre-created APEXState (default: creates from config)
+        state: APEXState with config, job_ops, and negotiation_handler.
         on_submit: Optional callback after successful submit.
                    Called with (job_id, response_content, metadata)
 
     Returns:
         APIRouter with /submit, /job/{id}, /job/{id}/verify, /negotiate, /status, /health endpoints
     """
-    # Resolve config and state
-    if state is None:
-        if config is None:
-            config = APEXConfig.from_env()
-        state = create_apex_state(config)
-
     router = APIRouter(tags=["APEX"])
 
     @router.post("/submit")
@@ -220,145 +210,6 @@ def create_apex_routes(
     return router
 
 
-class APEX:
-    """APEX extension for FastAPI — one-line init.
-
-    Bundles routes, middleware, and background job loop into a single object
-    that can be initialized onto any existing FastAPI application::
-
-        apex = APEX(on_job=execute_job)
-        apex.init_app(app, prefix="/apex")
-
-    This is equivalent to manually wiring ``create_apex_routes()``,
-    ``APEXMiddleware``, and ``run_job_loop()`` — but without the boilerplate.
-    """
-
-    def __init__(
-        self,
-        config: APEXConfig | None = None,
-        on_job: Callable[..., Any] | None = None,
-        on_submit: Callable[[int, str, dict], Any] | None = None,
-        on_job_skipped: Callable[[dict, str], Any] | None = None,
-        poll_interval: int | None = None,
-        task_metadata: dict[str, Any] | None = None,
-        middleware: bool = True,
-        skip_paths: list[str] | None = None,
-    ):
-        if config is None:
-            config = APEXConfig.from_env()
-        self._config = config
-        self._state = create_apex_state(config)
-        self._on_job = on_job
-        self._on_submit = on_submit
-        self._on_job_skipped = on_job_skipped
-        self._poll_interval = poll_interval
-        self._task_metadata = task_metadata
-        self._middleware = middleware
-        self._skip_paths = skip_paths
-        self._initialized = False
-        self._job_loop_task: asyncio.Task | None = None
-
-    @property
-    def state(self) -> APEXState:
-        return self._state
-
-    @property
-    def job_ops(self) -> APEXJobOps:
-        return self._state.job_ops
-
-    async def startup(self) -> None:
-        """Start the background job loop.
-
-        Call this from your own ``lifespan`` context manager if the app uses one,
-        since FastAPI ignores ``on_startup`` hooks when ``lifespan`` is set::
-
-            @asynccontextmanager
-            async def lifespan(app):
-                await apex.startup()
-                yield
-                await apex.shutdown()
-
-        If the app does **not** use ``lifespan``, :meth:`init_app` registers these
-        hooks automatically via ``app.router.on_startup`` / ``on_shutdown``.
-        """
-        if not self._on_job:
-            return
-        interval = self._poll_interval or int(os.getenv("POLL_INTERVAL", "10"))
-        self._job_loop_task = asyncio.create_task(
-            run_job_loop(
-                job_ops=self._state.job_ops,
-                on_job=self._on_job,
-                poll_interval=interval,
-                metadata=self._task_metadata,
-                on_job_skipped=self._on_job_skipped,
-            )
-        )
-        logger.info("[APEX] Job loop started: poll_interval=%ds", interval)
-
-    async def shutdown(self) -> None:
-        """Stop the background job loop. See :meth:`startup`."""
-        if self._job_loop_task:
-            self._job_loop_task.cancel()
-            try:
-                await self._job_loop_task
-            except asyncio.CancelledError:
-                pass
-            self._job_loop_task = None
-
-    def init_app(self, app: FastAPI, prefix: str = "/apex") -> None:
-        """Initialize APEX onto *app*: routes, middleware, and job-loop lifecycle.
-
-        Args:
-            app: The FastAPI application to initialize onto.
-            prefix: URL prefix for all APEX routes (default ``/apex``).
-
-        Raises:
-            RuntimeError: If called more than once on the same ``APEX`` instance.
-        """
-        if self._initialized:
-            raise RuntimeError("APEX already initialized")
-        self._initialized = True
-
-        # 1. Routes
-        router = create_apex_routes(state=self._state, on_submit=self._on_submit)
-        app.include_router(router, prefix=prefix)
-
-        # 2. Middleware
-        if self._middleware:
-            from .middleware import DEFAULT_SKIP_PATHS, APEXMiddleware
-
-            effective_skip = list(DEFAULT_SKIP_PATHS)
-            effective_skip.extend(f"{prefix}{p}" for p in DEFAULT_SKIP_PATHS)
-            if self._skip_paths:
-                effective_skip.extend(self._skip_paths)
-            app.add_middleware(
-                APEXMiddleware,
-                job_ops=self._state.job_ops,
-                skip_paths=effective_skip,
-            )
-
-        # 3. Job loop lifecycle — wrap the app's lifespan so it works
-        #    regardless of whether the user set a custom lifespan or not.
-        if self._on_job:
-            original_lifespan = app.router.lifespan_context
-
-            @asynccontextmanager
-            async def _apex_lifespan(app: FastAPI):
-                await self.startup()
-                async with original_lifespan(app) as state:
-                    yield state
-                await self.shutdown()
-
-            app.router.lifespan_context = _apex_lifespan
-
-        logger.info(
-            "[APEX] Initialized: prefix=%s, middleware=%s, job_loop=%s",
-            prefix,
-            "enabled" if self._middleware else "disabled",
-            "enabled" if self._on_job else "disabled",
-        )
-
-
 def create_apex_app(
     config: APEXConfig | None = None,
     on_job: Callable[..., Any] | None = None,
@@ -366,19 +217,23 @@ def create_apex_app(
     on_job_skipped: Callable[[dict, str], Any] | None = None,
     poll_interval: int | None = None,
     task_metadata: dict[str, Any] | None = None,
-    middleware: bool = True,
-    skip_paths: list[str] | None = None,
+    prefix: str = "/apex",
 ) -> FastAPI:
     """Create a complete FastAPI application with APEX endpoints.
 
-    The simplest way to deploy an APEX agent::
-
-        async def execute_job(job: dict) -> str:
-            return f"Processed: {job['description']}"
+    **Standalone** (default) — run directly with ``uvicorn``::
 
         app = create_apex_app(on_job=execute_job)
+        # Routes at /apex/submit, /apex/status, /apex/job/execute, etc.
+        # Root / endpoint with service info
 
-    Run with: ``uvicorn myagent:app``
+    **Mounted on a parent app** — pass ``prefix=""`` so the mount path
+    controls the prefix instead::
+
+        parent = FastAPI()
+        apex_app = create_apex_app(on_job=execute_job, prefix="")
+        parent.mount("/apex", apex_app)
+        # Routes at /apex/submit, /apex/status, /apex/job/execute, etc.
 
     When ``on_job`` is provided, the app automatically polls for funded jobs
     in the background, verifies them, calls your handler, and submits results
@@ -394,14 +249,8 @@ def create_apex_app(
     Without ``on_job``, the app only exposes HTTP endpoints (negotiate, submit,
     job query, etc.) and you must handle job discovery yourself.
 
-    Middleware is **enabled by default** (secure-by-default). All POST/PUT/DELETE
-    requests must include a valid ``X-Job-Id`` header whose on-chain job is
-    FUNDED and assigned to this agent. Safe methods (GET/HEAD/OPTIONS) and
-    standard paths (``/status``, ``/negotiate``, ``/health``, etc.) are always
-    allowed.
-
-    Routes are added at ``/apex/*``. For custom prefixes, use
-    ``create_apex_routes()`` with ``app.include_router(prefix="/your-prefix")``.
+    When ``on_job`` is provided, a ``POST /job/execute`` endpoint is also added
+    for client-initiated synchronous job execution.
 
     Args:
         config: APEXConfig instance (default: loads from env)
@@ -414,37 +263,124 @@ def create_apex_app(
                         Supports both sync and async callables.
         poll_interval: Seconds between polling cycles (default: env POLL_INTERVAL or 10)
         task_metadata: Default metadata attached to every submission
-        middleware: Enable APEXMiddleware for job verification (default: True)
-        skip_paths: Additional paths to skip verification (merged with defaults)
+        prefix: URL prefix for APEX routes (default: ``"/apex"``).
+                Use ``""`` when mounting as a sub-app so the mount path
+                controls the prefix.
 
     Returns:
         FastAPI application instance
     """
-    apex = APEX(
-        config=config,
-        on_job=on_job,
-        on_submit=on_submit,
-        on_job_skipped=on_job_skipped,
-        poll_interval=poll_interval,
-        task_metadata=task_metadata,
-        middleware=middleware,
-        skip_paths=skip_paths,
-    )
+    state = create_apex_state(config)
 
-    app = FastAPI(
+    # Shared set for dedup between job loop and /job/execute endpoint
+    processing_jobs: set[int] = set()
+
+    @asynccontextmanager
+    async def apex_lifespan(app: FastAPI):
+        task = None
+        if on_job:
+            interval = poll_interval or int(os.getenv("POLL_INTERVAL", "10"))
+            task = asyncio.create_task(
+                run_job_loop(
+                    job_ops=state.job_ops,
+                    on_job=on_job,
+                    poll_interval=interval,
+                    metadata=task_metadata,
+                    on_job_skipped=on_job_skipped,
+                    processing_jobs=processing_jobs,
+                )
+            )
+            logger.info("[APEX] Job loop started: poll_interval=%ds", interval)
+        yield
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    apex_app = FastAPI(
         title="APEX Agent",
         description="APEX (Agent Payment Exchange Protocol) Agent",
+        lifespan=apex_lifespan,
     )
-    apex.init_app(app)
 
-    prefix = "/apex"
+    router = _create_apex_routes(state=state, on_submit=on_submit)
+    apex_app.include_router(router, prefix=prefix)
 
-    @app.get("/")
-    async def root():
-        return {
-            "service": "APEX Agent",
-            "agent_address": apex.state.job_ops.agent_address,
-            "endpoints": {
+    # Add /job/execute endpoint when on_job is provided
+    if on_job:
+        is_async = inspect.iscoroutinefunction(on_job)
+        process_path = f"{prefix}/job/execute" if prefix else "/job/execute"
+
+        @apex_app.post(process_path)
+        async def process_job(request: Request):
+            """Client-initiated synchronous job execution.
+
+            Client calls /job/execute after funding a job. Agent verifies,
+            processes, and submits in one request.
+            """
+            try:
+                body = await request.json()
+            except Exception:
+                return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+            raw_job_id = body.get("job_id")
+            if raw_job_id is None:
+                return JSONResponse({"error": "job_id is required"}, status_code=400)
+
+            job_id = int(raw_job_id)
+
+            if job_id in processing_jobs:
+                return JSONResponse(
+                    {"error": "Job already being processed"}, status_code=409
+                )
+
+            processing_jobs.add(job_id)
+            try:
+                verification = await state.job_ops.verify_job(job_id)
+                if not verification.get("valid"):
+                    return JSONResponse(
+                        {"error": verification.get("error", "Job verification failed")},
+                        status_code=400,
+                    )
+
+                job = verification["job"]
+
+                # Call user's job handler
+                if is_async:
+                    task_result = await on_job(job)
+                else:
+                    task_result = await asyncio.to_thread(on_job, job)
+
+                # Parse result: str or (str, dict)
+                if isinstance(task_result, tuple):
+                    response_content, job_metadata = task_result
+                else:
+                    response_content = task_result
+                    job_metadata = None
+
+                # Merge metadata
+                merged_meta = dict(task_metadata) if task_metadata else {}
+                if job_metadata:
+                    merged_meta.update(job_metadata)
+
+                submission = await state.job_ops.submit_result(
+                    job_id=job_id,
+                    response_content=response_content,
+                    metadata=merged_meta or None,
+                )
+
+                status_code = 200 if submission.get("success") else 500
+                return JSONResponse(submission, status_code=status_code)
+            finally:
+                processing_jobs.discard(job_id)
+
+    # Standalone mode: add root endpoint with service info
+    if prefix:
+        @apex_app.get("/")
+        async def root():
+            endpoints = {
                 "submit": f"{prefix}/submit",
                 "job": f"{prefix}/job/{{job_id}}",
                 "response": f"{prefix}/job/{{job_id}}/response",
@@ -452,7 +388,16 @@ def create_apex_app(
                 "negotiate": f"{prefix}/negotiate",
                 "status": f"{prefix}/status",
                 "health": f"{prefix}/health",
-            },
-        }
+            }
+            if on_job:
+                endpoints["process"] = f"{prefix}/job/execute"
+            return {
+                "service": "APEX Agent",
+                "agent_address": state.job_ops.agent_address,
+                "endpoints": endpoints,
+            }
 
-    return app
+    # Store state for external access
+    apex_app.state.apex = state
+
+    return apex_app

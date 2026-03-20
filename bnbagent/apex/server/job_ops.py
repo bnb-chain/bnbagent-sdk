@@ -669,6 +669,7 @@ async def run_job_loop(
     poll_interval: int = 10,
     metadata: dict[str, Any] | None = None,
     on_job_skipped: Callable[[dict, str], Any] | None = None,
+    processing_jobs: set[int] | None = None,
 ) -> None:
     """Background loop: discover funded jobs → verify → process → submit.
 
@@ -693,6 +694,9 @@ async def run_job_loop(
                         Supports both sync and async callables. Each job
                         triggers the callback at most once (tracked via
                         ``skipped_jobs`` set, reset on process restart).
+        processing_jobs: Optional shared set of job IDs currently being
+                         processed by the ``/process`` endpoint. Jobs in
+                         this set are skipped by the loop to avoid conflicts.
     """
     is_async = inspect.iscoroutinefunction(on_job)
     agent_addr = job_ops.agent_address
@@ -715,67 +719,77 @@ async def run_job_loop(
                 if job_id in skipped_jobs:
                     continue
 
+                # Skip jobs being handled by /process endpoint
+                if processing_jobs and job_id in processing_jobs:
+                    continue
+
                 description = job.get("description", "")
                 logger.info(f"[JobRunner] Processing job #{job_id}: {description[:80]}")
 
-                # Verify
-                verification = await job_ops.verify_job(job_id)
-                if not verification["valid"]:
-                    skipped_jobs.add(job_id)
-                    reason = verification.get("error", "unknown")
-                    logger.warning(
-                        f"[JobRunner] Job #{job_id} skipped: {reason}"
-                    )
-                    if on_job_skipped:
-                        try:
-                            if inspect.iscoroutinefunction(on_job_skipped):
-                                await on_job_skipped(job, reason)
-                            else:
-                                await asyncio.to_thread(on_job_skipped, job, reason)
-                        except Exception as e:
-                            logger.error(f"[JobRunner] on_job_skipped callback error: {e}")
-                    continue
-
-                # Process — call user's job handler
+                if processing_jobs is not None:
+                    processing_jobs.add(job_id)
                 try:
-                    if is_async:
-                        task_result = await on_job(job)
+                    # Verify
+                    verification = await job_ops.verify_job(job_id)
+                    if not verification["valid"]:
+                        skipped_jobs.add(job_id)
+                        reason = verification.get("error", "unknown")
+                        logger.warning(
+                            f"[JobRunner] Job #{job_id} skipped: {reason}"
+                        )
+                        if on_job_skipped:
+                            try:
+                                if inspect.iscoroutinefunction(on_job_skipped):
+                                    await on_job_skipped(job, reason)
+                                else:
+                                    await asyncio.to_thread(on_job_skipped, job, reason)
+                            except Exception as e:
+                                logger.error(f"[JobRunner] on_job_skipped callback error: {e}")
+                        continue
+
+                    # Process — call user's job handler
+                    try:
+                        if is_async:
+                            task_result = await on_job(job)
+                        else:
+                            task_result = await asyncio.to_thread(on_job, job)
+                    except Exception as e:
+                        logger.error(f"[JobRunner] on_job failed for job #{job_id}: {e}")
+                        continue
+
+                    # Parse result: str or (str, dict)
+                    if isinstance(task_result, tuple):
+                        response_content, job_metadata = task_result
                     else:
-                        task_result = await asyncio.to_thread(on_job, job)
-                except Exception as e:
-                    logger.error(f"[JobRunner] on_job failed for job #{job_id}: {e}")
-                    continue
+                        response_content = task_result
+                        job_metadata = None
 
-                # Parse result: str or (str, dict)
-                if isinstance(task_result, tuple):
-                    response_content, job_metadata = task_result
-                else:
-                    response_content = task_result
-                    job_metadata = None
+                    # Merge metadata: defaults ← per-job overrides
+                    merged_meta = dict(metadata) if metadata else {}
+                    if job_metadata:
+                        merged_meta.update(job_metadata)
 
-                # Merge metadata: defaults ← per-job overrides
-                merged_meta = dict(metadata) if metadata else {}
-                if job_metadata:
-                    merged_meta.update(job_metadata)
-
-                # Submit
-                submission = await job_ops.submit_result(
-                    job_id=job_id,
-                    response_content=response_content,
-                    metadata=merged_meta or None,
-                )
-
-                if submission.get("success"):
-                    logger.info(
-                        f"[JobRunner] Job #{job_id} submitted! TX: {submission['txHash']}"
+                    # Submit
+                    submission = await job_ops.submit_result(
+                        job_id=job_id,
+                        response_content=response_content,
+                        metadata=merged_meta or None,
                     )
-                    if submission.get("dataUrl"):
-                        logger.info(f"[JobRunner]   Storage: {submission['dataUrl']}")
-                else:
-                    logger.error(
-                        f"[JobRunner] Job #{job_id} submission failed: "
-                        f"{submission.get('error')}"
-                    )
+
+                    if submission.get("success"):
+                        logger.info(
+                            f"[JobRunner] Job #{job_id} submitted! TX: {submission['txHash']}"
+                        )
+                        if submission.get("dataUrl"):
+                            logger.info(f"[JobRunner]   Storage: {submission['dataUrl']}")
+                    else:
+                        logger.error(
+                            f"[JobRunner] Job #{job_id} submission failed: "
+                            f"{submission.get('error')}"
+                        )
+                finally:
+                    if processing_jobs is not None:
+                        processing_jobs.discard(job_id)
 
         except Exception as e:
             logger.error(f"[JobRunner] Polling error: {e}")

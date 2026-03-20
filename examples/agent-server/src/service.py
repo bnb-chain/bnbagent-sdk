@@ -37,7 +37,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 # SDK imports
 from bnbagent.apex.config import APEXConfig
-from bnbagent.apex.server.routes import create_apex_app
+from bnbagent.apex.server import create_apex_app
 
 logging.basicConfig(
     level=logging.INFO,
@@ -125,11 +125,7 @@ def process_task(job: dict) -> tuple[str, dict]:
 # App — create_apex_app handles routes, polling, and lifecycle
 # ---------------------------------------------------------------------------
 
-app = create_apex_app(
-    config=config,
-    on_job=process_task,
-    middleware=False,  # Disable middleware for direct endpoints below
-)
+app = create_apex_app(config=config, on_job=process_task)
 
 
 # ---------------------------------------------------------------------------

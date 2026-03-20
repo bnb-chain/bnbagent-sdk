@@ -32,13 +32,13 @@ class StorageConfig:
         Env vars:
             STORAGE_PROVIDER: "local" or "ipfs" (default: "local")
             STORAGE_API_KEY: API key (fallback: PINATA_JWT)
-            STORAGE_API_URL: Pinning API URL (optional)
+            STORAGE_API_URL: Storage API URL (optional)
             STORAGE_GATEWAY_URL: Gateway URL (fallback: PINATA_GATEWAY)
-            LOCAL_STORAGE_PATH: Local storage directory (default: ".agent-data")
+            STORAGE_LOCAL_PATH: Local storage directory (default: ".agent-data")
         """
         return cls(
             type=os.getenv("STORAGE_PROVIDER", "local").lower(),
-            base_dir=os.getenv("LOCAL_STORAGE_PATH", ".agent-data"),
+            base_dir=os.getenv("STORAGE_LOCAL_PATH", ".agent-data"),
             api_key=os.getenv("STORAGE_API_KEY") or os.getenv("PINATA_JWT"),
             api_url=os.getenv("STORAGE_API_URL"),
             gateway_url=os.getenv("STORAGE_GATEWAY_URL") or os.getenv("PINATA_GATEWAY"),
