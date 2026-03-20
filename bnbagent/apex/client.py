@@ -408,12 +408,17 @@ class APEXClient(ContractClientMixin):
         Returns:
             The data URL string, or None if not found or not decodable.
         """
-        # from_block=0 is OK here: jobId is indexed so the RPC filters via
-        # bloom filter without scanning every block. Same approach as
-        # get_budget_set_events(). If the RPC rejects the range, the caller
-        # (APEXJobOps.get_response) catches the exception and returns 404.
+        # Use a bounded block range to avoid BSC RPC -32005 "limit exceeded"
+        # errors. 50,000 blocks ≈ 42 hours on BSC (3s blocks), which covers
+        # typical job lifecycles. Falls back to 0 if block_number fails.
+        try:
+            current_block = self.w3.eth.block_number
+            from_block = max(0, current_block - 50_000)
+        except Exception:
+            from_block = 0
+
         logs = self.contract.events.JobSubmitted().get_logs(
-            from_block=0,
+            from_block=from_block,
             to_block="latest",
             argument_filters={"jobId": job_id},
         )

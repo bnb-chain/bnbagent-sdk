@@ -100,7 +100,7 @@ Not part of the public API. Provides shared plumbing for protocol modules.
 | File | Purpose |
 |------|---------|
 | `routes.py` | `create_apex_app()` — FastAPI app factory; `APEXState` |
-| `job_ops.py` | `APEXJobOps` — async wrapper over synchronous `APEXClient` via `asyncio.to_thread()`; includes `get_response()` for retrieving stored deliverables and `run_job_loop()` for background job polling |
+| `job_ops.py` | `APEXJobOps` — async wrapper over synchronous `APEXClient` via `asyncio.to_thread()`; includes `get_response()` for retrieving stored deliverables |
 
 ### `bnbagent/wallets/` — Wallet Providers
 
@@ -134,7 +134,7 @@ Not part of the public API. Provides shared plumbing for protocol modules.
 |-----------|---------------------|
 | `getting-started/` | Step-by-step: wallet setup → agent registration → server → job creation → settlement |
 | `client-workflow/` | Client-side job creation workflow |
-| `agent-server/` | Full agent server with polling and job processing |
+| `agent-server/` | Full agent server with startup scan and client-driven job execution |
 | `evaluator/` | Evaluator/keeper scripts (Node.js) |
 
 ### `tests/` — Test Suite

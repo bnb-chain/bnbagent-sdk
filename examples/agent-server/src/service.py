@@ -20,7 +20,7 @@ Environment (agent-server/.env):
     SERVICE_PRICE=1000000000000000000           — Negotiation price (1 U)
     PAYMENT_TOKEN_ADDRESS                      — BEP20 payment token
     PORT=8003                                  — Server port
-    POLL_INTERVAL=15                           — Job polling interval
+    JOB_TIMEOUT=120                            — /job/execute timeout (seconds)
 """
 
 import logging

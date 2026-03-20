@@ -18,11 +18,12 @@ Environment (agent-server/.env):
     SERVICE_PRICE=1000000000000000000           — Negotiation price (1 U)
     PAYMENT_TOKEN_ADDRESS                      — BEP20 payment token
     PORT=8003                                  — Server port
-    POLL_INTERVAL=15                           — Job polling interval
+    JOB_TIMEOUT=120                            — /job/execute timeout (seconds)
 """
 
 import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -120,20 +121,31 @@ def process_task(job: dict) -> tuple[str, dict]:
 
 
 # ---------------------------------------------------------------------------
+# Mount APEX sub-app onto the existing app
+# ---------------------------------------------------------------------------
+# Starlette does not propagate lifespan events to mounted sub-apps, so
+# we call apex_app.state.startup() explicitly in the parent's lifespan.
+
+apex_app = create_apex_app(config=config, on_job=process_task, prefix="")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Trigger the one-time startup scan for pending jobs
+    await apex_app.state.startup()
+    yield
+
+
+# ---------------------------------------------------------------------------
 # Existing FastAPI app — your own endpoints, middleware, lifespan, etc.
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
     title="Blockchain News Agent",
     description="News search agent with APEX payment protocol",
+    lifespan=lifespan,
 )
 
-
-# ---------------------------------------------------------------------------
-# Mount APEX sub-app onto the existing app
-# ---------------------------------------------------------------------------
-
-apex_app = create_apex_app(config=config, on_job=process_task, prefix="")
 app.mount("/apex", apex_app)
 
 

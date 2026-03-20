@@ -279,7 +279,8 @@ class TestCreateApexApp:
         ) as mock_verify:
             mock_verify.return_value = {"valid": False, "error": "not funded"}
             resp = client.post("/apex/job/execute", json={"job_id": 42})
-            assert resp.status_code == 400
+            assert resp.status_code == 500
+            assert resp.json()["success"] is False
 
     def test_process_endpoint_success_includes_response_content(
         self, patched_web3, tmp_path
@@ -338,3 +339,111 @@ class TestCreateApexApp:
         )
         paths = [r.path for r in app.routes]
         assert "/job/execute" in paths
+
+    def test_process_endpoint_returns_202_on_timeout(self, patched_web3, tmp_path):
+        """Slow on_job triggers 202 Accepted when job_timeout is exceeded."""
+        import asyncio as _asyncio
+        from fastapi.testclient import TestClient
+
+        async def slow_handler(job):
+            await _asyncio.sleep(5)
+            return "slow result"
+
+        app = create_apex_app(
+            config=self._make_config(tmp_path),
+            on_job=slow_handler,
+            job_timeout=0.1,  # very short timeout
+        )
+        client = TestClient(app)
+
+        mock_job = {
+            "jobId": 99,
+            "description": "slow test",
+            "budget": 10**18,
+            "client": "0x" + "11" * 20,
+            "provider": app.state.apex.job_ops.agent_address,
+            "evaluator": "0x" + "33" * 20,
+            "status": "FUNDED",
+            "expiredAt": 9999999999,
+        }
+
+        with (
+            patch.object(
+                app.state.apex.job_ops,
+                "verify_job",
+                new_callable=AsyncMock,
+                return_value={"valid": True, "job": mock_job},
+            ),
+            patch.object(
+                app.state.apex.job_ops,
+                "submit_result",
+                new_callable=AsyncMock,
+                return_value={"success": True, "txHash": "0xabc"},
+            ),
+        ):
+            resp = client.post("/apex/job/execute", json={"job_id": 99})
+            assert resp.status_code == 202
+            data = resp.json()
+            assert data["status"] == "accepted"
+            assert data["job_id"] == 99
+
+    def test_process_endpoint_returns_200_within_timeout(self, patched_web3, tmp_path):
+        """Fast on_job returns 200 with full result within timeout."""
+        from fastapi.testclient import TestClient
+
+        app = create_apex_app(
+            config=self._make_config(tmp_path),
+            on_job=lambda job: "fast result",
+            job_timeout=10.0,
+        )
+        client = TestClient(app)
+
+        mock_job = {
+            "jobId": 77,
+            "description": "fast test",
+            "budget": 10**18,
+            "client": "0x" + "11" * 20,
+            "provider": app.state.apex.job_ops.agent_address,
+            "evaluator": "0x" + "33" * 20,
+            "status": "FUNDED",
+            "expiredAt": 9999999999,
+        }
+
+        with (
+            patch.object(
+                app.state.apex.job_ops,
+                "verify_job",
+                new_callable=AsyncMock,
+                return_value={"valid": True, "job": mock_job},
+            ),
+            patch.object(
+                app.state.apex.job_ops,
+                "submit_result",
+                new_callable=AsyncMock,
+                return_value={
+                    "success": True,
+                    "txHash": "0xdef",
+                    "dataUrl": "ipfs://Qm...",
+                    "deliverableHash": "0x123",
+                },
+            ),
+        ):
+            resp = client.post("/apex/job/execute", json={"job_id": 77})
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["success"] is True
+            assert data["response_content"] == "fast result"
+
+    def test_startup_method_exposed(self, patched_web3, tmp_path):
+        """app.state.startup is callable when on_job is provided."""
+        app = create_apex_app(
+            config=self._make_config(tmp_path),
+            on_job=lambda job: "result",
+        )
+        assert hasattr(app.state, "startup")
+        assert callable(app.state.startup)
+
+    def test_startup_method_absent_without_on_job(self, patched_web3, tmp_path):
+        """app.state.startup is not set when on_job is not provided."""
+        app = create_apex_app(config=self._make_config(tmp_path))
+        assert not hasattr(app.state, "startup")

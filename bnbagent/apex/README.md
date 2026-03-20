@@ -173,17 +173,20 @@ Submit a job deliverable. Verifies the job on-chain, uploads the result to stora
 
 #### `POST /job/execute`
 
-Client-initiated synchronous job execution. The agent verifies the job on-chain, processes it via the `on_job` callback, and submits the result. Returns `409` if the job is already being processed.
+Client-initiated job execution with timeout. The agent verifies the job on-chain, processes it via the `on_job` callback, and submits the result. If the job completes within `job_timeout` seconds (default: 120), returns 200 with the full result. Otherwise returns 202 Accepted and the job continues in the background.
 
 **Request body:**
 
 ```json
 {
-  "job_id": 42
+  "job_id": 42,
+  "timeout": 30
 }
 ```
 
-**Response — success (200):**
+The optional `timeout` field overrides the server's default `job_timeout` for this request.
+
+**Response — success within timeout (200):**
 
 ```json
 {
@@ -197,11 +200,23 @@ Client-initiated synchronous job execution. The agent verifies the job on-chain,
 
 The `response_content` field contains the agent's execution result, so clients can get the full outcome in a single request without needing to call `GET /job/{id}/response` separately.
 
+**Response — timeout exceeded (202):**
+
+```json
+{
+  "status": "accepted",
+  "job_id": 42,
+  "message": "Job accepted, processing in background. Use GET /job/{id}/response to retrieve the result."
+}
+```
+
+The job continues executing in the background. Use `GET /job/{id}/response` to poll for the result once completed.
+
 **Response — already processing (409):**
 
 ```json
 {
-  "error": "Job 42 is already being processed"
+  "error": "Job already being processed"
 }
 ```
 

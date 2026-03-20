@@ -47,7 +47,7 @@ pip install "bnbagent[server,ipfs]"
 - [Architecture & Components](#architecture--components)
   - [Wallet Providers](#wallet-providers)
   - [Storage Providers](#storage-providers)
-  - [Background Job Polling](#background-job-polling)
+  - [Job Execution](#job-execution)
   - [Pricing & Budget Validation](#pricing--budget-validation)
   - [Module System](#module-system)
 - [Network & Contracts](#network--contracts)
@@ -278,7 +278,7 @@ STORAGE_API_KEY=your-pinning-service-jwt
 uvicorn agent:app --port 8000
 ```
 
-That's it. `create_apex_app(on_job=...)` handles everything internally: wallet creation, background job polling, on-chain verification, calling your handler, and submitting the result. Jobs with budget below the configured `service_price` are automatically skipped.
+That's it. `create_apex_app(on_job=...)` handles everything internally: wallet creation, startup scan for pending jobs, on-chain verification, calling your handler, and submitting the result. Jobs with budget below the configured `service_price` are automatically skipped.
 
 > **Wallet lifecycle**: `PRIVATE_KEY` is only needed on the first run — it gets encrypted to `~/.bnbagent/wallets/<address>.json` (Keystore V3) and cleared from memory immediately. On subsequent runs, only `WALLET_PASSWORD` is needed. See [Wallet Providers](#wallet-providers) for details.
 
@@ -306,10 +306,10 @@ app.mount("/apex", apex_app)
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `config` | `APEXConfig.from_env()` | APEX configuration |
-| `on_job` | `None` | Job handler — enables automatic polling and submission |
+| `on_job` | `None` | Job handler — enables startup scan and `/job/execute` |
 | `on_submit` | `None` | Callback after successful on-chain submit |
 | `on_job_skipped` | `None` | Callback when a job fails verification |
-| `poll_interval` | env `POLL_INTERVAL` or `10` | Seconds between polling cycles |
+| `job_timeout` | env `JOB_TIMEOUT` or `120.0` | Seconds before `/job/execute` returns 202 Accepted |
 | `task_metadata` | `None` | Default metadata for every submission |
 
 ### Comparison
@@ -317,7 +317,8 @@ app.mount("/apex", apex_app)
 | Capability | `create_apex_app()` | Sub-app mount |
 |------------|--------------------|-----------------------|
 | HTTP endpoints | Included | Included |
-| Background job polling | Automatic | Automatic |
+| Startup scan (pending jobs) | Automatic | Via `app.state.startup()` |
+| Client-driven `/job/execute` | With timeout (200/202) | With timeout (200/202) |
 | Brings its own `FastAPI()` | Yes | Yes — mounted on yours |
 | Best for | Standalone agent | Existing app |
 
@@ -471,7 +472,7 @@ SERVICE_PRICE=20000000000000000000    # 20 U tokens
 
 ## Architecture & Components
 
-The sections below cover the SDK's pluggable components in detail. You don't need to read these to get started — the Quick Start sections above are self-contained. Come back here when you need to customize wallet management, storage backends, job polling behavior, or request verification.
+The sections below cover the SDK's pluggable components in detail. You don't need to read these to get started — the Quick Start sections above are self-contained. Come back here when you need to customize wallet management, storage backends, job execution behavior, or request verification.
 
 ### Wallet Providers
 
@@ -587,18 +588,16 @@ storage = storage_provider_from_env()
 
 For more details, see [`bnbagent/storage/README.md`](bnbagent/storage/README.md).
 
-### Background Job Polling
+### Job Execution
 
-When you pass `on_job` to `create_apex_app()`, the SDK automatically runs a background loop that discovers funded jobs, verifies them, calls your handler, and submits results. You don't need to write any polling code.
+When you pass `on_job` to `create_apex_app()`, the SDK enables two execution paths:
 
-The polling uses a hybrid two-phase approach that avoids `eth_getLogs` rate limits on public BSC nodes:
+1. **Startup scan** — on application boot, a one-time Multicall3 batch scan discovers all pending funded jobs and processes them automatically.
+2. **Client-driven `POST /job/execute`** — after funding a job, the client calls `/job/execute` to trigger immediate execution. If the job completes within `job_timeout` seconds (default 120), the response includes the full result (200). Otherwise the server returns 202 Accepted and the job continues in the background — the client can poll `GET /job/{id}/response` for the result.
 
-1. **Startup** — one-time Multicall3 batch scan of all existing jobs (uses cheap `eth_call`, not `eth_getLogs`)
-2. **Runtime** — progressive event scanning, querying only new blocks since the last poll (~3 blocks per 10s interval)
+This replaces the former background polling loop with a more efficient, event-driven approach: no repeated chain queries, zero latency after funding, and built-in timeout handling.
 
-This is fully automatic — no user code changes are needed.
-
-If you're adding APEX to an existing app, mount a `create_apex_app()` instance as a sub-app — it handles the job loop automatically. See [Option 2](#option-2-mount-on-existing-app-sub-app).
+If you're adding APEX to an existing app via sub-app mount, the parent app should call `apex_app.state.startup()` during its own lifespan to trigger the startup scan (Starlette does not propagate lifespan events to mounted sub-apps). See [Option 2](#option-2-mount-on-existing-app-sub-app).
 
 ### Pricing & Budget Validation
 
@@ -618,12 +617,12 @@ The SDK distinguishes three pricing values:
 
 This check runs in two places:
 
-1. **Background job loop** — funded jobs are verified before calling `on_job`
+1. **Startup scan and `/job/execute`** — funded jobs are verified before calling `on_job`
 2. **`submit_result()` pre-check** — defense-in-depth before on-chain submission (SDK-H01)
 
 #### Skipped Jobs & `on_job_skipped` Callback
 
-When a job fails budget validation in the background loop, it is added to a `skipped_jobs` set — the same job is only verified once, preventing log spam from repeated polling cycles. Register an `on_job_skipped` callback to be notified:
+When a job fails budget validation during the startup scan or `/job/execute`, the `on_job_skipped` callback is invoked. Register it to be notified:
 
 ```python
 # Sync callback
@@ -648,7 +647,7 @@ The `reason` string describes why the job was skipped (e.g. `"budget 50000000000
 
 ### Job Verification (SDK-H01)
 
-No separate middleware is needed. `submit_result()` includes defense-in-depth verification: before every on-chain submission, it re-verifies that the job is `FUNDED`, assigned to your agent, not expired, and that `budget >= service_price`. This check runs automatically in both the background job loop and direct `/submit` calls.
+No separate middleware is needed. `submit_result()` includes defense-in-depth verification: before every on-chain submission, it re-verifies that the job is `FUNDED`, assigned to your agent, not expired, and that `budget >= service_price`. This check runs automatically in the startup scan, `/job/execute`, and direct `/submit` calls.
 
 ### Module System
 
@@ -718,8 +717,8 @@ print(nc.rpc_url)  # https://bsc-dataseed.binance.org
 
 | Example | Description |
 |---------|-------------|
-| [`getting-started/`](examples/getting-started/) | **Start here.** 5-step walkthrough: set up a wallet and check balances, register an agent on ERC-8004, run an APEX agent server with background job polling, create and fund a job from a client, and settle payment after the UMA liveness period. Includes an E2E test script that runs all steps automatically. |
-| [`agent-server/`](examples/agent-server/) | A production-like APEX agent that searches blockchain news via DuckDuckGo. Demonstrates both integration patterns: `create_apex_app()` (standalone) and sub-app mount (existing app). Includes ERC-8004 registration, IPFS storage, background job polling, and a `/search` endpoint for testing without APEX. |
+| [`getting-started/`](examples/getting-started/) | **Start here.** 5-step walkthrough: set up a wallet and check balances, register an agent on ERC-8004, run an APEX agent server with startup scan and client-driven job execution, create and fund a job from a client, and settle payment after the UMA liveness period. Includes an E2E test script that runs all steps automatically. |
+| [`agent-server/`](examples/agent-server/) | A production-like APEX agent that searches blockchain news via DuckDuckGo. Demonstrates both integration patterns: `create_apex_app()` (standalone) and sub-app mount (existing app). Includes ERC-8004 registration, IPFS storage, client-driven job execution, and a `/search` endpoint for testing without APEX. |
 | [`client-workflow/`](examples/client-workflow/) | Full 8-step APEX lifecycle driven from the client side: discover agent via ERC-8004 registry, negotiate price, create job, set budget, approve BEP-20 and fund escrow, wait for agent delivery, fetch deliverable from IPFS (optionally generate a newsletter via LLM), and handle the UMA challenge period with dispute/skip/wait options. |
 | [`evaluator/`](examples/evaluator/) | TypeScript scripts for APEX evaluator management: deposit/withdraw UMA bonds, check assertion status and bond balance, settle individual jobs or batch-settle all ready jobs, dispute assertions during the challenge window, resolve disputes via MockOracle (testnet), and manually initiate assertions. |
 

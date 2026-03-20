@@ -23,7 +23,7 @@ from fastapi.responses import JSONResponse
 from ...storage import LocalStorageProvider
 from ..config import APEXConfig
 from ..negotiation import NegotiationHandler
-from .job_ops import APEXJobOps, run_job_loop
+from .job_ops import APEXJobOps
 
 logger = logging.getLogger(__name__)
 
@@ -215,7 +215,7 @@ def create_apex_app(
     on_job: Callable[..., Any] | None = None,
     on_submit: Callable[[int, str, dict], Any] | None = None,
     on_job_skipped: Callable[[dict, str], Any] | None = None,
-    poll_interval: int | None = None,
+    job_timeout: float | None = None,
     task_metadata: dict[str, Any] | None = None,
     prefix: str = "/apex",
 ) -> FastAPI:
@@ -235,9 +235,9 @@ def create_apex_app(
         parent.mount("/apex", apex_app)
         # Routes at /apex/submit, /apex/status, /apex/job/execute, etc.
 
-    When ``on_job`` is provided, the app automatically polls for funded jobs
-    in the background, verifies them, calls your handler, and submits results
-    on-chain. You only write the business logic.
+    When ``on_job`` is provided, a one-time startup scan processes all
+    pending funded jobs, and a ``POST /job/execute`` endpoint is added
+    for client-initiated job execution with timeout support.
 
     The ``on_job`` callback supports four signatures::
 
@@ -249,19 +249,18 @@ def create_apex_app(
     Without ``on_job``, the app only exposes HTTP endpoints (negotiate, submit,
     job query, etc.) and you must handle job discovery yourself.
 
-    When ``on_job`` is provided, a ``POST /job/execute`` endpoint is also added
-    for client-initiated synchronous job execution.
-
     Args:
         config: APEXConfig instance (default: loads from env)
         on_job: Job handler called for each funded job. The SDK handles
-                discovery, verification, and submission automatically.
+                verification and submission automatically.
         on_submit: Optional callback after successful submit (lower-level;
                    prefer ``on_job`` for most use cases)
         on_job_skipped: Optional callback when a job fails verification and is
                         skipped. Called with ``(job_dict, reason_string)``.
                         Supports both sync and async callables.
-        poll_interval: Seconds between polling cycles (default: env POLL_INTERVAL or 10)
+        job_timeout: Seconds to wait before returning 202 Accepted from
+                     ``/job/execute`` (default: env ``JOB_TIMEOUT`` or 120.0).
+                     The job continues in the background after timeout.
         task_metadata: Default metadata attached to every submission
         prefix: URL prefix for APEX routes (default: ``"/apex"``).
                 Use ``""`` when mounting as a sub-app so the mount path
@@ -272,32 +271,114 @@ def create_apex_app(
     """
     state = create_apex_state(config)
 
-    # Shared set for dedup between job loop and /job/execute endpoint
+    effective_timeout = job_timeout or float(os.getenv("JOB_TIMEOUT", "120.0"))
+
+    # Shared set for dedup between startup scan and /job/execute endpoint
     processing_jobs: set[int] = set()
+
+    # Background tasks tracked for graceful shutdown
+    background_tasks: set[asyncio.Task] = set()
+
+    is_async = inspect.iscoroutinefunction(on_job) if on_job else False
+
+    # ── Shared job execution logic ────────────────────────────────────────
+
+    async def _execute_job_internal(job_id: int) -> dict:
+        """Verify → on_job → submit_result. Used by startup scan and /job/execute."""
+        verification = await state.job_ops.verify_job(job_id)
+        if not verification.get("valid"):
+            reason = verification.get("error", "unknown")
+            if on_job_skipped:
+                try:
+                    if inspect.iscoroutinefunction(on_job_skipped):
+                        await on_job_skipped(verification.get("job", {"jobId": job_id}), reason)
+                    else:
+                        await asyncio.to_thread(
+                            on_job_skipped, verification.get("job", {"jobId": job_id}), reason
+                        )
+                except Exception as e:
+                    logger.error(f"[APEX] on_job_skipped callback error: {e}")
+            return {"success": False, "error": reason}
+
+        job = verification["job"]
+
+        # Call user's job handler
+        if is_async:
+            task_result = await on_job(job)
+        else:
+            task_result = await asyncio.to_thread(on_job, job)
+
+        # Parse result: str or (str, dict)
+        if isinstance(task_result, tuple):
+            response_content, job_metadata = task_result
+        else:
+            response_content = task_result
+            job_metadata = None
+
+        # Merge metadata: defaults ← per-job overrides
+        merged_meta = dict(task_metadata) if task_metadata else {}
+        if job_metadata:
+            merged_meta.update(job_metadata)
+
+        submission = await state.job_ops.submit_result(
+            job_id=job_id,
+            response_content=response_content,
+            metadata=merged_meta or None,
+        )
+
+        if submission.get("success"):
+            submission["response_content"] = response_content
+            logger.info(f"[APEX] Job #{job_id} submitted! TX: {submission.get('txHash')}")
+        else:
+            logger.error(f"[APEX] Job #{job_id} submission failed: {submission.get('error')}")
+
+        return submission
+
+    # ── Startup scan ──────────────────────────────────────────────────────
+
+    async def _startup_scan_worker():
+        """One-time scan: process all pending funded jobs."""
+        try:
+            result = await state.job_ops.get_pending_jobs()
+            if not result.get("success"):
+                logger.warning(f"[APEX] Startup scan error: {result.get('error')}")
+                return
+
+            jobs = result.get("jobs", [])
+            logger.info(f"[APEX] Startup scan found {len(jobs)} pending job(s)")
+
+            for job in jobs:
+                job_id = job["jobId"]
+                if job_id in processing_jobs:
+                    continue
+                processing_jobs.add(job_id)
+                try:
+                    await _execute_job_internal(job_id)
+                except Exception as e:
+                    logger.error(f"[APEX] Startup scan job #{job_id} failed: {e}")
+                finally:
+                    processing_jobs.discard(job_id)
+        except Exception as e:
+            logger.error(f"[APEX] Startup scan failed: {e}")
+
+    async def _run_startup_scan():
+        """Launch startup scan as a background task."""
+        task = asyncio.create_task(_startup_scan_worker())
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
+
+    # ── Lifespan (standalone mode) ────────────────────────────────────────
 
     @asynccontextmanager
     async def apex_lifespan(app: FastAPI):
-        task = None
         if on_job:
-            interval = poll_interval or int(os.getenv("POLL_INTERVAL", "10"))
-            task = asyncio.create_task(
-                run_job_loop(
-                    job_ops=state.job_ops,
-                    on_job=on_job,
-                    poll_interval=interval,
-                    metadata=task_metadata,
-                    on_job_skipped=on_job_skipped,
-                    processing_jobs=processing_jobs,
-                )
-            )
-            logger.info("[APEX] Job loop started: poll_interval=%ds", interval)
+            await _run_startup_scan()
         yield
-        if task:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        # Shutdown: cancel all remaining background tasks
+        for t in background_tasks:
+            t.cancel()
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
 
     apex_app = FastAPI(
         title="APEX Agent",
@@ -310,15 +391,16 @@ def create_apex_app(
 
     # Add /job/execute endpoint when on_job is provided
     if on_job:
-        is_async = inspect.iscoroutinefunction(on_job)
         process_path = f"{prefix}/job/execute" if prefix else "/job/execute"
 
         @apex_app.post(process_path)
         async def process_job(request: Request):
-            """Client-initiated synchronous job execution.
+            """Client-initiated job execution with timeout.
 
-            Client calls /job/execute after funding a job. Agent verifies,
-            processes, and submits in one request.
+            Executes the job via on_job. If the job completes within
+            ``job_timeout`` seconds, returns 200 with the full result.
+            If it times out, returns 202 Accepted and the job continues
+            in the background.
             """
             try:
                 body = await request.json()
@@ -331,56 +413,55 @@ def create_apex_app(
 
             job_id = int(raw_job_id)
 
+            # Per-request timeout override
+            req_timeout = effective_timeout
+            if body.get("timeout") is not None:
+                try:
+                    req_timeout = float(body["timeout"])
+                except (TypeError, ValueError):
+                    pass
+
             if job_id in processing_jobs:
                 return JSONResponse(
                     {"error": "Job already being processed"}, status_code=409
                 )
 
             processing_jobs.add(job_id)
-            try:
-                verification = await state.job_ops.verify_job(job_id)
-                if not verification.get("valid"):
-                    return JSONResponse(
-                        {"error": verification.get("error", "Job verification failed")},
-                        status_code=400,
-                    )
 
-                job = verification["job"]
+            async def _job_wrapper():
+                try:
+                    return await _execute_job_internal(job_id)
+                finally:
+                    processing_jobs.discard(job_id)
 
-                # Call user's job handler
-                if is_async:
-                    task_result = await on_job(job)
-                else:
-                    task_result = await asyncio.to_thread(on_job, job)
+            task = asyncio.create_task(_job_wrapper())
+            background_tasks.add(task)
+            task.add_done_callback(background_tasks.discard)
 
-                # Parse result: str or (str, dict)
-                if isinstance(task_result, tuple):
-                    response_content, job_metadata = task_result
-                else:
-                    response_content = task_result
-                    job_metadata = None
+            done, _ = await asyncio.wait({task}, timeout=req_timeout)
 
-                # Merge metadata
-                merged_meta = dict(task_metadata) if task_metadata else {}
-                if job_metadata:
-                    merged_meta.update(job_metadata)
-
-                submission = await state.job_ops.submit_result(
-                    job_id=job_id,
-                    response_content=response_content,
-                    metadata=merged_meta or None,
+            if done:
+                # Completed within timeout → 200/500 with full result
+                result = task.result()
+                status_code = 200 if result.get("success") else 500
+                return JSONResponse(result, status_code=status_code)
+            else:
+                # Timeout → 202 Accepted, task continues in background
+                return JSONResponse(
+                    {
+                        "status": "accepted",
+                        "job_id": job_id,
+                        "message": (
+                            "Job accepted, processing in background. "
+                            "Use GET /job/{id}/response to retrieve the result."
+                        ),
+                    },
+                    status_code=202,
                 )
-
-                if submission.get("success"):
-                    submission["response_content"] = response_content
-
-                status_code = 200 if submission.get("success") else 500
-                return JSONResponse(submission, status_code=status_code)
-            finally:
-                processing_jobs.discard(job_id)
 
     # Standalone mode: add root endpoint with service info
     if prefix:
+
         @apex_app.get("/")
         async def root():
             endpoints = {
@@ -402,5 +483,9 @@ def create_apex_app(
 
     # Store state for external access
     apex_app.state.apex = state
+
+    # Expose startup scan for gateway (mounted mode where lifespan doesn't propagate)
+    if on_job:
+        apex_app.state.startup = _run_startup_scan
 
     return apex_app
