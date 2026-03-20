@@ -2,7 +2,7 @@
 Step 4: Create and Fund a Job
 
 Creates an APEX job, sets a budget, approves token spending,
-funds the job, and polls until the agent submits.
+funds the job, triggers execution via /job/execute, and polls until the agent submits.
 
 Run this in Terminal 2 while step3 agent is running in Terminal 1.
 
@@ -163,12 +163,36 @@ def main():
     print()
 
     # =========================================================
-    # Step 4e: Poll for agent submission
+    # Step 4e: Trigger execution and poll for submission
     # =========================================================
 
     print("-" * 50)
-    print("4e: Waiting for agent to process and submit...")
+    print("4e: Triggering agent execution via /job/execute...")
     print("-" * 50)
+
+    import httpx
+
+    agent_url = os.getenv("AGENT_URL", "http://localhost:8000")
+    job_timeout = int(os.getenv("JOB_TIMEOUT", "30"))
+
+    try:
+        resp = httpx.post(
+            f"{agent_url}/apex/job/execute",
+            json={"job_id": job_id, "timeout": job_timeout},
+            timeout=job_timeout + 10,
+        )
+        print(f"  /job/execute returned {resp.status_code}")
+        if resp.status_code == 200:
+            data = resp.json()
+            print(f"  Job completed! TX: {data.get('txHash', 'N/A')}")
+        elif resp.status_code == 202:
+            print("  Job accepted, processing in background. Polling...")
+        else:
+            print(f"  Unexpected response: {resp.text[:200]}")
+    except Exception as e:
+        print(f"  /job/execute failed ({e}), falling back to polling...")
+
+    print()
     print("(Checking every 10 seconds)")
     print()
 

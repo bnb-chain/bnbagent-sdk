@@ -693,9 +693,28 @@ async def main():
     last_client_bal, last_provider_bal = cur_client, cur_provider
 
     # ══════════════════════════════════════════════════════════════════════
-    # Step 5: Wait for Agent (same as client_workflow.py Step 4)
+    # Step 5: Trigger Execution & Wait for Agent
     # ══════════════════════════════════════════════════════════════════════
-    banner(5, total_steps, "Waiting for News Agent to deliver...")
+    banner(5, total_steps, "Trigger /job/execute & Wait for Delivery")
+
+    execute_url = f"{AGENT_B_URL}/apex/job/execute"
+    print(f"  POST {execute_url}")
+    print(f"  Payload: {json.dumps({'job_id': job_id, 'timeout': 30})}")
+    async with httpx.AsyncClient(timeout=60) as http_client:
+        try:
+            resp = await http_client.post(
+                execute_url, json={"job_id": job_id, "timeout": 30},
+            )
+            print(f"  Response: {resp.status_code}")
+            if resp.status_code == 200:
+                data = resp.json()
+                print(f"  Job completed immediately! TX: {data.get('txHash', 'N/A')}")
+            elif resp.status_code == 202:
+                print("  Job accepted, processing in background. Polling...")
+            else:
+                print(f"  Unexpected: {resp.text[:200]}")
+        except Exception as e:
+            print(f"  /job/execute failed ({e}), falling back to polling...")
 
     print("  Polling job status every 10s...")
     while True:

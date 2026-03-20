@@ -17,7 +17,7 @@ Usage:
     python test_quickstart_e2e.py --skip-settle   # skip waiting for liveness (faster)
 
 Environment (optional):
-    POLL_INTERVAL  - Agent poll interval in seconds (default: 5)
+    JOB_TIMEOUT    - /job/execute timeout in seconds (default: 30)
     AGENT_PORT     - Agent server port (default: 8765)
 """
 
@@ -51,7 +51,7 @@ EVALUATOR_ADDRESS = os.getenv("APEX_EVALUATOR_ADDRESS", "")
 PAYMENT_TOKEN_ADDRESS = os.getenv("PAYMENT_TOKEN_ADDRESS", "0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565")
 WALLET_PASSWORD = os.getenv("WALLET_PASSWORD", "quickstart-demo")
 AGENT_PORT = int(os.getenv("AGENT_PORT", "8765"))
-POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "5"))
+JOB_TIMEOUT = int(os.getenv("JOB_TIMEOUT", "30"))
 
 SKIP_SETTLE = "--skip-settle" in sys.argv
 
@@ -192,7 +192,7 @@ async def start_agent_server() -> asyncio.Event:
     from contextlib import asynccontextmanager
     from fastapi import FastAPI
     from bnbagent.apex.config import APEXConfig
-    from bnbagent.apex.server.routes import create_apex_app
+    from bnbagent.apex.server import create_apex_app
 
     # Simple task processor — same pattern as step3
     def process_task(job: dict) -> str:
@@ -200,12 +200,11 @@ async def start_agent_server() -> asyncio.Event:
 
     server_ready = asyncio.Event()
 
-    # Use create_apex_app with on_job — SDK handles polling automatically
+    # Use create_apex_app with on_job — SDK handles startup scan + /job/execute
     app = create_apex_app(
         on_job=process_task,
-        poll_interval=POLL_INTERVAL,
+        job_timeout=30.0,
         task_metadata={"agent": "e2e-test"},
-        middleware=False,
     )
 
     # Wrap lifespan to also signal server_ready
@@ -323,8 +322,28 @@ def step4_create_and_fund_job(agent_address: str) -> int:
 # ---------------------------------------------------------------------------
 
 def step4e_wait_for_submission(job_id: int, timeout: int = 120) -> None:
-    """Wait for the agent server to pick up and submit the job."""
-    banner("Step 4e", "Wait for Agent Submission")
+    """Trigger /job/execute, then wait for the agent to submit the job."""
+    banner("Step 4e", "Trigger Execution & Wait for Submission")
+
+    import httpx
+
+    # Trigger agent execution via /job/execute
+    logger.info(f"Triggering /job/execute for job #{job_id}...")
+    try:
+        resp = httpx.post(
+            f"http://127.0.0.1:{AGENT_PORT}/apex/job/execute",
+            json={"job_id": job_id, "timeout": JOB_TIMEOUT},
+            timeout=JOB_TIMEOUT + 10,
+        )
+        logger.info(f"/job/execute returned {resp.status_code}")
+        if resp.status_code == 200:
+            logger.info(f"Job #{job_id} completed immediately!")
+            logger.info("Step 4e PASSED")
+            return
+        elif resp.status_code == 202:
+            logger.info("Job accepted, processing in background. Polling for completion...")
+    except Exception as e:
+        logger.warning(f"/job/execute call failed ({e}), falling back to polling...")
 
     from bnbagent import APEXClient, APEXStatus
 
@@ -377,7 +396,7 @@ def step4f_verify_deliverable(job_id: int) -> None:
     logger.info(f"On-chain deliverable hash: 0x{deliverable_hash.hex()}")
 
     # Read from local storage
-    storage_path = os.getenv("LOCAL_STORAGE_PATH", "./.agent-data")
+    storage_path = os.getenv("STORAGE_LOCAL_PATH", "./.agent-data")
     deliverable_file = os.path.join(storage_path, f"job-{job_id}.json")
 
     if not os.path.isfile(deliverable_file):

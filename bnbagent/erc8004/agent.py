@@ -241,7 +241,7 @@ class ERC8004Agent:
                 ):
                     return {
                         "name": agent.get("name"),
-                        "agent_id": agent.get("token_id"),
+                        "agent_id": int(agent["token_id"]),
                         "agent_uri": agent.get("agent_uri", ""),
                         "owner_address": agent.get("owner_address"),
                     }

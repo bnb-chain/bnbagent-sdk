@@ -42,7 +42,6 @@ class TestInit:
     def test_missing_private_key_no_keystore_auto_generates(self, monkeypatch, tmp_path):
         """When no PRIVATE_KEY and no keystore, from_env() succeeds and auto-generates a wallet."""
         monkeypatch.delenv("PRIVATE_KEY", raising=False)
-        monkeypatch.delenv("BSC_RPC_URL", raising=False)
         monkeypatch.delenv("RPC_URL", raising=False)
         monkeypatch.setenv("WALLET_PASSWORD", "test-pw")
         import bnbagent.wallets.evm_wallet_provider as wp
@@ -105,26 +104,15 @@ class TestInit:
 
 
 class TestFromEnv:
-    def test_bsc_rpc_url_priority(self, monkeypatch):
-        monkeypatch.setenv("BSC_RPC_URL", "https://bsc.example.com")
-        monkeypatch.setenv("RPC_URL", "https://generic.example.com")
+    def test_rpc_url_from_env(self, monkeypatch):
+        monkeypatch.setenv("RPC_URL", "https://rpc.example.com")
         monkeypatch.setenv("ERC8183_ADDRESS", "0x" + "ab" * 20)
         monkeypatch.setenv("PRIVATE_KEY", VALID_PK)
         monkeypatch.setenv("WALLET_PASSWORD", VALID_PASSWORD)
         config = APEXConfig.from_env()
-        assert config.rpc_url == "https://bsc.example.com"
-
-    def test_rpc_url_fallback(self, monkeypatch):
-        monkeypatch.delenv("BSC_RPC_URL", raising=False)
-        monkeypatch.setenv("RPC_URL", "https://generic.example.com")
-        monkeypatch.setenv("ERC8183_ADDRESS", "0x" + "ab" * 20)
-        monkeypatch.setenv("PRIVATE_KEY", VALID_PK)
-        monkeypatch.setenv("WALLET_PASSWORD", VALID_PASSWORD)
-        config = APEXConfig.from_env()
-        assert config.rpc_url == "https://generic.example.com"
+        assert config.rpc_url == "https://rpc.example.com"
 
     def test_missing_vars_raises(self, monkeypatch):
-        monkeypatch.delenv("BSC_RPC_URL", raising=False)
         monkeypatch.delenv("RPC_URL", raising=False)
         monkeypatch.delenv("ERC8183_ADDRESS", raising=False)
         monkeypatch.delenv("PRIVATE_KEY", raising=False)
@@ -132,7 +120,7 @@ class TestFromEnv:
             APEXConfig.from_env()
 
     def test_optional_fields_from_env(self, monkeypatch):
-        monkeypatch.setenv("BSC_RPC_URL", "https://rpc.example.com")
+        monkeypatch.setenv("RPC_URL", "https://rpc.example.com")
         monkeypatch.setenv("ERC8183_ADDRESS", "0x" + "ab" * 20)
         monkeypatch.setenv("PRIVATE_KEY", VALID_PK)
         monkeypatch.setenv("WALLET_PASSWORD", VALID_PASSWORD)
@@ -152,7 +140,7 @@ class TestFromEnv:
 
 class TestFromEnvOptional:
     def test_returns_none_when_missing(self, monkeypatch):
-        monkeypatch.delenv("BSC_RPC_URL", raising=False)
+        monkeypatch.delenv("RPC_URL", raising=False)
         monkeypatch.delenv("RPC_URL", raising=False)
         monkeypatch.delenv("ERC8183_ADDRESS", raising=False)
         monkeypatch.delenv("PRIVATE_KEY", raising=False)
@@ -160,7 +148,7 @@ class TestFromEnvOptional:
         assert result is None
 
     def test_returns_config_when_valid(self, monkeypatch):
-        monkeypatch.setenv("BSC_RPC_URL", "https://rpc.example.com")
+        monkeypatch.setenv("RPC_URL", "https://rpc.example.com")
         monkeypatch.setenv("ERC8183_ADDRESS", "0x" + "ab" * 20)
         monkeypatch.setenv("PRIVATE_KEY", VALID_PK)
         monkeypatch.setenv("WALLET_PASSWORD", VALID_PASSWORD)
