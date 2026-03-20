@@ -256,6 +256,56 @@ class APEXClient(ContractClientMixin):
             "description": raw[8],
         }
 
+    def get_jobs_batch(self, job_ids: list[int]) -> list[dict[str, Any] | None]:
+        """Batch-fetch multiple jobs via Multicall3.
+
+        Uses a single ``eth_call`` per batch (default 100) instead of one RPC
+        call per job, which is dramatically cheaper under public-node rate limits.
+
+        Args:
+            job_ids: List of job IDs to fetch.
+
+        Returns:
+            List matching input order.  Each element is a job dict (same format
+            as ``get_job()``) or ``None`` if that particular call failed.
+        """
+        if not job_ids:
+            return []
+
+        from ..core.multicall import multicall_read
+
+        raw_results = multicall_read(
+            w3=self.w3,
+            contract=self.contract,
+            function_name="getJob",
+            call_args_list=[(jid,) for jid in job_ids],
+        )
+
+        jobs: list[dict[str, Any] | None] = []
+        for idx, (success, decoded) in enumerate(raw_results):
+            if success and decoded:
+                try:
+                    raw = decoded
+                    jobs.append(
+                        {
+                            "jobId": job_ids[idx],
+                            "client": Web3.to_checksum_address(raw[0]),
+                            "provider": Web3.to_checksum_address(raw[1]),
+                            "evaluator": Web3.to_checksum_address(raw[2]),
+                            "hook": Web3.to_checksum_address(raw[3]),
+                            "budget": raw[4],
+                            "expiredAt": raw[5],
+                            "status": APEXStatus(raw[6]),
+                            "deliverable": raw[7],
+                            "description": raw[8],
+                        }
+                    )
+                except Exception:
+                    jobs.append(None)
+            else:
+                jobs.append(None)
+        return jobs
+
     def get_job_status(self, job_id: int) -> APEXStatus:
         """Get the status of a job."""
         return APEXStatus(self._call_with_retry(self.contract.functions.getJobStatus(job_id)))

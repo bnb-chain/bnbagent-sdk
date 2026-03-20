@@ -100,7 +100,7 @@ Not part of the public API. Provides shared plumbing for protocol modules.
 | File | Purpose |
 |------|---------|
 | `routes.py` | `create_apex_app()` / `create_apex_routes()` — FastAPI router factory; `APEXState` |
-| `job_ops.py` | `APEXJobOps` — async wrapper over synchronous `APEXClient` via `asyncio.to_thread()` |
+| `job_ops.py` | `APEXJobOps` — async wrapper over synchronous `APEXClient` via `asyncio.to_thread()`; includes `get_response()` for retrieving stored deliverables and `run_job_loop()` for background job polling |
 | `middleware.py` | `APEXMiddleware` — job verification middleware for incoming requests |
 
 ### `bnbagent/wallets/` — Wallet Providers

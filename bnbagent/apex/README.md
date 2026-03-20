@@ -22,23 +22,15 @@ and settlement -- letting AI agents transact with each other trustlessly.
 
 ## Quick Start
 
+### Standalone app
+
 ```python
-from bnbagent.apex.server.routes import create_apex_app
+from bnbagent.apex.server import create_apex_app
 
 def execute_job(job: dict) -> str:
-    """Called automatically for each funded job.
-
-    Args:
-        job: Job dict with keys: jobId (int), description (str), budget (int, wei),
-             client (str), provider (str), evaluator (str), status (str), expiredAt (int).
-
-    Returns:
-        Result string — uploaded to storage and submitted on-chain as deliverable.
-        Or tuple[str, dict] to attach per-job metadata.
-    """
+    """Called automatically for each funded job."""
     return f"Processed: {job['description']}"
 
-# on_job enables automatic job discovery, verification, and submission
 app = create_apex_app(on_job=execute_job)
 ```
 
@@ -46,7 +38,20 @@ app = create_apex_app(on_job=execute_job)
 uvicorn myagent:app --port 8000
 ```
 
-Or with explicit configuration:
+### Mount on an existing app
+
+```python
+from fastapi import FastAPI
+from bnbagent.apex.server import APEX
+
+app = FastAPI()
+
+apex = APEX(on_job=execute_job)
+apex.mount(app, prefix="/apex")
+# Routes, middleware, and job loop — all wired up.
+```
+
+### With explicit configuration
 
 ```python
 from bnbagent.apex.config import APEXConfig
@@ -58,6 +63,275 @@ app = create_apex_app(config=config, on_job=execute_job)
 ```
 
 ## API Reference
+
+### HTTP Endpoints
+
+All endpoints are mounted under a configurable prefix (default `/apex`).
+
+---
+
+#### `POST /negotiate`
+
+Client proposes job terms; agent responds with a price quote or rejection. Both request and response are hashed for on-chain anchoring.
+
+**Request body:**
+
+```json
+{
+  "task_description": "Search for BNB Chain news",
+  "terms": {
+    "service_type": "blockchain-news",
+    "deliverables": "JSON array of news articles",
+    "quality_standards": "Must include title, URL, and publication date",
+    "deadline_seconds": 300
+  }
+}
+```
+
+**Response — accepted (200):**
+
+```json
+{
+  "request": { "task_description": "...", "terms": { ... } },
+  "request_hash": "0xabc...",
+  "response": {
+    "accepted": true,
+    "terms": {
+      "service_type": "blockchain-news",
+      "deliverables": "JSON array of news articles",
+      "quality_standards": "Must include title, URL, and publication date",
+      "deadline_seconds": 300,
+      "price": "1000000000000000000",
+      "currency": "0xc70B...5565",
+      "evaluation_required": true,
+      "evaluator_type": "uma_oov3"
+    },
+    "estimated_completion_seconds": 120
+  },
+  "response_hash": "0xdef..."
+}
+```
+
+**Response — rejected (200):**
+
+```json
+{
+  "request": { ... },
+  "request_hash": "0xabc...",
+  "response": {
+    "accepted": false,
+    "reason_code": "0x06",
+    "reason": "Unsupported service type: foo. Supported: blockchain-news"
+  },
+  "response_hash": "0x..."
+}
+```
+
+**Errors:** `400` if body is not valid JSON or missing `terms`.
+
+---
+
+#### `POST /submit`
+
+Submit a job deliverable. Verifies the job on-chain, uploads the result to storage (IPFS or local), computes a content hash, and submits the hash on-chain.
+
+**Request body:**
+
+```json
+{
+  "job_id": 42,
+  "response_content": "Here are the latest BNB Chain news articles...",
+  "metadata": { "source": "duckduckgo", "query": "BNB Chain" }
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `job_id` | int | Yes | On-chain job ID |
+| `response_content` | string | No | Agent's deliverable text (default `""`) |
+| `metadata` | object | No | Extra metadata merged into the stored record |
+
+**Response — success (200):**
+
+```json
+{
+  "success": true,
+  "txHash": "0x123...",
+  "dataUrl": "ipfs://Qm.../job-42.json",
+  "deliverableHash": "0xabc..."
+}
+```
+
+**Response — failure (500):**
+
+```json
+{
+  "success": false,
+  "error": "Job verification failed: Job status is SUBMITTED, expected FUNDED"
+}
+```
+
+---
+
+#### `GET /job/{job_id}`
+
+Look up on-chain job details.
+
+**Path params:** `job_id` (int) — the on-chain job ID.
+
+**Response (200):**
+
+```json
+{
+  "success": true,
+  "jobId": 42,
+  "client": "0x1111...1111",
+  "provider": "0x2222...2222",
+  "evaluator": "0x3333...3333",
+  "hook": "0x0000...0000",
+  "budget": 1000000000000000000,
+  "expiredAt": 1742500000,
+  "status": 1,
+  "deliverable": "0xabc...",
+  "description": "Search for BNB Chain news"
+}
+```
+
+`status` values: `0` = CREATED, `1` = FUNDED, `2` = SUBMITTED, `3` = COMPLETED, `4` = REJECTED.
+
+**Error (500):** `{"success": false, "error": "..."}`.
+
+---
+
+#### `GET /job/{job_id}/response`
+
+After `/submit` completes, fetch the full deliverable stored by the agent.
+
+**Path params:** `job_id` (int) — the on-chain job ID.
+
+**Response (200):**
+
+```json
+{
+  "success": true,
+  "response": "Here are the latest BNB Chain news articles...",
+  "job": {
+    "id": 42,
+    "description": "Search for BNB Chain news",
+    "budget": "1000000000000000000",
+    "client": "0x1111...1111",
+    "provider": "0x2222...2222",
+    "evaluator": "0x3333...3333",
+    "hook": "0x0000...0000",
+    "expired_at": 1742500000,
+    "payment_token": "0xc70B...5565"
+  },
+  "negotiation": {
+    "budget_history": [
+      { "amount": "1000000000000000000", "block": 12345678, "tx": "0x..." }
+    ]
+  },
+  "metadata": {
+    "source": "duckduckgo",
+    "timestamps": { "submitted_at": 1742400000 }
+  }
+}
+```
+
+**Error (404):** `{"success": false, "error": "Response not found for job 42"}`.
+
+---
+
+#### `GET /job/{job_id}/verify`
+
+Pre-check whether a job can be processed by this agent. Validates: status is `FUNDED`, this agent is the provider, not expired, and budget meets `service_price`.
+
+**Path params:** `job_id` (int) — the on-chain job ID.
+
+**Response — valid (200):**
+
+```json
+{
+  "valid": true,
+  "job": { "success": true, "jobId": 42, "status": 1, ... },
+  "warnings": null
+}
+```
+
+**Response — with warning (200):**
+
+```json
+{
+  "valid": true,
+  "job": { ... },
+  "warnings": [
+    { "code": "CLIENT_AS_EVALUATOR", "message": "Evaluator is same as client - client can reject and get refund after you submit" }
+  ]
+}
+```
+
+**Response — invalid (400):**
+
+```json
+{ "valid": false, "error": "Job status is SUBMITTED, expected FUNDED", "error_code": 409 }
+```
+
+**Response — budget too low (400):**
+
+```json
+{
+  "valid": false,
+  "error": "Job budget (500) is below agent's service price (1000000000000000000)",
+  "error_code": 402,
+  "service_price": "1000000000000000000",
+  "decimals": 18
+}
+```
+
+---
+
+#### `GET /status`
+
+Agent info and pricing.
+
+**Response (200):**
+
+```json
+{
+  "status": "ok",
+  "agent_address": "0x2222...2222",
+  "erc8183_address": "0x4444...4444",
+  "service_price": "1000000000000000000",
+  "currency": "0xc70B...5565",
+  "decimals": 18
+}
+```
+
+---
+
+#### `GET /health`
+
+Health check for load balancers and monitoring.
+
+**Response (200):**
+
+```json
+{ "status": "ok", "service": "APEX Agent" }
+```
+
+---
+
+### `APEX`
+
+Extension class for mounting APEX onto an existing FastAPI app. Bundles routes,
+middleware, and background job loop into a single `.mount(app)` call.
+
+| Method / Property | Description |
+|---|---|
+| `APEX(config=..., on_job=..., middleware=True, ...)` | Constructor — same parameters as `create_apex_app()` |
+| `.mount(app, prefix="/apex")` | Mount routes, middleware, and job-loop lifecycle onto *app* |
+| `.state` | `APEXState` — shared state (config, job\_ops, negotiation handler) |
+| `.job_ops` | Shortcut for `state.job_ops` |
 
 ### `APEXClient`
 
@@ -76,6 +350,18 @@ contract. Inherits `ContractClientMixin` for nonce management and retries.
 | `claim_refund(job_id)` | Claim refund for a rejected/expired job. |
 | `get_job(job_id)` | Read full job struct from contract. |
 | `get_job_status(job_id)` | Return `APEXStatus` enum value. |
+
+### `APEXJobOps`
+
+Async wrapper over `APEXClient` for use in FastAPI and other async frameworks.
+
+| Method | Description |
+|---|---|
+| `submit_result(job_id, response_content, ...)` | Upload deliverable to storage and submit hash on-chain. |
+| `get_job(job_id)` | Get job details from chain (async). |
+| `get_response(job_id)` | Retrieve stored deliverable response from storage (agent response, job context, metadata). |
+| `get_pending_jobs(...)` | Scan for funded jobs assigned to this agent. Uses a hybrid approach: Multicall3 batch scan on startup, then progressive event scanning for subsequent polls. |
+| `verify_job(job_id)` | Verify job is processable (funded, correct provider, not expired, budget sufficient). |
 | `payment_token` | Property -- BEP-20 token address used for payments. |
 | `next_job_id` | Property -- next available job ID. |
 

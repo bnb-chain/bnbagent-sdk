@@ -350,3 +350,57 @@ class TestCallWithRetry:
         fn.call.side_effect = Exception("some other error")
         with pytest.raises(Exception, match="some other error"):
             apex_client._call_with_retry(fn)
+
+
+class TestGetJobsBatch:
+    def test_success(self, apex_client):
+        raw_job = (
+            FAKE_ADDRESS,       # client
+            FAKE_ADDRESS,       # provider
+            FAKE_ADDRESS,       # evaluator
+            "0x" + "00" * 20,   # hook
+            1000,               # budget
+            9999999999,         # expiredAt
+            2,                  # status (FUNDED)
+            b"\x00" * 32,      # deliverable
+            "test description", # description
+        )
+
+        with patch("bnbagent.core.multicall.multicall_read") as mock_mc:
+            mock_mc.return_value = [
+                (True, raw_job),
+                (True, raw_job),
+                (True, raw_job),
+            ]
+            jobs = apex_client.get_jobs_batch([0, 1, 2])
+
+        assert len(jobs) == 3
+        for i, job in enumerate(jobs):
+            assert job is not None
+            assert job["jobId"] == i
+            assert job["budget"] == 1000
+            assert job["status"] == APEXStatus.FUNDED
+
+    def test_partial_failure(self, apex_client):
+        raw_job = (
+            FAKE_ADDRESS, FAKE_ADDRESS, FAKE_ADDRESS,
+            "0x" + "00" * 20, 1000, 9999999999, 2,
+            b"\x00" * 32, "test",
+        )
+
+        with patch("bnbagent.core.multicall.multicall_read") as mock_mc:
+            mock_mc.return_value = [
+                (True, raw_job),
+                (False, None),
+                (True, raw_job),
+            ]
+            jobs = apex_client.get_jobs_batch([0, 1, 2])
+
+        assert len(jobs) == 3
+        assert jobs[0] is not None
+        assert jobs[1] is None
+        assert jobs[2] is not None
+
+    def test_empty(self, apex_client):
+        jobs = apex_client.get_jobs_batch([])
+        assert jobs == []
