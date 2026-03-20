@@ -322,8 +322,28 @@ def step4_create_and_fund_job(agent_address: str) -> int:
 # ---------------------------------------------------------------------------
 
 def step4e_wait_for_submission(job_id: int, timeout: int = 120) -> None:
-    """Wait for the agent server to pick up and submit the job."""
-    banner("Step 4e", "Wait for Agent Submission")
+    """Trigger /job/execute, then wait for the agent to submit the job."""
+    banner("Step 4e", "Trigger Execution & Wait for Submission")
+
+    import httpx
+
+    # Trigger agent execution via /job/execute
+    logger.info(f"Triggering /job/execute for job #{job_id}...")
+    try:
+        resp = httpx.post(
+            f"http://127.0.0.1:{AGENT_PORT}/apex/job/execute",
+            json={"job_id": job_id, "timeout": JOB_TIMEOUT},
+            timeout=JOB_TIMEOUT + 10,
+        )
+        logger.info(f"/job/execute returned {resp.status_code}")
+        if resp.status_code == 200:
+            logger.info(f"Job #{job_id} completed immediately!")
+            logger.info("Step 4e PASSED")
+            return
+        elif resp.status_code == 202:
+            logger.info("Job accepted, processing in background. Polling for completion...")
+    except Exception as e:
+        logger.warning(f"/job/execute call failed ({e}), falling back to polling...")
 
     from bnbagent import APEXClient, APEXStatus
 
