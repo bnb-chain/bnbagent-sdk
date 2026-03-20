@@ -1,10 +1,10 @@
 """
 Blockchain News Agent — Mount on an existing FastAPI app.
 
-Demonstrates using the APEX class to initialize APEX routes onto an existing
-FastAPI application that already has its own endpoints and lifespan.
+Demonstrates mounting the APEX sub-app onto an existing FastAPI application
+that already has its own endpoints and lifespan.
 
-Compare with service.py which uses create_apex_app() for a standalone agent.
+Compare with service.py which also uses create_apex_app() mounted on /apex.
 
 Usage:
     cd examples/agent-server
@@ -18,11 +18,12 @@ Environment (agent-server/.env):
     SERVICE_PRICE=1000000000000000000           — Negotiation price (1 U)
     PAYMENT_TOKEN_ADDRESS                      — BEP20 payment token
     PORT=8003                                  — Server port
-    POLL_INTERVAL=15                           — Job polling interval
+    JOB_TIMEOUT=120                            — /job/execute timeout (seconds)
 """
 
 import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -35,7 +36,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 # SDK imports
 from bnbagent.apex.config import APEXConfig
-from bnbagent.apex.server import APEX
+from bnbagent.apex.server import create_apex_app
 
 logging.basicConfig(
     level=logging.INFO,
@@ -120,25 +121,32 @@ def process_task(job: dict) -> tuple[str, dict]:
 
 
 # ---------------------------------------------------------------------------
+# Mount APEX sub-app onto the existing app
+# ---------------------------------------------------------------------------
+# Starlette does not propagate lifespan events to mounted sub-apps, so
+# we call apex_app.state.startup() explicitly in the parent's lifespan.
+
+apex_app = create_apex_app(config=config, on_job=process_task, prefix="")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Trigger the one-time startup scan for pending jobs
+    await apex_app.state.startup()
+    yield
+
+
+# ---------------------------------------------------------------------------
 # Existing FastAPI app — your own endpoints, middleware, lifespan, etc.
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
     title="Blockchain News Agent",
     description="News search agent with APEX payment protocol",
+    lifespan=lifespan,
 )
 
-
-# ---------------------------------------------------------------------------
-# Mount APEX onto the existing app — one line
-# ---------------------------------------------------------------------------
-
-apex = APEX(
-    config=config,
-    on_job=process_task,
-    middleware=False,
-)
-apex.init_app(app, prefix="/apex")
+app.mount("/apex", apex_app)
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +178,7 @@ class SearchResponse(BaseModel):
 async def root():
     return {
         "service": "Blockchain News Agent",
-        "agent_address": apex.job_ops.agent_address,
+        "agent_address": apex_app.state.apex.job_ops.agent_address,
         "endpoints": {
             "search": "/search",
             "apex_status": "/apex/status",

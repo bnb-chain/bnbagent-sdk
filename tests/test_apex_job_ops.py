@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from bnbagent.apex.client import APEXStatus
-from bnbagent.apex.server.job_ops import APEXJobOps, run_job_loop
+from bnbagent.apex.server.job_ops import APEXJobOps
 from tests.conftest import FAKE_ADDRESS, FAKE_PRIVATE_KEY, FAKE_TX_HASH
 
 
@@ -54,6 +54,7 @@ def _mock_client(ops, job_data=None):
     }
     client.w3.eth.block_number = 1000
     client.get_job_funded_events.return_value = []
+    client.get_submit_data_url.return_value = None
 
     ops._client = client
     return client
@@ -220,6 +221,23 @@ class TestGetResponse:
         result = await ops.get_response(999)
         assert result["success"] is False
         assert "not found" in result["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_from_chain_fallback(self):
+        """get_response recovers data URL from submit tx calldata."""
+        storage = AsyncMock()
+        stored_data = {"response": "ipfs result", "job": {"id": 7}}
+        storage.download.return_value = stored_data
+        ops = _make_job_ops(storage=storage)
+        client = _mock_client(ops)
+        client.get_submit_data_url.return_value = "ipfs://QmRecovered"
+
+        result = await ops.get_response(7)
+        assert result["success"] is True
+        assert result["response"] == "ipfs result"
+        storage.download.assert_called_once_with("ipfs://QmRecovered")
+        # Should be cached for next time
+        assert ops._deliverable_urls[7] == "ipfs://QmRecovered"
 
     @pytest.mark.asyncio
     async def test_no_storage(self):
@@ -668,150 +686,3 @@ class TestVerifyJob:
         assert result["decimals"] == 6
 
 
-class TestRunJobLoop:
-    @pytest.mark.asyncio
-    async def test_skipped_jobs_not_re_verified(self):
-        """Same job should only be verified once after being skipped."""
-        ops = _make_job_ops(service_price=10**18)
-        client = _mock_client(ops)
-        ops._startup_scan_done = True
-        ops._last_known_next_id = 1
-
-        # Job with insufficient budget
-        job_data = client.get_job.return_value.copy()
-        job_data["budget"] = 100  # way below service_price
-        client.get_job.return_value = job_data
-
-        future_ts = int(time.time()) + 3600
-        # Progressive Multicall3 path: next_job_id=2 means 1 new job
-        client.next_job_id.return_value = 2
-        client.get_jobs_batch.return_value = [
-            {"jobId": 1, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
-             "expiredAt": future_ts, "description": "test job", "budget": 100,
-             "client": "0x" + "cc" * 20, "evaluator": "0x" + "ee" * 20,
-             "hook": "0x" + "00" * 20, "deliverable": b"\x00" * 32},
-        ]
-
-        poll_count = 0
-
-        async def _patched_get_pending(from_block=None, to_block="latest", max_block_range=45000):
-            nonlocal poll_count
-            poll_count += 1
-            if poll_count > 2:
-                raise KeyboardInterrupt  # stop loop
-            # Reset next_id so the multicall path returns the same job again
-            ops._last_known_next_id = 1
-            return await ops._original_get_pending()
-
-        # Save original and patch
-        ops._original_get_pending = ops.get_pending_jobs
-        ops.get_pending_jobs = _patched_get_pending
-
-        import asyncio
-
-        with pytest.raises(KeyboardInterrupt):
-            await run_job_loop(
-                job_ops=ops,
-                on_job=lambda job: "result",
-                poll_interval=0,
-            )
-
-        # verify_job called only once (skipped on second poll)
-        assert client.get_job.call_count <= 2  # verify calls get_job once
-
-    @pytest.mark.asyncio
-    async def test_on_job_skipped_sync_callback(self):
-        """Sync on_job_skipped callback is called with job and reason."""
-        ops = _make_job_ops(service_price=10**18)
-        client = _mock_client(ops)
-        ops._startup_scan_done = True
-        ops._last_known_next_id = 1
-
-        job_data = client.get_job.return_value.copy()
-        job_data["budget"] = 100
-        client.get_job.return_value = job_data
-
-        future_ts = int(time.time()) + 3600
-        client.next_job_id.return_value = 2
-        client.get_jobs_batch.return_value = [
-            {"jobId": 1, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
-             "expiredAt": future_ts, "description": "test job", "budget": 100,
-             "client": "0x" + "cc" * 20, "evaluator": "0x" + "ee" * 20,
-             "hook": "0x" + "00" * 20, "deliverable": b"\x00" * 32},
-        ]
-
-        callback_calls = []
-
-        def on_skipped(job, reason):
-            callback_calls.append((job, reason))
-
-        poll_count = 0
-
-        async def _patched_get_pending(from_block=None, to_block="latest", max_block_range=45000):
-            nonlocal poll_count
-            poll_count += 1
-            if poll_count > 1:
-                raise KeyboardInterrupt
-            return await ops._original_get_pending()
-
-        ops._original_get_pending = ops.get_pending_jobs
-        ops.get_pending_jobs = _patched_get_pending
-
-        with pytest.raises(KeyboardInterrupt):
-            await run_job_loop(
-                job_ops=ops,
-                on_job=lambda job: "result",
-                poll_interval=0,
-                on_job_skipped=on_skipped,
-            )
-
-        assert len(callback_calls) == 1
-        assert "budget" in callback_calls[0][1].lower() or "service price" in callback_calls[0][1].lower()
-
-    @pytest.mark.asyncio
-    async def test_on_job_skipped_async_callback(self):
-        """Async on_job_skipped callback is awaited."""
-        ops = _make_job_ops(service_price=10**18)
-        client = _mock_client(ops)
-        ops._startup_scan_done = True
-        ops._last_known_next_id = 1
-
-        job_data = client.get_job.return_value.copy()
-        job_data["budget"] = 100
-        client.get_job.return_value = job_data
-
-        future_ts = int(time.time()) + 3600
-        client.next_job_id.return_value = 2
-        client.get_jobs_batch.return_value = [
-            {"jobId": 1, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
-             "expiredAt": future_ts, "description": "test job", "budget": 100,
-             "client": "0x" + "cc" * 20, "evaluator": "0x" + "ee" * 20,
-             "hook": "0x" + "00" * 20, "deliverable": b"\x00" * 32},
-        ]
-
-        callback_calls = []
-
-        async def on_skipped(job, reason):
-            callback_calls.append((job, reason))
-
-        poll_count = 0
-
-        async def _patched_get_pending(from_block=None, to_block="latest", max_block_range=45000):
-            nonlocal poll_count
-            poll_count += 1
-            if poll_count > 1:
-                raise KeyboardInterrupt
-            return await ops._original_get_pending()
-
-        ops._original_get_pending = ops.get_pending_jobs
-        ops.get_pending_jobs = _patched_get_pending
-
-        with pytest.raises(KeyboardInterrupt):
-            await run_job_loop(
-                job_ops=ops,
-                on_job=lambda job: "result",
-                poll_interval=0,
-                on_job_skipped=on_skipped,
-            )
-
-        assert len(callback_calls) == 1

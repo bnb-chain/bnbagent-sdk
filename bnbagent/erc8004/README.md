@@ -104,7 +104,7 @@ Override with env vars when needed:
 
 | Variable | Description | Default |
 |---|---|---|
-| `BSC_RPC_URL` | JSON-RPC endpoint | Network default |
+| `RPC_URL` | JSON-RPC endpoint | Network default |
 | `IDENTITY_REGISTRY_ADDRESS` | Registry contract address | Network default |
 
 ## Network Support

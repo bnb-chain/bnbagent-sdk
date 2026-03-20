@@ -20,11 +20,9 @@ Example:
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import logging
 import time
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from web3 import Web3
@@ -274,8 +272,16 @@ class APEXJobOps:
         """
         Get stored deliverable response for a job.
 
-        Looks up the data URL from in-memory cache (populated by submit_result),
-        then falls back to reading by convention filename for local storage.
+        Resolution order:
+        1. In-memory cache (populated by submit_result in the same process)
+        2. Convention filename for local storage (``job-{id}.json``)
+        3. On-chain fallback: decode ``optParams`` from the submit tx calldata
+           to recover the data URL, then download from storage.
+
+        The on-chain fallback (step 3) costs 2 RPC calls (``eth_getLogs`` on
+        the indexed ``JobSubmitted`` event + ``eth_getTransactionByHash``) and
+        only triggers when steps 1 and 2 miss — typically after a process
+        restart with IPFS storage.
 
         Args:
             job_id: The job ID
@@ -286,7 +292,7 @@ class APEXJobOps:
         if not self._storage:
             return {"success": False, "error": "No storage configured"}
 
-        # Try in-memory cache first (populated by submit_result)
+        # 1. In-memory cache (populated by submit_result)
         url = self._deliverable_urls.get(job_id)
         if url:
             try:
@@ -295,7 +301,7 @@ class APEXJobOps:
             except Exception as e:
                 logger.warning(f"[APEXJobOps] get_response({job_id}) download failed: {e}")
 
-        # Fallback: try convention filename for local storage
+        # 2. Convention filename for local storage
         if hasattr(self._storage, "_base"):
             try:
                 filepath = self._storage._base / f"job-{job_id}.json"
@@ -305,6 +311,21 @@ class APEXJobOps:
                     return {"success": True, **data}
             except Exception as e:
                 logger.warning(f"[APEXJobOps] get_response({job_id}) file read failed: {e}")
+
+        # 3. On-chain fallback: recover data URL from submit tx calldata
+        try:
+            client = self._get_client()
+            data_url = await asyncio.to_thread(client.get_submit_data_url, job_id)
+            if data_url:
+                logger.info(
+                    f"[APEXJobOps] get_response({job_id}) recovered URL from chain: {data_url}"
+                )
+                # Cache for subsequent requests
+                self._deliverable_urls[job_id] = data_url
+                data = await self._storage.download(data_url)
+                return {"success": True, **data}
+        except Exception as e:
+            logger.warning(f"[APEXJobOps] get_response({job_id}) on-chain fallback failed: {e}")
 
         return {"success": False, "error": f"Response not found for job {job_id}"}
 
@@ -661,123 +682,3 @@ class APEXJobOps:
     def apex_client(self) -> APEXClient:
         """Get the underlying APEXClient instance."""
         return self._get_client()
-
-
-async def run_job_loop(
-    job_ops: APEXJobOps,
-    on_job: Callable[..., Any],
-    poll_interval: int = 10,
-    metadata: dict[str, Any] | None = None,
-    on_job_skipped: Callable[[dict, str], Any] | None = None,
-) -> None:
-    """Background loop: discover funded jobs → verify → process → submit.
-
-    Encapsulates the standard APEX agent polling pattern. Users provide a job
-    handler; the SDK handles discovery, verification, submission, and errors.
-
-    Args:
-        job_ops: APEXJobOps instance (from APEXState.job_ops)
-        on_job: Callback invoked for each funded job. Receives the job dict
-                and returns the result. Supports four signatures::
-
-                    def on_job(job: dict) -> str                    # sync
-                    async def on_job(job: dict) -> str              # async
-                    def on_job(job: dict) -> tuple[str, dict]       # sync + per-job metadata
-                    async def on_job(job: dict) -> tuple[str, dict] # async + per-job metadata
-
-        poll_interval: Seconds between polling cycles (default: 10)
-        metadata: Default metadata attached to every submission.
-                  Per-job metadata from ``on_job`` is merged on top.
-        on_job_skipped: Optional callback when a job fails verification.
-                        Called with ``(job_dict, reason_string)``.
-                        Supports both sync and async callables. Each job
-                        triggers the callback at most once (tracked via
-                        ``skipped_jobs`` set, reset on process restart).
-    """
-    is_async = inspect.iscoroutinefunction(on_job)
-    agent_addr = job_ops.agent_address
-    logger.info(f"[JobRunner] Starting job loop for {agent_addr}, poll every {poll_interval}s")
-
-    skipped_jobs: set[int] = set()
-
-    while True:
-        try:
-            result = await job_ops.get_pending_jobs()
-
-            if not result.get("success"):
-                logger.warning(f"[JobRunner] get_pending_jobs error: {result.get('error')}")
-                await asyncio.sleep(poll_interval)
-                continue
-
-            for job in result.get("jobs", []):
-                job_id = job["jobId"]
-
-                if job_id in skipped_jobs:
-                    continue
-
-                description = job.get("description", "")
-                logger.info(f"[JobRunner] Processing job #{job_id}: {description[:80]}")
-
-                # Verify
-                verification = await job_ops.verify_job(job_id)
-                if not verification["valid"]:
-                    skipped_jobs.add(job_id)
-                    reason = verification.get("error", "unknown")
-                    logger.warning(
-                        f"[JobRunner] Job #{job_id} skipped: {reason}"
-                    )
-                    if on_job_skipped:
-                        try:
-                            if inspect.iscoroutinefunction(on_job_skipped):
-                                await on_job_skipped(job, reason)
-                            else:
-                                await asyncio.to_thread(on_job_skipped, job, reason)
-                        except Exception as e:
-                            logger.error(f"[JobRunner] on_job_skipped callback error: {e}")
-                    continue
-
-                # Process — call user's job handler
-                try:
-                    if is_async:
-                        task_result = await on_job(job)
-                    else:
-                        task_result = await asyncio.to_thread(on_job, job)
-                except Exception as e:
-                    logger.error(f"[JobRunner] on_job failed for job #{job_id}: {e}")
-                    continue
-
-                # Parse result: str or (str, dict)
-                if isinstance(task_result, tuple):
-                    response_content, job_metadata = task_result
-                else:
-                    response_content = task_result
-                    job_metadata = None
-
-                # Merge metadata: defaults ← per-job overrides
-                merged_meta = dict(metadata) if metadata else {}
-                if job_metadata:
-                    merged_meta.update(job_metadata)
-
-                # Submit
-                submission = await job_ops.submit_result(
-                    job_id=job_id,
-                    response_content=response_content,
-                    metadata=merged_meta or None,
-                )
-
-                if submission.get("success"):
-                    logger.info(
-                        f"[JobRunner] Job #{job_id} submitted! TX: {submission['txHash']}"
-                    )
-                    if submission.get("dataUrl"):
-                        logger.info(f"[JobRunner]   Storage: {submission['dataUrl']}")
-                else:
-                    logger.error(
-                        f"[JobRunner] Job #{job_id} submission failed: "
-                        f"{submission.get('error')}"
-                    )
-
-        except Exception as e:
-            logger.error(f"[JobRunner] Polling error: {e}")
-
-        await asyncio.sleep(poll_interval)

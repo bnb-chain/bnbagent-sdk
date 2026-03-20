@@ -6,7 +6,7 @@ A production-like APEX agent that searches for blockchain news using DuckDuckGo.
 
 1. Agent registers on ERC-8004 identity registry
 2. Clients create funded APEX jobs with search queries
-3. Agent polls for funded jobs, searches news, submits results to IPFS
+3. Agent scans for funded jobs on startup, accepts /job/execute requests, submits results to IPFS
 4. APEX Evaluator handles settlement after liveness period
 
 ## Setup
@@ -19,7 +19,7 @@ cp .env.example .env
 
 ## Usage
 
-Three entry points demonstrate different integration patterns — from one-line setup to full manual control:
+Two entry points demonstrate different integration patterns:
 
 ### Option 1: Standalone app (`service.py`) — `create_apex_app()`
 
@@ -40,9 +40,9 @@ from bnbagent.apex.server.routes import create_apex_app
 app = create_apex_app(config=config, on_job=process_task)
 ```
 
-### Option 2: Initialize on existing app (`service_mount.py`) — `APEX(...).init_app(app)`
+### Option 2: Mount onto existing app (`service_mount.py`) — `create_apex_app()` + `app.mount()`
 
-Initializes APEX onto an existing FastAPI app that has its own routes and lifecycle. Use this when adding APEX to an app that already does other things.
+Creates an APEX sub-application and mounts it onto an existing FastAPI app. Use this when adding APEX to an app that already does other things.
 
 ```bash
 python scripts/run_agent_mount.py
@@ -51,51 +51,19 @@ python src/service_mount.py
 
 ```python
 from fastapi import FastAPI
-from bnbagent.apex.server import APEX
+from bnbagent.apex.server import create_apex_app
 
 app = FastAPI(title="My Existing App")
 
-apex = APEX(config=config, on_job=process_task)
-apex.init_app(app, prefix="/apex")
+apex_app = create_apex_app(config=config, on_job=process_task)
+app.mount("/apex", apex_app)
 
 # Your own routes work alongside APEX
 @app.get("/search")
 async def search(): ...
 ```
 
-### Option 3: Full manual control (`service_routes.py`) — `create_apex_routes()`
-
-Wires routes, middleware, and job loop manually. Use this when you need full control over each layer — for example, custom middleware ordering, shared state across routers, or a non-standard job loop lifecycle.
-
-```bash
-python scripts/run_agent_routes.py
-python src/service_routes.py
-```
-
-```python
-from fastapi import FastAPI
-from bnbagent.apex.server.routes import create_apex_routes, create_apex_state
-from bnbagent.apex.server.middleware import APEXMiddleware, DEFAULT_SKIP_PATHS
-from bnbagent.apex.server.job_ops import run_job_loop
-
-state = create_apex_state(config)
-app = FastAPI()
-
-# 1. Routes
-router = create_apex_routes(state=state)
-app.include_router(router, prefix="/apex")
-
-# 2. Middleware (must add prefixed skip paths manually)
-skip_paths = list(DEFAULT_SKIP_PATHS) + [f"/apex{p}" for p in DEFAULT_SKIP_PATHS]
-app.add_middleware(APEXMiddleware, job_ops=state.job_ops, skip_paths=skip_paths)
-
-# 3. Job loop (manage lifecycle yourself)
-@app.on_event("startup")
-async def start():
-    asyncio.create_task(run_job_loop(job_ops=state.job_ops, on_job=process_task))
-```
-
-All three approaches produce the same APEX endpoints and behavior — the difference is how much the SDK manages for you.
+Both approaches produce the same APEX endpoints and behavior — the difference is whether APEX owns the app or is mounted onto yours.
 
 ### File structure
 
@@ -104,11 +72,9 @@ scripts/
   register.py            # One-time ERC-8004 registration
   run_agent.py           # Run standalone app (service.py)
   run_agent_mount.py     # Run mount mode (service_mount.py)
-  run_agent_routes.py    # Run manual routes mode (service_routes.py)
 src/
   service.py             # create_apex_app() — APEX owns the app
-  service_mount.py       # APEX(...).init_app(app) — init onto existing app
-  service_routes.py      # create_apex_routes() — full manual control
+  service_mount.py       # create_apex_app() + app.mount() — mount onto existing app
 ```
 
 ## Endpoints
@@ -122,6 +88,7 @@ src/
 | GET | /apex/job/{id}/verify | Job verification |
 | GET | /apex/status | Agent status |
 | POST | /search | Direct news search (testing) |
+| POST | /apex/job/execute | Client-initiated job execution (available when `on_job` is provided) |
 | GET | /apex/health | Health check |
 
 ## Testing Without APEX

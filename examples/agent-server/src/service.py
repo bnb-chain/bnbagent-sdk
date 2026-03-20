@@ -20,7 +20,7 @@ Environment (agent-server/.env):
     SERVICE_PRICE=1000000000000000000           — Negotiation price (1 U)
     PAYMENT_TOKEN_ADDRESS                      — BEP20 payment token
     PORT=8003                                  — Server port
-    POLL_INTERVAL=15                           — Job polling interval
+    JOB_TIMEOUT=120                            — /job/execute timeout (seconds)
 """
 
 import logging
@@ -37,7 +37,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 # SDK imports
 from bnbagent.apex.config import APEXConfig
-from bnbagent.apex.server.routes import create_apex_app
+from bnbagent.apex.server import create_apex_app
 
 logging.basicConfig(
     level=logging.INFO,
@@ -122,14 +122,10 @@ def process_task(job: dict) -> tuple[str, dict]:
 
 
 # ---------------------------------------------------------------------------
-# App — create_apex_app handles routes, polling, and lifecycle
+# App — create_apex_app handles routes, startup scan, and lifecycle
 # ---------------------------------------------------------------------------
 
-app = create_apex_app(
-    config=config,
-    on_job=process_task,
-    middleware=False,  # Disable middleware for direct endpoints below
-)
+app = create_apex_app(config=config, on_job=process_task)
 
 
 # ---------------------------------------------------------------------------

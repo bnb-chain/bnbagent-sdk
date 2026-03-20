@@ -8,7 +8,7 @@ Supports:
 - Network-based defaults via resolve_network()
 
 Environment variables:
-    BSC_RPC_URL or RPC_URL      - Blockchain RPC endpoint (overrides network default)
+    RPC_URL                     - Blockchain RPC endpoint (overrides network default)
     ERC8183_ADDRESS             - ERC-8183 contract address (overrides network default)
     APEX_EVALUATOR_ADDRESS      - APEX Evaluator address (overrides network default)
     PRIVATE_KEY                 - Agent wallet private key (optional; imported & encrypted
@@ -190,7 +190,7 @@ class APEXConfig:
             wallet_address=wallet_address,
             storage=storage,
             service_price=get_env("SERVICE_PRICE", "1000000000000000000"),
-            rpc_url=get_env("BSC_RPC_URL") or get_env("RPC_URL") or "",
+            rpc_url=get_env("RPC_URL") or "",
             chain_id=int(get_env("CHAIN_ID", "0")),
             erc8183_address=get_env("ERC8183_ADDRESS") or "",
             apex_evaluator_address=get_env("APEX_EVALUATOR_ADDRESS") or "",

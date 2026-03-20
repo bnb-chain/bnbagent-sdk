@@ -41,14 +41,19 @@ uvicorn myagent:app --port 8000
 ### Mount on an existing app
 
 ```python
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
-from bnbagent.apex.server import APEX
+from bnbagent.apex.server import create_apex_app
 
-app = FastAPI()
+apex_app = create_apex_app(on_job=execute_job)
 
-apex = APEX(on_job=execute_job)
-apex.init_app(app, prefix="/apex")
-# Routes, middleware, and job loop — all wired up.
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await apex_app.state.startup()  # trigger startup scan
+    yield
+
+app = FastAPI(lifespan=lifespan)
+app.mount("/apex", apex_app)
 ```
 
 ### With explicit configuration
@@ -168,6 +173,57 @@ Submit a job deliverable. Verifies the job on-chain, uploads the result to stora
 {
   "success": false,
   "error": "Job verification failed: Job status is SUBMITTED, expected FUNDED"
+}
+```
+
+---
+
+#### `POST /job/execute`
+
+Client-initiated job execution with timeout. The agent verifies the job on-chain, processes it via the `on_job` callback, and submits the result. If the job completes within `job_timeout` seconds (default: 120), returns 200 with the full result. Otherwise returns 202 Accepted and the job continues in the background.
+
+**Request body:**
+
+```json
+{
+  "job_id": 42,
+  "timeout": 30
+}
+```
+
+The optional `timeout` field overrides the server's default `job_timeout` for this request.
+
+**Response — success within timeout (200):**
+
+```json
+{
+  "success": true,
+  "txHash": "0x123...",
+  "dataUrl": "ipfs://Qm.../job-42.json",
+  "deliverableHash": "0xabc...",
+  "response_content": "Agent's actual output text..."
+}
+```
+
+The `response_content` field contains the agent's execution result, so clients can get the full outcome in a single request without needing to call `GET /job/{id}/response` separately.
+
+**Response — timeout exceeded (202):**
+
+```json
+{
+  "status": "accepted",
+  "job_id": 42,
+  "message": "Job accepted, processing in background. Use GET /job/{id}/response to retrieve the result."
+}
+```
+
+The job continues executing in the background. Use `GET /job/{id}/response` to poll for the result once completed.
+
+**Response — already processing (409):**
+
+```json
+{
+  "error": "Job already being processed"
 }
 ```
 
@@ -321,18 +377,6 @@ Health check for load balancers and monitoring.
 
 ---
 
-### `APEX`
-
-Extension class for initializing APEX onto an existing FastAPI app. Bundles routes,
-middleware, and background job loop into a single `.init_app(app)` call.
-
-| Method / Property | Description |
-|---|---|
-| `APEX(config=..., on_job=..., middleware=True, ...)` | Constructor — same parameters as `create_apex_app()` |
-| `.init_app(app, prefix="/apex")` | Initialize routes, middleware, and job-loop lifecycle onto *app* |
-| `.state` | `APEXState` — shared state (config, job\_ops, negotiation handler) |
-| `.job_ops` | Shortcut for `state.job_ops` |
-
 ### `APEXClient`
 
 Synchronous client wrapping the on-chain `AgenticCommerceUpgradeable`
@@ -423,7 +467,7 @@ and on-chain references for a completed job.
 |---|---|---|---|
 | `PRIVATE_KEY` | Recommended | Agent wallet private key (imported on first run; if omitted, a new wallet is auto-generated) | Auto-generate |
 | `WALLET_PASSWORD` | Yes | Password for wallet encryption | -- |
-| `BSC_RPC_URL` / `RPC_URL` | No | JSON-RPC endpoint | Network default |
+| `RPC_URL` | No | JSON-RPC endpoint | Network default |
 | `CHAIN_ID` | No | Chain ID | Network default |
 | `ERC8183_ADDRESS` | No | ERC-8183 contract address | Network default |
 | `APEX_EVALUATOR_ADDRESS` | No | Evaluator contract address | Network default |

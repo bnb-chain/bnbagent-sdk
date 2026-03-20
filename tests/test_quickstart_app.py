@@ -1,18 +1,11 @@
-"""Tests for APEX app factory and APEX extension class."""
+"""Tests for APEX app factory and sub-app architecture."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from bnbagent.apex.config import APEXConfig
-from bnbagent.apex.server.routes import (
-    APEX,
-    APEXState,
-    create_apex_app,
-    create_apex_routes,
-    create_apex_state,
-)
-from bnbagent.apex.server.middleware import APEXMiddleware, DEFAULT_SKIP_PATHS
+from bnbagent.apex.server import APEXState, create_apex_app, create_apex_state
 from bnbagent.storage.local_provider import LocalStorageProvider
 
 VALID_CONFIG = APEXConfig(
@@ -79,169 +72,56 @@ class TestCreateApexState:
         assert "0x" + "cd" * 32 not in r
 
 
-class TestCreateApexRoutes:
-    def test_returns_api_router(self, patched_web3, tmp_path):
-        from fastapi import APIRouter
-
-        config = APEXConfig(
-            rpc_url="https://rpc.example.com",
-            erc8183_address="0x" + "ab" * 20,
-            private_key="0x" + "cd" * 32,
-            wallet_password="test-pw",
-            storage=LocalStorageProvider(str(tmp_path / "data")),
-        )
-        router = create_apex_routes(config=config)
-        assert isinstance(router, APIRouter)
-
-    def test_all_endpoints_exist(self, patched_web3, tmp_path):
-        config = APEXConfig(
-            rpc_url="https://rpc.example.com",
-            erc8183_address="0x" + "ab" * 20,
-            private_key="0x" + "cd" * 32,
-            wallet_password="test-pw",
-            storage=LocalStorageProvider(str(tmp_path / "data")),
-        )
-        router = create_apex_routes(config=config)
-        paths = [route.path for route in router.routes]
-        assert "/submit" in paths
-        assert "/job/{job_id}" in paths
-        assert "/job/{job_id}/response" in paths
-        assert "/job/{job_id}/verify" in paths
-        assert "/negotiate" in paths
-        assert "/status" in paths
-        assert "/health" in paths
-
-    def test_on_submit_callback(self, patched_web3, tmp_path):
-        config = APEXConfig(
-            rpc_url="https://rpc.example.com",
-            erc8183_address="0x" + "ab" * 20,
-            private_key="0x" + "cd" * 32,
-            wallet_password="test-pw",
-            storage=LocalStorageProvider(str(tmp_path / "data")),
-        )
-        callback = MagicMock()
-        router = create_apex_routes(config=config, on_submit=callback)
-        assert router is not None
-
-    def test_accepts_pre_created_state(self, patched_web3, tmp_path):
-        config = APEXConfig(
-            rpc_url="https://rpc.example.com",
-            erc8183_address="0x" + "ab" * 20,
-            private_key="0x" + "cd" * 32,
-            wallet_password="test-pw",
-            storage=LocalStorageProvider(str(tmp_path / "data")),
-        )
-        state = create_apex_state(config)
-        router = create_apex_routes(state=state)
-        assert router is not None
-
-
 class TestCreateApexApp:
+    """Tests for create_apex_app() — standalone and mounted modes."""
+
+    def _make_config(self, tmp_path):
+        return APEXConfig(
+            rpc_url="https://rpc.example.com",
+            erc8183_address="0x" + "ab" * 20,
+            private_key="0x" + "cd" * 32,
+            wallet_password="test-pw",
+            storage=LocalStorageProvider(str(tmp_path / "data")),
+        )
+
+    # ── Standalone mode (default prefix="/apex") ─────────────────────────
+
     def test_returns_fastapi(self, patched_web3, tmp_path):
         from fastapi import FastAPI
 
-        config = APEXConfig(
-            rpc_url="https://rpc.example.com",
-            erc8183_address="0x" + "ab" * 20,
-            private_key="0x" + "cd" * 32,
-            wallet_password="test-pw",
-            storage=LocalStorageProvider(str(tmp_path / "data")),
-        )
-        app = create_apex_app(config=config)
+        app = create_apex_app(config=self._make_config(tmp_path))
         assert isinstance(app, FastAPI)
 
-    def test_health_endpoint(self, patched_web3, tmp_path):
-        config = APEXConfig(
-            rpc_url="https://rpc.example.com",
-            erc8183_address="0x" + "ab" * 20,
-            private_key="0x" + "cd" * 32,
-            wallet_password="test-pw",
-            storage=LocalStorageProvider(str(tmp_path / "data")),
-        )
-        app = create_apex_app(config=config)
-        routes = [r.path for r in app.routes]
-        assert "/apex/health" in routes
+    def test_standalone_routes_at_apex_prefix(self, patched_web3, tmp_path):
+        """Default standalone mode has routes at /apex/*."""
+        app = create_apex_app(config=self._make_config(tmp_path))
+        paths = [r.path for r in app.routes]
+        assert "/apex/submit" in paths
+        assert "/apex/health" in paths
+        assert "/apex/status" in paths
 
-    def test_fixed_apex_prefix(self, patched_web3, tmp_path):
-        config = APEXConfig(
-            rpc_url="https://rpc.example.com",
-            erc8183_address="0x" + "ab" * 20,
-            private_key="0x" + "cd" * 32,
-            wallet_password="test-pw",
-            storage=LocalStorageProvider(str(tmp_path / "data")),
-        )
-        app = create_apex_app(config=config)
-        routes = [r.path for r in app.routes]
-        assert any("/apex/submit" in r for r in routes)
+    def test_standalone_has_root_endpoint(self, patched_web3, tmp_path):
+        """Standalone mode includes a root / endpoint."""
+        from fastapi.testclient import TestClient
 
-    def test_middleware_enabled_by_default(self, patched_web3, tmp_path):
-        from bnbagent.apex.server.middleware import APEXMiddleware
+        app = create_apex_app(config=self._make_config(tmp_path))
+        client = TestClient(app)
+        resp = client.get("/")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["service"] == "APEX Agent"
+        assert "endpoints" in data
 
-        config = APEXConfig(
-            rpc_url="https://rpc.example.com",
-            erc8183_address="0x" + "ab" * 20,
-            private_key="0x" + "cd" * 32,
-            wallet_password="test-pw",
-            storage=LocalStorageProvider(str(tmp_path / "data")),
-        )
-        app = create_apex_app(config=config)
-        # Starlette stores middleware in user_middleware list before build,
-        # but after build the middleware stack is wrapped. Check that
-        # the middleware class is referenced in the app's middleware stack.
-        has_middleware = any(
-            m.cls is APEXMiddleware for m in app.user_middleware
-        )
-        assert has_middleware
+    def test_standalone_health(self, patched_web3, tmp_path):
+        from fastapi.testclient import TestClient
 
-    def test_middleware_disabled(self, patched_web3, tmp_path):
-        from bnbagent.apex.server.middleware import APEXMiddleware
+        app = create_apex_app(config=self._make_config(tmp_path))
+        client = TestClient(app)
+        resp = client.get("/apex/health")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
 
-        config = APEXConfig(
-            rpc_url="https://rpc.example.com",
-            erc8183_address="0x" + "ab" * 20,
-            private_key="0x" + "cd" * 32,
-            wallet_password="test-pw",
-            storage=LocalStorageProvider(str(tmp_path / "data")),
-        )
-        app = create_apex_app(config=config, middleware=False)
-        has_middleware = any(
-            m.cls is APEXMiddleware for m in app.user_middleware
-        )
-        assert not has_middleware
-
-    def test_middleware_includes_prefixed_skip_paths(self, patched_web3, tmp_path):
-        from bnbagent.apex.server.middleware import APEXMiddleware
-
-        config = APEXConfig(
-            rpc_url="https://rpc.example.com",
-            erc8183_address="0x" + "ab" * 20,
-            private_key="0x" + "cd" * 32,
-            wallet_password="test-pw",
-            storage=LocalStorageProvider(str(tmp_path / "data")),
-        )
-        app = create_apex_app(config=config)
-        mw_entry = next(m for m in app.user_middleware if m.cls is APEXMiddleware)
-        skip = mw_entry.kwargs.get("skip_paths", [])
-        # Both /negotiate and /apex/negotiate should be in skip paths
-        assert "/negotiate" in skip
-        assert "/apex/negotiate" in skip
-
-    def test_custom_skip_paths(self, patched_web3, tmp_path):
-        from bnbagent.apex.server.middleware import APEXMiddleware
-
-        config = APEXConfig(
-            rpc_url="https://rpc.example.com",
-            erc8183_address="0x" + "ab" * 20,
-            private_key="0x" + "cd" * 32,
-            wallet_password="test-pw",
-            storage=LocalStorageProvider(str(tmp_path / "data")),
-        )
-        app = create_apex_app(config=config, skip_paths=["/my-public"])
-        mw_entry = next(m for m in app.user_middleware if m.cls is APEXMiddleware)
-        skip = mw_entry.kwargs.get("skip_paths", [])
-        assert "/my-public" in skip
-
-    def test_status_endpoint_includes_pricing(self, patched_web3, tmp_path):
+    def test_standalone_status_includes_pricing(self, patched_web3, tmp_path):
         from fastapi.testclient import TestClient
 
         config = APEXConfig(
@@ -253,7 +133,7 @@ class TestCreateApexApp:
             payment_token_decimals=18,
             storage=LocalStorageProvider(str(tmp_path / "data")),
         )
-        app = create_apex_app(config=config, middleware=False)
+        app = create_apex_app(config=config)
         client = TestClient(app)
         resp = client.get("/apex/status")
         assert resp.status_code == 200
@@ -262,14 +142,13 @@ class TestCreateApexApp:
         assert data["decimals"] == 18
         assert "currency" in data
 
-    def test_get_response_endpoint_success(self, patched_web3, tmp_path):
+    def test_standalone_get_response_success(self, patched_web3, tmp_path):
         """GET /apex/job/{id}/response returns stored deliverable data."""
         import json
         from fastapi.testclient import TestClient
 
         storage_dir = tmp_path / "data"
         storage_dir.mkdir()
-        # Write a job file that LocalStorageProvider can find
         job_file = storage_dir / "job-42.json"
         job_file.write_text(json.dumps({
             "response": "hello from agent",
@@ -284,7 +163,7 @@ class TestCreateApexApp:
             wallet_password="test-pw",
             storage=LocalStorageProvider(str(storage_dir)),
         )
-        app = create_apex_app(config=config, middleware=False)
+        app = create_apex_app(config=config)
         client = TestClient(app)
 
         resp = client.get("/apex/job/42/response")
@@ -293,318 +172,374 @@ class TestCreateApexApp:
         assert data["success"] is True
         assert data["response"] == "hello from agent"
 
-    def test_get_response_endpoint_not_found(self, patched_web3, tmp_path):
-        """GET /apex/job/{id}/response returns 404 when no response exists."""
+    def test_standalone_get_response_not_found(self, patched_web3, tmp_path):
         from fastapi.testclient import TestClient
 
-        config = APEXConfig(
-            rpc_url="https://rpc.example.com",
-            erc8183_address="0x" + "ab" * 20,
-            private_key="0x" + "cd" * 32,
-            wallet_password="test-pw",
-            storage=LocalStorageProvider(str(tmp_path / "data")),
-        )
-        app = create_apex_app(config=config, middleware=False)
+        app = create_apex_app(config=self._make_config(tmp_path))
         client = TestClient(app)
 
         resp = client.get("/apex/job/999/response")
         assert resp.status_code == 404
-        data = resp.json()
-        assert data["success"] is False
+        assert resp.json()["success"] is False
+
+    # ── Mounted mode (prefix="") ─────────────────────────────────────────
+
+    def test_mounted_routes_at_mount_path(self, patched_web3, tmp_path):
+        """When mounted with prefix='', routes respond at the mount path."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        parent = FastAPI()
+        apex_app = create_apex_app(
+            config=self._make_config(tmp_path), prefix=""
+        )
+        parent.mount("/apex", apex_app)
+
+        client = TestClient(parent)
+        resp = client.get("/apex/health")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+
+        resp = client.get("/apex/status")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+
+    def test_mounted_no_root_endpoint(self, patched_web3, tmp_path):
+        """Mounted mode (prefix='') does not add a root / endpoint."""
+        app = create_apex_app(
+            config=self._make_config(tmp_path), prefix=""
+        )
+        paths = [r.path for r in app.routes]
+        assert "/" not in paths
+
+    # ── Common behavior ──────────────────────────────────────────────────
+
+    def test_state_accessible_via_app_state(self, patched_web3, tmp_path):
+        app = create_apex_app(config=self._make_config(tmp_path))
+        assert hasattr(app.state, "apex")
+        assert isinstance(app.state.apex, APEXState)
+        assert app.state.apex.job_ops is not None
 
     def test_on_job_skipped_parameter_accepted(self, patched_web3, tmp_path):
-        config = APEXConfig(
-            rpc_url="https://rpc.example.com",
-            erc8183_address="0x" + "ab" * 20,
-            private_key="0x" + "cd" * 32,
-            wallet_password="test-pw",
-            storage=LocalStorageProvider(str(tmp_path / "data")),
-        )
         callback = MagicMock()
         app = create_apex_app(
-            config=config,
+            config=self._make_config(tmp_path),
             on_job=lambda job: "result",
             on_job_skipped=callback,
         )
         assert app is not None
 
-
-class TestAPEX:
-    """Tests for the APEX extension class."""
-
-    def _make_config(self, tmp_path):
-        return APEXConfig(
-            rpc_url="https://rpc.example.com",
-            erc8183_address="0x" + "ab" * 20,
-            private_key="0x" + "cd" * 32,
-            wallet_password="test-pw",
-            storage=LocalStorageProvider(str(tmp_path / "data")),
+    def test_has_lifespan_with_on_job(self, patched_web3, tmp_path):
+        app = create_apex_app(
+            config=self._make_config(tmp_path),
+            on_job=lambda job: "result",
         )
+        assert app.router.lifespan_context is not None
 
-    def test_init_app_registers_routes(self, patched_web3, tmp_path):
-        from fastapi import FastAPI
+    # ── /job/execute endpoint ────────────────────────────────────────────────
 
-        apex = APEX(config=self._make_config(tmp_path))
-        app = FastAPI()
-        apex.init_app(app, prefix="/apex")
-
-        routes = [r.path for r in app.routes]
-        assert "/apex/submit" in routes
-        assert "/apex/job/{job_id}" in routes
-        assert "/apex/job/{job_id}/response" in routes
-        assert "/apex/job/{job_id}/verify" in routes
-        assert "/apex/negotiate" in routes
-        assert "/apex/status" in routes
-        assert "/apex/health" in routes
-
-    def test_init_app_adds_middleware(self, patched_web3, tmp_path):
-        from fastapi import FastAPI
-
-        from bnbagent.apex.server.middleware import APEXMiddleware
-
-        apex = APEX(config=self._make_config(tmp_path))
-        app = FastAPI()
-        apex.init_app(app)
-
-        has_middleware = any(m.cls is APEXMiddleware for m in app.user_middleware)
-        assert has_middleware
-
-    def test_init_app_without_middleware(self, patched_web3, tmp_path):
-        from fastapi import FastAPI
-
-        from bnbagent.apex.server.middleware import APEXMiddleware
-
-        apex = APEX(config=self._make_config(tmp_path), middleware=False)
-        app = FastAPI()
-        apex.init_app(app)
-
-        has_middleware = any(m.cls is APEXMiddleware for m in app.user_middleware)
-        assert not has_middleware
-
-    def test_init_app_wraps_lifespan_with_on_job(self, patched_web3, tmp_path):
-        from fastapi import FastAPI
-
-        apex = APEX(config=self._make_config(tmp_path), on_job=lambda job: "result")
-        app = FastAPI()
-        original_lifespan = app.router.lifespan_context
-        apex.init_app(app)
-
-        # lifespan should be wrapped (different from original)
-        assert app.router.lifespan_context is not original_lifespan
-
-    def test_init_app_no_job_loop_without_on_job(self, patched_web3, tmp_path):
-        from fastapi import FastAPI
-
-        apex = APEX(config=self._make_config(tmp_path))
-        app = FastAPI()
-        apex.init_app(app)
-
-        # Without on_job, no job loop task should be created
-        assert apex._job_loop_task is None
-
-    def test_init_app_wraps_custom_lifespan(self, patched_web3, tmp_path):
-        from contextlib import asynccontextmanager
-
-        from fastapi import FastAPI
-
-        startup_called = []
-
-        @asynccontextmanager
-        async def custom_lifespan(app):
-            startup_called.append("custom")
-            yield
-
-        apex = APEX(config=self._make_config(tmp_path), on_job=lambda job: "result")
-        app = FastAPI(lifespan=custom_lifespan)
-        apex.init_app(app)
-
-        # lifespan should be wrapped around the custom one
-        assert app.router.lifespan_context is not custom_lifespan
-
-    def test_state_accessible(self, patched_web3, tmp_path):
-        apex = APEX(config=self._make_config(tmp_path))
-        assert isinstance(apex.state, APEXState)
-        assert apex.job_ops is apex.state.job_ops
-
-    def test_double_init_app_raises(self, patched_web3, tmp_path):
-        from fastapi import FastAPI
-
-        apex = APEX(config=self._make_config(tmp_path))
-        app = FastAPI()
-        apex.init_app(app)
-
-        with pytest.raises(RuntimeError, match="APEX already initialized"):
-            apex.init_app(app)
-
-    def test_create_apex_app_still_works(self, patched_web3, tmp_path):
-        """Regression: create_apex_app should still work after refactor."""
-        from fastapi import FastAPI
-
-        config = self._make_config(tmp_path)
-        app = create_apex_app(config=config, on_job=lambda job: "result")
-        assert isinstance(app, FastAPI)
-        routes = [r.path for r in app.routes]
-        assert "/apex/health" in routes
-        assert "/" in routes
-
-    def test_custom_prefix(self, patched_web3, tmp_path):
-        from fastapi import FastAPI
-
-        apex = APEX(config=self._make_config(tmp_path))
-        app = FastAPI()
-        apex.init_app(app, prefix="/my-apex")
-
-        routes = [r.path for r in app.routes]
-        assert "/my-apex/submit" in routes
-        assert "/my-apex/health" in routes
-
-
-class TestManualRoutes:
-    """Tests for the Option 3 pattern: create_apex_routes() with manual middleware + job loop."""
-
-    def _make_config(self, tmp_path):
-        return APEXConfig(
-            rpc_url="https://rpc.example.com",
-            erc8183_address="0x" + "ab" * 20,
-            private_key="0x" + "cd" * 32,
-            wallet_password="test-pw",
-            storage=LocalStorageProvider(str(tmp_path / "data")),
+    def test_process_endpoint_exists_with_on_job(self, patched_web3, tmp_path):
+        app = create_apex_app(
+            config=self._make_config(tmp_path),
+            on_job=lambda job: "result",
         )
+        paths = [r.path for r in app.routes]
+        assert "/apex/job/execute" in paths
 
-    def test_manual_mount_with_prefix(self, patched_web3, tmp_path):
-        """Routes are accessible at the given prefix."""
-        from fastapi import FastAPI
+    def test_process_endpoint_absent_without_on_job(self, patched_web3, tmp_path):
+        app = create_apex_app(config=self._make_config(tmp_path))
+        paths = [r.path for r in app.routes]
+        assert "/apex/job/execute" not in paths
+        assert "/job/execute" not in paths
 
-        config = self._make_config(tmp_path)
-        state = create_apex_state(config)
-        app = FastAPI()
-        router = create_apex_routes(state=state)
-        app.include_router(router, prefix="/apex")
-
-        routes = [r.path for r in app.routes]
-        assert "/apex/submit" in routes
-        assert "/apex/negotiate" in routes
-        assert "/apex/status" in routes
-        assert "/apex/health" in routes
-        assert "/apex/job/{job_id}" in routes
-        assert "/apex/job/{job_id}/response" in routes
-        assert "/apex/job/{job_id}/verify" in routes
-
-    def test_manual_middleware_with_prefixed_skip_paths(self, patched_web3, tmp_path):
-        """Middleware skip_paths must include prefixed versions for correct behavior."""
-        from fastapi import FastAPI
-
-        config = self._make_config(tmp_path)
-        state = create_apex_state(config)
-        app = FastAPI()
-        prefix = "/apex"
-
-        router = create_apex_routes(state=state)
-        app.include_router(router, prefix=prefix)
-
-        skip_paths = list(DEFAULT_SKIP_PATHS) + [f"{prefix}{p}" for p in DEFAULT_SKIP_PATHS]
-        app.add_middleware(APEXMiddleware, job_ops=state.job_ops, skip_paths=skip_paths)
-
-        has_middleware = any(m.cls is APEXMiddleware for m in app.user_middleware)
-        assert has_middleware
-
-        mw_entry = next(m for m in app.user_middleware if m.cls is APEXMiddleware)
-        effective_skip = mw_entry.kwargs.get("skip_paths", [])
-        # Both bare and prefixed versions must be present
-        assert "/negotiate" in effective_skip
-        assert "/apex/negotiate" in effective_skip
-        assert "/status" in effective_skip
-        assert "/apex/status" in effective_skip
-        assert "/health" in effective_skip
-        assert "/apex/health" in effective_skip
-
-    def test_manual_middleware_without_prefix_misses_paths(self, patched_web3, tmp_path):
-        """Without adding prefixed skip_paths, the middleware would block APEX skip paths."""
-        from fastapi import FastAPI
-
-        config = self._make_config(tmp_path)
-        state = create_apex_state(config)
-        app = FastAPI()
-
-        router = create_apex_routes(state=state)
-        app.include_router(router, prefix="/apex")
-
-        # Only default skip paths — no prefixed versions
-        app.add_middleware(APEXMiddleware, job_ops=state.job_ops)
-
-        mw_entry = next(m for m in app.user_middleware if m.cls is APEXMiddleware)
-        effective_skip = mw_entry.kwargs.get("skip_paths", DEFAULT_SKIP_PATHS)
-        # /apex/negotiate is NOT in skip paths — this is the footgun
-        assert "/apex/negotiate" not in effective_skip
-
-    def test_no_middleware_added_by_default(self, patched_web3, tmp_path):
-        """create_apex_routes alone does NOT add middleware."""
-        from fastapi import FastAPI
-
-        config = self._make_config(tmp_path)
-        state = create_apex_state(config)
-        app = FastAPI()
-
-        router = create_apex_routes(state=state)
-        app.include_router(router, prefix="/apex")
-
-        has_middleware = any(
-            hasattr(m, "cls") and m.cls is APEXMiddleware
-            for m in app.user_middleware
-        )
-        assert not has_middleware
-
-    def test_status_endpoint_works(self, patched_web3, tmp_path):
-        """Status endpoint is accessible via the manually mounted router."""
-        from fastapi import FastAPI
+    def test_process_endpoint_requires_job_id(self, patched_web3, tmp_path):
         from fastapi.testclient import TestClient
 
-        config = self._make_config(tmp_path)
-        config.service_price = "5000000000000000000"
-        config.payment_token_decimals = 18
-        state = create_apex_state(config)
-
-        app = FastAPI()
-        router = create_apex_routes(state=state)
-        app.include_router(router, prefix="/apex")
-
+        app = create_apex_app(
+            config=self._make_config(tmp_path),
+            on_job=lambda job: "result",
+        )
         client = TestClient(app)
-        resp = client.get("/apex/status")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["service_price"] == "5000000000000000000"
-        assert data["decimals"] == 18
+        resp = client.post("/apex/job/execute", json={})
+        assert resp.status_code == 400
+        assert "job_id" in resp.json()["error"]
 
-    def test_health_endpoint_works(self, patched_web3, tmp_path):
-        """Health endpoint is accessible via the manually mounted router."""
-        from fastapi import FastAPI
+    @pytest.mark.asyncio
+    async def test_process_endpoint_rejects_invalid_job(self, patched_web3, tmp_path):
         from fastapi.testclient import TestClient
 
-        config = self._make_config(tmp_path)
-        state = create_apex_state(config)
-
-        app = FastAPI()
-        router = create_apex_routes(state=state)
-        app.include_router(router, prefix="/apex")
-
+        app = create_apex_app(
+            config=self._make_config(tmp_path),
+            on_job=lambda job: "result",
+        )
         client = TestClient(app)
-        resp = client.get("/apex/health")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["status"] == "ok"
 
-    def test_shared_state_across_router_and_middleware(self, patched_web3, tmp_path):
-        """The same state object is shared between routes and middleware."""
-        from fastapi import FastAPI
+        with patch.object(
+            app.state.apex.job_ops, "verify_job", new_callable=AsyncMock
+        ) as mock_verify:
+            mock_verify.return_value = {"valid": False, "error": "not funded"}
+            resp = client.post("/apex/job/execute", json={"job_id": 42})
+            assert resp.status_code == 500
+            assert resp.json()["success"] is False
 
-        config = self._make_config(tmp_path)
-        state = create_apex_state(config)
-        app = FastAPI()
+    def test_process_endpoint_success_includes_response_content(
+        self, patched_web3, tmp_path
+    ):
+        """Successful /job/execute response includes response_content."""
+        from fastapi.testclient import TestClient
 
-        router = create_apex_routes(state=state)
-        app.include_router(router, prefix="/apex")
-        app.add_middleware(APEXMiddleware, job_ops=state.job_ops)
+        app = create_apex_app(
+            config=self._make_config(tmp_path),
+            on_job=lambda job: "my agent output",
+        )
+        client = TestClient(app)
 
-        mw_entry = next(m for m in app.user_middleware if m.cls is APEXMiddleware)
-        # The job_ops passed to middleware is the same as state.job_ops
-        assert mw_entry.kwargs["job_ops"] is state.job_ops
+        mock_job = {
+            "jobId": 42,
+            "description": "test",
+            "budget": 10**18,
+            "client": "0x" + "11" * 20,
+            "provider": app.state.apex.job_ops.agent_address,
+            "evaluator": "0x" + "33" * 20,
+            "status": "FUNDED",
+            "expiredAt": 9999999999,
+        }
+
+        with (
+            patch.object(
+                app.state.apex.job_ops,
+                "verify_job",
+                new_callable=AsyncMock,
+                return_value={"valid": True, "job": mock_job},
+            ),
+            patch.object(
+                app.state.apex.job_ops,
+                "submit_result",
+                new_callable=AsyncMock,
+                return_value={
+                    "success": True,
+                    "txHash": "0xabc",
+                    "dataUrl": "ipfs://Qm...",
+                    "deliverableHash": "0xdef",
+                },
+            ),
+        ):
+            resp = client.post("/apex/job/execute", json={"job_id": 42})
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["success"] is True
+            assert data["response_content"] == "my agent output"
+
+    def test_process_endpoint_mounted_mode(self, patched_web3, tmp_path):
+        """With prefix='', /job/execute is at root level for mounting."""
+        app = create_apex_app(
+            config=self._make_config(tmp_path),
+            on_job=lambda job: "result",
+            prefix="",
+        )
+        paths = [r.path for r in app.routes]
+        assert "/job/execute" in paths
+
+    def test_process_endpoint_returns_202_on_timeout(self, patched_web3, tmp_path):
+        """Slow on_job triggers 202 Accepted when job_timeout is exceeded."""
+        import asyncio as _asyncio
+        from fastapi.testclient import TestClient
+
+        async def slow_handler(job):
+            await _asyncio.sleep(5)
+            return "slow result"
+
+        app = create_apex_app(
+            config=self._make_config(tmp_path),
+            on_job=slow_handler,
+            job_timeout=0.1,  # very short timeout
+        )
+        client = TestClient(app)
+
+        mock_job = {
+            "jobId": 99,
+            "description": "slow test",
+            "budget": 10**18,
+            "client": "0x" + "11" * 20,
+            "provider": app.state.apex.job_ops.agent_address,
+            "evaluator": "0x" + "33" * 20,
+            "status": "FUNDED",
+            "expiredAt": 9999999999,
+        }
+
+        with (
+            patch.object(
+                app.state.apex.job_ops,
+                "verify_job",
+                new_callable=AsyncMock,
+                return_value={"valid": True, "job": mock_job},
+            ),
+            patch.object(
+                app.state.apex.job_ops,
+                "submit_result",
+                new_callable=AsyncMock,
+                return_value={"success": True, "txHash": "0xabc"},
+            ),
+        ):
+            resp = client.post("/apex/job/execute", json={"job_id": 99})
+            assert resp.status_code == 202
+            data = resp.json()
+            assert data["status"] == "accepted"
+            assert data["job_id"] == 99
+
+    def test_process_endpoint_returns_200_within_timeout(self, patched_web3, tmp_path):
+        """Fast on_job returns 200 with full result within timeout."""
+        from fastapi.testclient import TestClient
+
+        app = create_apex_app(
+            config=self._make_config(tmp_path),
+            on_job=lambda job: "fast result",
+            job_timeout=10.0,
+        )
+        client = TestClient(app)
+
+        mock_job = {
+            "jobId": 77,
+            "description": "fast test",
+            "budget": 10**18,
+            "client": "0x" + "11" * 20,
+            "provider": app.state.apex.job_ops.agent_address,
+            "evaluator": "0x" + "33" * 20,
+            "status": "FUNDED",
+            "expiredAt": 9999999999,
+        }
+
+        with (
+            patch.object(
+                app.state.apex.job_ops,
+                "verify_job",
+                new_callable=AsyncMock,
+                return_value={"valid": True, "job": mock_job},
+            ),
+            patch.object(
+                app.state.apex.job_ops,
+                "submit_result",
+                new_callable=AsyncMock,
+                return_value={
+                    "success": True,
+                    "txHash": "0xdef",
+                    "dataUrl": "ipfs://Qm...",
+                    "deliverableHash": "0x123",
+                },
+            ),
+        ):
+            resp = client.post("/apex/job/execute", json={"job_id": 77})
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["success"] is True
+            assert data["response_content"] == "fast result"
+
+    def test_startup_method_exposed(self, patched_web3, tmp_path):
+        """app.state.startup is callable when on_job is provided."""
+        app = create_apex_app(
+            config=self._make_config(tmp_path),
+            on_job=lambda job: "result",
+        )
+        assert hasattr(app.state, "startup")
+        assert callable(app.state.startup)
+
+    def test_startup_method_absent_without_on_job(self, patched_web3, tmp_path):
+        """app.state.startup is not set when on_job is not provided."""
+        app = create_apex_app(config=self._make_config(tmp_path))
+        assert not hasattr(app.state, "startup")
+
+    # ── Startup scan & dedup & custom timeout ────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_startup_scan_runs_on_startup_call(self, patched_web3, tmp_path):
+        """Calling state.startup() triggers startup scan (get_pending_jobs)."""
+        import asyncio
+
+        app = create_apex_app(
+            config=self._make_config(tmp_path),
+            on_job=lambda job: "result",
+        )
+        with patch.object(
+            app.state.apex.job_ops, "get_pending_jobs", new_callable=AsyncMock,
+            return_value={"success": True, "jobs": []},
+        ) as mock_scan:
+            await app.state.startup()
+            # Let background task complete
+            await asyncio.sleep(0.1)
+            mock_scan.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_job_execute_dedup_returns_409(self, patched_web3, tmp_path):
+        """Second /job/execute for same job_id returns 409 while first is processing."""
+        import asyncio as _asyncio
+
+        import httpx
+
+        async def slow_handler(job):
+            await _asyncio.sleep(5)
+            return "result"
+
+        app = create_apex_app(
+            config=self._make_config(tmp_path),
+            on_job=slow_handler,
+            job_timeout=0.1,
+        )
+
+        mock_job = {
+            "jobId": 42, "description": "test", "budget": 10**18,
+            "client": "0x" + "11" * 20,
+            "provider": app.state.apex.job_ops.agent_address,
+            "evaluator": "0x" + "33" * 20,
+            "status": "FUNDED", "expiredAt": 9999999999,
+        }
+
+        with (
+            patch.object(app.state.apex.job_ops, "verify_job", new_callable=AsyncMock,
+                         return_value={"valid": True, "job": mock_job}),
+            patch.object(app.state.apex.job_ops, "submit_result", new_callable=AsyncMock,
+                         return_value={"success": True, "txHash": "0xabc"}),
+        ):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                # First request: 202 (timeout while processing)
+                resp1 = await client.post("/apex/job/execute", json={"job_id": 42})
+                assert resp1.status_code == 202
+
+                # Second request: 409 (already processing)
+                resp2 = await client.post("/apex/job/execute", json={"job_id": 42})
+                assert resp2.status_code == 409
+                assert "already being processed" in resp2.json()["error"]
+
+    def test_job_execute_custom_timeout(self, patched_web3, tmp_path):
+        """Request body timeout=0.05 overrides default job_timeout."""
+        import asyncio as _asyncio
+        from fastapi.testclient import TestClient
+
+        async def slow_handler(job):
+            await _asyncio.sleep(5)
+            return "slow"
+
+        app = create_apex_app(
+            config=self._make_config(tmp_path),
+            on_job=slow_handler,
+            job_timeout=300.0,  # very long default
+        )
+        client = TestClient(app)
+
+        mock_job = {
+            "jobId": 55, "description": "test", "budget": 10**18,
+            "client": "0x" + "11" * 20,
+            "provider": app.state.apex.job_ops.agent_address,
+            "evaluator": "0x" + "33" * 20,
+            "status": "FUNDED", "expiredAt": 9999999999,
+        }
+
+        with (
+            patch.object(app.state.apex.job_ops, "verify_job", new_callable=AsyncMock,
+                         return_value={"valid": True, "job": mock_job}),
+            patch.object(app.state.apex.job_ops, "submit_result", new_callable=AsyncMock,
+                         return_value={"success": True, "txHash": "0xabc"}),
+        ):
+            # Custom short timeout in request body → 202
+            resp = client.post("/apex/job/execute", json={"job_id": 55, "timeout": 0.05})
+            assert resp.status_code == 202

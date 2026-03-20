@@ -17,7 +17,7 @@ Usage:
     python test_quickstart_e2e.py --skip-settle   # skip waiting for liveness (faster)
 
 Environment (optional):
-    POLL_INTERVAL  - Agent poll interval in seconds (default: 5)
+    JOB_TIMEOUT    - /job/execute timeout in seconds (default: 30)
     AGENT_PORT     - Agent server port (default: 8765)
 """
 
@@ -51,7 +51,7 @@ EVALUATOR_ADDRESS = os.getenv("APEX_EVALUATOR_ADDRESS", "")
 PAYMENT_TOKEN_ADDRESS = os.getenv("PAYMENT_TOKEN_ADDRESS", "0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565")
 WALLET_PASSWORD = os.getenv("WALLET_PASSWORD", "quickstart-demo")
 AGENT_PORT = int(os.getenv("AGENT_PORT", "8765"))
-POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "5"))
+JOB_TIMEOUT = int(os.getenv("JOB_TIMEOUT", "30"))
 
 SKIP_SETTLE = "--skip-settle" in sys.argv
 
@@ -192,7 +192,7 @@ async def start_agent_server() -> asyncio.Event:
     from contextlib import asynccontextmanager
     from fastapi import FastAPI
     from bnbagent.apex.config import APEXConfig
-    from bnbagent.apex.server.routes import create_apex_app
+    from bnbagent.apex.server import create_apex_app
 
     # Simple task processor — same pattern as step3
     def process_task(job: dict) -> str:
@@ -200,12 +200,11 @@ async def start_agent_server() -> asyncio.Event:
 
     server_ready = asyncio.Event()
 
-    # Use create_apex_app with on_job — SDK handles polling automatically
+    # Use create_apex_app with on_job — SDK handles startup scan + /job/execute
     app = create_apex_app(
         on_job=process_task,
-        poll_interval=POLL_INTERVAL,
+        job_timeout=30.0,
         task_metadata={"agent": "e2e-test"},
-        middleware=False,
     )
 
     # Wrap lifespan to also signal server_ready
@@ -377,7 +376,7 @@ def step4f_verify_deliverable(job_id: int) -> None:
     logger.info(f"On-chain deliverable hash: 0x{deliverable_hash.hex()}")
 
     # Read from local storage
-    storage_path = os.getenv("LOCAL_STORAGE_PATH", "./.agent-data")
+    storage_path = os.getenv("STORAGE_LOCAL_PATH", "./.agent-data")
     deliverable_file = os.path.join(storage_path, f"job-{job_id}.json")
 
     if not os.path.isfile(deliverable_file):
