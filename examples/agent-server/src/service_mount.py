@@ -1,7 +1,7 @@
 """
 Blockchain News Agent — Mount on an existing FastAPI app.
 
-Demonstrates using the APEX class to mount APEX routes onto an existing
+Demonstrates using the APEX class to initialize APEX routes onto an existing
 FastAPI application that already has its own endpoints and lifespan.
 
 Compare with service.py which uses create_apex_app() for a standalone agent.
@@ -138,7 +138,7 @@ apex = APEX(
     on_job=process_task,
     middleware=False,
 )
-apex.mount(app, prefix="/apex")
+apex.init_app(app, prefix="/apex")
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +228,7 @@ if __name__ == "__main__":
   Storage:        {type(config.storage).__name__ if config.storage else "local (default)"}
   Price:          {int(config.service_price) / 10**18} U tokens
 
-  APEX endpoints (mounted):
+  APEX endpoints (initialized):
     POST /apex/negotiate   — Negotiation
     POST /apex/submit      — Submit result
     GET  /apex/job/{{id}}    — Job details

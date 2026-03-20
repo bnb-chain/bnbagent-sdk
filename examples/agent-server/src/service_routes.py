@@ -8,7 +8,7 @@ job loop lifecycle.
 
 Compare with:
   - service.py          → create_apex_app() (one-line setup)
-  - service_mount.py    → APEX(...).mount()  (mount on existing app)
+  - service_mount.py    → APEX(...).init_app()  (init on existing app)
 
 Usage:
     cd examples/agent-server

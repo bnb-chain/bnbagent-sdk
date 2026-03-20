@@ -341,12 +341,12 @@ class TestAPEX:
             storage=LocalStorageProvider(str(tmp_path / "data")),
         )
 
-    def test_mount_registers_routes(self, patched_web3, tmp_path):
+    def test_init_app_registers_routes(self, patched_web3, tmp_path):
         from fastapi import FastAPI
 
         apex = APEX(config=self._make_config(tmp_path))
         app = FastAPI()
-        apex.mount(app, prefix="/apex")
+        apex.init_app(app, prefix="/apex")
 
         routes = [r.path for r in app.routes]
         assert "/apex/submit" in routes
@@ -357,52 +357,52 @@ class TestAPEX:
         assert "/apex/status" in routes
         assert "/apex/health" in routes
 
-    def test_mount_adds_middleware(self, patched_web3, tmp_path):
+    def test_init_app_adds_middleware(self, patched_web3, tmp_path):
         from fastapi import FastAPI
 
         from bnbagent.apex.server.middleware import APEXMiddleware
 
         apex = APEX(config=self._make_config(tmp_path))
         app = FastAPI()
-        apex.mount(app)
+        apex.init_app(app)
 
         has_middleware = any(m.cls is APEXMiddleware for m in app.user_middleware)
         assert has_middleware
 
-    def test_mount_without_middleware(self, patched_web3, tmp_path):
+    def test_init_app_without_middleware(self, patched_web3, tmp_path):
         from fastapi import FastAPI
 
         from bnbagent.apex.server.middleware import APEXMiddleware
 
         apex = APEX(config=self._make_config(tmp_path), middleware=False)
         app = FastAPI()
-        apex.mount(app)
+        apex.init_app(app)
 
         has_middleware = any(m.cls is APEXMiddleware for m in app.user_middleware)
         assert not has_middleware
 
-    def test_mount_wraps_lifespan_with_on_job(self, patched_web3, tmp_path):
+    def test_init_app_wraps_lifespan_with_on_job(self, patched_web3, tmp_path):
         from fastapi import FastAPI
 
         apex = APEX(config=self._make_config(tmp_path), on_job=lambda job: "result")
         app = FastAPI()
         original_lifespan = app.router.lifespan_context
-        apex.mount(app)
+        apex.init_app(app)
 
         # lifespan should be wrapped (different from original)
         assert app.router.lifespan_context is not original_lifespan
 
-    def test_mount_no_job_loop_without_on_job(self, patched_web3, tmp_path):
+    def test_init_app_no_job_loop_without_on_job(self, patched_web3, tmp_path):
         from fastapi import FastAPI
 
         apex = APEX(config=self._make_config(tmp_path))
         app = FastAPI()
-        apex.mount(app)
+        apex.init_app(app)
 
         # Without on_job, no job loop task should be created
         assert apex._job_loop_task is None
 
-    def test_mount_wraps_custom_lifespan(self, patched_web3, tmp_path):
+    def test_init_app_wraps_custom_lifespan(self, patched_web3, tmp_path):
         from contextlib import asynccontextmanager
 
         from fastapi import FastAPI
@@ -416,7 +416,7 @@ class TestAPEX:
 
         apex = APEX(config=self._make_config(tmp_path), on_job=lambda job: "result")
         app = FastAPI(lifespan=custom_lifespan)
-        apex.mount(app)
+        apex.init_app(app)
 
         # lifespan should be wrapped around the custom one
         assert app.router.lifespan_context is not custom_lifespan
@@ -426,15 +426,15 @@ class TestAPEX:
         assert isinstance(apex.state, APEXState)
         assert apex.job_ops is apex.state.job_ops
 
-    def test_double_mount_raises(self, patched_web3, tmp_path):
+    def test_double_init_app_raises(self, patched_web3, tmp_path):
         from fastapi import FastAPI
 
         apex = APEX(config=self._make_config(tmp_path))
         app = FastAPI()
-        apex.mount(app)
+        apex.init_app(app)
 
-        with pytest.raises(RuntimeError, match="APEX already mounted"):
-            apex.mount(app)
+        with pytest.raises(RuntimeError, match="APEX already initialized"):
+            apex.init_app(app)
 
     def test_create_apex_app_still_works(self, patched_web3, tmp_path):
         """Regression: create_apex_app should still work after refactor."""
@@ -452,7 +452,7 @@ class TestAPEX:
 
         apex = APEX(config=self._make_config(tmp_path))
         app = FastAPI()
-        apex.mount(app, prefix="/my-apex")
+        apex.init_app(app, prefix="/my-apex")
 
         routes = [r.path for r in app.routes]
         assert "/my-apex/submit" in routes

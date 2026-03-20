@@ -2,9 +2,9 @@
 FastAPI application factory for APEX agents.
 
 Provides:
-- APEX: Extension class — one-line mount for existing apps
+- APEX: Extension class — one-line init for existing apps
 - create_apex_app(): Create a complete FastAPI app with APEX endpoints
-- create_apex_routes(): Create an APIRouter to mount in existing apps
+- create_apex_routes(): Create an APIRouter for use in existing apps
 """
 
 from __future__ import annotations
@@ -92,7 +92,7 @@ def create_apex_routes(
 ) -> APIRouter:
     """Create an APIRouter with APEX endpoints.
 
-    Can be mounted to an existing FastAPI app:
+    Can be included in an existing FastAPI app:
 
         app.include_router(create_apex_routes(), prefix="/your-prefix")
 
@@ -221,13 +221,13 @@ def create_apex_routes(
 
 
 class APEX:
-    """APEX extension for FastAPI — one-line mount.
+    """APEX extension for FastAPI — one-line init.
 
     Bundles routes, middleware, and background job loop into a single object
-    that can be mounted onto any existing FastAPI application::
+    that can be initialized onto any existing FastAPI application::
 
         apex = APEX(on_job=execute_job)
-        apex.mount(app, prefix="/apex")
+        apex.init_app(app, prefix="/apex")
 
     This is equivalent to manually wiring ``create_apex_routes()``,
     ``APEXMiddleware``, and ``run_job_loop()`` — but without the boilerplate.
@@ -255,7 +255,7 @@ class APEX:
         self._task_metadata = task_metadata
         self._middleware = middleware
         self._skip_paths = skip_paths
-        self._mounted = False
+        self._initialized = False
         self._job_loop_task: asyncio.Task | None = None
 
     @property
@@ -278,7 +278,7 @@ class APEX:
                 yield
                 await apex.shutdown()
 
-        If the app does **not** use ``lifespan``, :meth:`mount` registers these
+        If the app does **not** use ``lifespan``, :meth:`init_app` registers these
         hooks automatically via ``app.router.on_startup`` / ``on_shutdown``.
         """
         if not self._on_job:
@@ -305,19 +305,19 @@ class APEX:
                 pass
             self._job_loop_task = None
 
-    def mount(self, app: FastAPI, prefix: str = "/apex") -> None:
-        """Mount APEX onto *app*: routes, middleware, and job-loop lifecycle.
+    def init_app(self, app: FastAPI, prefix: str = "/apex") -> None:
+        """Initialize APEX onto *app*: routes, middleware, and job-loop lifecycle.
 
         Args:
-            app: The FastAPI application to mount onto.
+            app: The FastAPI application to initialize onto.
             prefix: URL prefix for all APEX routes (default ``/apex``).
 
         Raises:
             RuntimeError: If called more than once on the same ``APEX`` instance.
         """
-        if self._mounted:
-            raise RuntimeError("APEX already mounted")
-        self._mounted = True
+        if self._initialized:
+            raise RuntimeError("APEX already initialized")
+        self._initialized = True
 
         # 1. Routes
         router = create_apex_routes(state=self._state, on_submit=self._on_submit)
@@ -352,7 +352,7 @@ class APEX:
             app.router.lifespan_context = _apex_lifespan
 
         logger.info(
-            "[APEX] Mounted: prefix=%s, middleware=%s, job_loop=%s",
+            "[APEX] Initialized: prefix=%s, middleware=%s, job_loop=%s",
             prefix,
             "enabled" if self._middleware else "disabled",
             "enabled" if self._on_job else "disabled",
@@ -400,7 +400,7 @@ def create_apex_app(
     standard paths (``/status``, ``/negotiate``, ``/health``, etc.) are always
     allowed.
 
-    Routes are mounted at ``/apex/*``. For custom prefixes, use
+    Routes are added at ``/apex/*``. For custom prefixes, use
     ``create_apex_routes()`` with ``app.include_router(prefix="/your-prefix")``.
 
     Args:
@@ -435,7 +435,7 @@ def create_apex_app(
         title="APEX Agent",
         description="APEX (Agent Payment Exchange Protocol) Agent",
     )
-    apex.mount(app)
+    apex.init_app(app)
 
     prefix = "/apex"
 

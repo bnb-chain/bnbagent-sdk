@@ -47,7 +47,7 @@ from bnbagent.apex.server import APEX
 app = FastAPI()
 
 apex = APEX(on_job=execute_job)
-apex.mount(app, prefix="/apex")
+apex.init_app(app, prefix="/apex")
 # Routes, middleware, and job loop — all wired up.
 ```
 
@@ -323,13 +323,13 @@ Health check for load balancers and monitoring.
 
 ### `APEX`
 
-Extension class for mounting APEX onto an existing FastAPI app. Bundles routes,
-middleware, and background job loop into a single `.mount(app)` call.
+Extension class for initializing APEX onto an existing FastAPI app. Bundles routes,
+middleware, and background job loop into a single `.init_app(app)` call.
 
 | Method / Property | Description |
 |---|---|
 | `APEX(config=..., on_job=..., middleware=True, ...)` | Constructor — same parameters as `create_apex_app()` |
-| `.mount(app, prefix="/apex")` | Mount routes, middleware, and job-loop lifecycle onto *app* |
+| `.init_app(app, prefix="/apex")` | Initialize routes, middleware, and job-loop lifecycle onto *app* |
 | `.state` | `APEXState` — shared state (config, job\_ops, negotiation handler) |
 | `.job_ops` | Shortcut for `state.job_ops` |
 

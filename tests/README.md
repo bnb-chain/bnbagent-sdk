@@ -35,7 +35,7 @@ pytest -v
 | `test_service_record.py` | `ServiceRecord` — serialization, canonical JSON, hash computation |
 | `test_nonce_manager.py` | `NonceManager` — singleton, thread safety, error recovery |
 | `test_paymaster.py` | `Paymaster` — RPC helpers, sponsorability checks |
-| `test_quickstart_app.py` | `create_apex_app` / `APEX` / `create_apex_routes` — FastAPI factory, mount, manual wiring |
+| `test_quickstart_app.py` | `create_apex_app` / `APEX` / `create_apex_routes` — FastAPI factory, init_app, manual wiring |
 | `test_local_storage.py` | `LocalStorageProvider` — file I/O, permissions, path traversal |
 | `test_ipfs_storage.py` | `IPFSStorageProvider` — Pinata upload, CID validation, gateway |
 | `test_storage_factory.py` | `create_storage_provider` — factory selection, env config |

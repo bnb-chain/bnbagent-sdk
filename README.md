@@ -39,7 +39,7 @@ pip install "bnbagent[server,ipfs]"
 - [Quick Start: Register an Agent (ERC-8004)](#quick-start-register-an-agent-erc-8004)
 - [Quick Start: Run an APEX Agent Server](#quick-start-run-an-apex-agent-server)
   - [Option 1: One-Line Setup (`create_apex_app`)](#option-1-one-line-setup-create_apex_app)
-  - [Option 2: Mount on an Existing App (`APEX` class)](#option-2-mount-on-an-existing-app-apex-class)
+  - [Option 2: Initialize on an Existing App (`APEX` class)](#option-2-initialize-on-an-existing-app-apex-class)
   - [Option 3: Full Manual Control (`create_apex_routes`)](#option-3-full-manual-control-create_apex_routes)
   - [Endpoints](#endpoints)
   - [`on_job` Callback Reference](#on_job-callback-reference)
@@ -243,10 +243,10 @@ The SDK offers three integration levels — from one-line setup to full manual c
 | Approach | What it does | Best for |
 |----------|-------------|----------|
 | [`create_apex_app()`](#option-1-one-line-setup-create_apex_app) | Creates a complete FastAPI app with everything wired | New agents, standalone services |
-| [`APEX(...).mount(app)`](#option-2-mount-on-an-existing-app-apex-class) | Mounts routes, middleware, and job loop onto your app | Adding APEX to an existing FastAPI app |
+| [`APEX(...).init_app(app)`](#option-2-initialize-on-an-existing-app-apex-class) | Initializes routes, middleware, and job loop onto your app | Adding APEX to an existing FastAPI app |
 | [`create_apex_routes()`](#option-3-full-manual-control-create_apex_routes) | Returns only an API router — no middleware, no job loop | Advanced cases needing full control |
 
-Each level builds on the one below: `create_apex_app()` calls `APEX.mount()`, which calls `create_apex_routes()`.
+Each level builds on the one below: `create_apex_app()` calls `APEX.init_app()`, which calls `create_apex_routes()`.
 
 ### Prerequisites
 
@@ -286,9 +286,9 @@ That's it. `create_apex_app(on_job=...)` handles everything internally: wallet c
 
 > **Wallet lifecycle**: `PRIVATE_KEY` is only needed on the first run — it gets encrypted to `~/.bnbagent/wallets/<address>.json` (Keystore V3) and cleared from memory immediately. On subsequent runs, only `WALLET_PASSWORD` is needed. See [Wallet Providers](#wallet-providers) for details.
 
-### Option 2: Mount on an Existing App (`APEX` class)
+### Option 2: Initialize on an Existing App (`APEX` class)
 
-If you already have a FastAPI app, use the `APEX` extension class to mount APEX onto it. You get the same automation as `create_apex_app()` — routes, middleware, and background job loop — but on your own app instance:
+If you already have a FastAPI app, use the `APEX` extension class to initialize APEX onto it. You get the same automation as `create_apex_app()` — routes, middleware, and background job loop — but on your own app instance:
 
 ```python
 from fastapi import FastAPI
@@ -300,7 +300,7 @@ def execute_job(job: dict) -> str:
     return f"Processed: {job['description']}"
 
 apex = APEX(on_job=execute_job)
-apex.mount(app, prefix="/apex")
+apex.init_app(app, prefix="/apex")
 # Routes, middleware, and job polling are all set up — nothing else needed.
 ```
 
@@ -360,7 +360,7 @@ This gives you full flexibility to customize each layer independently — for ex
 
 ### Comparison
 
-| Capability | `create_apex_app()` | `APEX(...).mount(app)` | `create_apex_routes()` |
+| Capability | `create_apex_app()` | `APEX(...).init_app(app)` | `create_apex_routes()` |
 |------------|--------------------|-----------------------|-----------------------|
 | HTTP endpoints | Included | Included | Included |
 | Background job polling | Automatic | Automatic | **Manual** |
@@ -370,7 +370,7 @@ This gives you full flexibility to customize each layer independently — for ex
 
 ### Endpoints
 
-All three options expose the same set of APEX endpoints (default prefix `/apex`). For custom prefixes, use `APEX(...).mount(app, prefix="/your-prefix")` or `app.include_router(router, prefix="/your-prefix")`.
+All three options expose the same set of APEX endpoints (default prefix `/apex`). For custom prefixes, use `APEX(...).init_app(app, prefix="/your-prefix")` or `app.include_router(router, prefix="/your-prefix")`.
 
 | Method | Path | What it does |
 |--------|------|--------------|
@@ -646,9 +646,9 @@ The polling uses a hybrid two-phase approach that avoids `eth_getLogs` rate limi
 
 This is fully automatic — no user code changes are needed.
 
-> **`create_apex_routes()` does NOT include job polling.** If you use the low-level `create_apex_routes()` without `run_job_loop()`, funded jobs will never be automatically discovered or submitted. Use `APEX(on_job=...).mount(app)` instead — it wires everything up in one line. See [Option 2](#option-2-mount-on-an-existing-app-apex-class) and [Option 3](#option-3-full-manual-control-create_apex_routes) for details.
+> **`create_apex_routes()` does NOT include job polling.** If you use the low-level `create_apex_routes()` without `run_job_loop()`, funded jobs will never be automatically discovered or submitted. Use `APEX(on_job=...).init_app(app)` instead — it wires everything up in one line. See [Option 2](#option-2-initialize-on-an-existing-app-apex-class) and [Option 3](#option-3-full-manual-control-create_apex_routes) for details.
 
-If you're mounting APEX onto an existing app, the `APEX` class handles the job loop automatically — see [Option 2](#option-2-mount-on-an-existing-app-apex-class).
+If you're adding APEX to an existing app, the `APEX` class handles the job loop automatically — see [Option 2](#option-2-initialize-on-an-existing-app-apex-class).
 
 ### Pricing & Budget Validation
 
@@ -729,7 +729,7 @@ app = create_apex_app(skip_paths=["/my-public-endpoint", "/webhook"])
 app = create_apex_app(middleware=False)
 ```
 
-> **Note**: When using `create_apex_routes()` to mount on an existing app, middleware is NOT auto-added — you control your own app's middleware stack.
+> **Note**: When using `create_apex_routes()` on an existing app, middleware is NOT auto-added — you control your own app's middleware stack.
 
 ### Module System
 
@@ -800,7 +800,7 @@ print(nc.rpc_url)  # https://bsc-dataseed.binance.org
 | Example | Description |
 |---------|-------------|
 | [`getting-started/`](examples/getting-started/) | **Start here.** 5-step walkthrough: set up a wallet and check balances, register an agent on ERC-8004, run an APEX agent server with background job polling, create and fund a job from a client, and settle payment after the UMA liveness period. Includes an E2E test script that runs all steps automatically. |
-| [`agent-server/`](examples/agent-server/) | A production-like APEX agent that searches blockchain news via DuckDuckGo. Demonstrates all three integration patterns: `create_apex_app()` (standalone), `APEX.mount()` (existing app), and `create_apex_routes()` (full manual control). Includes ERC-8004 registration, IPFS storage, background job polling, and a `/search` endpoint for testing without APEX. |
+| [`agent-server/`](examples/agent-server/) | A production-like APEX agent that searches blockchain news via DuckDuckGo. Demonstrates all three integration patterns: `create_apex_app()` (standalone), `APEX.init_app()` (existing app), and `create_apex_routes()` (full manual control). Includes ERC-8004 registration, IPFS storage, background job polling, and a `/search` endpoint for testing without APEX. |
 | [`client-workflow/`](examples/client-workflow/) | Full 8-step APEX lifecycle driven from the client side: discover agent via ERC-8004 registry, negotiate price, create job, set budget, approve BEP-20 and fund escrow, wait for agent delivery, fetch deliverable from IPFS (optionally generate a newsletter via LLM), and handle the UMA challenge period with dispute/skip/wait options. |
 | [`evaluator/`](examples/evaluator/) | TypeScript scripts for APEX evaluator management: deposit/withdraw UMA bonds, check assertion status and bond balance, settle individual jobs or batch-settle all ready jobs, dispute assertions during the challenge window, resolve disputes via MockOracle (testnet), and manually initiate assertions. |
 

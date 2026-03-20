@@ -40,9 +40,9 @@ from bnbagent.apex.server.routes import create_apex_app
 app = create_apex_app(config=config, on_job=process_task)
 ```
 
-### Option 2: Mount on existing app (`service_mount.py`) — `APEX(...).mount(app)`
+### Option 2: Initialize on existing app (`service_mount.py`) — `APEX(...).init_app(app)`
 
-Mounts APEX onto an existing FastAPI app that has its own routes and lifecycle. Use this when adding APEX to an app that already does other things.
+Initializes APEX onto an existing FastAPI app that has its own routes and lifecycle. Use this when adding APEX to an app that already does other things.
 
 ```bash
 python scripts/run_agent_mount.py
@@ -56,7 +56,7 @@ from bnbagent.apex.server import APEX
 app = FastAPI(title="My Existing App")
 
 apex = APEX(config=config, on_job=process_task)
-apex.mount(app, prefix="/apex")
+apex.init_app(app, prefix="/apex")
 
 # Your own routes work alongside APEX
 @app.get("/search")
@@ -107,7 +107,7 @@ scripts/
   run_agent_routes.py    # Run manual routes mode (service_routes.py)
 src/
   service.py             # create_apex_app() — APEX owns the app
-  service_mount.py       # APEX(...).mount(app) — mount onto existing app
+  service_mount.py       # APEX(...).init_app(app) — init onto existing app
   service_routes.py      # create_apex_routes() — full manual control
 ```
 
