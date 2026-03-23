@@ -122,11 +122,6 @@ jobs:
             ```bash
             pip install bnbagent==${{ inputs.version }}
             ```
-
-            ✅ Published to **Production PyPI**
-
-            ### Changes
-
-            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+          generate_release_notes: true
           draft: false
           prerelease: false
