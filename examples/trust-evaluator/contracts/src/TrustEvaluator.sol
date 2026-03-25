@@ -22,8 +22,8 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
                         INTERFACES
 //////////////////////////////////////////////////////////////*/
 
-/// @notice ERC-8183 AgenticCommerce interface
-/// @dev Compatible with both Virtuals ACP and BNB Chain APEX implementations
+/// @notice ERC-8183 job contract interface
+/// @dev Compatible with BNB Chain APEX implementation
 interface IERC8183 {
     enum Status {
         Open,
@@ -180,7 +180,7 @@ contract TrustEvaluator is Ownable2Step, ReentrancyGuard {
     //////////////////////////////////////////////////////////////*/
 
     /// @notice Evaluate a submitted ERC-8183 job using trust scores
-    /// @param jobContract The ERC-8183 AgenticCommerce contract
+    /// @param jobContract The ERC-8183 job contract
     /// @param jobId The job to evaluate
     function evaluate(address jobContract, uint256 jobId) external nonReentrant {
         if (jobContract == address(0)) revert ZeroAddress();

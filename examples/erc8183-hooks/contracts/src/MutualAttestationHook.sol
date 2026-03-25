@@ -41,7 +41,7 @@ interface IEAS {
 /**
  * @title MutualAttestationHook
  * @notice Airbnb-style bilateral review system for ERC-8183 Agentic Commerce.
- *         Both client and provider attest each other on EAS after job completion,
+ *         Both client and provider attest each other on BAS after job completion,
  *         building two-sided on-chain reputation.
  *
  * PROBLEM

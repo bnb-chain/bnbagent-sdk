@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 /**
  * @title AttestationHook
- * @notice Writes an immutable EAS attestation for every completed or rejected
+ * @notice Writes an immutable BAS attestation for every completed or rejected
  *         ERC-8183 job, creating on-chain receipts that feed reputation systems.
  *
  * PROBLEM
@@ -14,7 +14,7 @@ pragma solidity ^0.8.20;
  *
  * SOLUTION
  * --------
- * This hook calls EAS after every job completion or rejection, storing:
+ * This hook calls BAS after every job completion or rejection, storing:
  * jobId, client, provider, evaluator, budget, outcome reason, completed flag.
  * Permanently queryable by anyone on-chain.
  *
@@ -23,7 +23,7 @@ pragma solidity ^0.8.20;
  *  1. Job completes/rejects on ERC-8183 contract
  *  2. afterAction callback triggers this hook
  *  3. Hook reads job data from ERC-8183 via getJob()
- *  4. Hook calls EAS.attest() with job outcome data
+ *  4. Hook calls BAS.attest() with job outcome data
  *  5. Attestation UID stored for reference
  *
  * TRUST MODEL
@@ -31,7 +31,7 @@ pragma solidity ^0.8.20;
  * - Attestations are non-revocable — job outcomes are facts
  * - Hook never blocks lifecycle transitions (afterAction only)
  * - Each jobId attested exactly once (idempotency guard + CEI sentinel)
- * - EAS failures never revert the parent transaction (try/catch)
+ * - BAS failures never revert the parent transaction (try/catch)
  */
 
 /// @notice Minimal BAS/EAS interface (BAS is BNB Chain's fork of EAS — same interface)
@@ -120,7 +120,7 @@ contract AttestationHook {
 
     event AttestationFailed(uint256 indexed jobId, bytes reason);
     event SchemaUpdated(bytes32 indexed newSchemaUID);
-    event EASUpdated(address indexed newEAS);
+    event BASUpdated(address indexed newEAS);
     event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
@@ -154,7 +154,7 @@ contract AttestationHook {
 
     /// @param jobContract_ ERC-8183 contract address
     /// @param eas_ BAS/EAS contract address (BSC: 0x247Fe62d887bc9410c3848DF2f322e52DA9a51bC)
-    /// @param schemaUID_ Pre-registered EAS schema UID for job receipts
+    /// @param schemaUID_ Pre-registered BAS schema UID for job receipts
     constructor(
         address jobContract_,
         address eas_,
@@ -180,7 +180,7 @@ contract AttestationHook {
         // pass
     }
 
-    /// @notice Called after complete/reject — writes EAS attestation
+    /// @notice Called after complete/reject — writes BAS attestation
     function afterAction(uint256 jobId, bytes4 selector, bytes calldata data) external onlyJobContract_ {
         if (selector == COMPLETE_SELECTOR) {
             // Extract reason from data (first 32 bytes after jobId)
@@ -197,8 +197,8 @@ contract AttestationHook {
     //////////////////////////////////////////////////////////////*/
 
     /**
-     * @dev Reads job data and writes an EAS attestation.
-     *      Uses try/catch — EAS failures NEVER revert the parent tx.
+     * @dev Reads job data and writes a BAS attestation.
+     *      Uses try/catch — BAS failures NEVER revert the parent tx.
      *      Idempotent — each jobId attested once only.
      *      Follows CEI pattern with a pending sentinel.
      *
@@ -238,7 +238,7 @@ contract AttestationHook {
         // CEI: Set sentinel BEFORE external call
         jobAttestations[jobId] = _PENDING_SENTINEL;
 
-        // Write to EAS (never reverts parent tx)
+        // Write to BAS (never reverts parent tx)
         try eas.attest(
             IEAS.AttestationRequest({
                 schema: schemaUID,
@@ -272,10 +272,10 @@ contract AttestationHook {
         emit SchemaUpdated(schemaUID_);
     }
 
-    function setEAS(address eas_) external onlyOwner_ {
+    function setBAS(address eas_) external onlyOwner_ {
         if (eas_ == address(0)) revert ZeroAddress();
         eas = IEAS(eas_);
-        emit EASUpdated(eas_);
+        emit BASUpdated(eas_);
     }
 
     function transferOwnership(address newOwner) external onlyOwner_ {
@@ -295,7 +295,7 @@ contract AttestationHook {
                     VIEW
     //////////////////////////////////////////////////////////////*/
 
-    /// @notice Get the EAS attestation UID for a given job
+    /// @notice Get the BAS attestation UID for a given job
     function getAttestation(uint256 jobId) external view returns (bytes32) {
         bytes32 uid = jobAttestations[jobId];
         return uid == _PENDING_SENTINEL ? bytes32(0) : uid;
