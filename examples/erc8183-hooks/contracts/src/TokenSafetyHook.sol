@@ -91,23 +91,26 @@ contract TokenSafetyHook is Ownable {
     //////////////////////////////////////////////////////////////*/
 
     /// @notice Called before fund() — checks token safety
+    /// @dev Fail-closed: reverts if data is malformed or missing
     function beforeAction(uint256 jobId, bytes4 selector, bytes calldata data) external onlyJobContract {
         if (selector != FUND_SELECTOR) return; // only check on funding
 
-        // Extract payment token from optParams (first 20 bytes after jobId)
-        // Convention: optParams = abi.encode(tokenAddress, amount)
-        if (data.length >= 20) {
-            address token = abi.decode(data, (address));
+        // Extract payment token from optParams
+        // Convention: optParams = abi.encode(tokenAddress, amount) = 64 bytes minimum
+        if (data.length < 64) {
+            revert UnsafeToken(address(0)); // fail-closed: malformed data = block funding
+        }
 
-            // Skip whitelisted tokens
-            if (tokenWhitelist[token]) return;
+        (address token,) = abi.decode(data, (address, uint256));
 
-            // Query oracle
-            (, bool isSafe) = oracle.checkToken(token);
-            if (!isSafe) {
-                emit TokenBlocked(token, jobId, "Token failed safety check");
-                revert UnsafeToken(token);
-            }
+        // Skip whitelisted tokens
+        if (tokenWhitelist[token]) return;
+
+        // Query oracle
+        (, bool isSafe) = oracle.checkToken(token);
+        if (!isSafe) {
+            emit TokenBlocked(token, jobId, "Token failed safety check");
+            revert UnsafeToken(token);
         }
     }
 
