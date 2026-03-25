@@ -66,11 +66,15 @@ ERC-8183 Contract
 
 ## EAS Deployment Addresses
 
-| Chain | EAS Contract |
-|-------|-------------|
-| BSC Testnet | Check [EAS docs](https://docs.attest.org/docs/quick--start/contracts) |
-| Base | `0x4200000000000000000000000000000000000021` |
-| Ethereum | `0xA1207F3BBa224E2c9c3c6D5aF63D0eb1582Ce587` |
+| Chain | EAS Contract | Status |
+|-------|-------------|--------|
+| Base | `0x4200000000000000000000000000000000000021` | ✅ Official |
+| Ethereum | `0xA1207F3BBa224E2c9c3c6D5aF63D0eb1582Ce587` | ✅ Official |
+| Optimism | `0x4200000000000000000000000000000000000021` | ✅ Official |
+| Arbitrum | See [EAS docs](https://docs.attest.org/docs/quick--start/contracts) | ✅ Official |
+| **BSC / BSC Testnet** | **Not yet deployed** | ⚠️ Requires self-deploy |
+
+> **BSC Note:** EAS does not have an official deployment on BNB Chain yet. The `AttestationHook` and `MutualAttestationHook` contracts are EAS-dependent — to use them on BSC, you would need to deploy the [EAS contracts](https://github.com/ethereum-attestation-service/eas-contracts) yourself. The `TokenSafetyHook` works independently of EAS and is ready to use on any EVM chain.
 
 ## Testing
 
