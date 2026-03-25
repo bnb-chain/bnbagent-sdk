@@ -45,6 +45,27 @@ Client funds job → beforeAction hook triggers
 - Pairable with any token safety API (GoPlus, Honeypot.is, etc.)
 - Upgradeable (UUPS pattern)
 
+### 4. CompositeRouterHook — Plugin Composition Router
+
+**Problem:** A single job often needs multiple hooks — token safety before funding, trust gating before submission, attestations after completion. But each job can only have one hook address.
+
+**Solution:** CompositeRouterHook acts as a single hook that fans out to up to 10 plugin hooks in priority order:
+
+```
+Router (set as job hook)
+  ├── Priority 0: TokenSafetyHook     (beforeAction: block unsafe tokens)
+  ├── Priority 1: TrustGateHook       (beforeAction: check provider score)
+  ├── Priority 5: AttestationHook     (afterAction: write BAS receipt)
+  └── Priority 10: MutualAttestHook   (afterAction: record for reviews)
+```
+
+**Features:**
+- Up to 10 plugins, managed at runtime (add/remove/enable/disable)
+- beforeAction = hard gate (any plugin revert blocks the action)
+- afterAction = soft gate (failures logged, don't block job)
+- Priority-ordered execution (ascending)
+- Upgradeable (UUPS pattern)
+
 ## Architecture
 
 These hooks plug into ERC-8183's `beforeAction` / `afterAction` callback system:
