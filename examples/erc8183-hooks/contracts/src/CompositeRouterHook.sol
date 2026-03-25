@@ -43,10 +43,9 @@ interface IERC8183Hook {
  * -------------------
  * ```
  * Router (this contract, set as job hook)
- *   ├── Priority 0: TokenSafetyHook     (beforeAction: block unsafe tokens)
- *   ├── Priority 1: TrustGateHook       (beforeAction: check provider score)
- *   ├── Priority 5: AttestationHook     (afterAction: write BAS receipt)
- *   └── Priority 10: MutualAttestHook   (afterAction: record for reviews)
+ *   ├── Priority 0: TokenSafetyHook          (beforeAction: block unsafe tokens)
+ *   ├── Priority 5: AttestationHook          (afterAction: write BAS receipt)
+ *   └── Priority 10: MutualAttestationHook   (afterAction: record for bilateral reviews)
  * ```
  *
  * TRUST MODEL
