@@ -19,7 +19,7 @@ interface IERC8183Reader {
     function getJob(uint256 jobId) external view returns (Job memory);
 }
 
-/// @notice Minimal EAS interface
+/// @notice Minimal BAS/EAS interface (BAS is BNB Chain's fork of EAS — same interface)
 interface IEAS {
     struct AttestationRequestData {
         address recipient;
@@ -56,18 +56,18 @@ interface IEAS {
  *  2. afterAction callback records participants + timestamp
  *  3. Within reviewWindow (default 7 days):
  *       a. Client calls submitClientReview(jobId, score, comment)
- *          → EAS attestation with provider as recipient
+ *          → BAS attestation with provider as recipient
  *       b. Provider calls submitProviderReview(jobId, score, comment)
- *          → EAS attestation with client as recipient
+ *          → BAS attestation with client as recipient
  *  4. Both reviews submitted → MutualReviewComplete event
  *
  * TRUST MODEL
  * -----------
  * Only recorded job participants can review. Each party reviews exactly once.
- * EAS attestations are non-revocable — reviews are permanent on-chain facts.
+ * BAS attestations are non-revocable — reviews are permanent on-chain facts.
  */
 contract MutualAttestationHook is ReentrancyGuard {
-    /// @notice EAS contract for attestations
+    /// @notice BAS contract (BNB Attestation Service — EAS-compatible)
     IEAS public immutable eas;
 
     /// @notice ERC-8183 contract this hook is attached to

@@ -1,27 +1,27 @@
 # ERC-8183 Hook Contracts
 
-Production-ready hook contracts for ERC-8183 Agentic Commerce. These hooks add trust, safety, and attestation layers to the job lifecycle.
+Production-ready hook contracts for ERC-8183 Agentic Commerce. These hooks add trust, safety, and attestation layers to the job lifecycle using [BAS (BNB Attestation Service)](https://bascan.io) for on-chain attestations.
 
 ## Hooks
 
 ### 1. MutualAttestationHook — Airbnb-Style Bilateral Reviews
 
-Both client **and** provider leave on-chain reviews (via EAS) after job completion, building two-sided reputation.
+Both client **and** provider leave on-chain reviews (via BAS) after job completion, building two-sided reputation.
 
 **Why it matters:** One-sided reviews create incentive problems. Clients can post vague specs without accountability. Providers can deliver poor work while blaming the spec. Mutual reviews fix this.
 
 **Flow:**
 ```
 Job completes → 7-day review window opens
-  → Client rates provider (1-5 stars + comment) → EAS attestation
-  → Provider rates client (1-5 stars + comment) → EAS attestation
+  → Client rates provider (1-5 stars + comment) → BAS attestation
+  → Provider rates client (1-5 stars + comment) → BAS attestation
   → Both done? → MutualReviewComplete event
 ```
 
 **Features:**
 - Only job participants can review (enforced on-chain)
 - One review per party per job
-- Non-revocable EAS attestations — reviews are permanent facts
+- Non-revocable BAS attestations — reviews are permanent facts
 - Configurable review window (default 7 days)
 - Works for both completed and rejected jobs
 
@@ -64,17 +64,18 @@ ERC-8183 Contract
                                               ↳ e.g., record completion for reviews
 ```
 
-## EAS Deployment Addresses
+## BAS (BNB Attestation Service) Deployment Addresses
 
-| Chain | EAS Contract | Status |
-|-------|-------------|--------|
-| Base | `0x4200000000000000000000000000000000000021` | ✅ Official |
-| Ethereum | `0xA1207F3BBa224E2c9c3c6D5aF63D0eb1582Ce587` | ✅ Official |
-| Optimism | `0x4200000000000000000000000000000000000021` | ✅ Official |
-| Arbitrum | See [EAS docs](https://docs.attest.org/docs/quick--start/contracts) | ✅ Official |
-| **BSC / BSC Testnet** | **Not yet deployed** | ⚠️ Requires self-deploy |
+These hooks use [BAS](https://github.com/bnb-attestation-service/bas-contract) — BNB Chain's native attestation service (EAS-compatible fork with the same `IEAS` interface).
 
-> **BSC Note:** EAS does not have an official deployment on BNB Chain yet. The `AttestationHook` and `MutualAttestationHook` contracts are EAS-dependent — to use them on BSC, you would need to deploy the [EAS contracts](https://github.com/ethereum-attestation-service/eas-contracts) yourself. The `TokenSafetyHook` works independently of EAS and is ready to use on any EVM chain.
+| Chain | BAS Contract | Schema Registry |
+|-------|-------------|-----------------|
+| **BSC Mainnet** | `0x247Fe62d887bc9410c3848DF2f322e52DA9a51bC` | `0x5e905F77f59491F03eBB78c204986aaDEB0C6bDa` |
+| **BSC Testnet** | `0x6c2270298b1e6046898a322acB3Cbad6F99f7CBD` | `0x08C8b8417313fF130526862f90cd822B55002D72` |
+| **opBNB Mainnet** | `0x5e905F77f59491F03eBB78c204986aaDEB0C6bDa` | `0x65CFBDf1EA0ACb7492Ecc1610cfBf79665DC631B` |
+| **opBNB Testnet** | `0x5e905F77f59491F03eBB78c204986aaDEB0C6bDa` | `0x65CFBDf1EA0ACb7492Ecc1610cfBf79665DC631B` |
+
+> **Cross-chain note:** For Base/Ethereum/Optimism deployments, use [EAS](https://docs.attest.org/docs/quick--start/contracts) instead (same interface). The `TokenSafetyHook` works independently on any EVM chain without BAS/EAS.
 
 ## Testing
 
@@ -88,7 +89,8 @@ forge test -vv
 
 - [TrustEvaluator](../trust-evaluator/) — Trust-based fast-path evaluator
 - [ERC-8183 spec](https://eips.ethereum.org/EIPS/eip-8183)
-- [EAS (Ethereum Attestation Service)](https://docs.attest.org)
+- [BAS (BNB Attestation Service)](https://github.com/bnb-attestation-service/bas-contract)
+- [BAS Explorer](https://bascan.io)
 
 ## License
 

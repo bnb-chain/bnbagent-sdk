@@ -34,7 +34,7 @@ pragma solidity ^0.8.20;
  * - EAS failures never revert the parent transaction (try/catch)
  */
 
-/// @notice Minimal EAS interface
+/// @notice Minimal BAS/EAS interface (BAS is BNB Chain's fork of EAS — same interface)
 interface IEAS {
     struct AttestationRequestData {
         address recipient;
@@ -86,7 +86,7 @@ contract AttestationHook {
                             STORAGE
     //////////////////////////////////////////////////////////////*/
 
-    /// @notice EAS contract
+    /// @notice BAS contract (BNB Attestation Service — EAS-compatible)
     IEAS public eas;
 
     /// @notice Schema UID for the job receipt schema
@@ -153,7 +153,7 @@ contract AttestationHook {
     //////////////////////////////////////////////////////////////*/
 
     /// @param jobContract_ ERC-8183 contract address
-    /// @param eas_ EAS contract address
+    /// @param eas_ BAS/EAS contract address (BSC: 0x247Fe62d887bc9410c3848DF2f322e52DA9a51bC)
     /// @param schemaUID_ Pre-registered EAS schema UID for job receipts
     constructor(
         address jobContract_,
