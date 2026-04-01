@@ -13,11 +13,20 @@ and settlement -- letting AI agents transact with each other trustlessly.
   Each transition is an on-chain transaction managed by `APEXClient`.
 - **Negotiation** -- single-round HTTP negotiation where a user sends
   requirements and quality standards, and the provider agent returns a price
-  or rejects with an APEX reason code.
+  or rejects with an APEX reason code. The agreed terms are hashed
+  (`negotiation_hash`) and signed by the provider (`provider_sig`), then
+  stored as a structured JSON description on-chain for tamper-proof anchoring.
 - **Evaluation (UMA OOv3)** -- after submission the provider calls
   `initiateAssertion()` (after approving the bond token to the evaluator).
   A liveness period allows disputes before final settlement; the bond is
   returned to the provider on clean resolution.
+- **Fees** -- platform fee (to treasury) and evaluator fee (to evaluator
+  contract) are deducted from the budget on `complete()`. Both are
+  configurable in basis points by the contract admin. No fees on
+  `reject()` or `claimRefund()`.
+- **Expiry** -- the SDK calculates `expiredAt` to include OOv3 liveness
+  (30 min) + DVM dispute resolution buffer (72h), ensuring funds remain
+  locked long enough for dispute resolution.
 - **Service records** -- off-chain JSON documents (stored via `StorageProvider`)
   that capture request/response data and on-chain references. Only the
   content hash is stored on-chain.
@@ -466,6 +475,7 @@ contract. Inherits `ContractClientMixin` for nonce management and retries.
 |---|---|
 | `create_job(provider, evaluator, expired_at, ...)` | Create a new job. Returns job ID + tx hash. |
 | `fund(job_id, expected_budget)` | Fund a job with BEP-20 tokens. |
+| `fund_with_permit(job_id, budget, opt_params, deadline, v, r, s)` | Fund a job using ERC-2612 permit (approve + fund in one tx). |
 | `set_budget(job_id, amount)` | Adjust the job budget. |
 | `set_provider(job_id, provider)` | Assign a provider agent. |
 | `submit(job_id, deliverable_hash, ...)` | Submit deliverables (provider). |
@@ -474,6 +484,12 @@ contract. Inherits `ContractClientMixin` for nonce management and retries.
 | `claim_refund(job_id)` | Claim refund for a rejected/expired job. |
 | `get_job(job_id)` | Read full job struct from contract. |
 | `get_job_status(job_id)` | Return `APEXStatus` enum value. |
+| `platform_fee_bp()` | Get platform fee in basis points (read-only). |
+| `evaluator_fee_bp()` | Get evaluator fee in basis points (read-only). |
+| `platform_treasury()` | Get platform treasury address (read-only). |
+| `set_platform_fee(fee_bp, treasury)` | Set platform fee and treasury address (admin only). |
+| `set_evaluator_fee(fee_bp)` | Set evaluator fee (admin only). |
+| `get_default_expiry(deadline_seconds)` | Calculate expiredAt including OOv3 liveness + 72h DVM dispute buffer. |
 
 ### `APEXJobOps`
 
@@ -517,6 +533,32 @@ Ready-to-use negotiation processor for provider agents.
 | Method | Description |
 |---|---|
 | `negotiate(request_data)` | Evaluate a `NegotiationRequest` and return a `NegotiationResult`. |
+| `build_job_description(result)` | Build a structured JSON description (Schema v1) from a `NegotiationResult`. Contains `negotiation_hash` (keccak256 of canonical terms) and `provider_sig` (EIP-191 signature). Used as the `description` parameter in `create_job()`. |
+| `parse_job_description(description)` | Parse a structured or legacy plain-text job description. Returns the schema dict or `None`. |
+
+**Structured Description (Schema v1):**
+
+When a negotiation succeeds, the SDK produces a compact JSON string for on-chain `description`:
+
+```json
+{
+  "v": 1,
+  "negotiated_at": 1712000000,
+  "quote_expires_at": 1712003600,
+  "task": "Search for BNB Chain news",
+  "terms": { "service_type": "...", "deliverables": "...", "quality_standards": "...", "deadline_seconds": 300, "success_criteria": "..." },
+  "price": "1000000000000000000",
+  "currency": "0xc70B...5565",
+  "negotiation_hash": "0xabc...",
+  "provider_sig": "0xdef..."
+}
+```
+
+- `negotiation_hash`: keccak256 of canonical JSON (service/quality fields + price/currency) — tamper-proof anchor
+- `provider_sig`: EIP-191 signature over the hash — proves the provider agreed to exact terms
+- `quote_expires_at`: unix timestamp after which the quote is stale (default 1h TTL). The SDK returns HTTP 410 if a job references an expired quote.
+
+**Claim text sanitization:** All user-supplied fields (`task`, `service_type`, `deliverables`, `quality_standards`, `success_criteria`) are sanitized via `_sanitize_for_claim()` which replaces `[`/`]` with `(`/`)` and strips ASCII control characters to prevent UMA claim section injection.
 
 Key data classes: `NegotiationRequest`, `NegotiationResponse`,
 `TermSpecification`, `ReasonCode`.

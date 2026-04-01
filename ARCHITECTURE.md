@@ -87,10 +87,10 @@ Not part of the public API. Provides shared plumbing for protocol modules.
 
 | File | Purpose |
 |------|---------|
-| `client.py` | `APEXClient` — ERC-8183 contract interaction (create/complete/cancel jobs); `APEXStatus` enum |
-| `evaluator_client.py` | `APEXEvaluatorClient` — UMA optimistic oracle evaluator interface |
+| `client.py` | `APEXClient` — ERC-8183 contract interaction (create/fund/complete/reject jobs, `fund_with_permit()`, fee management via `platform_fee_bp()`/`set_platform_fee()`/`set_evaluator_fee()`, `get_default_expiry()` with 72h DVM buffer); `APEXStatus` enum |
+| `evaluator_client.py` | `APEXEvaluatorClient` — UMA OOv3 evaluator with provider-pays-bond model (`initiate_assertion()`, `check_bond_readiness()`, `approve_bond_token()`); deprecated pool methods (`deposit_bond`, `withdraw_bond`) |
 | `config.py` | `APEXConfig` — unified config (wallet_provider + storage + contract addresses) |
-| `negotiation.py` | `NegotiationHandler`, request/response models, `TermSpecification`, `ReasonCode` |
+| `negotiation.py` | `NegotiationHandler`, structured description Schema v1 (`build_job_description()` with `negotiation_hash` + `provider_sig`), `_sanitize_for_claim()`, request/response models, `TermSpecification`, `ReasonCode` |
 | `service_record.py` | `ServiceRecord`, `RequestData`, `ResponseData` — dispute evidence structure |
 | `constants.py` | `get_apex_config()` — lazy per-network contract addresses |
 | `module.py` | `APEXModule` plugin (declares dependency on `erc8004`) |
@@ -100,7 +100,7 @@ Not part of the public API. Provides shared plumbing for protocol modules.
 | File | Purpose |
 |------|---------|
 | `routes.py` | `create_apex_app()` — FastAPI app factory; `APEXState` |
-| `job_ops.py` | `APEXJobOps` — async wrapper over synchronous `APEXClient` via `asyncio.to_thread()`; includes `get_response()` for retrieving stored deliverables |
+| `job_ops.py` | `APEXJobOps` — async wrapper over synchronous `APEXClient` via `asyncio.to_thread()`; includes `get_response()` for retrieving stored deliverables, `initiate_assertion()` for bond approval + UMA assertion, and quote expiry validation (410 on expired) |
 
 ### `bnbagent/wallets/` — Wallet Providers
 
@@ -253,13 +253,17 @@ Other agents discover via `get_all_agents()` / `get_agent_info()`.
 ### Job Lifecycle (APEX)
 
 ```
-1. Client discovers provider  →  ERC8004Agent.get_all_agents()
-2. Price negotiation          →  NegotiationHandler (off-chain HTTP)
-3. Client creates job         →  APEXClient.create_job()  →  on-chain escrow
-4. Provider executes task     →  APEXJobOps (async server)
-5. Provider uploads evidence  →  StorageProvider.upload()  →  ServiceRecord
-6. Provider completes job     →  APEXClient.complete_job()
-7. Evaluator settles          →  APEXEvaluatorClient  →  UMA oracle  →  payment release
+1. Client discovers provider    →  ERC8004Agent.get_all_agents()
+2. Price negotiation            →  NegotiationHandler (off-chain HTTP)
+   └─ structured description    →  build_job_description() → negotiation_hash + provider_sig
+3. Client creates job           →  APEXClient.create_job(description=structured_json)
+   └─ or fund with permit       →  APEXClient.fund_with_permit() (approve + fund in 1 tx)
+4. Provider executes task       →  APEXJobOps (async server)
+5. Provider uploads evidence    →  StorageProvider.upload()  →  ServiceRecord
+6. Provider submits deliverable →  APEXClient.submit()  →  afterAction hook stores dataUrl
+7. Provider stakes bond         →  APEXEvaluatorClient.approve_bond_token() + initiate_assertion()
+8. Liveness period (30 min)     →  anyone can dispute by posting counter-bond
+9. Settlement                   →  APEXEvaluatorClient.settle_job()  →  payment release (minus fees)
 ```
 
 ### Server Request Flow (FastAPI)
