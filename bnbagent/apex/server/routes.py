@@ -76,6 +76,7 @@ def create_apex_state(config: APEXConfig | None = None) -> APEXState:
     negotiation_handler = NegotiationHandler(
         service_price=config.service_price,
         currency=config.effective_payment_token,
+        wallet_provider=config.wallet_provider,
     )
 
     return APEXState(
@@ -140,8 +141,6 @@ def _create_apex_routes(
         result = await state.job_ops.get_job(job_id)
         if not result.get("success"):
             return JSONResponse(result, status_code=500)
-        if "deliverable" in result and isinstance(result["deliverable"], bytes):
-            result["deliverable"] = "0x" + result["deliverable"].hex()
         if "description" in result and isinstance(result["description"], bytes):
             result["description"] = result["description"].decode("utf-8", errors="replace")
         if "status" in result and hasattr(result["status"], "value"):
@@ -329,6 +328,14 @@ def create_apex_app(
         if submission.get("success"):
             submission["response_content"] = response_content
             logger.info(f"[APEX] Job #{job_id} submitted! TX: {submission.get('txHash')}")
+
+            # Initiate UMA assertion so the liveness window starts immediately
+            assertion = await state.job_ops.initiate_assertion(job_id)
+            if assertion.get("success"):
+                logger.info(f"[APEX] Job #{job_id} assertion initiated! TX: {assertion.get('txHash')}")
+                submission["assertionTxHash"] = assertion.get("txHash")
+            else:
+                logger.error(f"[APEX] Job #{job_id} assertion failed: {assertion.get('error')}")
         else:
             logger.error(f"[APEX] Job #{job_id} submission failed: {submission.get('error')}")
 

@@ -4,20 +4,15 @@
   "description": "Utility scripts for ERC-8183 and APEX Evaluator contracts",
   "type": "module",
   "scripts": {
-    "get-job": "tsx src/get-apex-job.ts",
-    "get-job-claim": "tsx src/get-apex-job-claim.ts",
-    "settle-job": "tsx src/settle-apex-job.ts",
-    "settle-jobs": "tsx src/settle-jobs.ts",
-    "dispute-job": "tsx src/dispute-apex-job.ts",
-    "resolve-dispute": "tsx src/resolve-apex-dispute.ts",
-    "get-settlement": "tsx src/get-apex-settlement.ts",
+    "get-job": "tsx src/get-job.ts",
+    "get-job-claim": "tsx src/get-job-claim.ts",
+    "settle-job": "tsx src/settle-job.ts",
+    "settle-all-jobs": "tsx src/settle-all-jobs.ts",
+    "dispute-job": "tsx src/dispute-job.ts",
+    "resolve-dispute": "tsx src/resolve-dispute-job.ts",
+    "get-settlement": "tsx src/get-settlement.ts",
     "initiate-assertion": "tsx src/initiate-assertion.ts",
-    "deposit-bond": "tsx src/deposit-bond.ts",
-    "withdraw-bond": "tsx src/withdraw-bond.ts",
-    "check-bond": "tsx src/check-bond.ts",
-    "query-uma-bond": "tsx src/query-uma-bond.ts",
-    "switch-bond-token": "tsx src/switch-bond-token.ts",
-    "help": "echo '=== ERC-8183 & APEX Evaluator Scripts ===\\n  get-job              - Get ERC-8183 job & assertion\\n  get-job-claim        - Get job claim & verify\\n  settle-job           - Settle single assertion\\n  settle-jobs          - Settle ALL ready jobs (batch)\\n  dispute-job          - Dispute assertion\\n  resolve-dispute      - Resolve disputed job\\n  get-settlement       - Get settlement details\\n  initiate-assertion   - Manually initiate assertion\\n  deposit-bond         - Deposit bond to evaluator\\n  withdraw-bond        - Withdraw bond from evaluator\\n  check-bond           - Check bond balance\\n  query-uma-bond       - Query UMA OOv3 bond config\\n  switch-bond-token    - Switch evaluator bond token\\n\\nUsage: npm run <script> -- <jobId>'"
+    "help": "echo '=== ERC-8183 & APEX Evaluator Scripts ===\\n  get-job              - Get ERC-8183 job & assertion\\n  get-job-claim        - Get job claim & verify\\n  settle-job           - Settle single assertion\\n  settle-jobs          - Settle ALL ready jobs (batch)\\n  dispute-job          - Dispute assertion\\n  resolve-dispute      - Resolve disputed job\\n  get-settlement       - Get settlement details\\n  initiate-assertion   - Manually initiate assertion\\n\\nUsage: npm run <script> -- <jobId>'"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

@@ -1,6 +1,6 @@
 /**
  * Settle an APEX job's UMA assertion after challenge period expires
- * Usage: JOB_ID=14 npm run settle-apex-job
+ * Usage: JOB_ID=14 npm run settle-job
  */
 import { formatUnits } from "viem";
 import { publicClient, getSettleWalletClient, ERC8183_ADDRESS, APEX_EVALUATOR_ADDRESS } from "./config.js";
@@ -8,13 +8,12 @@ import { publicClient, getSettleWalletClient, ERC8183_ADDRESS, APEX_EVALUATOR_AD
 const JOB_ID = BigInt(process.argv[2] || process.env.JOB_ID || "0");
 
 const STATUS_LABELS: Record<number, string> = {
-  0: "None",
-  1: "Open",
-  2: "Funded",
-  3: "Submitted",
-  4: "Completed",
-  5: "Rejected",
-  6: "Expired",
+  0: "Open",
+  1: "Funded",
+  2: "Submitted",
+  3: "Completed",
+  4: "Rejected",
+  5: "Expired",
 };
 
 const ERC8183_ABI = [
@@ -24,15 +23,15 @@ const ERC8183_ABI = [
     outputs: [
       {
         components: [
+          { name: "id", type: "uint256" },
           { name: "client", type: "address" },
           { name: "provider", type: "address" },
           { name: "evaluator", type: "address" },
-          { name: "hook", type: "address" },
+          { name: "description", type: "string" },
           { name: "budget", type: "uint256" },
           { name: "expiredAt", type: "uint256" },
           { name: "status", type: "uint8" },
-          { name: "deliverable", type: "bytes32" },
-          { name: "description", type: "string" },
+          { name: "hook", type: "address" },
         ],
         name: "",
         type: "tuple",
@@ -69,8 +68,8 @@ const EVALUATOR_ABI = [
 
 async function main() {
   if (JOB_ID === 0n) {
-    console.error("Usage: JOB_ID=14 npm run settle-apex-job");
-    console.error("   or: npm run settle-apex-job -- 14");
+    console.error("Usage: JOB_ID=14 npm run settle-job");
+    console.error("   or: npm run settle-job -- 14");
     process.exit(1);
   }
 
@@ -94,8 +93,8 @@ async function main() {
 
   console.log("Current Status:", STATUS_LABELS[job.status] || job.status);
 
-  if (job.status !== 3) {
-    console.error("❌ Job is not in Submitted status. Cannot settle.");
+  if (job.status !== 2) {
+    console.error(`❌ Job is not in Submitted status (current: ${STATUS_LABELS[job.status] ?? job.status}). Cannot settle.`);
     process.exit(1);
   }
 

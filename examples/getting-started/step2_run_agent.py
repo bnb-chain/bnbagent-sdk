@@ -1,20 +1,20 @@
 """
-Step 3: Run Agent Server
+Step 2: Run Agent Server
 
 Starts a minimal APEX agent server that:
   - Exposes APEX endpoints (negotiate, submit, job/execute, job query)
   - Scans for pending funded jobs on startup
   - Accepts client-driven job execution via /job/execute
 
-Keep this running in Terminal 1, then open Terminal 2 for step4.
+Keep this running in Terminal 1, then open Terminal 2 for step3.
 
 Prerequisites:
-    - Completed step1 (wallet funded) and step2 (agent registered)
+    - Completed step1 (wallet funded)
 
 Usage:
-    python step3_run_agent.py
+    python step2_run_agent.py
 
-Next: step4_create_job.py (in a separate terminal)
+Next: step3_register_agent.py (in a separate terminal)
 """
 
 import logging
@@ -51,10 +51,15 @@ def process_task(job: dict) -> str:
     Returns:
         Result string to submit on-chain.
     """
-    description = job.get("description", "")
+    from bnbagent.apex.negotiation import parse_job_description
+
+    raw_description = job.get("description", "")
+    parsed = parse_job_description(raw_description)
+    task = parsed["task"] if parsed else raw_description
+
     return (
         f"Getting Started Agent processed your request:\n\n"
-        f"Task: {description}\n\n"
+        f"Task: {task}\n\n"
         f"Result: This is a demo response from the getting-started agent. "
         f"Replace process_task() with your real AI logic."
     )

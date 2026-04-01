@@ -6,7 +6,7 @@ implementing the evaluator interface can be used. The current implementation
 wraps a UMA OOv3-based evaluator:
   - Query assertion info, liveness, settleable status
   - Settle jobs after liveness period
-  - Deposit/withdraw bond
+  - Initiate assertions (provider must approve bond token first)
 """
 
 from __future__ import annotations
@@ -84,8 +84,8 @@ class APEXEvaluatorClient(ContractClientMixin):
                 self.w3.eth.account.from_key(private_key).address if private_key else None
             )
 
-    def _send_tx(self, fn, value: int = 0, gas: int = 500_000) -> dict[str, Any]:
-        """Override default gas limit (500k is sufficient for evaluator ops)."""
+    def _send_tx(self, fn, value: int = 0, gas: int = 1_000_000) -> dict[str, Any]:
+        """Override default gas limit (1M covers initiateAssertion which calls OOv3)."""
         return super()._send_tx(fn, value=value, gas=gas)
 
     # ── Query Functions ──
@@ -118,9 +118,13 @@ class APEXEvaluatorClient(ContractClientMixin):
         """Get the minimum bond required for assertions."""
         return self._call_with_retry(self.contract.functions.getMinimumBond())
 
-    def get_bond_balance(self) -> int:
-        """Get current bond balance in the contract."""
-        return self._call_with_retry(self.contract.functions.bondBalance())
+    def get_total_locked_bond(self) -> int:
+        """Get total amount of bond tokens locked in active assertions."""
+        return self._call_with_retry(self.contract.functions.totalLockedBond())
+
+    def get_job_asserter(self, job_id: int) -> str:
+        """Get the address that paid the bond for a job's assertion."""
+        return self._call_with_retry(self.contract.functions.jobAsserter(job_id))
 
     def get_liveness(self) -> int:
         """Get current liveness period in seconds."""
@@ -155,29 +159,104 @@ class APEXEvaluatorClient(ContractClientMixin):
 
     def initiate_assertion(self, job_id: int) -> dict[str, Any]:
         """
-        Manually initiate an assertion for a submitted job.
+        Initiate a UMA assertion for a submitted job.
 
-        Note: Normally this is auto-triggered by afterAction hook.
-        Only needed if hook wasn't set when job was created.
+        The caller must be the job provider and must have approved at least
+        getMinimumBond() of bondToken to this evaluator contract before calling.
+        Use approve_bond() to perform the approval.
         """
         fn = self.contract.functions.initiateAssertion(job_id)
         return self._send_tx(fn)
 
-    def deposit_bond(self, amount: int) -> dict[str, Any]:
+    def check_bond_readiness(self, provider_address: str) -> dict[str, Any]:
         """
-        Deposit bond tokens into the contract.
+        Pre-flight check: does the provider have enough bond tokens and allowance?
 
-        Anyone can call this to fund assertions.
+        Pure reads (0 gas). Call before initiateAssertion to get clear errors.
+
+        Returns:
+            Dict with ready, min_bond, balance, allowance, needs_approval, needs_tokens
         """
+        min_bond = self.get_minimum_bond()
+        bond_token_addr = self.get_bond_token_address()
+
+        erc20_abi = [
+            {"inputs": [{"name": "account", "type": "address"}], "name": "balanceOf",
+             "outputs": [{"name": "", "type": "uint256"}], "stateMutability": "view", "type": "function"},
+            {"inputs": [{"name": "owner", "type": "address"}, {"name": "spender", "type": "address"}],
+             "name": "allowance", "outputs": [{"name": "", "type": "uint256"}],
+             "stateMutability": "view", "type": "function"},
+        ]
+        bond_token = self.w3.eth.contract(
+            address=Web3.to_checksum_address(bond_token_addr), abi=erc20_abi,
+        )
+        provider = Web3.to_checksum_address(provider_address)
+        balance = bond_token.functions.balanceOf(provider).call()
+        allowance = bond_token.functions.allowance(provider, self.address).call()
+
+        return {
+            "ready": balance >= min_bond and allowance >= min_bond,
+            "min_bond": min_bond,
+            "balance": balance,
+            "allowance": allowance,
+            "bond_token": bond_token_addr,
+            "needs_approval": allowance < min_bond,
+            "needs_tokens": balance < min_bond,
+        }
+
+    def approve_bond_token(self, bond_token_address: str, amount: int) -> dict[str, Any]:
+        """
+        Approve bond tokens to the evaluator using this client's own web3 instance.
+
+        Args:
+            bond_token_address: ERC-20 bond token contract address
+            amount: Amount to approve (use max uint256 for unlimited)
+        """
+        erc20_abi = [
+            {"inputs": [{"name": "spender", "type": "address"}, {"name": "amount", "type": "uint256"}],
+             "name": "approve", "outputs": [{"name": "", "type": "bool"}],
+             "stateMutability": "nonpayable", "type": "function"},
+        ]
+        bond_token = self.w3.eth.contract(
+            address=Web3.to_checksum_address(bond_token_address), abi=erc20_abi,
+        )
+        fn = bond_token.functions.approve(self.address, amount)
+        return self._send_tx(fn)
+
+    def approve_bond(self, bond_token_contract: Any, amount: int) -> dict[str, Any]:
+        """
+        Approve bond tokens to the evaluator contract.
+
+        Deprecated: use approve_bond_token(address, amount) instead.
+
+        Args:
+            bond_token_contract: An ERC-20 web3 contract instance for the bond token
+            amount: Amount to approve (use get_minimum_bond() for exact amount)
+        """
+        fn = bond_token_contract.functions.approve(self.address, amount)
+        return self._send_tx(fn)
+
+    def deposit_bond(self, amount: int) -> dict[str, Any]:
+        """Deprecated in v5. Raises DeprecationWarning."""
+        import warnings
+        warnings.warn(
+            "deposit_bond() is deprecated. In v5, agents pay the bond directly "
+            "by approving bondToken and calling initiate_assertion().",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         fn = self.contract.functions.depositBond(amount)
         return self._send_tx(fn)
 
     def withdraw_bond(self, amount: int) -> dict[str, Any]:
-        """
-        Withdraw bond tokens from the contract.
-
-        Only owner can call this.
-        """
+        """Deprecated in v5. Raises DeprecationWarning."""
+        import warnings
+        warnings.warn(
+            "withdraw_bond() is deprecated. In v5, bond is held per-assertion "
+            "and returned directly to the asserter.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         fn = self.contract.functions.withdrawBond(amount)
         return self._send_tx(fn)
 

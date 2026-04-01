@@ -1,16 +1,19 @@
 """
-Step 2: Register Agent
+Step 3: Register Agent
 
-Registers your agent on the ERC-8004 Identity Registry.
-Run this once -- it will skip registration if already done.
+Registers your agent on the ERC-8004 Identity Registry so that
+clients can discover it. Run this while the agent server (step2) is running.
+
+The agent endpoint is verified to be reachable before registering.
 
 Prerequisites:
     - Completed step1_setup_wallet.py (wallet funded with BNB)
+    - step2_run_agent.py running in Terminal 1
 
 Usage:
-    python step2_register_agent.py
+    python step3_register_agent.py
 
-Next: step3_run_agent.py
+Next: step4_create_job.py
 """
 
 import os
@@ -28,7 +31,7 @@ def main():
     wallet_password = os.getenv("WALLET_PASSWORD", "quickstart-demo")
 
     print("=" * 50)
-    print("Step 2: Register Agent")
+    print("Step 3: Register Agent")
     print("=" * 50)
     print()
 
@@ -52,10 +55,28 @@ def main():
     print(f"Wallet: {sdk.wallet_address}")
     print()
 
+    # --- Verify agent server is running ---
+    agent_host = os.getenv("AGENT_URL", "http://localhost:8000")
+    agent_endpoint = f"{agent_host}/.well-known/agent-card.json"
+
+    print(f"Checking agent server at {agent_host}...")
+    import httpx
+
+    try:
+        resp = httpx.get(f"{agent_host}/apex/health", timeout=5)
+        if resp.status_code == 200:
+            print("  Agent server is running!")
+        else:
+            print(f"  Warning: /apex/health returned {resp.status_code}")
+    except Exception:
+        print(f"  Warning: Agent server not reachable at {agent_host}")
+        print("  Make sure step2_run_agent.py is running in another terminal.")
+        print("  Proceeding with registration anyway...")
+    print()
+
     # --- Agent metadata ---
     agent_name = "getting-started-agent"
     agent_description = "Getting started demo agent for BNBAgent SDK"
-    agent_endpoint = "http://localhost:8000/.well-known/agent-card.json"
 
     agent_uri = sdk.generate_agent_uri(
         name=agent_name,
@@ -88,7 +109,7 @@ def main():
         print()
         print(f"Your Agent ID: {agent_id}")
         print()
-        print("Next: python step3_run_agent.py")
+        print("Next: python step4_create_job.py")
         return
 
     # --- Register new agent ---
@@ -106,7 +127,7 @@ def main():
         print()
         print(f"Your Agent ID: {agent_id}")
         print()
-        print("Next: python step3_run_agent.py")
+        print("Next: python step4_create_job.py")
 
     except Exception as e:
         print(f"Registration failed: {e}")

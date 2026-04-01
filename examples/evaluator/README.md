@@ -1,6 +1,6 @@
 # Evaluator Scripts
 
-Manage the APEX Evaluator: deposit bonds, check assertions, settle jobs, handle disputes.
+Manage the APEX Evaluator: initiate assertions, check assertion status, settle jobs, handle disputes.
 
 ## Setup
 
@@ -10,6 +10,15 @@ npm install
 cp .env.example .env
 # Edit .env: add PRIVATE_KEY (and SETTLE_PRIVATE_KEY / DISPUTE_PRIVATE_KEY if needed)
 ```
+
+## Assertion Flow (v5)
+
+In v5, the **provider pays the bond directly** instead of the evaluator holding a pre-funded pool:
+
+1. Provider calls `submit()` on the APEX contract
+2. Provider approves bond token to the evaluator contract (`approve(evaluator, bondAmount)`)
+3. Provider calls `initiateAssertion(jobId)` — bond is pulled from provider via `transferFrom`
+4. After the liveness period, anyone calls `settleJob(jobId)` — bond returned to provider on clean resolution
 
 ## Commands
 
@@ -21,13 +30,12 @@ cp .env.example .env
 | `npm run get-job-claim -- <job_id>` | Get APEX job claim & verify |
 | `npm run get-settlement -- <job_id>` | Get settlement details |
 
-**Bond Management:**
+**Assertion Management:**
 
 | Command | Description |
 |---------|-------------|
-| `AMOUNT=<n> npm run deposit-bond` | Deposit bond tokens to evaluator |
-| `AMOUNT=<n> npm run withdraw-bond` | Withdraw bond from evaluator (owner only) |
-| `npm run check-bond` | Check current bond balance |
+| `npm run initiate-assertion -- <job_id>` | Approve bond + initiate assertion (provider only) |
+| `npm run check-bond` | Check total locked bond across active assertions |
 
 **Settlement & Disputes:**
 
@@ -37,6 +45,7 @@ cp .env.example .env
 | `npm run settle-jobs` | Batch settle ALL ready jobs |
 | `npm run dispute-job -- <job_id>` | Dispute an assertion (requires bond) |
 | `npm run resolve-dispute -- <job_id> <true\|false>` | Resolve dispute via MockOracle (testnet) |
-| `npm run initiate-assertion -- <job_id>` | Manually initiate assertion |
+
+> **Note:** `deposit-bond` and `withdraw-bond` commands are removed in v5. The evaluator no longer holds a bond pool — each assertion's bond is paid and returned directly to the provider.
 
 Run `npm run help` to see all available commands.

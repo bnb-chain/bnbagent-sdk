@@ -1,18 +1,17 @@
 /**
  * Get settlement details for an APEX job
- * Usage: npm run get-apex-settlement -- <jobId>
+ * Usage: npm run get-settlement -- <jobId>
  */
 import { formatUnits } from "viem";
 import { publicClient, ERC8183_ADDRESS, APEX_EVALUATOR_ADDRESS, OOV3_ADDRESS } from "./config.js";
 
 const STATUS_LABELS: Record<number, string> = {
-  0: "None",
-  1: "Open",
-  2: "Funded",
-  3: "Submitted",
-  4: "Completed",
-  5: "Rejected",
-  6: "Expired",
+  0: "Open",
+  1: "Funded",
+  2: "Submitted",
+  3: "Completed",
+  4: "Rejected",
+  5: "Expired",
 };
 
 const ERC8183_ABI = [
@@ -22,15 +21,15 @@ const ERC8183_ABI = [
     outputs: [
       {
         components: [
+          { name: "id", type: "uint256" },
           { name: "client", type: "address" },
           { name: "provider", type: "address" },
           { name: "evaluator", type: "address" },
-          { name: "hook", type: "address" },
+          { name: "description", type: "string" },
           { name: "budget", type: "uint256" },
           { name: "expiredAt", type: "uint256" },
           { name: "status", type: "uint8" },
-          { name: "deliverable", type: "bytes32" },
-          { name: "description", type: "string" },
+          { name: "hook", type: "address" },
         ],
         name: "",
         type: "tuple",
@@ -63,6 +62,7 @@ const JOB_COMPLETED_EVENT = {
   type: "event",
   inputs: [
     { name: "jobId", type: "uint256", indexed: true },
+    { name: "evaluator", type: "address", indexed: true },
     { name: "reason", type: "bytes32", indexed: false },
   ],
 } as const;
@@ -72,6 +72,7 @@ const JOB_REJECTED_EVENT = {
   type: "event",
   inputs: [
     { name: "jobId", type: "uint256", indexed: true },
+    { name: "rejector", type: "address", indexed: true },
     { name: "reason", type: "bytes32", indexed: false },
   ],
 } as const;
@@ -102,7 +103,7 @@ async function main() {
   const jobId = process.argv[2] || process.env.JOB_ID;
 
   if (!jobId) {
-    console.error("Usage: npm run get-apex-settlement -- <jobId>");
+    console.error("Usage: npm run get-settlement -- <jobId>");
     process.exit(1);
   }
 
@@ -126,9 +127,9 @@ async function main() {
   console.log(`  Evaluator: ${job.evaluator}`);
   console.log(`  Budget:    ${formatUnits(job.budget, 18)} U`);
 
-  if (job.status !== 4 && job.status !== 5) {
-    console.log(`\n⚠️  Job is not settled yet (Completed=4, Rejected=5)`);
-    console.log(`  Current status: ${STATUS_LABELS[job.status]}`);
+  if (job.status !== 3 && job.status !== 4) {
+    console.log(`\n⚠️  Job is not settled yet (Completed=3, Rejected=4)`);
+    console.log(`  Current status: ${STATUS_LABELS[job.status] ?? job.status}`);
   }
 
   const latestBlock = await publicClient.getBlockNumber();
@@ -186,11 +187,11 @@ async function main() {
   if (!settlementEvent) {
     console.log("  ❌ Settlement event not found");
     console.log("  The job may not have been settled yet.");
-    
+
     // Check if it uses APEX Evaluator
     if (job.evaluator.toLowerCase() === APEX_EVALUATOR_ADDRESS.toLowerCase()) {
       console.log("\n  This job uses APEX Evaluator. Checking assertion status...");
-      
+
       const [assertionId, isDisputed] = await Promise.all([
         publicClient.readContract({
           address: APEX_EVALUATOR_ADDRESS,
@@ -209,15 +210,15 @@ async function main() {
       if (assertionId !== "0x0000000000000000000000000000000000000000000000000000000000000000") {
         console.log(`  Assertion ID: ${assertionId}`);
         console.log(`  Disputed: ${isDisputed}`);
-        
+
         if (isDisputed) {
-          console.log("\n  💡 Use 'resolve-apex-dispute' to resolve the dispute.");
+          console.log("\n  💡 Use 'resolve-dispute' to resolve the dispute.");
         } else {
-          console.log("\n  💡 Use 'settle-apex-job' to settle after liveness period.");
+          console.log("\n  💡 Use 'settle-job' to settle after liveness period.");
         }
       }
     }
-    
+
     process.exit(1);
   }
 
@@ -261,7 +262,7 @@ async function main() {
       let label = "";
       const fromLower = from.toLowerCase();
       const toLower = to.toLowerCase();
-      
+
       if (fromLower === ERC8183_ADDRESS.toLowerCase()) {
         if (toLower === job.provider.toLowerCase()) {
           label = " ← PROVIDER PAYMENT";

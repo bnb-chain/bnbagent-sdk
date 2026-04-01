@@ -150,11 +150,15 @@ class TestRealContract:
                     "name": "",
                     "type": "tuple",
                     "components": [
+                        {"name": "id", "type": "uint256"},
                         {"name": "client", "type": "address"},
                         {"name": "provider", "type": "address"},
-                        {"name": "budget", "type": "uint256"},
-                        {"name": "status", "type": "uint8"},
+                        {"name": "evaluator", "type": "address"},
                         {"name": "description", "type": "string"},
+                        {"name": "budget", "type": "uint256"},
+                        {"name": "expiredAt", "type": "uint256"},
+                        {"name": "status", "type": "uint8"},
+                        {"name": "hook", "type": "address"},
                     ],
                 }
             ],
@@ -180,7 +184,7 @@ class TestRealContract:
     def test_get_output_types_tuple(self):
         contract = self._make_contract()
         types = _get_output_types(contract, "getJob")
-        assert types == ["(address,address,uint256,uint8,string)"]
+        assert types == ["(uint256,address,address,address,string,uint256,uint256,uint8,address)"]
 
     def test_decode_roundtrip(self):
         """Encode args, then decode return data — full path without RPC."""
@@ -197,11 +201,12 @@ class TestRealContract:
         addr = "0xcA11bde05977b3631167028862bE2a173976CA11"
         fake_return = _abi_encode(
             output_types,
-            [(addr, addr, 100, 1, "test job")],
+            [(42, addr, addr, addr, "test job", 100, 9999999999, 1, addr)],
         )
         decoded = abi_decode(output_types, fake_return)
-        # decoded is ((addr, addr, 100, 1, "test job"),) — unwrap tuple
+        # decoded is ((42, addr, addr, addr, "test job", 100, ...),) — unwrap tuple
         job = decoded[0]
-        assert job[2] == 100
-        assert job[3] == 1
-        assert job[4] == "test job"
+        assert job[0] == 42       # id
+        assert job[4] == "test job"  # description
+        assert job[5] == 100      # budget
+        assert job[7] == 1        # status

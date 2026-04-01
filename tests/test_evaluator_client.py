@@ -83,10 +83,6 @@ class TestReadMethods:
         evaluator_client.contract.functions.getMinimumBond.return_value.call.return_value = 10**18
         assert evaluator_client.get_minimum_bond() == 10**18
 
-    def test_get_bond_balance(self, evaluator_client):
-        evaluator_client.contract.functions.bondBalance.return_value.call.return_value = 5000
-        assert evaluator_client.get_bond_balance() == 5000
-
     def test_get_liveness(self, evaluator_client):
         evaluator_client.contract.functions.liveness.return_value.call.return_value = 1800
         assert evaluator_client.get_liveness() == 1800

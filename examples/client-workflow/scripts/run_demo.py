@@ -23,7 +23,7 @@ Usage:
 
 Environment (demo/.env.editor):
     RPC_URL, ERC8183_ADDRESS, APEX_EVALUATOR_ADDRESS, PRIVATE_KEY,
-    AGENT_B_ADDRESS, AGENT_B_URL=http://localhost:8003,
+    AGENT_SERVER_ADDRESS, AGENT_SERVER_URL=http://localhost:8003,
     PAYMENT_TOKEN_ADDRESS, OPENROUTER_API_KEY
     AGENT_ID (optional) — For ERC-8004 discovery
     WALLET_PASSWORD (optional) — For ERC-8004 SDK
@@ -58,8 +58,8 @@ RPC_URL = os.environ.get("RPC_URL") or _nc.rpc_url
 ERC8183_ADDRESS = os.environ.get("ERC8183_ADDRESS") or _nc.erc8183_contract
 APEX_EVALUATOR_ADDRESS = os.environ.get("APEX_EVALUATOR_ADDRESS") or _nc.apex_evaluator
 PRIVATE_KEY = os.environ["PRIVATE_KEY"]  # Required — no default
-AGENT_B_ADDRESS = os.getenv("AGENT_B_ADDRESS", "")
-AGENT_B_URL = os.getenv("AGENT_B_URL", "http://localhost:8003")
+AGENT_B_ADDRESS = os.getenv("AGENT_SERVER_ADDRESS", "")
+AGENT_B_URL = os.getenv("AGENT_SERVER_URL", "http://localhost:8003")
 PAYMENT_TOKEN_ADDRESS = os.environ.get("PAYMENT_TOKEN_ADDRESS") or _nc.payment_token
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash")
@@ -516,11 +516,11 @@ async def main():
             print(f"  Discovery failed: {e}")
             print("  Falling back to env variables...")
             if not AGENT_B_ADDRESS:
-                print("Error: AGENT_B_ADDRESS required")
+                print("Error: AGENT_SERVER_ADDRESS required")
                 sys.exit(1)
 
     if not AGENT_B_ADDRESS:
-        print("Error: AGENT_B_ADDRESS required in .env.editor or use --discover")
+        print("Error: AGENT_SERVER_ADDRESS required in .env or use --discover")
         sys.exit(1)
 
     print(f"""
@@ -612,13 +612,16 @@ async def main():
     print(f"  Evaluator:   {APEX_EVALUATOR_ADDRESS}")
     print(f"  Hook:        {APEX_EVALUATOR_ADDRESS} (auto-assertion)")
     print(f"  Expiry:      {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(expiry))}")
-    print(f"  Description: {task_description[:80]}...")
+    print(f"  Description: {task_description[:80]}...  (structured JSON with negotiation terms)")
 
+    from bnbagent.apex.negotiation import build_job_description
+
+    description = build_job_description(neg_result)
     result = apex.create_job(
         provider=AGENT_B_ADDRESS,
         evaluator=APEX_EVALUATOR_ADDRESS,
         expired_at=expiry,
-        description=task_description,
+        description=description,
         hook=APEX_EVALUATOR_ADDRESS,
     )
     job_id = result["jobId"]
@@ -722,9 +725,7 @@ async def main():
         status = APEXStatus(job["status"])
 
         if status == APEXStatus.SUBMITTED:
-            deliverable_hash = job.get("deliverable", b"")
             print(f"\n  ✓ Status: SUBMITTED!")
-            print(f"  Deliverable hash: 0x{deliverable_hash.hex() if isinstance(deliverable_hash, bytes) else deliverable_hash}")
 
             # Show balance (still in escrow, waiting for UMA)
             cur_client, cur_provider = show_balances(
@@ -755,7 +756,7 @@ async def main():
     #   2. Reporter agent's /search endpoint (direct fallback)
     #   3. On-chain job description as last resort
     news_content = ""
-    pinata_gateway = os.getenv("PINATA_GATEWAY", "https://gateway.pinata.cloud/ipfs/")
+    pinata_gateway = os.getenv("STORAGE_GATEWAY_URL", "https://gateway.pinata.cloud/ipfs/")
 
     # Strategy 1: IPFS via Pinata
     pinata_jwt = os.getenv("STORAGE_API_KEY") or os.getenv("PINATA_JWT", "")
@@ -1059,7 +1060,7 @@ Format it nicely with markdown headers and bullet points."""
   To resolve manually, run:
 
     cd scripts
-    JOB_ID={job_id} npm run resolve-apex-dispute -- {job_id} {'true' if resolve_true else 'false'}
+    JOB_ID={job_id} npm run resolve-dispute -- {job_id} {'true' if resolve_true else 'false'}
 """)
 
         else:
@@ -1093,7 +1094,7 @@ Format it nicely with markdown headers and bullet points."""
         print(f"  ⚠ Status: {final_status.name} — settlement has NOT completed yet.")
         print(f"  The money flow below reflects the CURRENT state, not the final outcome.")
         print(f"  To complete settlement, run:")
-        print(f"    cd scripts && JOB_ID={job_id} npm run settle-apex-job")
+        print(f"    cd scripts && JOB_ID={job_id} npm run settle-job")
 
     # ── Final Balance Check & Money Flow ──
     final_client_balance = get_balance(w3, PAYMENT_TOKEN_ADDRESS, account)

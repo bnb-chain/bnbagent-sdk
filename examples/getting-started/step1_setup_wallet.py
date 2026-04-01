@@ -11,7 +11,7 @@ Usage:
     cp .env.example .env  # Fill in PRIVATE_KEY
     python step1_setup_wallet.py
 
-Next: step2_register_agent.py
+Next: step2_run_agent.py
 """
 
 import os
@@ -125,7 +125,7 @@ def main():
     print(f"  Address: {address}")
     print(f"  BNB:     {bnb_display}")
     print()
-    print("Next: python step2_register_agent.py")
+    print("Next: python step2_run_agent.py")
 
 
 if __name__ == "__main__":

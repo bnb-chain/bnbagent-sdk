@@ -39,12 +39,10 @@ def _mock_client(ops, job_data=None):
             "budget": 1000,
             "expiredAt": int(time.time()) + 3600,
             "status": APEXStatus.FUNDED,
-            "deliverable": b"\x00" * 32,
             "description": "test job",
         }
 
     client.get_job.return_value = job_data
-    client.get_job_status.return_value = APEXStatus.FUNDED
     client.payment_token.return_value = "0xTokenAddr"
     client.get_budget_set_events.return_value = []
     client.submit.return_value = {
@@ -274,7 +272,7 @@ class TestGetJobStatus:
     async def test_failure(self):
         ops = _make_job_ops()
         client = _mock_client(ops)
-        client.get_job_status.side_effect = Exception("rpc error")
+        client.get_job.side_effect = Exception("rpc error")
         result = await ops.get_job_status(1)
         assert result["success"] is False
 
@@ -287,31 +285,31 @@ class TestGetPendingJobs:
         ops = _make_job_ops()
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_known_next_id = 5
+        ops._last_known_counter = 5
 
         future_ts = int(time.time()) + 3600
-        # next_job_id returns 6 → one new job (ID 5)
-        client.next_job_id.return_value = 6
+        # job_counter returns 6 → one new job (ID 6)
+        client.job_counter.return_value = 6
         client.get_jobs_batch.return_value = [
-            {"jobId": 5, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
+            {"jobId": 6, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
              "expiredAt": future_ts, "description": "new job"},
         ]
         result = await ops.get_pending_jobs()
         assert result["success"] is True
         assert len(result["jobs"]) == 1
-        assert result["jobs"][0]["jobId"] == 5
+        assert result["jobs"][0]["jobId"] == 6
 
     @pytest.mark.asyncio
     async def test_skips_non_funded(self):
         ops = _make_job_ops()
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_known_next_id = 5
+        ops._last_known_counter = 5
 
         future_ts = int(time.time()) + 3600
-        client.next_job_id.return_value = 6
+        client.job_counter.return_value = 6
         client.get_jobs_batch.return_value = [
-            {"jobId": 5, "provider": FAKE_ADDRESS, "status": APEXStatus.COMPLETED,
+            {"jobId": 6, "provider": FAKE_ADDRESS, "status": APEXStatus.COMPLETED,
              "expiredAt": future_ts, "description": "completed"},
         ]
         result = await ops.get_pending_jobs()
@@ -322,12 +320,12 @@ class TestGetPendingJobs:
         ops = _make_job_ops()
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_known_next_id = 5
+        ops._last_known_counter = 5
 
         future_ts = int(time.time()) + 3600
-        client.next_job_id.return_value = 6
+        client.job_counter.return_value = 6
         client.get_jobs_batch.return_value = [
-            {"jobId": 5, "provider": "0x" + "ff" * 20, "status": APEXStatus.FUNDED,
+            {"jobId": 6, "provider": "0x" + "ff" * 20, "status": APEXStatus.FUNDED,
              "expiredAt": future_ts, "description": "other provider"},
         ]
         result = await ops.get_pending_jobs()
@@ -335,12 +333,12 @@ class TestGetPendingJobs:
 
     @pytest.mark.asyncio
     async def test_no_new_jobs_zero_multicall(self):
-        """When next_job_id hasn't changed, no Multicall3 call is made."""
+        """When job_counter hasn't changed, no Multicall3 call is made."""
         ops = _make_job_ops()
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_known_next_id = 5
-        client.next_job_id.return_value = 5  # unchanged
+        ops._last_known_counter = 5
+        client.job_counter.return_value = 5  # unchanged
 
         result = await ops.get_pending_jobs()
         assert result["success"] is True
@@ -353,32 +351,32 @@ class TestGetPendingJobs:
         ops = _make_job_ops()
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_known_next_id = 10
+        ops._last_known_counter = 10
 
         future_ts = int(time.time()) + 3600
-        client.next_job_id.return_value = 13  # 3 new jobs: 10, 11, 12
+        client.job_counter.return_value = 13  # 3 new jobs: 11, 12, 13
         client.get_jobs_batch.return_value = [
-            {"jobId": 10, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
-             "expiredAt": future_ts, "description": "job 10"},
-            None,  # job 11 failed
-            {"jobId": 12, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
-             "expiredAt": future_ts, "description": "job 12"},
+            {"jobId": 11, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "job 11"},
+            None,  # job 12 failed
+            {"jobId": 13, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "job 13"},
         ]
 
         result = await ops.get_pending_jobs()
         assert result["success"] is True
         assert len(result["jobs"]) == 2
-        # Verify get_jobs_batch was called with [10, 11, 12]
-        client.get_jobs_batch.assert_called_once_with([10, 11, 12])
-        assert ops._last_known_next_id == 13
+        # Verify get_jobs_batch was called with [11, 12, 13]
+        client.get_jobs_batch.assert_called_once_with([11, 12, 13])
+        assert ops._last_known_counter == 13
 
     @pytest.mark.asyncio
     async def test_error_propagates(self):
         ops = _make_job_ops()
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_known_next_id = 5
-        client.next_job_id.side_effect = Exception("rpc error")
+        ops._last_known_counter = 5
+        client.job_counter.side_effect = Exception("rpc error")
         result = await ops.get_pending_jobs()
         assert result["success"] is False
 
@@ -390,19 +388,19 @@ class TestStartupScan:
     async def test_finds_funded_jobs(self):
         ops = _make_job_ops()
         client = _mock_client(ops)
-        client.next_job_id.return_value = 5
+        client.job_counter.return_value = 5
 
         future_ts = int(time.time()) + 3600
         jobs_batch = [
-            None,  # job 0 failed
-            {"jobId": 1, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
-             "expiredAt": future_ts, "description": "job 1"},
-            {"jobId": 2, "provider": "0x" + "ff" * 20, "status": APEXStatus.FUNDED,
-             "expiredAt": future_ts, "description": "job 2"},  # wrong provider
-            {"jobId": 3, "provider": FAKE_ADDRESS, "status": APEXStatus.COMPLETED,
-             "expiredAt": future_ts, "description": "job 3"},  # not funded
-            {"jobId": 4, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
-             "expiredAt": future_ts, "description": "job 4"},
+            None,  # job 1 failed
+            {"jobId": 2, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "job 2"},
+            {"jobId": 3, "provider": "0x" + "ff" * 20, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "job 3"},  # wrong provider
+            {"jobId": 4, "provider": FAKE_ADDRESS, "status": APEXStatus.COMPLETED,
+             "expiredAt": future_ts, "description": "job 4"},  # not funded
+            {"jobId": 5, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "job 5"},
         ]
         client.get_jobs_batch.return_value = jobs_batch
 
@@ -410,13 +408,13 @@ class TestStartupScan:
         assert result["success"] is True
         assert len(result["jobs"]) == 2
         job_ids = {j["jobId"] for j in result["jobs"]}
-        assert job_ids == {1, 4}
+        assert job_ids == {2, 5}
 
     @pytest.mark.asyncio
     async def test_empty_contract(self):
         ops = _make_job_ops()
         client = _mock_client(ops)
-        client.next_job_id.return_value = 0
+        client.job_counter.return_value = 0
 
         result = await ops.get_pending_jobs()
         assert result["success"] is True
@@ -427,11 +425,11 @@ class TestStartupScan:
     async def test_filters_wrong_provider(self):
         ops = _make_job_ops()
         client = _mock_client(ops)
-        client.next_job_id.return_value = 1
+        client.job_counter.return_value = 1
 
         future_ts = int(time.time()) + 3600
         client.get_jobs_batch.return_value = [
-            {"jobId": 0, "provider": "0x" + "ff" * 20, "status": APEXStatus.FUNDED,
+            {"jobId": 1, "provider": "0x" + "ff" * 20, "status": APEXStatus.FUNDED,
              "expiredAt": future_ts, "description": "other agent's job"},
         ]
 
@@ -443,11 +441,11 @@ class TestStartupScan:
     async def test_filters_non_funded(self):
         ops = _make_job_ops()
         client = _mock_client(ops)
-        client.next_job_id.return_value = 1
+        client.job_counter.return_value = 1
 
         future_ts = int(time.time()) + 3600
         client.get_jobs_batch.return_value = [
-            {"jobId": 0, "provider": FAKE_ADDRESS, "status": APEXStatus.COMPLETED,
+            {"jobId": 1, "provider": FAKE_ADDRESS, "status": APEXStatus.COMPLETED,
              "expiredAt": future_ts, "description": "completed job"},
         ]
 
@@ -459,11 +457,11 @@ class TestStartupScan:
     async def test_filters_expired(self):
         ops = _make_job_ops()
         client = _mock_client(ops)
-        client.next_job_id.return_value = 1
+        client.job_counter.return_value = 1
 
         past_ts = int(time.time()) - 100
         client.get_jobs_batch.return_value = [
-            {"jobId": 0, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
+            {"jobId": 1, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
              "expiredAt": past_ts, "description": "expired job"},
         ]
 
@@ -476,7 +474,7 @@ class TestStartupScan:
         ops = _make_job_ops()
         client = _mock_client(ops)
         client.w3.eth.block_number = 12345
-        client.next_job_id.return_value = 0
+        client.job_counter.return_value = 0
 
         await ops.get_pending_jobs()
         assert ops._last_scanned_block == 12345
@@ -488,7 +486,7 @@ class TestStartupScan:
         ops = _make_job_ops()
         client = _mock_client(ops)
         client.w3.eth.block_number = 50000
-        client.next_job_id.side_effect = Exception("multicall revert")
+        client.job_counter.side_effect = Exception("multicall revert")
         client.get_job_funded_events.return_value = [
             {"jobId": 1, "client": "0xabc", "amount": 100,
              "blockNumber": 50, "transactionHash": "0xhash"},
@@ -506,17 +504,17 @@ class TestProgressiveScanning:
 
     @pytest.mark.asyncio
     async def test_no_new_jobs_returns_empty(self):
-        """When next_job_id unchanged, return empty without calling get_jobs_batch."""
+        """When job_counter unchanged, return empty without calling get_jobs_batch."""
         ops = _make_job_ops()
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_known_next_id = 10
-        client.next_job_id.return_value = 10
+        ops._last_known_counter = 10
+        client.job_counter.return_value = 10
 
         result = await ops.get_pending_jobs()
         assert result["success"] is True
         assert result["jobs"] == []
-        client.next_job_id.assert_called_once()
+        client.job_counter.assert_called_once()
         client.get_jobs_batch.assert_not_called()
 
     @pytest.mark.asyncio
@@ -525,41 +523,41 @@ class TestProgressiveScanning:
         ops = _make_job_ops()
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_known_next_id = 5
+        ops._last_known_counter = 5
 
         future_ts = int(time.time()) + 3600
-        client.next_job_id.return_value = 8
+        client.job_counter.return_value = 8
         client.get_jobs_batch.return_value = [
-            {"jobId": 5, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
-             "expiredAt": future_ts, "description": "job 5"},
-            {"jobId": 6, "provider": "0x" + "ff" * 20, "status": APEXStatus.FUNDED,
-             "expiredAt": future_ts, "description": "job 6"},  # wrong provider
-            {"jobId": 7, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
-             "expiredAt": future_ts, "description": "job 7"},
+            {"jobId": 6, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "job 6"},
+            {"jobId": 7, "provider": "0x" + "ff" * 20, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "job 7"},  # wrong provider
+            {"jobId": 8, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "job 8"},
         ]
 
         result = await ops.get_pending_jobs()
         assert result["success"] is True
         assert len(result["jobs"]) == 2
-        client.get_jobs_batch.assert_called_once_with([5, 6, 7])
+        client.get_jobs_batch.assert_called_once_with([6, 7, 8])
 
     @pytest.mark.asyncio
-    async def test_updates_last_known_next_id(self):
+    async def test_updates_last_known_counter(self):
         ops = _make_job_ops()
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_known_next_id = 5
+        ops._last_known_counter = 5
 
         future_ts = int(time.time()) + 3600
-        client.next_job_id.return_value = 7
+        client.job_counter.return_value = 7
         client.get_jobs_batch.return_value = [
-            {"jobId": 5, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
-             "expiredAt": future_ts, "description": "job 5"},
+            {"jobId": 6, "provider": FAKE_ADDRESS, "status": APEXStatus.FUNDED,
+             "expiredAt": future_ts, "description": "job 6"},
             None,
         ]
 
         await ops.get_pending_jobs()
-        assert ops._last_known_next_id == 7
+        assert ops._last_known_counter == 7
 
     @pytest.mark.asyncio
     async def test_explicit_from_block_honored(self):
@@ -567,7 +565,7 @@ class TestProgressiveScanning:
         ops = _make_job_ops()
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_known_next_id = 10
+        ops._last_known_counter = 10
         client.get_job_funded_events.return_value = []
 
         await ops.get_pending_jobs(from_block=500)
@@ -576,15 +574,15 @@ class TestProgressiveScanning:
 
     @pytest.mark.asyncio
     async def test_explicit_from_block_no_state_update(self):
-        """Explicit from_block does NOT update _last_known_next_id."""
+        """Explicit from_block does NOT update _last_known_counter."""
         ops = _make_job_ops()
         client = _mock_client(ops)
         ops._startup_scan_done = True
-        ops._last_known_next_id = 10
+        ops._last_known_counter = 10
         client.get_job_funded_events.return_value = []
 
         await ops.get_pending_jobs(from_block=500)
-        assert ops._last_known_next_id == 10  # unchanged
+        assert ops._last_known_counter == 10  # unchanged
 
 
 class TestVerifyJob:
@@ -659,6 +657,55 @@ class TestVerifyJob:
         client = _mock_client(ops)
         job_data = client.get_job.return_value.copy()
         job_data["budget"] = 2 * 10**18  # 2 tokens >= 1 token
+        client.get_job.return_value = job_data
+        result = await ops.verify_job(1)
+        assert result["valid"] is True
+
+    @pytest.mark.asyncio
+    async def test_quote_expired(self):
+        """Job with expired quote_expires_at in structured description → invalid 410."""
+        import json
+
+        ops = _make_job_ops()
+        client = _mock_client(ops)
+        job_data = client.get_job.return_value.copy()
+        expired_desc = json.dumps({
+            "v": 1,
+            "negotiated_at": int(time.time()) - 7200,
+            "quote_expires_at": int(time.time()) - 3600,  # expired 1 hour ago
+            "task": "test task",
+            "terms": {"service_type": "general", "deliverables": "d", "quality_standards": "q"},
+            "price": "1000000000000000000",
+            "currency": "0x" + "aa" * 20,
+            "negotiation_hash": "0xabc",
+            "provider_sig": "0xsig",
+        }, sort_keys=True, separators=(",", ":"))
+        job_data["description"] = expired_desc
+        client.get_job.return_value = job_data
+        result = await ops.verify_job(1)
+        assert result["valid"] is False
+        assert result["error_code"] == 410
+
+    @pytest.mark.asyncio
+    async def test_quote_not_expired(self):
+        """Job with valid quote_expires_at → accepted."""
+        import json
+
+        ops = _make_job_ops()
+        client = _mock_client(ops)
+        job_data = client.get_job.return_value.copy()
+        valid_desc = json.dumps({
+            "v": 1,
+            "negotiated_at": int(time.time()) - 60,
+            "quote_expires_at": int(time.time()) + 3600,  # still valid
+            "task": "test task",
+            "terms": {"service_type": "general", "deliverables": "d", "quality_standards": "q"},
+            "price": "1000000000000000000",
+            "currency": "0x" + "aa" * 20,
+            "negotiation_hash": "0xabc",
+            "provider_sig": "0xsig",
+        }, sort_keys=True, separators=(",", ":"))
+        job_data["description"] = valid_desc
         client.get_job.return_value = job_data
         result = await ops.verify_job(1)
         assert result["valid"] is True

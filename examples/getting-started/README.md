@@ -2,12 +2,13 @@
 
 ## Prerequisites
 - Python 3.10+
+- [uv](https://docs.astral.sh/uv/)
 - Testnet BNB ([faucet](https://www.bnbchain.org/en/testnet-faucet))
-- `pip install "bnbagent[server]" python-dotenv`
 
 ## Setup
 
 ```bash
+uv sync
 cp .env.example .env
 # Edit .env: add your PRIVATE_KEY
 ```
@@ -16,13 +17,13 @@ cp .env.example .env
 
 | Step | Script | What it does |
 |------|--------|-------------|
-| 1 | `python step1_setup_wallet.py` | Setup wallet, mint test tokens |
-| 2 | `python step2_register_agent.py` | Register agent on ERC-8004 |
-| 3 | `python step3_run_agent.py` | Start agent server (Terminal 1) |
-| 4 | `python step4_create_job.py` | Create & fund a job (Terminal 2) |
-| 5 | `python step5_settle_job.py <JOB_ID>` | Settle job after liveness (use job ID from step 4) |
+| 1 | `uv run python step1_setup_wallet.py` | Setup wallet, mint test tokens |
+| 2 | `uv run python step2_run_agent.py` | Start agent server (Terminal 1) |
+| 3 | `uv run python step3_register_agent.py` | Register agent on ERC-8004 (Terminal 2) |
+| 4 | `uv run python step4_create_job.py` | Discover agent, create & fund a job (Terminal 2) |
+| 5 | `uv run python step5_settle_job.py <JOB_ID>` | Settle job after liveness (use job ID from step 4) |
 
-> **Note:** Step 3 runs a server. Open a second terminal for steps 4-5.
+> **Note:** Step 2 runs a server. Open a second terminal for steps 3-5.
 
 ## E2E Test
 

@@ -1,20 +1,22 @@
 """
-Step 4: Create and Fund a Job
+Step 4: Discover Agent, Create and Fund a Job
 
-Creates an APEX job, sets a budget, approves token spending,
-funds the job, triggers execution via /job/execute, and polls until the agent submits.
+Discovers the agent from ERC-8004 registry, negotiates terms,
+creates an APEX job, funds it, and triggers execution.
 
-Run this in Terminal 2 while step3 agent is running in Terminal 1.
+Run this in Terminal 2 while step2 agent is running in Terminal 1.
 
 Prerequisites:
-    - step3_run_agent.py running in another terminal
+    - step2_run_agent.py running in another terminal
+    - step3_register_agent.py completed (agent registered on ERC-8004)
     - U tokens in your wallet (step1 mints them)
 
 Usage:
     python step4_create_job.py
 
 Environment (optional overrides):
-    AGENT_ADDRESS  - Provider agent address (defaults to your own wallet)
+    AGENT_NAME     - Agent name to discover (default: getting-started-agent)
+    AGENT_ADDRESS  - Skip discovery, use this address directly
 
 Next: step5_settle_job.py
 """
@@ -69,23 +71,124 @@ def main():
         wallet_provider=wallet,
     )
 
-    agent_address = os.getenv("AGENT_ADDRESS", wallet.address)
+    # =========================================================
+    # Step 4a: Discover agent from ERC-8004 registry
+    # =========================================================
 
-    print(f"Client:    {wallet.address}")
-    print(f"Provider:  {agent_address}")
-    print(f"Evaluator: {evaluator_address}")
+    print("-" * 50)
+    print("4a: Discovering agent from ERC-8004 registry...")
+    print("-" * 50)
+
+    from bnbagent import ERC8004Agent
+
+    agent_address = os.getenv("AGENT_ADDRESS", "")
+    agent_url = os.getenv("AGENT_URL", "")
+    agent_name = os.getenv("AGENT_NAME", "getting-started-agent")
+
+    if agent_address:
+        print(f"  Using AGENT_ADDRESS from env: {agent_address}")
+        if not agent_url:
+            agent_url = "http://localhost:8000"
+    else:
+        # Discover from ERC-8004 registry
+        discovery_sdk = ERC8004Agent(
+            wallet_provider=wallet,
+            network="bsc-testnet",
+        )
+
+        print(f"  Searching for agent '{agent_name}' on ERC-8004...")
+        agents = discovery_sdk.get_all_agents(limit=100, offset=0)
+        found = None
+        for agent in agents.get("items", []):
+            if agent.get("name", "").lower() == agent_name.lower():
+                found = agent
+                break
+
+        if found:
+            agent_id = found["token_id"]
+            agent_address = found["owner_address"]
+            print(f"  Found agent #{agent_id}: {found.get('name')}")
+            print(f"  Owner:    {agent_address}")
+
+            # Extract endpoint URL from agent services
+            services = found.get("services", {})
+            for svc_name, svc_info in services.items():
+                endpoint = svc_info.get("endpoint", "")
+                if endpoint:
+                    # Derive base URL from endpoint (strip path like /.well-known/...)
+                    from urllib.parse import urlparse
+                    parsed = urlparse(endpoint)
+                    agent_url = f"{parsed.scheme}://{parsed.netloc}"
+                    print(f"  Endpoint: {agent_url} (from {svc_name} service)")
+                    break
+
+            if not agent_url:
+                agent_url = "http://localhost:8000"
+                print(f"  No endpoint in registry, using default: {agent_url}")
+        else:
+            print(f"  Agent '{agent_name}' not found on ERC-8004.")
+            print("  Make sure step3_register_agent.py was run.")
+            print("  Falling back to own wallet address...")
+            agent_address = wallet.address
+            agent_url = "http://localhost:8000"
+
+    print()
+    print(f"  Client:    {wallet.address}")
+    print(f"  Provider:  {agent_address}")
+    print(f"  Evaluator: {evaluator_address}")
+    print(f"  Agent URL: {agent_url}")
     print()
 
     # =========================================================
-    # Step 4a: Create Job
+    # Step 4b: Negotiate with agent (optional — falls back to plain description)
     # =========================================================
 
     print("-" * 50)
-    print("4a: Creating job...")
+    print("4b: Negotiating with agent...")
+    print("-" * 50)
+
+    import httpx
+    from bnbagent.apex.negotiation import build_job_description
+
+    task_description = "Quickstart demo task: analyze blockchain trends"
+    neg_result = None
+
+    negotiate_payload = {
+        "task_description": task_description,
+        "terms": {
+            "service_type": "general",
+            "deliverables": "Analysis report",
+            "quality_standards": "Clear and accurate",
+        },
+    }
+
+    try:
+        resp = httpx.post(
+            f"{agent_url}/apex/negotiate",
+            json=negotiate_payload,
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            neg_result = resp.json()
+            print(f"  Negotiation accepted. Price: {neg_result.get('price', 'N/A')}")
+        else:
+            print(f"  Negotiation returned {resp.status_code}, using plain description")
+    except Exception as e:
+        print(f"  Negotiation failed ({e}), using plain description")
+
+    description = build_job_description(neg_result) if neg_result and neg_result.get("accepted") else task_description
+    print(f"  Description: {'structured JSON (negotiated)' if neg_result else 'plain text (fallback)'}")
+    print()
+
+    # =========================================================
+    # Step 4c: Create Job
+    # =========================================================
+
+    print("-" * 50)
+    print("4c: Creating job...")
     print("-" * 50)
 
     expiry = get_default_expiry()  # ~73 hours from now
-    description = "Quickstart demo task: analyze blockchain trends"
 
     result = apex.create_job(
         provider=agent_address,
@@ -101,11 +204,11 @@ def main():
     print()
 
     # =========================================================
-    # Step 4b: Set Budget
+    # Step 4d: Set Budget
     # =========================================================
 
     print("-" * 50)
-    print("4b: Setting budget...")
+    print("4d: Setting budget...")
     print("-" * 50)
 
     budget = 1 * 10**18  # 1 U token
@@ -116,11 +219,11 @@ def main():
     print()
 
     # =========================================================
-    # Step 4c: Approve BEP20 spending
+    # Step 4e: Approve BEP20 spending
     # =========================================================
 
     print("-" * 50)
-    print("4c: Approving token spend...")
+    print("4e: Approving token spend...")
     print("-" * 50)
 
     token = w3.eth.contract(
@@ -150,11 +253,11 @@ def main():
     print()
 
     # =========================================================
-    # Step 4d: Fund Job
+    # Step 4f: Fund Job
     # =========================================================
 
     print("-" * 50)
-    print("4d: Funding job...")
+    print("4f: Funding job...")
     print("-" * 50)
 
     result = apex.fund(job_id, budget)
@@ -163,14 +266,12 @@ def main():
     print()
 
     # =========================================================
-    # Step 4e: Trigger execution and poll for submission
+    # Step 4g: Trigger execution and poll for submission
     # =========================================================
 
     print("-" * 50)
-    print("4e: Triggering agent execution via /job/execute...")
+    print("4g: Triggering agent execution via /job/execute...")
     print("-" * 50)
-
-    import httpx
 
     agent_url = os.getenv("AGENT_URL", "http://localhost:8000")
     job_timeout = int(os.getenv("JOB_TIMEOUT", "30"))
@@ -219,16 +320,14 @@ def main():
             continue
 
     # =========================================================
-    # Step 4f: Fetch and verify deliverable
+    # Step 4h: Fetch and verify deliverable
     # =========================================================
 
     print("-" * 50)
-    print("4f: Fetching deliverable...")
+    print("4h: Fetching deliverable...")
     print("-" * 50)
 
     job = apex.get_job(job_id)
-    deliverable_hash = job["deliverable"]
-    print(f"  On-chain deliverable hash: 0x{deliverable_hash.hex()}")
 
     # --- Method 1: Fetch via agent's HTTP API (recommended) ---
     # In production, client and agent are on different machines.
