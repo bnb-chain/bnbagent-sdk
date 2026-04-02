@@ -55,11 +55,11 @@ class ContractClientMixin:
                 if not skip_preflight:
                     import concurrent.futures as _cf
                     _call_params = {
-                        "from": tx["from"],
-                        "to": tx["to"],
-                        "data": tx["data"],
+                        "from": self._account,
+                        "to": tx.get("to"),
+                        "data": tx.get("data", "0x"),
                         "value": tx.get("value", 0),
-                        "gas": tx["gas"],
+                        "gas": tx.get("gas", gas),
                     }
                     with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
                         _future = _pool.submit(self.w3.eth.call, _call_params)
