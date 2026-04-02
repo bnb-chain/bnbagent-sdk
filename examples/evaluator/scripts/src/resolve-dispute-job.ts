@@ -1,7 +1,7 @@
 /**
  * Resolve a disputed APEX job by pushing price to MockOracle
  *
- * Usage: npm run resolve-apex-dispute -- <jobId> <true|false>
+ * Usage: npm run resolve-dispute -- <jobId> <true|false>
  *   true  = Provider wins (assertion correct, job completes)
  *   false = Client wins (assertion incorrect, job rejected)
  *
@@ -17,13 +17,12 @@ import { publicClient, getSettleWalletClient, ERC8183_ADDRESS, APEX_EVALUATOR_AD
 const MOCK_ORACLE_ADDRESS = "0xd48D0Bdcf46E87352ECD9Cb9A22A27e9a761F8c2" as `0x${string}`;
 
 const STATUS_LABELS: Record<number, string> = {
-  0: "None",
-  1: "Open",
-  2: "Funded",
-  3: "Submitted",
-  4: "Completed",
-  5: "Rejected",
-  6: "Expired",
+  0: "Open",
+  1: "Funded",
+  2: "Submitted",
+  3: "Completed",
+  4: "Rejected",
+  5: "Expired",
 };
 
 const ERC8183_ABI = [
@@ -33,15 +32,15 @@ const ERC8183_ABI = [
     outputs: [
       {
         components: [
+          { name: "id", type: "uint256" },
           { name: "client", type: "address" },
           { name: "provider", type: "address" },
           { name: "evaluator", type: "address" },
-          { name: "hook", type: "address" },
+          { name: "description", type: "string" },
           { name: "budget", type: "uint256" },
           { name: "expiredAt", type: "uint256" },
           { name: "status", type: "uint8" },
-          { name: "deliverable", type: "bytes32" },
-          { name: "description", type: "string" },
+          { name: "hook", type: "address" },
         ],
         name: "",
         type: "tuple",
@@ -139,7 +138,7 @@ async function main() {
   const resolution = process.argv[3] || process.env.RESOLUTION;
 
   if (!jobId || !resolution) {
-    console.error("Usage: npm run resolve-apex-dispute -- <jobId> <true|false>");
+    console.error("Usage: npm run resolve-dispute -- <jobId> <true|false>");
     console.error("  true  = Provider wins (assertion correct, job completes)");
     console.error("  false = Client wins (assertion incorrect, job rejected)");
     process.exit(1);
@@ -165,8 +164,8 @@ async function main() {
   console.log(`  Status: ${STATUS_LABELS[job.status] || job.status}`);
   console.log(`  Evaluator: ${job.evaluator}`);
 
-  if (job.status !== 3) {
-    console.error(`\n❌ Job is not in Submitted status (current: ${STATUS_LABELS[job.status]})`);
+  if (job.status !== 2) {
+    console.error(`\n❌ Job is not in Submitted status (current: ${STATUS_LABELS[job.status] ?? job.status})`);
     process.exit(1);
   }
 
@@ -206,7 +205,7 @@ async function main() {
 
   if (!isDisputed) {
     console.error("\n❌ Assertion is not disputed");
-    console.log("  Use settle-apex-job if liveness has passed");
+    console.log("  Use settle-job if liveness has passed");
     process.exit(1);
   }
 

@@ -4,8 +4,8 @@ import { bscTestnet } from "viem/chains";
 import "dotenv/config";
 
 export const OOV3_ADDRESS = (process.env.OOV3_ADDRESS || "0xFc5bb3e475cc9264760Cf33b1e9ea7B87942C709") as `0x${string}`;
-export const ERC8183_ADDRESS = (process.env.ERC8183_ADDRESS || "0x3464e64dD53bC093c53050cE5114062765e9F1b6") as `0x${string}`;
-export const APEX_EVALUATOR_ADDRESS = (process.env.APEX_EVALUATOR_ADDRESS || "0x5f4976ACBCD2968D08273bA9f4a67FA43C4A3af3") as `0x${string}`;
+export const ERC8183_ADDRESS = (process.env.ERC8183_ADDRESS || "0x0afef5748837ef7961e85db65daf97a4f92a00a8") as `0x${string}`;
+export const APEX_EVALUATOR_ADDRESS = (process.env.APEX_EVALUATOR_ADDRESS || "0x549cb8bee93794b104c78d025aa5b24832a94984") as `0x${string}`;
 
 export const RPC_URL = process.env.RPC_URL || "https://data-seed-prebsc-2-s2.binance.org:8545";
 

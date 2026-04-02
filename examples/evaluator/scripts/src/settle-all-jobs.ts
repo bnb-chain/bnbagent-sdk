@@ -1,8 +1,8 @@
 /**
  * Settle all settleable APEX jobs using APEX Evaluator
  * 
- * Scans all jobs from 1 to nextJobId and settles any that are:
- * - Status = Submitted (3)
+ * Scans all jobs from 1 to jobCounter and settles any that are:
+ * - Status = Submitted (2)
  * - Uses APEX Evaluator
  * - Challenge period has expired (isSettleable = true)
  * 
@@ -22,19 +22,18 @@ import { publicClient, getSettleWalletClient, ERC8183_ADDRESS, APEX_EVALUATOR_AD
 const DRY_RUN = process.argv.includes("--dry-run");
 
 const STATUS_LABELS: Record<number, string> = {
-  0: "None",
-  1: "Open",
-  2: "Funded",
-  3: "Submitted",
-  4: "Completed",
-  5: "Rejected",
-  6: "Expired",
+  0: "Open",
+  1: "Funded",
+  2: "Submitted",
+  3: "Completed",
+  4: "Rejected",
+  5: "Expired",
 };
 
 const ERC8183_ABI = [
   {
     inputs: [],
-    name: "nextJobId",
+    name: "jobCounter",
     outputs: [{ name: "", type: "uint256" }],
     stateMutability: "view",
     type: "function",
@@ -45,15 +44,15 @@ const ERC8183_ABI = [
     outputs: [
       {
         components: [
+          { name: "id", type: "uint256" },
           { name: "client", type: "address" },
           { name: "provider", type: "address" },
           { name: "evaluator", type: "address" },
-          { name: "hook", type: "address" },
+          { name: "description", type: "string" },
           { name: "budget", type: "uint256" },
           { name: "expiredAt", type: "uint256" },
           { name: "status", type: "uint8" },
-          { name: "deliverable", type: "bytes32" },
-          { name: "description", type: "string" },
+          { name: "hook", type: "address" },
         ],
         name: "",
         type: "tuple",
@@ -96,17 +95,17 @@ interface SettleableJob {
 }
 
 async function findSettleableJobs(): Promise<SettleableJob[]> {
-  const nextJobId = await publicClient.readContract({
+  const counter = await publicClient.readContract({
     address: ERC8183_ADDRESS,
     abi: ERC8183_ABI,
-    functionName: "nextJobId",
+    functionName: "jobCounter",
   });
 
-  console.log(`Scanning jobs 1 to ${nextJobId - 1n}...`);
-  
+  console.log(`Scanning jobs 1 to ${counter}...`);
+
   const settleable: SettleableJob[] = [];
-  
-  for (let jobId = 1n; jobId < nextJobId; jobId++) {
+
+  for (let jobId = 1n; jobId <= counter; jobId++) {
     try {
       const job = await publicClient.readContract({
         address: ERC8183_ADDRESS,
@@ -115,8 +114,8 @@ async function findSettleableJobs(): Promise<SettleableJob[]> {
         args: [jobId],
       });
 
-      // Skip if not Submitted
-      if (job.status !== 3) continue;
+      // Skip if not Submitted (status 2)
+      if (job.status !== 2) continue;
 
       // Skip if not using APEX Evaluator
       if (job.evaluator.toLowerCase() !== APEX_EVALUATOR_ADDRESS.toLowerCase()) continue;

@@ -10,15 +10,39 @@ The TermSpecification follows APEX's structured terms:
 NegotiationHandler provides a ready-to-use negotiation processor for agents:
   handler = NegotiationHandler(service_price="20e18", currency="0x...")
   result = handler.negotiate(request_data)
+
+On-chain Description (v1 schema)
+---------------------------------
+build_job_description(result.to_dict()) produces a compact JSON string for
+createJob(). It embeds the full agreed terms + provider signature so neither
+party can tamper with the negotiation record after the job is on-chain.
+
+  {
+    "v": 1,
+    "negotiated_at": <unix ts>,
+    "quote_expires_at": <unix ts>,
+    "task": "<task_description>",
+    "terms": { "service_type", "deliverables", "quality_standards",
+               "success_criteria"?, "deadline_seconds" },
+    "price": "<wei>",
+    "currency": "<token address>",
+    "negotiation_hash": "0x...",   # keccak256 of above (without hash/sig fields)
+    "provider_sig": "0x..."         # EIP-191 signature over negotiation_hash
+  }
+
+UMA dispute voters read job.description verbatim from the assertion claim.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+import time
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .client import APEXClient
+    from ..wallets.wallet_provider import WalletProvider
 
 
 class ReasonCode:
@@ -126,8 +150,6 @@ class NegotiationRequest:
         Compute keccak256 hash of the canonical request for on-chain anchoring.
         Returns hex string with 0x prefix.
         """
-        import json
-
         from web3 import Web3
 
         canonical_json = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
@@ -184,6 +206,7 @@ class NegotiationResponse:
 
     terms: TermSpecification | None = None
     estimated_completion_seconds: int | None = None
+    quote_expires_at: int | None = None
 
     reason_code: str | None = None
     reason: str | None = None
@@ -195,6 +218,8 @@ class NegotiationResponse:
             result["terms"] = self.terms.to_dict()
         if self.estimated_completion_seconds is not None:
             result["estimated_completion_seconds"] = self.estimated_completion_seconds
+        if self.quote_expires_at is not None:
+            result["quote_expires_at"] = self.quote_expires_at
         if self.reason_code is not None:
             result["reason_code"] = self.reason_code
         if self.reason is not None:
@@ -221,17 +246,17 @@ class NegotiationResponse:
         Compute keccak256 hash of the canonical response for on-chain anchoring.
         Returns hex string with 0x prefix.
         """
-        import json
-
         from web3 import Web3
 
-        canonical_data = {
+        canonical_data: dict = {
             "accepted": self.accepted,
         }
         if self.terms is not None:
             canonical_data["terms"] = self.terms.to_dict()
         if self.estimated_completion_seconds is not None:
             canonical_data["estimated_completion_seconds"] = self.estimated_completion_seconds
+        if self.quote_expires_at is not None:
+            canonical_data["quote_expires_at"] = self.quote_expires_at
 
         canonical_json = json.dumps(canonical_data, sort_keys=True, separators=(",", ":"))
         h = Web3.keccak(text=canonical_json).hex()
@@ -246,6 +271,7 @@ class NegotiationResponse:
             accepted=data["accepted"],
             terms=terms,
             estimated_completion_seconds=data.get("estimated_completion_seconds"),
+            quote_expires_at=data.get("quote_expires_at"),
             reason_code=data.get("reason_code"),
             reason=data.get("reason"),
         )
@@ -269,6 +295,8 @@ class NegotiationResult:
     request_hash: str
     response: dict
     response_hash: str
+    negotiation_hash: str = ""
+    provider_sig: str = ""
 
     @property
     def accepted(self) -> bool:
@@ -277,12 +305,152 @@ class NegotiationResult:
 
     def to_dict(self) -> dict:
         """Return the full negotiation envelope."""
-        return {
+        result = {
             "request": self.request,
             "request_hash": self.request_hash,
             "response": self.response,
             "response_hash": self.response_hash,
         }
+        if self.negotiation_hash:
+            result["negotiation_hash"] = self.negotiation_hash
+        if self.provider_sig:
+            result["provider_sig"] = self.provider_sig
+        return result
+
+
+def _sanitize_for_claim(s: str) -> str:
+    """
+    Sanitize a string for embedding in the UMA assertion claim.
+
+    Replaces [ and ] with ( and ) to prevent injection into the UMA claim's
+    section markers ([REQUEST], [RESPONSE], [VERIFY]). Also strips null bytes
+    and ASCII control characters (except tab/newline which are benign in JSON).
+    """
+    if not isinstance(s, str):
+        return str(s)
+    result = s.replace("[", "(").replace("]", ")")
+    # Strip ASCII control chars (0x00–0x1F) except tab (0x09) and newline (0x0A)
+    result = "".join(ch for ch in result if ord(ch) >= 0x20 or ch in ("\t", "\n"))
+    return result
+
+
+def _build_description_content(negotiation_result: dict) -> dict:
+    """
+    Extract and sanitize the signable content from a negotiation result dict.
+
+    Returns the content dict (without negotiation_hash and provider_sig) that
+    is used as input to keccak256 for the negotiation_hash.
+    """
+    response = negotiation_result.get("response", {})
+    request = negotiation_result.get("request", {})
+
+    if not response.get("accepted"):
+        raise ValueError("Cannot build description from a rejected negotiation")
+
+    response_terms = response.get("terms", {})
+    price = response_terms.get("price") or ""
+    currency = response_terms.get("currency") or ""
+
+    if not price:
+        raise ValueError("Negotiation response missing price")
+    if not currency:
+        raise ValueError("Negotiation response missing currency")
+
+    # Build terms section (service/quality fields only, no price/currency)
+    terms: dict = {
+        "service_type": _sanitize_for_claim(response_terms.get("service_type", "")),
+        "deliverables": _sanitize_for_claim(response_terms.get("deliverables", "")),
+        "quality_standards": _sanitize_for_claim(response_terms.get("quality_standards", "")),
+        "deadline_seconds": response_terms.get("deadline_seconds"),
+    }
+    success_criteria = response_terms.get("success_criteria")
+    if success_criteria:
+        terms["success_criteria"] = [_sanitize_for_claim(c) for c in success_criteria]
+
+    negotiated_at = negotiation_result.get("negotiated_at") or response.get("negotiated_at") or int(time.time())
+    quote_expires_at = negotiation_result.get("quote_expires_at") or response.get("quote_expires_at")
+
+    content: dict = {
+        "v": 1,
+        "negotiated_at": negotiated_at,
+        "task": _sanitize_for_claim(request.get("task_description", "")),
+        "terms": terms,
+        "price": price,
+        "currency": currency,
+    }
+    if quote_expires_at is not None:
+        content["quote_expires_at"] = quote_expires_at
+
+    return content
+
+
+def build_job_description(negotiation_result: dict, max_length: int = 2000) -> str:
+    """
+    Build a compact JSON description string for createJob() from a negotiation result.
+
+    The description is stored on-chain in Job.description and is embedded verbatim
+    in the UMA assertion claim so dispute voters can see the agreed terms directly.
+
+    The provider_sig (if present) allows anyone to verify the provider agreed to
+    these exact terms: ecrecover(negotiation_hash, provider_sig) == job.provider.
+
+    Args:
+        negotiation_result: Dict from NegotiationResult.to_dict() or the HTTP
+                            /negotiate endpoint response.
+        max_length: Maximum byte length of the output string (default 2000).
+                    If exceeded, the task field is truncated.
+
+    Returns:
+        Compact JSON string suitable for createJob(description=...).
+
+    Raises:
+        ValueError: If the negotiation was not accepted or required fields are missing.
+    """
+    content = _build_description_content(negotiation_result)
+
+    # Append negotiation_hash and provider_sig from the result
+    negotiation_hash = negotiation_result.get("negotiation_hash", "")
+    provider_sig = negotiation_result.get("provider_sig", "")
+    if negotiation_hash:
+        content["negotiation_hash"] = negotiation_hash
+    if provider_sig:
+        content["provider_sig"] = provider_sig
+
+    description = json.dumps(content, sort_keys=True, separators=(",", ":"))
+
+    # Truncate task field if over max_length
+    if len(description) > max_length:
+        overage = len(description) - max_length
+        task = content.get("task", "")
+        if len(task) > overage + 3:
+            content["task"] = task[: len(task) - overage - 3] + "..."
+            description = json.dumps(content, sort_keys=True, separators=(",", ":"))
+
+    return description
+
+
+def parse_job_description(description: str) -> dict | None:
+    """
+    Parse a structured on-chain job description (schema v1+).
+
+    Returns the parsed dict if the description is a valid structured JSON with
+    a 'v' version field, or None for legacy plain-text descriptions.
+
+    Args:
+        description: The job.description string from on-chain.
+
+    Returns:
+        Parsed dict, or None if not a structured description.
+    """
+    if not description or not description.strip().startswith("{"):
+        return None
+    try:
+        parsed = json.loads(description)
+        if isinstance(parsed, dict) and "v" in parsed:
+            return parsed
+        return None
+    except (json.JSONDecodeError, ValueError):
+        return None
 
 
 class NegotiationHandler:
@@ -294,11 +462,14 @@ class NegotiationHandler:
     - Checks service type support
     - Validates required fields (quality_standards)
     - Returns properly structured response with hashes
+    - Signs the negotiation hash with the agent's wallet (if wallet_provider set)
 
     Example:
         handler = NegotiationHandler(
             service_price="20000000000000000000",  # 20 tokens (18 decimals)
             currency="0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
+            wallet_provider=wallet,               # enables provider_sig
+            quote_ttl_seconds=3600,               # quote valid for 1 hour
         )
 
         # Or auto-fetch currency from contract:
@@ -320,6 +491,8 @@ class NegotiationHandler:
         supported_service_types: list[str] | None = None,
         estimated_completion_seconds: int = 120,
         require_quality_standards: bool = True,
+        wallet_provider: WalletProvider | None = None,
+        quote_ttl_seconds: int = 3600,
     ):
         """
         Initialize the negotiation handler.
@@ -330,6 +503,11 @@ class NegotiationHandler:
             supported_service_types: List of supported service types (None = accept all)
             estimated_completion_seconds: Estimated time to complete the service
             require_quality_standards: Whether to require quality_standards in request
+            wallet_provider: Wallet for signing negotiation_hash. When set, the
+                             NegotiationResult will include provider_sig allowing
+                             clients to verify the agent agreed to the terms.
+            quote_ttl_seconds: How long the price quote is valid (default: 3600s = 1h).
+                               Sets quote_expires_at = now + quote_ttl_seconds.
         """
         self._service_price = service_price
         self._currency = currency
@@ -338,6 +516,8 @@ class NegotiationHandler:
             self._supported_types = {t.lower() for t in supported_service_types}
         self._estimated_completion = estimated_completion_seconds
         self._require_quality_standards = require_quality_standards
+        self._wallet_provider = wallet_provider
+        self._quote_ttl_seconds = quote_ttl_seconds
 
     @classmethod
     def from_apex_client(
@@ -347,12 +527,11 @@ class NegotiationHandler:
         supported_service_types: list[str] | None = None,
         estimated_completion_seconds: int = 120,
         require_quality_standards: bool = True,
+        wallet_provider: WalletProvider | None = None,
+        quote_ttl_seconds: int = 3600,
     ) -> NegotiationHandler:
         """
         Create a NegotiationHandler with currency fetched from the ERC-8183 contract.
-
-        Validates that service_price >= contract's minBudget. If not, clients
-        won't be able to fund jobs at this price (setBudget will revert).
 
         Args:
             apex_client: APEXClient instance for on-chain queries
@@ -360,12 +539,11 @@ class NegotiationHandler:
             supported_service_types: List of supported service types
             estimated_completion_seconds: Estimated completion time
             require_quality_standards: Whether to require quality_standards
+            wallet_provider: Wallet for signing negotiation results
+            quote_ttl_seconds: Quote validity period in seconds
 
         Returns:
             NegotiationHandler with currency from contract
-
-        Raises:
-            ValueError: If service_price is below the contract's minBudget
 
         Example:
             from bnbagent import APEXClient, NegotiationHandler
@@ -382,19 +560,14 @@ class NegotiationHandler:
         """
         currency = apex_client.payment_token()
 
-        min_budget = apex_client.min_budget()
-        if min_budget > 0 and int(service_price) < min_budget:
-            raise ValueError(
-                f"service_price ({service_price}) is below contract minBudget "
-                f"({min_budget}). Clients won't be able to fund jobs at this price."
-            )
-
         return cls(
             service_price=service_price,
             currency=currency,
             supported_service_types=supported_service_types,
             estimated_completion_seconds=estimated_completion_seconds,
             require_quality_standards=require_quality_standards,
+            wallet_provider=wallet_provider,
+            quote_ttl_seconds=quote_ttl_seconds,
         )
 
     @staticmethod
@@ -406,11 +579,16 @@ class NegotiationHandler:
         """
         Process a negotiation request and return the result.
 
+        If wallet_provider is set, the result includes:
+          - negotiation_hash: keccak256 of the canonical description content
+          - provider_sig: EIP-191 signature over negotiation_hash
+
         Args:
             request_data: The incoming request dict (task_description, terms, ...)
 
         Returns:
-            NegotiationResult with request, request_hash, response, response_hash
+            NegotiationResult with request, request_hash, response, response_hash,
+            and (if wallet configured) negotiation_hash + provider_sig.
         """
         try:
             req = NegotiationRequest.from_dict(request_data)
@@ -443,6 +621,9 @@ class NegotiationHandler:
                 reason="quality_standards is required in terms.",
             )
 
+        now = int(time.time())
+        quote_expires_at = now + self._quote_ttl_seconds
+
         response_terms = TermSpecification(
             service_type=req.terms.service_type,
             deliverables=req.terms.deliverables,
@@ -457,15 +638,58 @@ class NegotiationHandler:
             accepted=True,
             terms=response_terms,
             estimated_completion_seconds=self._estimated_completion,
+            quote_expires_at=quote_expires_at,
         )
 
         response_hash = self._ensure_hex_prefix(response.compute_hash())
 
-        return NegotiationResult(
+        # Build partial result to compute negotiation_hash
+        partial_result = NegotiationResult(
             request=req.to_dict(),
             request_hash=request_hash,
             response=response.to_dict(),
             response_hash=response_hash,
+        )
+        partial_dict = partial_result.to_dict()
+        partial_dict["negotiated_at"] = now
+
+        negotiation_hash = ""
+        provider_sig = ""
+
+        if self._wallet_provider:
+            try:
+                from web3 import Web3
+
+                content = _build_description_content(partial_dict)
+                canonical = json.dumps(content, sort_keys=True, separators=(",", ":"))
+                h = Web3.keccak(text=canonical).hex()
+                negotiation_hash = h if h.startswith("0x") else "0x" + h
+
+                sig_result = self._wallet_provider.sign_message(negotiation_hash)
+                sig_bytes = sig_result.get("signature", b"")
+                provider_sig = (
+                    sig_bytes.hex()
+                    if isinstance(sig_bytes, (bytes, bytearray))
+                    else str(sig_bytes)
+                )
+                if provider_sig and not provider_sig.startswith("0x"):
+                    provider_sig = "0x" + provider_sig
+            except Exception:
+                # Signing failure is non-fatal; proceed without sig
+                negotiation_hash = ""
+                provider_sig = ""
+
+        # Store negotiated_at in the response dict for build_job_description
+        response_dict = response.to_dict()
+        response_dict["negotiated_at"] = now
+
+        return NegotiationResult(
+            request=req.to_dict(),
+            request_hash=request_hash,
+            response=response_dict,
+            response_hash=response_hash,
+            negotiation_hash=negotiation_hash,
+            provider_sig=provider_sig,
         )
 
     def _reject(

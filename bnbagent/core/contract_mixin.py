@@ -24,7 +24,7 @@ class ContractClientMixin:
         self._account: str | None
     """
 
-    def _send_tx(self, fn, value: int = 0, gas: int = 2_000_000) -> dict[str, Any]:
+    def _send_tx(self, fn, value: int = 0, gas: int = 2_000_000, skip_preflight: bool = False) -> dict[str, Any]:
         """Build, sign, and send a transaction with nonce management and retry."""
         if not self._private_key and not self._wallet_provider:
             raise RuntimeError("private_key or wallet_provider required for write operations")
@@ -36,14 +36,45 @@ class ContractClientMixin:
         for attempt in range(MAX_RETRIES):
             nonce = nonce_mgr.get_nonce()
             try:
+                # Fetch current gas price and add 20% buffer to avoid mempool stuck
+                try:
+                    gas_price = int(self.w3.eth.gas_price * 1.2)
+                except Exception:
+                    gas_price = 3_000_000_000  # 3 Gwei fallback
                 tx = fn.build_transaction(
                     {
                         "from": self._account,
                         "nonce": nonce,
                         "gas": gas,
+                        "gasPrice": gas_price,
                         "value": value,
                     }
                 )
+                # Pre-flight: simulate via eth_call to surface revert reason before spending gas.
+                # Skipped when skip_preflight=True (e.g. when node returns opaque 0x reverts).
+                if not skip_preflight:
+                    import concurrent.futures as _cf
+                    _call_params = {
+                        "from": tx["from"],
+                        "to": tx["to"],
+                        "data": tx["data"],
+                        "value": tx.get("value", 0),
+                        "gas": tx["gas"],
+                    }
+                    with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+                        _future = _pool.submit(self.w3.eth.call, _call_params)
+                        try:
+                            _future.result(timeout=10)
+                        except _cf.TimeoutError:
+                            logger.warning(f"[{class_name}] Pre-flight eth_call timed out, proceeding anyway")
+                        except Exception as preflight_err:
+                            err_str = str(preflight_err)
+                            # Skip pre-flight if node returns opaque 0x (no revert data)
+                            if "'0x'" in err_str or err_str.strip().endswith(", '0x')"):
+                                logger.warning(f"[{class_name}] Pre-flight returned opaque 0x revert, proceeding to on-chain tx")
+                            else:
+                                raise RuntimeError(f"Transaction would revert: {preflight_err}") from preflight_err
+
                 if self._wallet_provider:
                     signed = self._wallet_provider.sign_transaction(tx)
                     raw_tx = signed["rawTransaction"]
@@ -52,6 +83,10 @@ class ContractClientMixin:
                     raw_tx = signed.raw_transaction
                 tx_hash = self.w3.eth.send_raw_transaction(raw_tx)
                 receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash)
+                if receipt["status"] == 0:
+                    raise RuntimeError(
+                        f"Transaction reverted on-chain: {receipt['transactionHash'].hex()}"
+                    )
                 return {
                     "transactionHash": receipt["transactionHash"].hex(),
                     "status": receipt["status"],

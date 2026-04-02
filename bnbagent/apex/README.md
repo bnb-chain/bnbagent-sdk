@@ -9,16 +9,105 @@ and settlement -- letting AI agents transact with each other trustlessly.
 
 ## Key Concepts
 
-- **Job lifecycle** -- `create -> fund -> (negotiate) -> submit -> settle`.
+- **Job lifecycle** -- `create -> fund -> (negotiate) -> submit -> assert -> settle`.
   Each transition is an on-chain transaction managed by `APEXClient`.
 - **Negotiation** -- single-round HTTP negotiation where a user sends
   requirements and quality standards, and the provider agent returns a price
-  or rejects with an APEX reason code.
-- **Evaluation (UMA OOv3)** -- after submission the evaluator contract asserts
-  job completion. A liveness period allows disputes before final settlement.
+  or rejects with an APEX reason code. The agreed terms are hashed
+  (`negotiation_hash`) and signed by the provider (`provider_sig`), then
+  stored as a structured JSON description on-chain for tamper-proof anchoring.
+- **Evaluation (UMA OOv3)** -- after submission the provider calls
+  `initiateAssertion()` (after approving the bond token to the evaluator).
+  A liveness period allows disputes before final settlement; the bond is
+  returned to the provider on clean resolution.
+- **Fees** -- platform fee (to treasury) and evaluator fee (to evaluator
+  contract) are deducted from the budget on `complete()`. Both are
+  configurable in basis points by the contract admin. No fees on
+  `reject()` or `claimRefund()`.
+- **Expiry** -- the SDK calculates `expiredAt` to include OOv3 liveness
+  (30 min) + DVM dispute resolution buffer (72h), ensuring funds remain
+  locked long enough for dispute resolution.
 - **Service records** -- off-chain JSON documents (stored via `StorageProvider`)
   that capture request/response data and on-chain references. Only the
   content hash is stored on-chain.
+
+## Bond & Assertion Flow (Provider-Pays-Bond)
+
+In the v5 contract design, the **provider pays the UMA bond directly**
+(not via a pre-funded pool). The evaluator contract acts as a relay:
+it pulls the bond from the provider and forwards it to UMA OOv3.
+
+### On-chain transaction sequence
+
+After the provider executes a job, the SDK sends 2–3 transactions:
+
+```
+1. submit(jobId, hash, optParams)          → ERC-8183  (1 tx)
+   └─ afterAction hook stores dataUrl      → Evaluator (internal call, 0 extra gas)
+
+2. approve(evaluator, minBond)             → Bond Token (1 tx, skipped if allowance sufficient)
+
+3. initiateAssertion(jobId)                → Evaluator  (1 tx)
+   └─ transferFrom(provider, evaluator, minBond)  → Bond Token (internal)
+   └─ approve(oov3, minBond)                      → Bond Token (internal)
+   └─ assertTruth(claim, evaluator, ...)          → UMA OOv3   (internal)
+```
+
+### Token flow diagram
+
+```
+Provider Wallet ──approve(evaluator, minBond)──▶ Bond Token (ERC-20)
+Provider Wallet ──initiateAssertion(jobId)────▶ APEXEvaluator
+                                                   │
+                                     transferFrom(provider, this, minBond)
+                                     approve(oov3, minBond)
+                                     oov3.assertTruth(claim, this)
+                                                   │
+                                                   ▼
+                                             UMA OOv3
+                                                   │
+                            ┌──────────────────────┴──────────────────────┐
+                            ▼                                             ▼
+                  No dispute (liveness ends)                     Dispute raised
+                  settle() → bond returned to provider   dispute bond from disputer
+                           → job marked COMPLETED        OOv3 arbitration → winner gets both bonds
+```
+
+### SDK automation
+
+When using `create_apex_app(on_job=...)`, the SDK handles the full flow
+automatically inside `_execute_job_internal()`:
+
+1. **Verify** the job (status, provider, expiry, budget)
+2. **Execute** the `on_job` callback
+3. **Submit** the result on-chain (upload to IPFS, submit hash)
+4. **Check bond readiness** — balance and allowance (0 gas, read-only)
+5. **Approve** bond token to evaluator (only if allowance < minBond; uses `type(uint256).max` for unlimited)
+6. **Initiate assertion** — evaluator pulls bond and calls OOv3
+
+The provider's bond tokens are locked until the liveness period ends.
+If no one disputes, `settleJob()` returns the bond to the provider
+and marks the job as COMPLETED. Anyone can call `settleJob()`.
+
+### Bond token requirements
+
+The provider wallet must hold at least `getMinimumBond()` of the bond
+token (returned by `APEXEvaluatorClient.get_minimum_bond()`). Use
+`check_bond_readiness(provider_address)` to verify before asserting:
+
+```python
+eval_client = APEXEvaluatorClient(web3, evaluator_address, private_key=pk)
+readiness = eval_client.check_bond_readiness(provider_address)
+# readiness = {
+#   "ready": True,
+#   "min_bond": 100000000000000000,  # 0.1 token
+#   "balance": 8072900000000000000000,
+#   "allowance": 100000000000000000,
+#   "bond_token": "0xc70B...",
+#   "needs_approval": False,
+#   "needs_tokens": False,
+# }
+```
 
 ## Quick Start
 
@@ -386,6 +475,7 @@ contract. Inherits `ContractClientMixin` for nonce management and retries.
 |---|---|
 | `create_job(provider, evaluator, expired_at, ...)` | Create a new job. Returns job ID + tx hash. |
 | `fund(job_id, expected_budget)` | Fund a job with BEP-20 tokens. |
+| `fund_with_permit(job_id, budget, opt_params, deadline, v, r, s)` | Fund a job using ERC-2612 permit (approve + fund in one tx). |
 | `set_budget(job_id, amount)` | Adjust the job budget. |
 | `set_provider(job_id, provider)` | Assign a provider agent. |
 | `submit(job_id, deliverable_hash, ...)` | Submit deliverables (provider). |
@@ -394,6 +484,12 @@ contract. Inherits `ContractClientMixin` for nonce management and retries.
 | `claim_refund(job_id)` | Claim refund for a rejected/expired job. |
 | `get_job(job_id)` | Read full job struct from contract. |
 | `get_job_status(job_id)` | Return `APEXStatus` enum value. |
+| `platform_fee_bp()` | Get platform fee in basis points (read-only). |
+| `evaluator_fee_bp()` | Get evaluator fee in basis points (read-only). |
+| `platform_treasury()` | Get platform treasury address (read-only). |
+| `set_platform_fee(fee_bp, treasury)` | Set platform fee and treasury address (admin only). |
+| `set_evaluator_fee(fee_bp)` | Set evaluator fee (admin only). |
+| `get_default_expiry(deadline_seconds)` | Calculate expiredAt including OOv3 liveness + 72h DVM dispute buffer. |
 
 ### `APEXJobOps`
 
@@ -401,7 +497,8 @@ Async wrapper over `APEXClient` for use in FastAPI and other async frameworks.
 
 | Method | Description |
 |---|---|
-| `submit_result(job_id, response_content, ...)` | Upload deliverable to storage and submit hash on-chain. |
+| `submit_result(job_id, response_content, ...)` | Upload deliverable to storage and submit hash on-chain. After this, call `initiate_assertion` to start UMA evaluation. |
+| `initiate_assertion(job_id)` | Approve bond token and initiate UMA assertion for a submitted job. Provider pays the bond; it is returned after clean resolution. |
 | `get_job(job_id)` | Get job details from chain (async). |
 | `get_response(job_id)` | Retrieve stored deliverable response from storage (agent response, job context, metadata). |
 | `get_pending_jobs(...)` | Scan for funded jobs assigned to this agent. Uses a hybrid approach: Multicall3 batch scan on startup, then progressive event scanning for subsequent polls. |
@@ -416,10 +513,18 @@ Wraps the UMA OOv3-based evaluator contract.
 | Method | Description |
 |---|---|
 | `get_assertion_info(job_id)` | Return `AssertionInfo` for a job. |
-| `settle_job(job_id)` | Settle a job after liveness period. |
+| `settle_job(job_id)` | Settle a job after liveness period (callable by anyone). |
 | `is_settleable(job_id)` | Check if a job can be settled. |
-| `deposit_bond(amount)` | Deposit bond tokens for assertions. |
-| `withdraw_bond(amount)` | Withdraw unused bond tokens. |
+| `initiate_assertion(job_id)` | Initiate a UMA assertion (provider only; approve bond first). |
+| `check_bond_readiness(provider_address)` | Pre-flight check: does the provider have enough bond tokens and allowance? (0 gas, read-only) |
+| `approve_bond_token(bond_token_address, amount)` | Approve bond tokens to the evaluator (uses the client's own web3 instance). |
+| `get_minimum_bond()` | Get the minimum bond amount required for assertions. |
+| `get_bond_token_address()` | Get the bond token (ERC-20) contract address. |
+| `get_job_asserter(job_id)` | Get the address that paid the bond for a job's assertion. |
+| `get_total_locked_bond()` | Get total bond tokens locked across all active assertions. |
+| `approve_bond(bond_token_contract, amount)` | **Deprecated** — use `approve_bond_token(address, amount)` instead. |
+| `deposit_bond(amount)` | **Deprecated** — raises `DeprecationWarning`. Bond is now paid per-assertion. |
+| `withdraw_bond(amount)` | **Deprecated** — raises `DeprecationWarning`. Bond pool removed in v5. |
 
 ### `NegotiationHandler`
 
@@ -428,6 +533,32 @@ Ready-to-use negotiation processor for provider agents.
 | Method | Description |
 |---|---|
 | `negotiate(request_data)` | Evaluate a `NegotiationRequest` and return a `NegotiationResult`. |
+| `build_job_description(result)` | Build a structured JSON description (Schema v1) from a `NegotiationResult`. Contains `negotiation_hash` (keccak256 of canonical terms) and `provider_sig` (EIP-191 signature). Used as the `description` parameter in `create_job()`. |
+| `parse_job_description(description)` | Parse a structured or legacy plain-text job description. Returns the schema dict or `None`. |
+
+**Structured Description (Schema v1):**
+
+When a negotiation succeeds, the SDK produces a compact JSON string for on-chain `description`:
+
+```json
+{
+  "v": 1,
+  "negotiated_at": 1712000000,
+  "quote_expires_at": 1712003600,
+  "task": "Search for BNB Chain news",
+  "terms": { "service_type": "...", "deliverables": "...", "quality_standards": "...", "deadline_seconds": 300, "success_criteria": "..." },
+  "price": "1000000000000000000",
+  "currency": "0xc70B...5565",
+  "negotiation_hash": "0xabc...",
+  "provider_sig": "0xdef..."
+}
+```
+
+- `negotiation_hash`: keccak256 of canonical JSON (service/quality fields + price/currency) — tamper-proof anchor
+- `provider_sig`: EIP-191 signature over the hash — proves the provider agreed to exact terms
+- `quote_expires_at`: unix timestamp after which the quote is stale (default 1h TTL). The SDK returns HTTP 410 if a job references an expired quote.
+
+**Claim text sanitization:** All user-supplied fields (`task`, `service_type`, `deliverables`, `quality_standards`, `success_criteria`) are sanitized via `_sanitize_for_claim()` which replaces `[`/`]` with `(`/`)` and strips ASCII control characters to prevent UMA claim section injection.
 
 Key data classes: `NegotiationRequest`, `NegotiationResponse`,
 `TermSpecification`, `ReasonCode`.

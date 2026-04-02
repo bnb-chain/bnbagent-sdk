@@ -94,10 +94,14 @@ Together, they enable agents to negotiate pricing, accept jobs, deliver work, an
 | **Budget**          | The amount of payment tokens a client locks in escrow for a job via `setBudget()` + `fund()`. The SDK automatically rejects jobs where `budget < service_price`.                                                                                          |
 | **Deliverable**     | The work output, stored off-chain (IPFS); only the content hash goes on-chain                                                                                                                                                                             |
 | **Evaluator**       | A contract that verifies deliverables and triggers settlement (currently UMA OOv3)                                                                                                                                                                        |
-| **Assertion**       | An on-chain claim by the evaluator that the deliverable is valid, automatically initiated when the agent submits work                                                                                                                                     |
-| **Liveness period** | A 30-minute challenge window after assertion where anyone can dispute by posting a bond                                                                                                                                                                   |
+| **Assertion**       | An on-chain claim by the evaluator that the deliverable is valid, initiated by the provider after submitting work (provider pays the UMA bond)                                                                                                            |
+| **Bond**            | A deposit the provider stakes when initiating an assertion. Returned on clean resolution; forfeited if a dispute rules against the provider. The provider pays the bond directly (provider-pays-bond model).                                               |
+| **Liveness period** | A 30-minute challenge window after assertion where anyone can dispute by posting a counter-bond                                                                                                                                                            |
 | **Dispute (DVM)**   | If disputed during liveness, UMA's [Data Verification Mechanism (DVM)](https://docs.uma.xyz/protocol-overview/how-does-umas-oracle-work#disputes) resolves the dispute via token-holder vote (~48-72 hours). DVM can rule for or against the deliverable. |
 | **Settlement**      | After the liveness period passes without dispute (or after DVM resolution), `settle_job()` releases payment to the agent or refunds the client                                                                                                            |
+| **Platform Fee**    | A fee (in basis points) deducted from the budget on `complete()` and sent to the platform treasury. Configured by the contract admin via `setPlatformFee()`.                                                                                              |
+| **Evaluator Fee**   | A fee (in basis points) deducted from the budget on `complete()` and sent to the evaluator contract. Configured by the contract admin via `setEvaluatorFee()`.                                                                                            |
+| **Permit**          | ERC-2612 permit allows funding a job in a single transaction (`fundWithPermit()`) instead of separate `approve()` + `fund()` calls.                                                                                                                       |
 
 
 ### How APEX Works
@@ -106,9 +110,13 @@ Together, they enable agents to negotiate pricing, accept jobs, deliver work, an
 Client                        Contract (ERC-8183)             Agent (Provider)          Evaluator (UMA OOv3)
   │                               │                               │                         │
   │  1. negotiate() ──────────────┼───────────────────────────►   │                         │
-  │     (agree on price & terms)  │                               │                         │
+  │     (agree on price & terms;  │                               │                         │
+  │      structured description   │                               │                         │
+  │      with negotiation_hash    │                               │                         │
+  │      + provider_sig)          │                               │                         │
   │                               │                               │                         │
-  │  2. create_job() ────────►    │                               │                         │
+  │  2. create_job() ────────►    │  (description = structured    │                         │
+  │     (or fundWithPermit)       │   JSON with hash + sig)       │                         │
   │  3. set_budget(price) ───►    │  (use negotiated price)       │                         │
   │  4. fund() ──────────────►    │  (tokens locked in escrow)    │                         │
   │                               │  ─── status: FUNDED ─────►    │                         │
@@ -124,8 +132,11 @@ Client                        Contract (ERC-8183)             Agent (Provider)  
   │                               │                               │                         │
   │                               │                     submit()  │                         │
   │                               │  ◄────────────────────────────│                         │
-  │                               │  ─── auto-trigger hook ──────────────────────────────►  │
-  │                               │                               │  6. Assertion initiated  │
+  │                               │  ─── afterAction hook ───────────────────────────────►  │
+  │                               │                               │                         │
+  │                               │                               │  6a. approve(bond)       │
+  │                               │                               │  6b. initiateAssertion() │
+  │                               │                               │      (provider pays bond)│
   │                               │                               │                         │
   │                               │                               │  7. Liveness (30 min)    │
   │                               │                               │     Anyone can dispute   │
@@ -133,6 +144,8 @@ Client                        Contract (ERC-8183)             Agent (Provider)  
   │  No dispute:                  │                               │                         │
   │                               │  ◄── settle_job() ───────────────────────────────────── │
   │                               │  ─── payment to agent ───►    │  8. COMPLETED            │
+  │                               │  (minus platform + evaluator  │     (bond returned)      │
+  │                               │   fees if configured)         │                         │
   │                               │                               │                         │
   │  If disputed:                 │                               │                         │
   │     UMA DVM vote (~48-72h)    │                               │                         │

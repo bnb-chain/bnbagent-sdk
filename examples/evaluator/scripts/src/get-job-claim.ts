@@ -1,7 +1,7 @@
 /**
  * Get and verify UMA claim content for an APEX job
  *
- * Usage: JOB_ID=14 npm run get-apex-job-claim
+ * Usage: JOB_ID=14 npm run get-job-claim
  *
  * This script:
  * 1. Fetches job data from ERC-8183 contract
@@ -23,13 +23,12 @@ const IPFS_GATEWAYS = [
 ];
 
 const STATUS_LABELS: Record<number, string> = {
-  0: "None",
-  1: "Open",
-  2: "Funded",
-  3: "Submitted",
-  4: "Completed",
-  5: "Rejected",
-  6: "Expired",
+  0: "Open",
+  1: "Funded",
+  2: "Submitted",
+  3: "Completed",
+  4: "Rejected",
+  5: "Expired",
 };
 
 const ERC8183_ABI = [
@@ -39,15 +38,15 @@ const ERC8183_ABI = [
     outputs: [
       {
         components: [
+          { name: "id", type: "uint256" },
           { name: "client", type: "address" },
           { name: "provider", type: "address" },
           { name: "evaluator", type: "address" },
-          { name: "hook", type: "address" },
+          { name: "description", type: "string" },
           { name: "budget", type: "uint256" },
           { name: "expiredAt", type: "uint256" },
           { name: "status", type: "uint8" },
-          { name: "deliverable", type: "bytes32" },
-          { name: "description", type: "string" },
+          { name: "hook", type: "address" },
         ],
         name: "",
         type: "tuple",
@@ -152,31 +151,31 @@ async function findAssertionMadeEvent(assertionId: `0x${string}`): Promise<{
   claim: string;
 } | null> {
   const assertionMadeSignature = "0xdb1513f0abeb57a364db56aa3eb52015cca5268f00fd67bc73aaf22bccab02b7";
-  
+
   // Search recent blocks (last ~24 hours on BSC = ~28800 blocks)
   const latestBlock = await publicClient.getBlockNumber();
   const startBlock = latestBlock - 30000n;
-  
+
   console.log(`  Searching blocks ${startBlock} - ${latestBlock}...`);
-  
+
   const BATCH_SIZE = 10000n;
-  
+
   for (let from = startBlock; from <= latestBlock; from += BATCH_SIZE) {
     const to = from + BATCH_SIZE - 1n > latestBlock ? latestBlock : from + BATCH_SIZE - 1n;
-    
+
     try {
       const logs = await publicClient.getLogs({
         address: OOV3_ADDRESS,
         fromBlock: from,
         toBlock: to,
       });
-      
+
       for (const log of logs) {
         if (log.topics[0] !== assertionMadeSignature) continue;
-        
+
         // Check if this log's assertionId matches (it's in topics[1])
         if (log.topics[1]?.toLowerCase() !== assertionId.toLowerCase()) continue;
-        
+
         // Decode claim from data
         const data = log.data;
         const claimOffsetHex = data.slice(2 + 64, 2 + 128);
@@ -185,7 +184,7 @@ async function findAssertionMadeEvent(assertionId: `0x${string}`): Promise<{
         const claimLength = parseInt(claimLengthHex, 16);
         const claimDataHex = `0x${data.slice(claimOffset + 64, claimOffset + 64 + claimLength * 2)}` as `0x${string}`;
         const claim = hexToString(claimDataHex);
-        
+
         return {
           txHash: log.transactionHash,
           blockNumber: log.blockNumber,
@@ -196,13 +195,13 @@ async function findAssertionMadeEvent(assertionId: `0x${string}`): Promise<{
       // Continue to next batch
     }
   }
-  
+
   return null;
 }
 
 async function main() {
   if (JOB_ID === 0n) {
-    console.error("Usage: JOB_ID=14 npm run get-apex-job-claim");
+    console.error("Usage: JOB_ID=14 npm run get-job-claim");
     process.exit(1);
   }
 
@@ -214,7 +213,7 @@ async function main() {
 
   // Step 1: Get job details
   console.log("[1/5] Fetching job from ERC-8183 contract...");
-  
+
   const job = await publicClient.readContract({
     address: ERC8183_ADDRESS,
     abi: ERC8183_ABI,
@@ -228,7 +227,7 @@ async function main() {
   console.log(`  Evaluator:   ${job.evaluator}`);
   console.log(`  Budget:      ${formatUnits(job.budget, 18)} U`);
   console.log(`  Description: ${job.description.length > 60 ? job.description.slice(0, 60) + "..." : job.description}`);
-  console.log(`  Deliverable: ${job.deliverable}`);
+  console.log(`  Deliverable: (see JobSubmitted event — not stored in struct)`);
   console.log("");
 
   // Check if using APEX Evaluator
@@ -321,14 +320,9 @@ async function main() {
   // The claim contains: "Deliverable Hash: 0x..."
   const deliverableHashMatch = eventData.claim.match(/Deliverable Hash: (0x[a-fA-F0-9]+)/);
   const claimDeliverableHash = deliverableHashMatch ? deliverableHashMatch[1] : null;
-  
-  console.log(`  On-chain deliverable: ${job.deliverable}`);
-  console.log(`  Claim deliverable:    ${claimDeliverableHash || "(not found in claim)"}`);
 
-  if (claimDeliverableHash) {
-    const match = job.deliverable.toLowerCase() === claimDeliverableHash.toLowerCase();
-    console.log(`  Match:                ${match ? "✅ YES" : "❌ NO"}`);
-  }
+  console.log(`  Claim deliverable:    ${claimDeliverableHash || "(not found in claim)"}`);
+  console.log(`  Note: deliverable hash is in JobSubmitted event, not the job struct`);
   console.log("");
 
   // Step 5: Try to fetch from IPFS
@@ -361,7 +355,7 @@ async function main() {
 
   // Fallback: check for any IPFS reference
   if (!dataUrl) {
-    const ipfsMatch = eventData.claim.match(/ipfs:\/\/(\w+)/) || 
+    const ipfsMatch = eventData.claim.match(/ipfs:\/\/(\w+)/) ||
                       job.description.match(/ipfs:\/\/(\w+)/);
     if (ipfsMatch) {
       dataUrl = `ipfs://${ipfsMatch[1]}`;
@@ -374,7 +368,7 @@ async function main() {
     if (dataUrl.startsWith("ipfs://")) {
       cid = dataUrl.replace("ipfs://", "");
     }
-    
+
     try {
       const content = await fetchFromIPFS(cid);
       console.log("");
@@ -391,11 +385,8 @@ async function main() {
       console.log("--- Hash Verification ---");
       console.log(`  Data URL:        ${dataUrl}`);
       console.log(`  Computed hash:   ${computedHash}`);
-      console.log(`  On-chain hash:   ${job.deliverable}`);
-      const match = computedHash.toLowerCase() === job.deliverable.toLowerCase();
-      console.log(`  Match:           ${match ? "✅ YES" : "❌ NO"}`);
-      
-      if (!match) {
+
+      if (!claimDeliverableHash) {
         console.log("");
         console.log("  Note: Hash mismatch may occur if URL format differs.");
         console.log("  Try checking if the URL was stored with/without trailing slash, etc.");
@@ -410,7 +401,7 @@ async function main() {
     console.log("  To verify manually:");
     console.log("  1. Get the original data URL from the provider");
     console.log("  2. Compute: keccak256(data_url)");
-    console.log("  3. Compare with on-chain hash:", job.deliverable);
+    console.log("  3. Compare with hash in JobSubmitted event log");
   }
 
   console.log("");

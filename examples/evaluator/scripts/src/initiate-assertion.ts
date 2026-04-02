@@ -5,6 +5,12 @@
  * Use this when:
  * - Job is in Submitted status but assertion wasn't initiated
  * - (e.g., bond was insufficient when provider submitted)
+ *
+ * Access control:
+ * - Only the job's **provider** can call initiateAssertion().
+ *   The contract checks `msg.sender == job.provider` and reverts
+ *   with CallerNotAllowed(address) otherwise.
+ * - PRIVATE_KEY must correspond to the provider address of the job.
  */
 import { formatUnits } from "viem";
 import { publicClient, getWalletClient, ERC8183_ADDRESS, APEX_EVALUATOR_ADDRESS } from "./config.js";
@@ -12,13 +18,12 @@ import { publicClient, getWalletClient, ERC8183_ADDRESS, APEX_EVALUATOR_ADDRESS 
 const JOB_ID = BigInt(process.argv[2] || process.env.JOB_ID || "0");
 
 const STATUS_LABELS: Record<number, string> = {
-  0: "None",
-  1: "Open",
-  2: "Funded",
-  3: "Submitted",
-  4: "Completed",
-  5: "Rejected",
-  6: "Expired",
+  0: "Open",
+  1: "Funded",
+  2: "Submitted",
+  3: "Completed",
+  4: "Rejected",
+  5: "Expired",
 };
 
 const ERC8183_ABI = [
@@ -28,15 +33,15 @@ const ERC8183_ABI = [
     outputs: [
       {
         components: [
+          { name: "id", type: "uint256" },
           { name: "client", type: "address" },
           { name: "provider", type: "address" },
           { name: "evaluator", type: "address" },
-          { name: "hook", type: "address" },
+          { name: "description", type: "string" },
           { name: "budget", type: "uint256" },
           { name: "expiredAt", type: "uint256" },
           { name: "status", type: "uint8" },
-          { name: "deliverable", type: "bytes32" },
-          { name: "description", type: "string" },
+          { name: "hook", type: "address" },
         ],
         name: "",
         type: "tuple",
@@ -113,8 +118,8 @@ async function main() {
 
   console.log("Job Status:", STATUS_LABELS[job.status] || job.status);
 
-  if (job.status !== 3) {
-    console.error("❌ Job is not in Submitted status. Cannot initiate assertion.");
+  if (job.status !== 2) {
+    console.error(`❌ Job is not in Submitted status (current: ${STATUS_LABELS[job.status] ?? job.status}). Cannot initiate assertion.`);
     process.exit(1);
   }
 

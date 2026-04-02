@@ -60,13 +60,12 @@ def get_default_expiry(liveness_seconds: int = DEFAULT_LIVENESS_SECONDS) -> int:
 class APEXStatus(IntEnum):
     """ERC-8183 Job status enum."""
 
-    NONE = 0
-    OPEN = 1
-    FUNDED = 2
-    SUBMITTED = 3
-    COMPLETED = 4
-    REJECTED = 5
-    EXPIRED = 6
+    OPEN = 0
+    FUNDED = 1
+    SUBMITTED = 2
+    COMPLETED = 3
+    REJECTED = 4
+    EXPIRED = 5
 
 
 def _load_erc8183_abi() -> list:
@@ -212,9 +211,20 @@ class APEXClient(ContractClientMixin):
         fn = self.contract.functions.claimRefund(job_id)
         return self._send_tx(fn)
 
-    def claim_pending(self) -> dict[str, Any]:
-        """Claim any pending withdrawals for the caller."""
-        fn = self.contract.functions.claimPending()
+    def fund_with_permit(
+        self,
+        job_id: int,
+        expected_budget: int,
+        opt_params: bytes = b"",
+        deadline: int = 0,
+        v: int = 0,
+        r: bytes = b"\x00" * 32,
+        s: bytes = b"\x00" * 32,
+    ) -> dict[str, Any]:
+        """Fund a job using ERC-2612 permit (approve + fund in one tx)."""
+        fn = self.contract.functions.fundWithPermit(
+            job_id, expected_budget, opt_params, deadline, v, r, s,
+        )
         return self._send_tx(fn)
 
     # ── Provider (Agent) functions ──
@@ -244,16 +254,15 @@ class APEXClient(ContractClientMixin):
         """Get job details by ID."""
         raw = self._call_with_retry(self.contract.functions.getJob(job_id))
         return {
-            "jobId": job_id,
-            "client": raw[0],
-            "provider": raw[1],
-            "evaluator": raw[2],
-            "hook": raw[3],
-            "budget": raw[4],
-            "expiredAt": raw[5],
-            "status": APEXStatus(raw[6]),
-            "deliverable": raw[7],
-            "description": raw[8],
+            "jobId": raw[0],
+            "client": raw[1],
+            "provider": raw[2],
+            "evaluator": raw[3],
+            "description": raw[4],
+            "budget": raw[5],
+            "expiredAt": raw[6],
+            "status": APEXStatus(raw[7]),
+            "hook": raw[8],
         }
 
     def get_jobs_batch(self, job_ids: list[int]) -> list[dict[str, Any] | None]:
@@ -288,16 +297,15 @@ class APEXClient(ContractClientMixin):
                     raw = decoded
                     jobs.append(
                         {
-                            "jobId": job_ids[idx],
-                            "client": Web3.to_checksum_address(raw[0]),
-                            "provider": Web3.to_checksum_address(raw[1]),
-                            "evaluator": Web3.to_checksum_address(raw[2]),
-                            "hook": Web3.to_checksum_address(raw[3]),
-                            "budget": raw[4],
-                            "expiredAt": raw[5],
-                            "status": APEXStatus(raw[6]),
-                            "deliverable": raw[7],
-                            "description": raw[8],
+                            "jobId": raw[0],
+                            "client": Web3.to_checksum_address(raw[1]),
+                            "provider": Web3.to_checksum_address(raw[2]),
+                            "evaluator": Web3.to_checksum_address(raw[3]),
+                            "description": raw[4],
+                            "budget": raw[5],
+                            "expiredAt": raw[6],
+                            "status": APEXStatus(raw[7]),
+                            "hook": Web3.to_checksum_address(raw[8]),
                         }
                     )
                 except Exception:
@@ -306,27 +314,62 @@ class APEXClient(ContractClientMixin):
                 jobs.append(None)
         return jobs
 
-    def get_job_status(self, job_id: int) -> APEXStatus:
-        """Get the status of a job."""
-        return APEXStatus(self._call_with_retry(self.contract.functions.getJobStatus(job_id)))
-
     def payment_token(self) -> str:
         """Get the payment token address configured in the ERC-8183 contract."""
         return self._call_with_retry(self.contract.functions.paymentToken())
 
-    def min_budget(self) -> int:
-        """Get the minimum budget required for jobs."""
-        return self._call_with_retry(self.contract.functions.minBudget())
+    def job_counter(self) -> int:
+        """Get the current job counter (last assigned job ID, or 0 if no jobs created)."""
+        return self._call_with_retry(self.contract.functions.jobCounter())
 
-    def next_job_id(self) -> int:
-        """Get the next job ID that will be assigned."""
-        return self._call_with_retry(self.contract.functions.nextJobId())
+    def platform_fee_bp(self) -> int:
+        """Get the platform fee in basis points."""
+        return self._call_with_retry(self.contract.functions.platformFeeBP())
 
-    def pending_withdrawals(self, account: str) -> int:
-        """Get pending withdrawal amount for an account."""
+    def evaluator_fee_bp(self) -> int:
+        """Get the evaluator fee in basis points."""
+        return self._call_with_retry(self.contract.functions.evaluatorFeeBP())
+
+    def platform_treasury(self) -> str:
+        """Get the platform treasury address."""
+        return self._call_with_retry(self.contract.functions.platformTreasury())
+
+    def whitelisted_hooks(self, hook: str) -> bool:
+        """Check if a hook contract is whitelisted."""
         return self._call_with_retry(
-            self.contract.functions.pendingWithdrawals(Web3.to_checksum_address(account))
+            self.contract.functions.whitelistedHooks(Web3.to_checksum_address(hook))
         )
+
+    def job_has_budget(self, job_id: int) -> bool:
+        """Check if a job has a budget set."""
+        return self._call_with_retry(self.contract.functions.jobHasBudget(job_id))
+
+    # ── Admin functions ──
+
+    def set_platform_fee(self, fee_bp: int, treasury: str) -> dict[str, Any]:
+        """Set platform fee and treasury (admin only)."""
+        fn = self.contract.functions.setPlatformFee(fee_bp, Web3.to_checksum_address(treasury))
+        return self._send_tx(fn)
+
+    def set_evaluator_fee(self, fee_bp: int) -> dict[str, Any]:
+        """Set evaluator fee in basis points (admin only)."""
+        fn = self.contract.functions.setEvaluatorFee(fee_bp)
+        return self._send_tx(fn)
+
+    def set_hook_whitelist(self, hook: str, status: bool) -> dict[str, Any]:
+        """Whitelist or de-whitelist a hook contract (admin only)."""
+        fn = self.contract.functions.setHookWhitelist(Web3.to_checksum_address(hook), status)
+        return self._send_tx(fn)
+
+    def pause(self) -> dict[str, Any]:
+        """Pause the contract (admin only)."""
+        fn = self.contract.functions.pause()
+        return self._send_tx(fn)
+
+    def unpause(self) -> dict[str, Any]:
+        """Unpause the contract (admin only)."""
+        fn = self.contract.functions.unpause()
+        return self._send_tx(fn)
 
     # ── Event helpers ──
 

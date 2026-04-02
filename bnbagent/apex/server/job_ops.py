@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 
 from ...storage.interface import StorageProvider
 from ..client import APEXClient, APEXStatus
+from ..evaluator_client import APEXEvaluatorClient
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ class APEXJobOps:
         wallet_provider: WalletProvider | None = None,
         service_price: int = 0,
         payment_token_decimals: int = 18,
+        evaluator_address: str | None = None,
     ):
         """
         Initialize job operations.
@@ -83,6 +85,9 @@ class APEXJobOps:
             payment_token_decimals: Decimal places of the payment token (default: 18).
                                    Included in verify_job() 402 responses so clients
                                    can interpret the amounts.
+            evaluator_address: Optional APEXEvaluatorUpgradeable contract address.
+                               Required for initiate_assertion(). If not set,
+                               the evaluator address is read from the job's evaluator field.
         """
         self._rpc_url = rpc_url
         self._erc8183_address = erc8183_address
@@ -95,11 +100,13 @@ class APEXJobOps:
         self._wallet_provider = wallet_provider
         self._service_price = service_price
         self._payment_token_decimals = payment_token_decimals
+        self._evaluator_address = evaluator_address
         self._client: APEXClient | None = None
+        self._evaluator_client: APEXEvaluatorClient | None = None
         self._deliverable_urls: dict[int, str] = {}  # job_id → data_url
         self._last_scanned_block: int | None = None
         self._startup_scan_done: bool = False
-        self._last_known_next_id: int = 0
+        self._last_known_counter: int = 0
         self._pending_open_ids: set[int] = set()  # OPEN jobs assigned to this agent
 
     def _get_client(self) -> APEXClient:
@@ -116,6 +123,19 @@ class APEXJobOps:
             )
         return self._client
 
+    def _get_evaluator_client(self, evaluator_address: str) -> APEXEvaluatorClient:
+        """Get or create APEXEvaluatorClient for the given evaluator address."""
+        if self._evaluator_client is None or self._evaluator_client.address.lower() != evaluator_address.lower():
+            from ...core.abi_loader import create_web3
+            w3 = create_web3(self._rpc_url)
+            self._evaluator_client = APEXEvaluatorClient(
+                web3=w3,
+                contract_address=evaluator_address,
+                private_key=self._private_key,
+                wallet_provider=self._wallet_provider,
+            )
+        return self._evaluator_client
+
     @property
     def agent_address(self) -> str:
         """Get the agent's wallet address."""
@@ -123,6 +143,76 @@ class APEXJobOps:
             return self._wallet_provider.address
         client = self._get_client()
         return client._account or ""
+
+    async def initiate_assertion(self, job_id: int) -> dict[str, Any]:
+        """
+        Approve bond tokens and initiate a UMA assertion for a submitted job.
+
+        Must be called after submit_result(). The agent (provider) pays the bond.
+        The bond is returned to the agent after the liveness period (if not disputed).
+
+        Args:
+            job_id: The job ID
+
+        Returns:
+            Dict with success status and transaction hash
+        """
+        try:
+            client = self._get_client()
+
+            # Get job to find evaluator address
+            job = await asyncio.to_thread(client.get_job, job_id)
+            evaluator_addr = job.get("evaluator", "")
+            if not evaluator_addr or evaluator_addr == "0x" + "0" * 40:
+                return {"success": False, "error": "Job has no evaluator set"}
+
+            eval_client = self._get_evaluator_client(evaluator_addr)
+
+            # Idempotent: skip if assertion already initiated (e.g. by afterAction hook)
+            already = await asyncio.to_thread(eval_client.job_assertion_initiated, job_id)
+            if already:
+                logger.info(f"[APEXJobOps] initiate_assertion({job_id}): already initiated, skipping")
+                return {"success": True, "already_initiated": True}
+
+            # Pre-flight: check provider has enough bond tokens and allowance (0 gas)
+            provider_addr = self.agent_address
+            readiness = await asyncio.to_thread(eval_client.check_bond_readiness, provider_addr)
+            logger.info(
+                f"[APEXJobOps] bond readiness: balance={readiness['balance']},"
+                f" allowance={readiness['allowance']}, min={readiness['min_bond']}"
+            )
+
+            if readiness["needs_tokens"]:
+                return {
+                    "success": False,
+                    "error": (
+                        f"Provider has insufficient bond tokens: "
+                        f"have {readiness['balance']}, need {readiness['min_bond']} "
+                        f"of {readiness['bond_token']}"
+                    ),
+                }
+
+            # Approve evaluator with max uint256 (unlimited) so future jobs skip this step
+            if readiness["needs_approval"]:
+                MAX_UINT256 = 2**256 - 1
+                approve_result = await asyncio.to_thread(
+                    eval_client.approve_bond_token, readiness["bond_token"], MAX_UINT256
+                )
+                logger.info(f"[APEXJobOps] approve_bond({job_id}) tx: {approve_result['transactionHash']}")
+
+            # Initiate assertion — evaluator pulls bond from provider, then calls OOv3
+            result = await asyncio.to_thread(eval_client.initiate_assertion, job_id)
+            logger.info(f"[APEXJobOps] initiate_assertion({job_id}) tx: {result['transactionHash']}")
+
+            return {
+                "success": True,
+                "txHash": result["transactionHash"],
+                "bond": readiness["min_bond"],
+            }
+
+        except Exception as e:
+            logger.error(f"[APEXJobOps] initiate_assertion({job_id}) failed: {e}")
+            return {"success": False, "error": str(e)}
 
     async def submit_result(
         self,
@@ -143,7 +233,14 @@ class APEXJobOps:
             include_negotiation_history: Include budget negotiation history (default: True)
 
         Returns:
-            Dict with success status, transaction hash, and data URL
+            Dict with success status, transaction hash, and data URL.
+            After this returns successfully, call initiate_assertion(job_id) to
+            start the UMA dispute window (the agent pays the bond).
+
+        Note:
+            Negotiation terms are stored on-chain in job.description (schema v1).
+            The IPFS deliverable data is supplementary — the on-chain description
+            is the authoritative record for UMA dispute resolution.
         """
         try:
             # Defense-in-depth: verify job before submitting (SDK-H01)
@@ -341,8 +438,8 @@ class APEXJobOps:
         """
         try:
             client = self._get_client()
-            status = await asyncio.to_thread(client.get_job_status, job_id)
-            return {"success": True, "status": status}
+            job = await asyncio.to_thread(client.get_job, job_id)
+            return {"success": True, "status": job["status"]}
         except Exception as e:
             logger.error(f"[APEXJobOps] get_job_status({job_id}) failed: {e}")
             return {"success": False, "error": str(e)}
@@ -420,20 +517,20 @@ class APEXJobOps:
         snapshot_block = await asyncio.to_thread(lambda: client.w3.eth.block_number)
 
         try:
-            next_id = await asyncio.to_thread(client.next_job_id)
-            if next_id == 0:
+            counter = await asyncio.to_thread(client.job_counter)
+            if counter == 0:
                 self._last_scanned_block = snapshot_block
                 self._startup_scan_done = True
                 return {"success": True, "jobs": []}
 
-            result = await self._multicall_scan(list(range(next_id)))
+            result = await self._multicall_scan(list(range(1, counter + 1)))
 
             self._last_scanned_block = snapshot_block
-            self._last_known_next_id = next_id
+            self._last_known_counter = counter
             self._startup_scan_done = True
             logger.info(
                 f"[APEXJobOps] Startup scan complete: {len(result['jobs'])} pending"
-                f" out of {next_id} total jobs (snapshot block {snapshot_block})"
+                f" out of {counter} total jobs (snapshot block {snapshot_block})"
             )
             return result
 
@@ -537,29 +634,29 @@ class APEXJobOps:
 
             # Subsequent calls: progressive Multicall3 scanning
             client = self._get_client()
-            next_id = await asyncio.to_thread(client.next_job_id)
+            counter = await asyncio.to_thread(client.job_counter)
 
             # Collect IDs to scan: new job IDs + previously-seen OPEN jobs
             scan_set: set[int] = set()
-            if next_id > self._last_known_next_id:
-                scan_set.update(range(self._last_known_next_id, next_id))
+            if counter > self._last_known_counter:
+                scan_set.update(range(self._last_known_counter + 1, counter + 1))
             scan_set.update(self._pending_open_ids)
 
             if not scan_set:
                 logger.debug(
                     f"[APEXJobOps] Progressive scan: no changes"
-                    f" (next_id={next_id}, open={len(self._pending_open_ids)})"
+                    f" (counter={counter}, open={len(self._pending_open_ids)})"
                 )
                 return {"success": True, "jobs": []}
 
             scan_ids = sorted(scan_set)
             logger.info(
                 f"[APEXJobOps] Progressive scan: checking {len(scan_ids)} job(s)"
-                f" (new={next_id - self._last_known_next_id},"
+                f" (new={counter - self._last_known_counter},"
                 f" open={len(self._pending_open_ids)})"
             )
             result = await self._multicall_scan(scan_ids)
-            self._last_known_next_id = next_id
+            self._last_known_counter = counter
             found = len(result.get("jobs", []))
             if found:
                 logger.info(
@@ -622,12 +719,32 @@ class APEXJobOps:
 
             import time
 
-            if job_result.get("expiredAt", 0) <= int(time.time()):
+            now = int(time.time())
+
+            if job_result.get("expiredAt", 0) <= now:
                 return {
                     "valid": False,
                     "error": "Job has expired",
                     "error_code": 408,
                 }
+
+            # Quote expiry check: if description has a structured quote_expires_at,
+            # skip jobs where the original price quote has expired.
+            description = job_result.get("description", "")
+            if description:
+                try:
+                    from ..negotiation import parse_job_description
+
+                    parsed = parse_job_description(description)
+                    if parsed and parsed.get("quote_expires_at"):
+                        if now > parsed["quote_expires_at"]:
+                            return {
+                                "valid": False,
+                                "error": "Negotiation quote has expired",
+                                "error_code": 410,
+                            }
+                except Exception:
+                    pass  # Non-fatal: malformed description doesn't block job
 
             # Budget check
             if self._service_price > 0:

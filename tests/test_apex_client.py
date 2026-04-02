@@ -24,13 +24,12 @@ from tests.conftest import (
 
 class TestAPEXStatus:
     def test_enum_values(self):
-        assert APEXStatus.NONE == 0
-        assert APEXStatus.OPEN == 1
-        assert APEXStatus.FUNDED == 2
-        assert APEXStatus.SUBMITTED == 3
-        assert APEXStatus.COMPLETED == 4
-        assert APEXStatus.REJECTED == 5
-        assert APEXStatus.EXPIRED == 6
+        assert APEXStatus.OPEN == 0
+        assert APEXStatus.FUNDED == 1
+        assert APEXStatus.SUBMITTED == 2
+        assert APEXStatus.COMPLETED == 3
+        assert APEXStatus.REJECTED == 4
+        assert APEXStatus.EXPIRED == 5
 
     def test_is_int_enum(self):
         assert issubclass(APEXStatus, IntEnum)
@@ -164,14 +163,6 @@ class TestWriteMethods:
         apex_client.contract.functions.claimRefund.assert_called_once_with(1)
         assert result["status"] == 1
 
-    def test_claim_pending(self, apex_client):
-        apex_client._send_tx = MagicMock(
-            return_value={"transactionHash": FAKE_TX_HASH, "status": 1}
-        )
-        result = apex_client.claim_pending()
-        apex_client.contract.functions.claimPending.assert_called_once()
-        assert result["status"] == 1
-
     def test_submit_with_opt_params(self, apex_client):
         apex_client._send_tx = MagicMock(
             return_value={"transactionHash": FAKE_TX_HASH, "status": 1}
@@ -185,15 +176,15 @@ class TestWriteMethods:
 class TestReadMethods:
     def test_get_job(self, apex_client):
         raw = (
+            1,  # id
             FAKE_ADDRESS,  # client
             FAKE_ADDRESS,  # provider
             FAKE_ADDRESS,  # evaluator
-            "0x" + "00" * 20,  # hook
+            "test description",  # description
             1000,  # budget
             9999999999,  # expiredAt
-            2,  # status (FUNDED)
-            b"\x00" * 32,  # deliverable
-            "test description",  # description
+            1,  # status (FUNDED)
+            "0x" + "00" * 20,  # hook
         )
         apex_client.contract.functions.getJob.return_value.call.return_value = raw
 
@@ -204,26 +195,13 @@ class TestReadMethods:
         assert job["status"] == APEXStatus.FUNDED
         assert job["description"] == "test description"
 
-    def test_get_job_status(self, apex_client):
-        apex_client.contract.functions.getJobStatus.return_value.call.return_value = 3
-        status = apex_client.get_job_status(1)
-        assert status == APEXStatus.SUBMITTED
-
     def test_payment_token(self, apex_client):
         apex_client.contract.functions.paymentToken.return_value.call.return_value = FAKE_ADDRESS
         assert apex_client.payment_token() == FAKE_ADDRESS
 
-    def test_min_budget(self, apex_client):
-        apex_client.contract.functions.minBudget.return_value.call.return_value = 500
-        assert apex_client.min_budget() == 500
-
-    def test_next_job_id(self, apex_client):
-        apex_client.contract.functions.nextJobId.return_value.call.return_value = 10
-        assert apex_client.next_job_id() == 10
-
-    def test_pending_withdrawals(self, apex_client):
-        apex_client.contract.functions.pendingWithdrawals.return_value.call.return_value = 200
-        assert apex_client.pending_withdrawals(FAKE_ADDRESS) == 200
+    def test_job_counter(self, apex_client):
+        apex_client.contract.functions.jobCounter.return_value.call.return_value = 10
+        assert apex_client.job_counter() == 10
 
 
 class TestEventQueries:
@@ -354,23 +332,26 @@ class TestCallWithRetry:
 
 class TestGetJobsBatch:
     def test_success(self, apex_client):
-        raw_job = (
-            FAKE_ADDRESS,       # client
-            FAKE_ADDRESS,       # provider
-            FAKE_ADDRESS,       # evaluator
-            "0x" + "00" * 20,   # hook
-            1000,               # budget
-            9999999999,         # expiredAt
-            2,                  # status (FUNDED)
-            b"\x00" * 32,      # deliverable
-            "test description", # description
-        )
+        raw_jobs = [
+            (
+                i,                      # id
+                FAKE_ADDRESS,           # client
+                FAKE_ADDRESS,           # provider
+                FAKE_ADDRESS,           # evaluator
+                "test description",     # description
+                1000,                   # budget
+                9999999999,             # expiredAt
+                1,                      # status (FUNDED)
+                "0x" + "00" * 20,       # hook
+            )
+            for i in range(3)
+        ]
 
         with patch("bnbagent.core.multicall.multicall_read") as mock_mc:
             mock_mc.return_value = [
-                (True, raw_job),
-                (True, raw_job),
-                (True, raw_job),
+                (True, raw_jobs[0]),
+                (True, raw_jobs[1]),
+                (True, raw_jobs[2]),
             ]
             jobs = apex_client.get_jobs_batch([0, 1, 2])
 
@@ -383,9 +364,9 @@ class TestGetJobsBatch:
 
     def test_partial_failure(self, apex_client):
         raw_job = (
-            FAKE_ADDRESS, FAKE_ADDRESS, FAKE_ADDRESS,
-            "0x" + "00" * 20, 1000, 9999999999, 2,
-            b"\x00" * 32, "test",
+            0, FAKE_ADDRESS, FAKE_ADDRESS, FAKE_ADDRESS,
+            "test", 1000, 9999999999, 1,
+            "0x" + "00" * 20,
         )
 
         with patch("bnbagent.core.multicall.multicall_read") as mock_mc:

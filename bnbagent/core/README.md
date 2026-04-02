@@ -61,7 +61,7 @@ Signing priority: `wallet_provider.sign_transaction()` > `web3.eth.account.sign_
 
 | Method | Description |
 |---|---|
-| `_send_tx(fn, value=0, gas=2_000_000)` | Build, sign, and send a write transaction with retry. |
+| `_send_tx(fn, value=0, gas=2_000_000, skip_preflight=False)` | Build, sign, and send a write transaction with retry. Includes pre-flight `eth_call` simulation (surfaces revert reasons before spending gas), dynamic gas price with 20% buffer, and on-chain revert detection (`receipt.status == 0`). Pass `skip_preflight=True` when the node returns opaque `0x` reverts. |
 | `_call_with_retry(fn)` | Execute a read-only contract call with rate-limit retry. |
 
 ### `ModuleRegistry`

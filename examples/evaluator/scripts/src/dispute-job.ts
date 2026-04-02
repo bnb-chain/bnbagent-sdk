@@ -1,6 +1,6 @@
 /**
  * Dispute an APEX job's UMA assertion during the challenge period
- * Usage: JOB_ID=14 npm run dispute-apex-job
+ * Usage: JOB_ID=14 npm run dispute-job
  *
  * Prerequisites:
  * - Job must be in "Submitted" status with assertion initiated
@@ -20,15 +20,15 @@ const ERC8183_ABI = [
     outputs: [
       {
         components: [
+          { name: "id", type: "uint256" },
           { name: "client", type: "address" },
           { name: "provider", type: "address" },
           { name: "evaluator", type: "address" },
-          { name: "hook", type: "address" },
+          { name: "description", type: "string" },
           { name: "budget", type: "uint256" },
           { name: "expiredAt", type: "uint256" },
           { name: "status", type: "uint8" },
-          { name: "deliverable", type: "bytes32" },
-          { name: "description", type: "string" },
+          { name: "hook", type: "address" },
         ],
         name: "",
         type: "tuple",
@@ -147,8 +147,8 @@ const ERC20_ABI = [
 
 async function main() {
   if (JOB_ID === 0n) {
-    console.error("Usage: JOB_ID=14 npm run dispute-apex-job");
-    console.error("   or: npm run dispute-apex-job -- 14");
+    console.error("Usage: JOB_ID=14 npm run dispute-job");
+    console.error("   or: npm run dispute-job -- 14");
     process.exit(1);
   }
 
@@ -173,8 +173,11 @@ async function main() {
     args: [JOB_ID],
   });
 
-  if (job.status !== 3) {
-    console.error("❌ Job is not in Submitted status.");
+  if (job.status !== 2) {
+    const STATUS_LABELS: Record<number, string> = {
+      0: "Open", 1: "Funded", 2: "Submitted", 3: "Completed", 4: "Rejected", 5: "Expired",
+    };
+    console.error(`❌ Job is not in Submitted status (current: ${STATUS_LABELS[job.status] ?? job.status}).`);
     process.exit(1);
   }
 
@@ -221,7 +224,7 @@ async function main() {
 
   const now = Math.floor(Date.now() / 1000);
   const expirationTime = Number(assertion.expirationTime);
-  
+
   if (now >= expirationTime) {
     console.error("❌ Challenge period expired. Cannot dispute.");
     process.exit(1);
@@ -254,7 +257,7 @@ async function main() {
     });
     await publicClient.waitForTransactionReceipt({ hash: mintHash });
     console.log("✓ Minted", formatUnits(mintAmount, 18), "U");
-    
+
     balance = await publicClient.readContract({
       address: U_ADDRESS,
       abi: ERC20_ABI,

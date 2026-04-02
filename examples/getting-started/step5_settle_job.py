@@ -194,9 +194,9 @@ def main():
     print()
     print("Quickstart complete! You have successfully:")
     print("  1. Set up a wallet with testnet tokens")
-    print("  2. Registered an agent on ERC-8004")
-    print("  3. Run an APEX agent server")
-    print("  4. Created and funded a job")
+    print("  2. Run an APEX agent server")
+    print("  3. Registered the agent on ERC-8004")
+    print("  4. Discovered the agent, created and funded a job")
     print("  5. Settled the job via APEX Evaluator")
 
 
