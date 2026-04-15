@@ -488,7 +488,7 @@ class TestStartupScan:
         client.w3.eth.block_number = 50000
         client.job_counter.side_effect = Exception("multicall revert")
         client.get_job_funded_events.return_value = [
-            {"jobId": 1, "client": "0xabc", "amount": 100,
+            {"jobId": 1, "client": "0xabc", "provider": FAKE_ADDRESS, "amount": 100,
              "blockNumber": 50, "transactionHash": "0xhash"},
         ]
 

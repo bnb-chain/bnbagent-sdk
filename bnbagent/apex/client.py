@@ -149,7 +149,7 @@ class APEXClient(ContractClientMixin):
         amount: int,
         opt_params: bytes = b"",
     ) -> dict[str, Any]:
-        """Set the budget for a job. Must be called before fund()."""
+        """Set the budget for a job (client-only). Provider proposes price via /negotiate."""
         fn = self.contract.functions.setBudget(job_id, amount, opt_params)
         return self._send_tx(fn)
 
@@ -389,7 +389,7 @@ class APEXClient(ContractClientMixin):
         """
         event_filter = {}
         if provider:
-            event_filter["client"] = Web3.to_checksum_address(provider)
+            event_filter["provider"] = Web3.to_checksum_address(provider)
 
         logs = self.contract.events.JobFunded().get_logs(
             from_block=from_block,
@@ -401,6 +401,7 @@ class APEXClient(ContractClientMixin):
             {
                 "jobId": log["args"]["jobId"],
                 "client": log["args"]["client"],
+                "provider": log["args"]["provider"],
                 "amount": log["args"]["amount"],
                 "blockNumber": log["blockNumber"],
                 "transactionHash": log["transactionHash"].hex(),
