@@ -1,6 +1,6 @@
 [project]
 name = "bnbagent"
-version = "0.2.0"
+version = "0.2.1"
 description = "Modular Python SDK for on-chain AI agents on BNB Chain"
 readme = "README.md"
 requires-python = ">=3.10"
