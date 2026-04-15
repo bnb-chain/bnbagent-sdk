@@ -476,7 +476,7 @@ contract. Inherits `ContractClientMixin` for nonce management and retries.
 | `create_job(provider, evaluator, expired_at, ...)` | Create a new job. Returns job ID + tx hash. |
 | `fund(job_id, expected_budget)` | Fund a job with BEP-20 tokens. |
 | `fund_with_permit(job_id, budget, opt_params, deadline, v, r, s)` | Fund a job using ERC-2612 permit (approve + fund in one tx). |
-| `set_budget(job_id, amount)` | Adjust the job budget. |
+| `set_budget(job_id, amount)` | Set the job budget (client-only). Provider proposes price via `/negotiate`. |
 | `set_provider(job_id, provider)` | Assign a provider agent. |
 | `submit(job_id, deliverable_hash, ...)` | Submit deliverables (provider). |
 | `complete(job_id)` | Mark job as complete (requester). |

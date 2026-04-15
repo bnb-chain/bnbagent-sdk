@@ -41,7 +41,8 @@ from dotenv import load_dotenv
 from web3 import Web3
 
 # Load env from demo root directory (.env next to scripts/)
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+env_file = os.path.basename(os.environ.get("ENV_FILE", ".env"))
+load_dotenv(Path(__file__).resolve().parent.parent / env_file)
 
 # SDK imports — use public API paths (bnbagent.* and bnbagent.apex.*)
 from bnbagent import APEXClient, APEXStatus
@@ -637,7 +638,7 @@ async def main():
     # ══════════════════════════════════════════════════════════════════════
     banner(3, total_steps, f"Set Budget: {BUDGET / 10**18} U tokens")
 
-    result = apex.set_budget(job_id, BUDGET)
+    result = apex.set_budget(job_id, BUDGET)  # client-only; provider proposes via /negotiate
     print(f"  Budget set to {BUDGET / 10**18} U tokens for Job #{job_id}")
     print(tx_link(result["transactionHash"]))
     print("  Waiting for confirmation...")

@@ -23,7 +23,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load .env from project root (one level up from scripts/)
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+env_file = os.path.basename(os.environ.get("ENV_FILE", ".env"))
+load_dotenv(Path(__file__).resolve().parent.parent / env_file)
 
 
 def main():

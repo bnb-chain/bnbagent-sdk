@@ -32,7 +32,8 @@ from pydantic import BaseModel
 from ddgs import DDGS
 
 # Load .env from project root (one level up from src/)
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+env_file = os.path.basename(os.environ.get("ENV_FILE", ".env"))
+load_dotenv(Path(__file__).resolve().parent.parent / env_file)
 
 # SDK imports
 from bnbagent.apex.config import APEXConfig

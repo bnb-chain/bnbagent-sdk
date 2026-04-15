@@ -28,7 +28,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load .env from this script's directory
-load_dotenv(Path(__file__).resolve().parent / ".env")
+env_file = os.path.basename(os.environ.get("ENV_FILE", ".env"))
+load_dotenv(Path(__file__).resolve().parent / env_file)
 
 
 def main():
@@ -208,13 +209,13 @@ def main():
     # =========================================================
 
     print("-" * 50)
-    print("4d: Setting budget...")
+    print("4d: Setting budget (client sets agreed price before funding)...")
     print("-" * 50)
 
     budget = 1 * 10**18  # 1 U token
     print(f"Budget: {budget / 10**18} U")
 
-    result = apex.set_budget(job_id, budget)
+    result = apex.set_budget(job_id, budget)  # client-only
     print(f"TX: https://testnet.bscscan.com/tx/{result['transactionHash']}")
     print()
 

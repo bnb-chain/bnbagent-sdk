@@ -18,12 +18,14 @@ Next: step3_register_agent.py (in a separate terminal)
 """
 
 import logging
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 # Load .env from this script's directory
-load_dotenv(Path(__file__).resolve().parent / ".env")
+env_file = os.path.basename(os.environ.get("ENV_FILE", ".env"))
+load_dotenv(Path(__file__).resolve().parent / env_file)
 
 from bnbagent.apex.server import create_apex_app
 

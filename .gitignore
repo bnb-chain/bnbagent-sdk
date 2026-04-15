@@ -74,3 +74,6 @@ Thumbs.db
 
 .agent-data/
 .storage/
+
+.env.*
+!.env.example

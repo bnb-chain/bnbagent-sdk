@@ -32,7 +32,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load .env from getting-started directory
-load_dotenv(Path(__file__).resolve().parent / ".env")
+env_file = os.path.basename(os.environ.get("ENV_FILE", ".env"))
+load_dotenv(Path(__file__).resolve().parent / env_file)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -479,8 +480,19 @@ def step4f_verify_deliverable(job_id: int) -> None:
 # Step 5: Settle Job
 # ---------------------------------------------------------------------------
 
+def _assertion_phase(info) -> str:
+    """Derive human-readable assertion phase from AssertionInfo."""
+    if not info.initiated:
+        return "NOT_INITIATED"
+    if info.settleable:
+        return "SETTLEABLE"
+    if info.disputed:
+        return "DISPUTED (DVM arbitration)"
+    return "LIVENESS"
+
+
 def step5_settle_job(job_id: int) -> None:
-    """Wait for liveness and settle the job via evaluator."""
+    """Track assertion lifecycle and settle the job."""
     banner("Step 5", "Settle Job")
 
     from bnbagent import APEXClient, APEXStatus
@@ -493,45 +505,61 @@ def step5_settle_job(job_id: int) -> None:
         web3=w3, contract_address=EVALUATOR_ADDRESS, private_key=PRIVATE_KEY,
     )
 
-    # Check status
+    # ── Initial status ──
     job = apex.get_job(job_id)
     status = APEXStatus(job["status"])
-    logger.info(f"Job status: {status.name}")
+    logger.info(f"Job #{job_id} status: {status.name}")
 
-    if status == APEXStatus.COMPLETED:
-        logger.info("Already completed!")
+    if status in (APEXStatus.COMPLETED, APEXStatus.REJECTED):
+        logger.info(f"Job already {status.name} — nothing to do")
         logger.info("Step 5 PASSED")
         return
 
     if status != APEXStatus.SUBMITTED:
         raise StepError(f"Expected SUBMITTED, got {status.name}")
 
-    # Check assertion
+    # ── Assertion info ──
     info = evaluator.get_assertion_info(job_id)
     if not info.initiated:
         raise StepError("Assertion not initiated")
 
-    if info.disputed:
-        raise StepError("Assertion is disputed — cannot auto-settle in E2E test")
+    assertion_hex = info.assertion_id.hex()
+    logger.info(f"Assertion: {assertion_hex[:16]}...")
+    logger.info(f"Liveness ends: {time.strftime('%H:%M:%S', time.localtime(info.liveness_end))}")
+    logger.info(f"Phase: {_assertion_phase(info)}")
 
-    logger.info(f"Assertion ID: {info.assertion_id.hex()}")
-    logger.info(f"Liveness end: {time.strftime('%H:%M:%S', time.localtime(info.liveness_end))}")
+    # ── Lifecycle tracking loop ──
+    prev_phase = _assertion_phase(info)
 
-    # Wait for liveness
-    if not info.settleable:
+    while True:
+        # 1. Check job status — may have been settled externally
+        job = apex.get_job(job_id)
+        status = APEXStatus(job["status"])
+        if status in (APEXStatus.COMPLETED, APEXStatus.REJECTED):
+            logger.info(f"  → Job {status.name} (settled externally)")
+            break
+
+        # 2. Check assertion state
+        info = evaluator.get_assertion_info(job_id)
+        phase = _assertion_phase(info)
+
+        # Log phase transitions
+        if phase != prev_phase:
+            logger.info(f"  → Phase changed: {prev_phase} → {phase}")
+            prev_phase = phase
+
+        # 3. Settleable → exit loop to settle
+        if info.settleable:
+            logger.info("  → Assertion ready to settle!")
+            break
+
+        # 4. Show progress
         remaining = max(0, info.liveness_end - int(time.time()))
-        logger.info(f"Waiting for liveness period ({remaining}s remaining)...")
+        mins, secs = divmod(remaining, 60)
+        logger.info(f"  [{phase}] {mins}m{secs}s remaining...")
+        time.sleep(min(30, remaining + 5))
 
-        while True:
-            info = evaluator.get_assertion_info(job_id)
-            if info.settleable:
-                logger.info("Liveness period expired!")
-                break
-            remaining = max(0, info.liveness_end - int(time.time()))
-            logger.info(f"  {remaining}s remaining...")
-            time.sleep(min(30, remaining + 5))
-
-    # Snapshot balances before settle
+    # ── Snapshot balances ──
     from web3 import Web3 as W3
 
     token = w3.eth.contract(
@@ -546,17 +574,21 @@ def step5_settle_job(job_id: int) -> None:
     provider_before = token.functions.balanceOf(provider_addr).call()
     client_before = token.functions.balanceOf(client_addr).call()
 
-    # Settle
-    logger.info("Settling job...")
-    result = evaluator.settle_job(job_id)
-    logger.info(f"Settled! TX: {result['transactionHash'][:16]}...")
+    # ── Settle (if needed) ──
+    status = APEXStatus(job["status"])
+    if status in (APEXStatus.COMPLETED, APEXStatus.REJECTED):
+        logger.info(f"Job already {status.name} — skipping settle call")
+    else:
+        logger.info("Settling job...")
+        result = evaluator.settle_job(job_id)
+        logger.info(f"Settled! TX: {result['transactionHash'][:16]}...")
 
-    # Verify final status
+    # ── Verify final status ──
     job = apex.get_job(job_id)
     status = APEXStatus(job["status"])
     logger.info(f"Final status: {status.name}")
 
-    # Balance changes
+    # ── Balance changes ──
     provider_after = token.functions.balanceOf(provider_addr).call()
     client_after = token.functions.balanceOf(client_addr).call()
     provider_diff = (provider_after - provider_before) / (10 ** decimals)

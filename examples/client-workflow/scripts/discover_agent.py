@@ -19,7 +19,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load .env from demo root directory (.env next to scripts/)
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+env_file = os.path.basename(os.environ.get("ENV_FILE", ".env"))
+load_dotenv(Path(__file__).resolve().parent.parent / env_file)
 
 
 def discover_agents(name_filter: str = "") -> list:

@@ -208,7 +208,7 @@ class TestEventQueries:
     def test_get_job_funded_events_no_filter(self, apex_client):
         mock_log = MagicMock()
         mock_log.__getitem__ = lambda s, k: {
-            "args": {"jobId": 1, "client": FAKE_ADDRESS, "amount": 100},
+            "args": {"jobId": 1, "client": FAKE_ADDRESS, "provider": FAKE_ADDRESS, "amount": 100},
             "blockNumber": 50,
             "transactionHash": bytes.fromhex(FAKE_TX_HASH[2:]),
         }[k]
@@ -217,12 +217,15 @@ class TestEventQueries:
         events = apex_client.get_job_funded_events(from_block=0)
         assert len(events) == 1
         assert events[0]["jobId"] == 1
+        assert events[0]["provider"] == FAKE_ADDRESS
 
     def test_get_job_funded_events_with_provider_filter(self, apex_client):
         apex_client.contract.events.JobFunded.return_value.get_logs.return_value = []
         _events = apex_client.get_job_funded_events(from_block=0, provider=FAKE_ADDRESS)
         call_kwargs = apex_client.contract.events.JobFunded.return_value.get_logs.call_args
-        assert call_kwargs[1].get("argument_filters") is not None
+        filters = call_kwargs[1].get("argument_filters")
+        assert filters is not None
+        assert "provider" in filters
 
     def test_get_job_created_events(self, apex_client):
         apex_client.contract.events.JobCreated.return_value.get_logs.return_value = []

@@ -13,6 +13,18 @@ cp .env.example .env
 # Edit .env: add your PRIVATE_KEY
 ```
 
+## Environment Files
+
+Multiple environments are supported via `ENV_FILE`:
+
+| File | Environment | Usage |
+|------|-------------|-------|
+| `.env` | Default | `uv run python step4_create_job.py` |
+| `.env.qa` | QA (dev testing) | `ENV_FILE=.env.qa uv run python step4_create_job.py` |
+| `.env.testnet` | BSC Testnet | `ENV_FILE=.env.testnet uv run python step4_create_job.py` |
+
+All scripts default to `.env` if `ENV_FILE` is not set.
+
 ## Steps
 
 | Step | Script | What it does |
@@ -31,8 +43,11 @@ Run all 5 steps automatically in a single command:
 
 ```bash
 # Full flow (includes ~30min liveness wait for settlement)
-uv run python examples/getting-started/test_quickstart_e2e.py
+uv run python test_quickstart_e2e.py
 
 # Quick validation (skip settlement wait)
-uv run python examples/getting-started/test_quickstart_e2e.py --skip-settle
+uv run python test_quickstart_e2e.py --skip-settle
+
+# Run against QA environment
+ENV_FILE=.env.qa uv run python test_quickstart_e2e.py
 ```
