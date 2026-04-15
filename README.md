@@ -748,8 +748,8 @@ All contracts are deployed and operational.
 | Contract                     | Address                                      |
 | ---------------------------- | -------------------------------------------- |
 | Identity Registry (ERC-8004) | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
-| Agentic Commerce (ERC-8183)  | `0x3464e64dD53bC093c53050cE5114062765e9F1b6` |
-| APEX Evaluator (UMA OOv3)    | `0x5f4976ACBCD2968D08273bA9f4a67FA43C4A3af3` |
+| Agentic Commerce (ERC-8183)  | `0xf8b6921fea71dfca3482a4a69576198d2072d188` |
+| APEX Evaluator (UMA OOv3)    | `0xd707433ca1343759ccc127402b18cfdae3f0e10b` |
 | Payment Token (U)            | `0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565` |
 | UMA OOv3 *                   | `0xFc5bb3e475cc9264760Cf33b1e9ea7B87942C709` |
 
