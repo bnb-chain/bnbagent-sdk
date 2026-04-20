@@ -30,7 +30,7 @@ Get started with the BNBAgent SDK through these examples.
 
 | Contract | Address |
 |----------|---------|
-| ERC-8183 (Agentic Commerce) | `0x3464e64dD53bC093c53050cE5114062765e9F1b6` |
-| APEX Evaluator | `0x5f4976ACBCD2968D08273bA9f4a67FA43C4A3af3` |
+| ERC-8183 (Agentic Commerce) | `0xf8b6921fea71dfca3482a4a69576198d2072d188` |
+| APEX Evaluator | `0xd707433ca1343759ccc127402b18cfdae3f0e10b` |
 | Identity Registry (ERC-8004) | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
 | Payment Token (U) | `0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565` |

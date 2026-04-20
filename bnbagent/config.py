@@ -39,8 +39,8 @@ NETWORKS: dict[str, NetworkConfig] = {
         paymaster_url="https://bsc-megafuel-testnet.nodereal.io",
         use_paymaster=True,
         registry_contract="0x8004A818BFB912233c491871b3d84c89A494BD9e",
-        erc8183_contract="0x3464e64dD53bC093c53050cE5114062765e9F1b6",
-        apex_evaluator="0x5f4976ACBCD2968D08273bA9f4a67FA43C4A3af3",
+        erc8183_contract="0xf8b6921fea71dfca3482a4a69576198d2072d188",
+        apex_evaluator="0xd707433ca1343759ccc127402b18cfdae3f0e10b",
         payment_token="0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
     ),
     "bsc-mainnet": NetworkConfig(
@@ -214,11 +214,11 @@ class BNBAgentConfig:
                 "apex": {
                     "erc8183_address": os.getenv(
                         "ERC8183_ADDRESS",
-                        "0x3464e64dD53bC093c53050cE5114062765e9F1b6",
+                        "0xf8b6921fea71dfca3482a4a69576198d2072d188",
                     ),
                     "evaluator_address": os.getenv(
                         "APEX_EVALUATOR_ADDRESS",
-                        "0x5f4976ACBCD2968D08273bA9f4a67FA43C4A3af3",
+                        "0xd707433ca1343759ccc127402b18cfdae3f0e10b",
                     ),
                     "payment_token": os.getenv(
                         "PAYMENT_TOKEN_ADDRESS",
