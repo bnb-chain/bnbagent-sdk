@@ -1,532 +1,264 @@
-"""
-ERC-8183 (Agentic Commerce) contract interaction client.
+"""``APEXClient`` — single-entry facade over the APEX v1 contract stack.
 
-Provides typed Python methods wrapping the on-chain AgenticCommerceUpgradeable contract:
-  createJob, setBudget, fund, setProvider, submit, complete, reject, claimRefund, getJob.
+APEX v1 is a three-layer protocol:
 
-This client is intentionally **synchronous**.  web3.py's HTTPProvider performs
-blocking HTTP calls and there is no production-ready async transport.  Async
-callers (e.g. APEXJobOps) bridge via ``asyncio.to_thread()`` to avoid blocking
-the event loop.
+- ``AgenticCommerceUpgradeable`` — ERC-8183 kernel (escrow).
+- ``EvaluatorRouterUpgradeable`` — routing layer acting as ``job.evaluator``
+  and ``job.hook`` for every routed job.
+- ``OptimisticPolicy``           — UMA-style silence-approves policy with
+  a whitelisted-voter reject quorum.
+
+``APEXClient`` composes three thin sub-clients (``commerce`` / ``router`` /
+``policy``) and a minimal ERC-20 helper. Most callers only use the top-level
+methods; advanced users can reach the sub-clients via attributes.
+
+Design notes
+------------
+- Synchronous. Async callers wrap via ``asyncio.to_thread(...)``.
+- Signing is wallet-provider only — raw private keys never cross this API.
+- Network configuration goes through a single ``network`` argument that
+  accepts either a preset name (``"bsc-testnet"``) or a ``NetworkConfig``
+  object for custom deployments (local forks, private RPCs, etc.).
+- Payment token address is NOT a configuration input — it is immutable
+  on the kernel and fetched lazily via ``commerce.paymentToken()``.
+- ``fund`` uses a **floor-based** approval strategy (see
+  ``fund`` docstring). Default floor is ``100 * 10**decimals``, which
+  assumes a stablecoin payment token.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import time
-from enum import IntEnum
-from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from web3 import Web3
-from web3.contract import Contract
-
-from ..core.contract_mixin import ContractClientMixin
-
-if TYPE_CHECKING:
-    from ..wallets.wallet_provider import WalletProvider
+from ..config import NetworkConfig, resolve_network
+from ..core.abi_loader import create_web3
+from ..wallets.wallet_provider import WalletProvider
+from ._erc20 import MinimalERC20Client
+from .commerce import CommerceClient
+from .policy import PolicyClient
+from .router import RouterClient
+from .types import ZERO_ADDRESS, ZERO_REASON, Job, JobStatus, Verdict
 
 logger = logging.getLogger(__name__)
 
-# Job expiry calculation: liveness_period + 72 hours (DVM buffer)
-#
-# Components:
-#   - OOv3 liveness period: 30 min default (configurable)
-#   - DVM dispute resolution: 48-96 hours (use 72h as safe upper bound)
-#
-# Jobs can be refunded after expiry if not completed/rejected,
-# so expiry must be long enough to cover worst-case dispute scenario.
-DEFAULT_LIVENESS_SECONDS = 30 * 60  # 30 minutes (OOv3 default)
-DVM_BUFFER_SECONDS = 72 * 60 * 60  # 72 hours for DVM disputes
-DEFAULT_JOB_EXPIRY_SECONDS = DEFAULT_LIVENESS_SECONDS + DVM_BUFFER_SECONDS  # 72.5 hours
+
+# Default floor for auto-approval in ``fund``, expressed in whole token units.
+# Multiplied by ``10 ** token_decimals`` at call time.
+# Assumes a stablecoin payment token; non-stable deployments should pass
+# ``approve_floor=0`` (exact) or a custom floor.
+DEFAULT_APPROVE_FLOOR_UNITS: int = 100
 
 
-def get_default_expiry(liveness_seconds: int = DEFAULT_LIVENESS_SECONDS) -> int:
-    """
-    Get default job expiry timestamp.
+class APEXClient:
+    """High-level facade over Commerce + Router + Policy.
 
-    Formula: current_time + liveness_period + 72_hours
-
-    Args:
-        liveness_seconds: OOv3 liveness period in seconds (default: 1800 = 30 min)
-
-    Returns:
-        int: Unix timestamp for job expiry
-    """
-    return int(time.time()) + liveness_seconds + DVM_BUFFER_SECONDS
-
-
-class APEXStatus(IntEnum):
-    """ERC-8183 Job status enum."""
-
-    OPEN = 0
-    FUNDED = 1
-    SUBMITTED = 2
-    COMPLETED = 3
-    REJECTED = 4
-    EXPIRED = 5
-
-
-def _load_erc8183_abi() -> list:
-    abi_path = Path(__file__).parent / "abis" / "ERC8183.json"
-    try:
-        with open(abi_path) as f:
-            return json.load(f)
-    except FileNotFoundError:
-        raise RuntimeError(f"ABI file not found: {abi_path}") from None
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"Invalid JSON in ABI file {abi_path}: {e}") from e
-
-
-class APEXClient(ContractClientMixin):
-    """
-    Python client for the ERC-8183 (Agentic Commerce) contract.
-
-    Wraps all public functions for both client-side and provider-side (agent) operations.
+    Parameters
+    ----------
+    wallet_provider:
+        Required ``WalletProvider`` that performs all signing. Raw private
+        keys never cross this boundary — wrap them in ``EVMWalletProvider``
+        first.
+    network:
+        Either a preset name (``"bsc-testnet"`` / ``"bsc-mainnet"``) or a
+        ``NetworkConfig`` instance. Use a ``NetworkConfig`` (e.g. via
+        ``dataclasses.replace(resolve_network("bsc-testnet"), rpc_url=...)``)
+        to override RPC or contract addresses for custom deployments.
+    debug:
+        Enables extra debug logging.
     """
 
     def __init__(
         self,
-        web3: Web3,
-        contract_address: str,
-        private_key: str | None = None,
-        abi: list | None = None,
-        wallet_provider: WalletProvider | None = None,
-    ):
-        self.w3 = web3
-        self.address = Web3.to_checksum_address(contract_address)
-
-        if abi is None:
-            abi = _load_erc8183_abi()
-
-        self.contract: Contract = self.w3.eth.contract(address=self.address, abi=abi)
-        self._private_key = private_key
-        self._wallet_provider = wallet_provider
-        if wallet_provider is not None:
-            self._account = wallet_provider.address
-        else:
-            self._account = (
-                self.w3.eth.account.from_key(private_key).address if private_key else None
+        wallet_provider: WalletProvider,
+        network: str | NetworkConfig = "bsc-testnet",
+        *,
+        debug: bool = False,
+    ) -> None:
+        if wallet_provider is None:
+            raise ValueError(
+                "wallet_provider is required. Wrap your key in EVMWalletProvider "
+                "(e.g. EVMWalletProvider(password='...', private_key='0x...'))."
             )
 
-    # ── Client functions ──
+        nc = resolve_network(network)
+        for field_name in ("commerce_contract", "router_contract", "policy_contract"):
+            if not getattr(nc, field_name):
+                raise ValueError(
+                    f"network '{nc.name}' is missing {field_name}; "
+                    "pass a NetworkConfig with all three APEX addresses set."
+                )
+
+        self.debug = debug
+        self.network = nc
+        self.w3 = create_web3(nc.rpc_url)
+
+        self._wallet_provider = wallet_provider
+        self.address: str = wallet_provider.address
+
+        self.commerce = CommerceClient(self.w3, nc.commerce_contract, wallet_provider)
+        self.router = RouterClient(self.w3, nc.router_contract, wallet_provider)
+        self.policy = PolicyClient(self.w3, nc.policy_contract, wallet_provider)
+
+        # Cached payment-token state (populated lazily).
+        self._payment_token_address: str | None = None
+        self._payment_token_decimals: int | None = None
+        self._payment_token_symbol: str | None = None
+        self._erc20: MinimalERC20Client | None = None
+
+    # ------------------------------------------------------------ token cache
+
+    @property
+    def payment_token(self) -> str:
+        """Payment token address (cached). Fetched from ``commerce.paymentToken``."""
+        if self._payment_token_address is None:
+            self._payment_token_address = self.commerce.payment_token()
+        return self._payment_token_address
+
+    def _erc20_client(self) -> MinimalERC20Client:
+        if self._erc20 is None:
+            self._erc20 = MinimalERC20Client(
+                self.w3, self.payment_token, self._wallet_provider
+            )
+        return self._erc20
+
+    def token_decimals(self) -> int:
+        if self._payment_token_decimals is None:
+            self._payment_token_decimals = self._erc20_client().decimals()
+        return self._payment_token_decimals
+
+    def token_symbol(self) -> str:
+        if self._payment_token_symbol is None:
+            self._payment_token_symbol = self._erc20_client().symbol()
+        return self._payment_token_symbol
+
+    def token_balance(self, address: str | None = None) -> int:
+        return self._erc20_client().balance_of(address or self.address)
+
+    def token_allowance(self, owner: str, spender: str) -> int:
+        return self._erc20_client().allowance(owner, spender)
+
+    def approve_payment_token(self, spender: str, amount: int) -> dict[str, Any]:
+        """Send ``approve(spender, amount)`` on the payment token."""
+        return self._erc20_client().approve(spender, amount)
+
+    # ----------------------------------------------------------------- writes
 
     def create_job(
         self,
-        provider: str,
-        evaluator: str,
+        *,
+        provider: str = ZERO_ADDRESS,
         expired_at: int,
-        description: str,
-        hook: str = "0x0000000000000000000000000000000000000000",
+        description: str = "",
+        hook: str | None = None,
     ) -> dict[str, Any]:
-        """
-        Create a new job. Returns jobId from event.
+        """Create a job with the Router set as evaluator + hook.
 
-        Args:
-            provider: Provider (agent) address. Can be zero address for open jobs.
-            evaluator: Evaluator address. Can be zero address if client is evaluator.
-            expired_at: Unix timestamp when job expires.
-            description: Job description string.
-            hook: Optional hook contract address.
+        Parameters mirror ``AgenticCommerceUpgradeable.createJob`` except
+        ``evaluator`` / ``hook`` default to the Router address (the
+        v1 deployment pattern).
         """
-        fn = self.contract.functions.createJob(
-            Web3.to_checksum_address(provider),
-            Web3.to_checksum_address(evaluator),
-            expired_at,
-            description,
-            Web3.to_checksum_address(hook),
+        return self.commerce.create_job(
+            provider=provider,
+            evaluator=self.router.address,
+            expired_at=expired_at,
+            description=description,
+            hook=hook if hook is not None else self.router.address,
         )
-        result = self._send_tx(fn)
-        logs = self.contract.events.JobCreated().process_receipt(result["receipt"])
-        if logs:
-            result["jobId"] = logs[0]["args"]["jobId"]
-        return result
 
-    def set_budget(
-        self,
-        job_id: int,
-        amount: int,
-        opt_params: bytes = b"",
-    ) -> dict[str, Any]:
-        """Set the budget for a job (client-only). Provider proposes price via /negotiate."""
-        fn = self.contract.functions.setBudget(job_id, amount, opt_params)
-        return self._send_tx(fn)
+    def register_job(self, job_id: int, policy: str | None = None) -> dict[str, Any]:
+        """Bind the configured policy (or an override) to a job on the Router."""
+        return self.router.register_job(job_id, policy or self.policy.address)
+
+    def set_provider(self, job_id: int, provider: str) -> dict[str, Any]:
+        return self.commerce.set_provider(job_id, provider)
+
+    def set_budget(self, job_id: int, amount: int) -> dict[str, Any]:
+        return self.commerce.set_budget(job_id, amount)
 
     def fund(
         self,
         job_id: int,
-        expected_budget: int,
-        opt_params: bytes = b"",
+        amount: int,
+        *,
+        approve_floor: int | None = None,
     ) -> dict[str, Any]:
-        """
-        Fund a job. Caller must approve() the payment token first.
-        Transfers funds from client to contract escrow.
-        """
-        fn = self.contract.functions.fund(job_id, expected_budget, opt_params)
-        return self._send_tx(fn)
+        """Fund a job, topping up the payment-token allowance if needed.
 
-    def set_provider(
-        self,
-        job_id: int,
-        provider: str,
-        opt_params: bytes = b"",
-    ) -> dict[str, Any]:
-        """Set the provider for an open job (provider was zero address)."""
-        fn = self.contract.functions.setProvider(
-            job_id,
-            Web3.to_checksum_address(provider),
-            opt_params,
-        )
-        return self._send_tx(fn)
+        Approval strategy (gas-aware, security-first):
 
-    def complete(
-        self,
-        job_id: int,
-        reason: bytes = b"\x00" * 32,
-        opt_params: bytes = b"",
-    ) -> dict[str, Any]:
+        1. If ``allowance(client, commerce) >= amount`` → call ``fund`` only.
+        2. Otherwise approve ``max(amount, floor)`` where ``floor`` is:
+             - ``approve_floor`` if provided (``0`` = exact ``amount``).
+             - Else ``DEFAULT_APPROVE_FLOOR_UNITS * 10**decimals`` (≈100 of
+               the token, a stablecoin-friendly default).
+
+        The floor pattern saves approve transactions for streams of
+        small-budget jobs; large-budget jobs always fall back to exact
+        approve so residual allowance is bounded.
+
+        Note
+        ----
+        Callers who want full manual control should pre-approve via
+        ``apex.approve_payment_token(spender, cap)``; the allowance check
+        above will then detect the existing allowance and skip the approve.
         """
-        Complete/approve a job (evaluator only).
-        Releases payment to provider.
-        """
-        fn = self.contract.functions.complete(job_id, reason, opt_params)
-        return self._send_tx(fn)
+        current = self.token_allowance(self.address, self.commerce.address)
+        if current < amount:
+            if approve_floor is None:
+                floor = DEFAULT_APPROVE_FLOOR_UNITS * (10 ** self.token_decimals())
+            else:
+                if approve_floor < 0:
+                    raise ValueError("approve_floor must be >= 0")
+                floor = approve_floor
+            cap = max(amount, floor)
+            logger.debug(
+                "[APEXClient] topping up allowance: current=%s amount=%s cap=%s",
+                current, amount, cap,
+            )
+            self.approve_payment_token(self.commerce.address, cap)
 
-    def reject(
-        self,
-        job_id: int,
-        reason: bytes = b"\x00" * 32,
-        opt_params: bytes = b"",
-    ) -> dict[str, Any]:
-        """
-        Reject a job (client or evaluator).
-        Refunds payment to client.
-        """
-        fn = self.contract.functions.reject(job_id, reason, opt_params)
-        return self._send_tx(fn)
-
-    def claim_refund(self, job_id: int) -> dict[str, Any]:
-        """Claim refund for an expired job."""
-        fn = self.contract.functions.claimRefund(job_id)
-        return self._send_tx(fn)
-
-    def fund_with_permit(
-        self,
-        job_id: int,
-        expected_budget: int,
-        opt_params: bytes = b"",
-        deadline: int = 0,
-        v: int = 0,
-        r: bytes = b"\x00" * 32,
-        s: bytes = b"\x00" * 32,
-    ) -> dict[str, Any]:
-        """Fund a job using ERC-2612 permit (approve + fund in one tx)."""
-        fn = self.contract.functions.fundWithPermit(
-            job_id, expected_budget, opt_params, deadline, v, r, s,
-        )
-        return self._send_tx(fn)
-
-    # ── Provider (Agent) functions ──
+        return self.commerce.fund(job_id, amount)
 
     def submit(
         self,
         job_id: int,
         deliverable: bytes,
-        opt_params: bytes = b"",
+        data_url: str | None = None,
     ) -> dict[str, Any]:
-        """
-        Submit work for a funded job. Provider only.
+        """Provider submits. ``data_url`` is forwarded as ``optParams`` (UTF-8)."""
+        opt_params = data_url.encode("utf-8") if data_url else b""
+        return self.commerce.submit(job_id, deliverable, opt_params)
 
-        Args:
-            job_id: The job ID.
-            deliverable: 32-byte hash of the deliverable (e.g., IPFS CID hash).
-            opt_params: Optional parameters for hooks.
-        """
-        if len(deliverable) != 32:
-            raise ValueError("deliverable must be exactly 32 bytes")
-        fn = self.contract.functions.submit(job_id, deliverable, opt_params)
-        return self._send_tx(fn)
-
-    # ── View functions ──
-
-    def get_job(self, job_id: int) -> dict[str, Any]:
-        """Get job details by ID."""
-        raw = self._call_with_retry(self.contract.functions.getJob(job_id))
-        return {
-            "jobId": raw[0],
-            "client": raw[1],
-            "provider": raw[2],
-            "evaluator": raw[3],
-            "description": raw[4],
-            "budget": raw[5],
-            "expiredAt": raw[6],
-            "status": APEXStatus(raw[7]),
-            "hook": raw[8],
-        }
-
-    def get_jobs_batch(self, job_ids: list[int]) -> list[dict[str, Any] | None]:
-        """Batch-fetch multiple jobs via Multicall3.
-
-        Uses a single ``eth_call`` per batch (default 100) instead of one RPC
-        call per job, which is dramatically cheaper under public-node rate limits.
-
-        Args:
-            job_ids: List of job IDs to fetch.
-
-        Returns:
-            List matching input order.  Each element is a job dict (same format
-            as ``get_job()``) or ``None`` if that particular call failed.
-        """
-        if not job_ids:
-            return []
-
-        from ..core.multicall import multicall_read
-
-        raw_results = multicall_read(
-            w3=self.w3,
-            contract=self.contract,
-            function_name="getJob",
-            call_args_list=[(jid,) for jid in job_ids],
-        )
-
-        jobs: list[dict[str, Any] | None] = []
-        for idx, (success, decoded) in enumerate(raw_results):
-            if success and decoded:
-                try:
-                    raw = decoded
-                    jobs.append(
-                        {
-                            "jobId": raw[0],
-                            "client": Web3.to_checksum_address(raw[1]),
-                            "provider": Web3.to_checksum_address(raw[2]),
-                            "evaluator": Web3.to_checksum_address(raw[3]),
-                            "description": raw[4],
-                            "budget": raw[5],
-                            "expiredAt": raw[6],
-                            "status": APEXStatus(raw[7]),
-                            "hook": Web3.to_checksum_address(raw[8]),
-                        }
-                    )
-                except Exception:
-                    jobs.append(None)
-            else:
-                jobs.append(None)
-        return jobs
-
-    def payment_token(self) -> str:
-        """Get the payment token address configured in the ERC-8183 contract."""
-        return self._call_with_retry(self.contract.functions.paymentToken())
-
-    def job_counter(self) -> int:
-        """Get the current job counter (last assigned job ID, or 0 if no jobs created)."""
-        return self._call_with_retry(self.contract.functions.jobCounter())
-
-    def platform_fee_bp(self) -> int:
-        """Get the platform fee in basis points."""
-        return self._call_with_retry(self.contract.functions.platformFeeBP())
-
-    def evaluator_fee_bp(self) -> int:
-        """Get the evaluator fee in basis points."""
-        return self._call_with_retry(self.contract.functions.evaluatorFeeBP())
-
-    def platform_treasury(self) -> str:
-        """Get the platform treasury address."""
-        return self._call_with_retry(self.contract.functions.platformTreasury())
-
-    def whitelisted_hooks(self, hook: str) -> bool:
-        """Check if a hook contract is whitelisted."""
-        return self._call_with_retry(
-            self.contract.functions.whitelistedHooks(Web3.to_checksum_address(hook))
-        )
-
-    def job_has_budget(self, job_id: int) -> bool:
-        """Check if a job has a budget set."""
-        return self._call_with_retry(self.contract.functions.jobHasBudget(job_id))
-
-    # ── Admin functions ──
-
-    def set_platform_fee(self, fee_bp: int, treasury: str) -> dict[str, Any]:
-        """Set platform fee and treasury (admin only)."""
-        fn = self.contract.functions.setPlatformFee(fee_bp, Web3.to_checksum_address(treasury))
-        return self._send_tx(fn)
-
-    def set_evaluator_fee(self, fee_bp: int) -> dict[str, Any]:
-        """Set evaluator fee in basis points (admin only)."""
-        fn = self.contract.functions.setEvaluatorFee(fee_bp)
-        return self._send_tx(fn)
-
-    def set_hook_whitelist(self, hook: str, status: bool) -> dict[str, Any]:
-        """Whitelist or de-whitelist a hook contract (admin only)."""
-        fn = self.contract.functions.setHookWhitelist(Web3.to_checksum_address(hook), status)
-        return self._send_tx(fn)
-
-    def pause(self) -> dict[str, Any]:
-        """Pause the contract (admin only)."""
-        fn = self.contract.functions.pause()
-        return self._send_tx(fn)
-
-    def unpause(self) -> dict[str, Any]:
-        """Unpause the contract (admin only)."""
-        fn = self.contract.functions.unpause()
-        return self._send_tx(fn)
-
-    # ── Event helpers ──
-
-    def get_job_funded_events(
+    def cancel_open(
         self,
-        from_block: int,
-        to_block: str = "latest",
-        provider: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """
-        Get JobFunded events, optionally filtered by provider.
+        job_id: int,
+        reason: bytes = ZERO_REASON,
+    ) -> dict[str, Any]:
+        """Client cancels a job still in Open state (no escrow moved)."""
+        return self.commerce.reject(job_id, reason)
 
-        This is useful for agents to discover jobs assigned to them.
+    def claim_refund(self, job_id: int) -> dict[str, Any]:
+        return self.commerce.claim_refund(job_id)
 
-        Note: from_block is required - caller should calculate appropriate range
-        to avoid exceeding RPC block range limits (e.g., BSC: 50000 blocks).
-        """
-        event_filter = {}
-        if provider:
-            event_filter["provider"] = Web3.to_checksum_address(provider)
+    def settle(self, job_id: int, evidence: bytes = b"") -> dict[str, Any]:
+        """Permissionless: pull the policy verdict and apply it on-chain."""
+        return self.router.settle(job_id, evidence)
 
-        logs = self.contract.events.JobFunded().get_logs(
-            from_block=from_block,
-            to_block=to_block,
-            argument_filters=event_filter if event_filter else None,
-        )
+    def dispute(self, job_id: int) -> dict[str, Any]:
+        return self.policy.dispute(job_id)
 
-        return [
-            {
-                "jobId": log["args"]["jobId"],
-                "client": log["args"]["client"],
-                "provider": log["args"]["provider"],
-                "amount": log["args"]["amount"],
-                "blockNumber": log["blockNumber"],
-                "transactionHash": log["transactionHash"].hex(),
-            }
-            for log in logs
-        ]
+    def vote_reject(self, job_id: int) -> dict[str, Any]:
+        return self.policy.vote_reject(job_id)
 
-    def get_job_created_events(
-        self,
-        from_block: int,
-        to_block: str = "latest",
-    ) -> list[dict[str, Any]]:
-        """
-        Get JobCreated events.
+    # ------------------------------------------------------------------ views
 
-        Note: from_block is required - caller should calculate appropriate range
-        to avoid exceeding RPC block range limits (e.g., BSC: 50000 blocks).
-        """
-        logs = self.contract.events.JobCreated().get_logs(
-            from_block=from_block,
-            to_block=to_block,
-        )
+    def get_job(self, job_id: int) -> Job:
+        return self.commerce.get_job(job_id)
 
-        return [
-            {
-                "jobId": log["args"]["jobId"],
-                "client": log["args"]["client"],
-                "provider": log["args"]["provider"],
-                "evaluator": log["args"]["evaluator"],
-                "expiredAt": log["args"]["expiredAt"],
-                "blockNumber": log["blockNumber"],
-                "transactionHash": log["transactionHash"].hex(),
-            }
-            for log in logs
-        ]
+    def get_job_status(self, job_id: int) -> JobStatus:
+        return self.commerce.get_job(job_id).status
 
-    def get_submit_data_url(self, job_id: int) -> str | None:
-        """Recover the data URL from a submit transaction's calldata.
-
-        Queries the JobSubmitted event (indexed by jobId) to find the tx hash,
-        then decodes ``optParams`` from the transaction input. This is the only
-        way to recover the IPFS/storage URL after a process restart, since the
-        URL is not stored on-chain (only its keccak256 hash is).
-
-        Args:
-            job_id: The job ID.
-
-        Returns:
-            The data URL string, or None if not found or not decodable.
-        """
-        # Use a bounded block range to avoid BSC RPC -32005 "limit exceeded"
-        # errors. 50,000 blocks ≈ 42 hours on BSC (3s blocks), which covers
-        # typical job lifecycles. Falls back to 0 if block_number fails.
-        try:
-            current_block = self.w3.eth.block_number
-            from_block = max(0, current_block - 50_000)
-        except Exception:
-            from_block = 0
-
-        logs = self.contract.events.JobSubmitted().get_logs(
-            from_block=from_block,
-            to_block="latest",
-            argument_filters={"jobId": job_id},
-        )
-        if not logs:
-            return None
-
-        tx_hash = logs[0]["transactionHash"]
-        tx = self.w3.eth.get_transaction(tx_hash)
-
-        try:
-            _, params = self.contract.decode_function_input(tx.input)
-        except (ValueError, KeyError) as e:
-            logger.warning(f"[APEXClient] Failed to decode submit tx for job {job_id}: {e}")
-            return None
-
-        opt_params: bytes = params.get("optParams", b"")
-        if not opt_params:
-            return None
-
-        try:
-            return opt_params.decode("utf-8")
-        except UnicodeDecodeError:
-            logger.warning(f"[APEXClient] optParams for job {job_id} is not valid UTF-8")
-            return None
-
-    def get_budget_set_events(
-        self,
-        job_id: int | None = None,
-        from_block: int = 0,
-        to_block: str = "latest",
-    ) -> list[dict[str, Any]]:
-        """
-        Get BudgetSet events for tracking negotiation history.
-
-        This is useful for tracking budget changes during negotiation phase.
-        Both client and provider can call setBudget() while job is in Open status.
-
-        Args:
-            job_id: Optional job ID to filter events (indexed, so RPC can handle broader range)
-            from_block: Starting block number (when job_id is provided, 0 is usually OK)
-            to_block: Ending block number or "latest"
-
-        Returns:
-            List of BudgetSet events with jobId, amount, blockNumber, transactionHash
-
-        Note: When job_id is None, caller should limit from_block to avoid exceeding
-        RPC block range limits (e.g., BSC: 50000 blocks).
-        """
-        event_filter = {}
-        if job_id is not None:
-            event_filter["jobId"] = job_id
-
-        logs = self.contract.events.BudgetSet().get_logs(
-            from_block=from_block,
-            to_block=to_block,
-            argument_filters=event_filter if event_filter else None,
-        )
-
-        return [
-            {
-                "jobId": log["args"]["jobId"],
-                "amount": log["args"]["amount"],
-                "blockNumber": log["blockNumber"],
-                "transactionHash": log["transactionHash"].hex(),
-            }
-            for log in logs
-        ]
+    def get_verdict(self, job_id: int, evidence: bytes = b"") -> tuple[Verdict, bytes]:
+        """Simulate the verdict the Router would see right now."""
+        return self.policy.check(job_id, evidence)

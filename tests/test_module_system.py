@@ -276,5 +276,6 @@ class TestBuiltinModules:
         assert info.name == "apex"
         assert "erc8004" in info.dependencies
         config = mod.default_config()
-        assert "erc8183_contract" in config
-        assert "apex_evaluator" in config
+        assert "commerce_contract" in config
+        assert "router_contract" in config
+        assert "policy_contract" in config

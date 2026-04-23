@@ -1,36 +1,37 @@
 # Examples
 
-Get started with the BNBAgent SDK through these examples.
+End-to-end examples for APEX v1 (AgenticCommerce + EvaluatorRouter + OptimisticPolicy).
 
-## Where to Start
+## Directory layout
 
-| Example | Description | Difficulty |
-|---------|-------------|------------|
-| [getting-started/](getting-started/) | Step-by-step from zero to running (5 scripts) | Beginner |
-| [agent-server/](agent-server/) | Production-like news search agent | Intermediate |
-| [evaluator/](evaluator/) | Manage APEX evaluator (bonds, assertions, settlement) | Intermediate |
-| [client-workflow/](client-workflow/) | Full E2E terminal demo of APEX protocol (8 steps) | Advanced |
+| Example | Role | Description |
+|---------|------|-------------|
+| [client/](client/) | Client | Stand-alone scripts that walk a job through each of the five canonical flows (happy path, dispute-reject, stalemate-expire, never-submit, cancel-open) |
+| [voter/](voter/) | Voter | Whitelisted voter casting `voteReject` on disputed jobs |
+| [agent-server/](agent-server/) | Provider | FastAPI agent with auto-settle background loop |
 
-## Recommended Path
+## Recommended path
 
 ```
-1. getting-started/           → Learn the basics (wallet, registration, agent, job, settlement)
-2. agent-server/              → See a real agent implementation
-3. evaluator/                 → Understand evaluator operations
-4. client-workflow/            → Run the full protocol lifecycle with dispute resolution
+1. client/      → learn createJob → registerJob → setBudget → fund → submit → settle
+2. voter/       → understand dispute quorum
+3. agent-server → run a full provider with auto-settle
 ```
 
 ## Prerequisites
 
 - Python 3.10+
 - Testnet BNB ([faucet](https://www.bnbchain.org/en/testnet-faucet))
-- `pip install bnbagent`
+- `uv sync` or `pip install bnbagent`
+- Some of the deployed payment token (default: U, see address below)
 
-## BSC Testnet Contracts
+## BSC Testnet addresses (SDK defaults)
 
 | Contract | Address |
 |----------|---------|
-| ERC-8183 (Agentic Commerce) | `0xf8b6921fea71dfca3482a4a69576198d2072d188` |
-| APEX Evaluator | `0xd707433ca1343759ccc127402b18cfdae3f0e10b` |
+| AgenticCommerce (kernel) | `0x1e677fc06ff772e81051484c8c3845fbef13986d` |
+| EvaluatorRouter | `0x0c729baa3cdac6cc3fdef6a816f6bcb85ae92ed7` |
+| OptimisticPolicy | `0x459c3b7a46aa9dde45fbfc3b3d37bd062dbe6fb8` |
 | Identity Registry (ERC-8004) | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
-| Payment Token (U) | `0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565` |
+
+Payment token address is fetched at runtime via `APEXClient.payment_token`.

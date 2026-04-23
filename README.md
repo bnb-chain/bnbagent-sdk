@@ -2,14 +2,14 @@
 
 > **⚠️ This project is under active development. Currently only BSC Testnet is supported. Do not use in production.**
 
-Python SDK for building on-chain AI agents on BNB Chain — register identities, accept jobs, evaluate results, settle disputes, and get paid automatically.
+Python SDK for building on-chain AI agents on BNB Chain — register identities, negotiate, accept jobs, deliver work, and get paid trustlessly through on-chain escrow.
 
 BNBAgent SDK provides two core capabilities:
 
 - **ERC-8004 (Agent Identity)** — Register your AI agent on-chain with a unique identity token, manage wallets, and make your agent discoverable. Registration is gas-free on BSC Testnet via MegaFuel paymaster sponsorship.
-- **APEX (Agent Payment Exchange Protocol)** — A trustless commerce layer where agents negotiate pricing, accept jobs, deliver work, evaluate results, settle disputes, and receive payment through smart contract escrow with UMA optimistic oracle verification.
+- **APEX Protocol v1 (Agent Payment Exchange)** — A three-layer agentic commerce stack (AgenticCommerce kernel + EvaluatorRouter + OptimisticPolicy) where agents negotiate pricing, accept jobs, deliver work, and settle payment automatically. Uses optimistic settlement: silence past the dispute window is implicit approval, and clients can dispute within the window to trigger a whitelisted-voter quorum reject.
 
-> **Relationship between ERC-8004 and APEX**: These two capabilities are independent. APEX does not require ERC-8004 registration — any wallet address can be a provider. ERC-8004 is recommended for agent discovery (clients can find your agent on-chain), but it is not a prerequisite for accepting and completing APEX jobs.
+> **Relationship between ERC-8004 and APEX**: These two capabilities are independent. APEX does not require ERC-8004 registration — any wallet address can be a provider. ERC-8004 is recommended for agent discovery, but it is not a prerequisite for accepting and completing APEX jobs.
 
 ## Installation
 
@@ -19,7 +19,7 @@ Install from [PyPI](https://pypi.org/project/bnbagent/):
 pip install bnbagent
 ```
 
-The base package includes ERC-8004 identity registration and APEX client. Install optional extras for additional features:
+The base package includes ERC-8004 identity registration and the APEX client stack. Install optional extras for additional features:
 
 ```bash
 # APEX server components (FastAPI + Uvicorn)
@@ -38,18 +38,9 @@ pip install "bnbagent[server,ipfs]"
 - [What is APEX?](#what-is-apex)
 - [Quick Start: Register an Agent (ERC-8004)](#quick-start-register-an-agent-erc-8004)
 - [Quick Start: Run an APEX Agent Server](#quick-start-run-an-apex-agent-server)
-  - [Option 1: Standalone App (`create_apex_app`)](#option-1-standalone-app-create_apex_app)
-  - [Option 2: Mount on Existing App (sub-app)](#option-2-mount-on-existing-app-sub-app)
-  - [Endpoints](#endpoints)
-  - [`on_job` Callback Reference](#on_job-callback-reference)
-  - [Customize with APEXConfig](#customize-with-apexconfig)
+- [Quick Start: Use `APEXClient` from a Client](#quick-start-use-apexclient-from-a-client)
 - [Configuration Reference](#configuration-reference)
 - [Architecture & Components](#architecture--components)
-  - [Wallet Providers](#wallet-providers)
-  - [Storage Providers](#storage-providers)
-  - [Job Execution](#job-execution)
-  - [Pricing & Budget Validation](#pricing--budget-validation)
-  - [Module System](#module-system)
 - [Network & Contracts](#network--contracts)
 - [Examples](#examples)
 - [Security](#security)
@@ -60,129 +51,96 @@ pip install "bnbagent[server,ipfs]"
 
 ## What is ERC-8004?
 
-[ERC-8004](https://eips.ethereum.org/EIPS/eip-8004) is a standard for registering AI agent identities on-chain. Think of it as a decentralized phone book for AI agents — each agent gets:
+[ERC-8004](https://eips.ethereum.org/EIPS/eip-8004) is a standard for registering AI agent identities on-chain. Each agent gets:
 
 - **An on-chain identity token** — A unique `agentId` (ERC-721) minted to your wallet address
-- **A discoverable profile** — Name, description, and protocol endpoints (e.g. A2A agent card URL) stored as a URI
+- **A discoverable profile** — Name, description, and protocol endpoints stored as a URI
 - **Metadata** — Arbitrary key-value pairs attached to your agent record
-
-Other agents and clients can query the registry to discover your agent and learn how to interact with it.
 
 **Gas-free registration**: On BSC Testnet, registration transactions are sponsored by [MegaFuel paymaster](https://docs.nodereal.io/docs/megafuel) — you don't need tBNB for gas.
 
 ## What is APEX?
 
-**APEX (Agent Payment Exchange Protocol)** is a trustless commerce protocol for AI agents. It combines three components:
+**APEX (Agent Payment Exchange Protocol) v1** is a trustless commerce stack for AI agents built around [ERC-8183](https://eips.ethereum.org/EIPS/eip-8183) with a pluggable, UMA-style optimistic evaluator. Two agents — a **client** who pays and a **provider** who delivers — transact through three contracts:
 
-- **[ERC-8183](https://eips.ethereum.org/EIPS/eip-8183) (Agentic Commerce)** — On-chain smart contract for job lifecycle and payment escrow
-- **APEX Evaluator ([UMA OOv3](https://docs.uma.xyz/))** — On-chain evaluation and dispute resolution
-- **Negotiation** — Off-chain HTTP protocol for price and terms agreement
-
-Together, they enable agents to negotiate pricing, accept jobs, deliver work, and receive payment — with trustless escrow and on-chain dispute resolution.
+1. **AgenticCommerce** — the ERC-8183 kernel. Owns job state and escrow.
+2. **EvaluatorRouter** — the routing layer. Binds each job to a policy; doubles as `job.evaluator` and `job.hook`. `settle(jobId)` is permissionless and pulls the verdict.
+3. **OptimisticPolicy** — the reference policy. **Silence past the dispute window is implicit approval.** A client-raised dispute triggers a whitelisted-voter quorum: enough `voteReject` calls flip the verdict to REJECT.
 
 ### Key Concepts
 
-
-| Term                | What it means                                                                                                                                                                                                                                             |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Job**             | A unit of work between a client and an agent, tracked on-chain with a unique `jobId`                                                                                                                                                                      |
-| **Client**          | The party that creates and funds a job                                                                                                                                                                                                                    |
-| **Provider**        | The agent that performs the work and submits a deliverable                                                                                                                                                                                                |
-| **Escrow**          | Payment tokens locked in the ERC-8183 contract until the job is settled                                                                                                                                                                                   |
-| **Negotiation**     | Off-chain HTTP exchange where client and agent agree on price, terms, and deliverables. The agreed price is then used to set the on-chain budget. Negotiation hashes are anchored on-chain to prevent post-hoc tampering.                                 |
-| **Service Price**   | The agent's asking price for a job, configured via `SERVICE_PRICE` env var or `APEXConfig.service_price`. Returned in negotiation responses and `/status`.                                                                                                |
-| **Budget**          | The agreed price set by the client via `setBudget()` and locked in escrow via `fund()`. The SDK automatically rejects jobs where `budget < service_price`.                                                                                                |
-| **Deliverable**     | The work output, stored off-chain (IPFS); only the content hash goes on-chain                                                                                                                                                                             |
-| **Evaluator**       | A contract that verifies deliverables and triggers settlement (currently UMA OOv3)                                                                                                                                                                        |
-| **Assertion**       | An on-chain claim by the evaluator that the deliverable is valid, initiated by the provider after submitting work (provider pays the UMA bond)                                                                                                            |
-| **Bond**            | A deposit the provider stakes when initiating an assertion. Returned on clean resolution; forfeited if a dispute rules against the provider. The provider pays the bond directly (provider-pays-bond model).                                               |
-| **Liveness period** | A 30-minute challenge window after assertion where anyone can dispute by posting a counter-bond                                                                                                                                                            |
-| **Dispute (DVM)**   | If disputed during liveness, UMA's [Data Verification Mechanism (DVM)](https://docs.uma.xyz/protocol-overview/how-does-umas-oracle-work#disputes) resolves the dispute via token-holder vote (~48-72 hours). DVM can rule for or against the deliverable. |
-| **Settlement**      | After the liveness period passes without dispute (or after DVM resolution), `settle_job()` releases payment to the agent or refunds the client                                                                                                            |
-| **Platform Fee**    | A fee (in basis points) deducted from the budget on `complete()` and sent to the platform treasury. Configured by the contract admin via `setPlatformFee()`.                                                                                              |
-| **Evaluator Fee**   | A fee (in basis points) deducted from the budget on `complete()` and sent to the evaluator contract. Configured by the contract admin via `setEvaluatorFee()`.                                                                                            |
-| **Permit**          | ERC-2612 permit allows funding a job in a single transaction (`fundWithPermit()`) instead of separate `approve()` + `fund()` calls.                                                                                                                       |
-
+| Term | What it means |
+|------|---------------|
+| **Job** | A unit of work between a client and a provider, tracked on-chain with a unique `jobId`. |
+| **Client** | The party that creates and funds a job. |
+| **Provider** | The agent that performs the work and submits a deliverable. |
+| **Escrow** | Payment tokens locked in the Commerce kernel on `fund`, released to provider on `complete` or refunded on `reject` / `claimRefund`. |
+| **Negotiation** | Off-chain HTTP exchange where client and provider agree on price / terms / deliverables. The agreed description is anchored on-chain. |
+| **Service Price** | The provider's minimum acceptable budget. Configured via `APEX_SERVICE_PRICE`. |
+| **Budget** | The amount the client sets via `setBudget` and then escrows via `fund`. |
+| **Deliverable** | The work output. Stored off-chain (IPFS); only the keccak256 hash goes on-chain. |
+| **Policy** | A contract implementing `IPolicy` that produces a verdict for a given job. `OptimisticPolicy` is the only v1 policy. |
+| **Dispute Window** | The grace period after `submit` during which the client can call `policy.dispute(jobId)`. Silence = approve. |
+| **Quorum** | Number of `voteReject` calls from whitelisted voters required to flip the verdict to REJECT. |
+| **Settle** | `router.settle(jobId)` is permissionless: anyone can apply the current policy verdict to the kernel. The provider's SDK runs this automatically via an auto-settle loop. |
+| **Platform Fee** | Basis points deducted from the budget on `complete` and sent to the platform treasury. |
+| **Expiry Refund** | `claimRefund(jobId)` after `expiredAt`. Non-pausable, non-hookable — the universal escape hatch. |
 
 ### How APEX Works
 
 ```
-Client                        Contract (ERC-8183)             Agent (Provider)          Evaluator (UMA OOv3)
-  │                               │                               │                         │
-  │  1. negotiate() ──────────────┼───────────────────────────►   │                         │
-  │     (agree on price & terms;  │                               │                         │
-  │      structured description   │                               │                         │
-  │      with negotiation_hash    │                               │                         │
-  │      + provider_sig)          │                               │                         │
-  │                               │                               │                         │
-  │  2. create_job() ────────►    │  (description = structured    │                         │
-  │     (or fundWithPermit)       │   JSON with hash + sig)       │                         │
-  │  3. set_budget(price) ───►    │  (use negotiated price)       │                         │
-  │  4. fund() ──────────────►    │  (tokens locked in escrow)    │                         │
-  │                               │  ─── status: FUNDED ─────►    │                         │
-  │                               │                               │  4b. verify: budget ≥    │
-  │                               │                               │      service_price?      │
-  │                               │                               │                         │
-  │  5. POST /job/execute ────────┼───────────────────────────►   │                         │
-  │     (trigger execution)       │                               │  5b. verify + execute    │
-  │                               │                               │      on_job callback     │
-  │  ◄── 200 + result (fast) ─────┼───────────────────────────────│                         │
-  │  OR  202 Accepted (slow) ─────┼───────────────────────────────│                         │
-  │    → GET /job/{id}/response   │                               │                         │
-  │                               │                               │                         │
-  │                               │                     submit()  │                         │
-  │                               │  ◄────────────────────────────│                         │
-  │                               │  ─── afterAction hook ───────────────────────────────►  │
-  │                               │                               │                         │
-  │                               │                               │  6a. approve(bond)       │
-  │                               │                               │  6b. initiateAssertion() │
-  │                               │                               │      (provider pays bond)│
-  │                               │                               │                         │
-  │                               │                               │  7. Liveness (30 min)    │
-  │                               │                               │     Anyone can dispute   │
-  │                               │                               │                         │
-  │  No dispute:                  │                               │                         │
-  │                               │  ◄── settle_job() ───────────────────────────────────── │
-  │                               │  ─── payment to agent ───►    │  8. COMPLETED            │
-  │                               │  (minus platform + evaluator  │     (bond returned)      │
-  │                               │   fees if configured)         │                         │
-  │                               │                               │                         │
-  │  If disputed:                 │                               │                         │
-  │     UMA DVM vote (~48-72h)    │                               │                         │
-  │     ├─ DVM rules FOR  ───►    │  ─── payment to agent ───►    │     COMPLETED            │
-  │     └─ DVM rules AGAINST ─►   │  ─── refund to client         │     REJECTED             │
+Client                          Contracts                              Provider (your agent)
+  │                                │                                        │
+  │  1. negotiate() ────────────────────────────────────────────────────►   │
+  │                                │                                        │
+  │  2. createJob(provider, router, expiredAt, desc, router) ──►           │
+  │     ──────────────────────────► Commerce          status = OPEN         │
+  │                                │                                        │
+  │  3. registerJob(jobId, policy) ──► Router                               │
+  │                                │                                        │
+  │  4. setBudget(jobId, amount) ──► Commerce                               │
+  │  5. approve(commerce, amount) + fund(jobId, amount) ──► Commerce        │
+  │                                │                 status = FUNDED        │
+  │                                │                                        │
+  │                                │    submit(jobId, deliverable) ◄────    │
+  │                                │                 status = SUBMITTED     │
+  │                                │                                        │
+  │  (optional during dispute window)                                       │
+  │     dispute(jobId) ──► Policy                                           │
+  │                                │                                        │
+  │                                │       voteReject(jobId) ◄── voters     │
+  │                                │                                        │
+  │  settle(jobId) — permissionless, provider auto-settles:                 │
+  │     ──► Router pulls Policy.check(jobId)                                │
+  │         ├─ verdict = APPROVE ──► Commerce.complete  status = COMPLETED  │
+  │         └─ verdict = REJECT  ──► Commerce.reject    status = REJECTED   │
+  │                                │                                        │
+  │  No verdict ever reached? claimRefund(jobId) past expiredAt:            │
+  │                                │                 status = EXPIRED       │
 ```
 
 ### Job Lifecycle
 
 ```
-                                            ┌──────────────────────────┐
-                                            │        EVALUATION         │
-                                            │ assertion + liveness 30m  │
-                                            └─────┬──────────┬─────────┘
-                                                  │          │
-OPEN ──► FUNDED ──► SUBMITTED ──► [evaluate] ─────┤          ├──► COMPLETED (agent paid)
-  │         │                                     │   (no dispute, liveness passes)
-  │         │                                     │
-  │         │                              (disputed → DVM ~48-72h)
-  │         │                                     │
-  │         │                                     ├──► COMPLETED (agent paid)    [DVM rules FOR]
-  │         │                                     └──► REJECTED  (client refunded) [DVM rules AGAINST]
+OPEN ──► FUNDED ──► SUBMITTED ──┬──► (silence past window) ──► APPROVE ──► COMPLETED
+  │         │                   │
+  │         │                   ├──► dispute + quorum reject ──► REJECT ──► REJECTED
+  │         │                   │
+  │         │                   └──► no quorum + expiredAt passed ────────► EXPIRED (claimRefund)
   │         │
-  │         └── (expired) ──► EXPIRED (client can claim refund)
-  └── (not funded) ──► remains OPEN
+  │         └── expiredAt passed ──────────────────────────────────────────► EXPIRED (claimRefund)
+  │
+  └── client reject() (before funding) ─────────────────────────────────────► REJECTED
 ```
 
-
-| Status      | Description                                                                                                     |
-| ----------- | --------------------------------------------------------------------------------------------------------------- |
-| `OPEN`      | Job created on-chain, budget not yet funded                                                                     |
-| `FUNDED`    | Payment tokens locked in escrow, agent can start working                                                        |
-| `SUBMITTED` | Agent submitted a deliverable hash; evaluator automatically initiates an assertion                              |
-| `COMPLETED` | Assertion passed liveness without dispute, or DVM ruled in favor of the deliverable — payment released to agent |
-| `REJECTED`  | Assertion disputed and DVM ruled against the deliverable — client refunded                                      |
-| `EXPIRED`   | Past deadline without resolution — client can reclaim escrowed funds                                            |
-
+| Status | Description |
+|--------|-------------|
+| `OPEN` | Created on-chain; no budget escrowed yet. |
+| `FUNDED` | Escrow deposited; provider can work. |
+| `SUBMITTED` | Provider submitted a deliverable hash; waiting for verdict. |
+| `COMPLETED` | Policy verdict = APPROVE. Payment released to provider (minus fees). |
+| `REJECTED` | Either client cancelled while OPEN, or policy verdict = REJECT. Client refunded. |
+| `EXPIRED` | Past `expiredAt` with no settlement. Client reclaims via `claimRefund`. |
 
 ---
 
@@ -195,8 +153,6 @@ Register your AI agent on-chain with a unique identity. This is a one-time setup
 - Python 3.10+
 - A private key (generate one or use an existing wallet)
 
-### Step 1: Create a Wallet and Register
-
 ```python
 import os
 from dotenv import load_dotenv
@@ -204,123 +160,70 @@ from bnbagent import ERC8004Agent, AgentEndpoint, EVMWalletProvider
 
 load_dotenv()
 
-# First run: imports key and encrypts to ~/.bnbagent/wallets/<address>.json
-# After that: loads from keystore — PRIVATE_KEY can be removed from .env
 wallet = EVMWalletProvider(
     password=os.getenv("WALLET_PASSWORD"),
     private_key=os.getenv("PRIVATE_KEY"),  # only needed on first run
 )
 
-# Initialize the ERC-8004 SDK
 sdk = ERC8004Agent(network="bsc-testnet", wallet_provider=wallet)
 
-# Define your agent's profile
 agent_uri = sdk.generate_agent_uri(
     name="my-ai-agent",
     description="AI agent for document processing",
     endpoints=[
         AgentEndpoint(
-            name="A2A",
-            endpoint="https://my-agent.example.com/.well-known/agent-card.json",
-            version="0.3.0",
+            name="APEX",
+            endpoint="https://my-agent.example.com/apex/status",
+            version="0.1.0",
         ),
     ],
 )
 
-# Register on-chain (gas-free on testnet via MegaFuel paymaster)
 result = sdk.register_agent(agent_uri=agent_uri)
 print(f"Agent registered! ID: {result['agentId']}, TX: {result['transactionHash']}")
 ```
-
-```bash
-# .env — PRIVATE_KEY only needed on first run (encrypted afterward)
-WALLET_PASSWORD=your-secure-password
-PRIVATE_KEY=0x...
-```
-
-### Step 2: Discover Other Agents
-
-```python
-# Look up an agent by ID
-agent_info = sdk.get_agent_info(agent_id=1)·
-print(agent_info)
-
-# List all registered agents
-result = sdk.get_all_agents()
-for agent in result["items"]:
-    print(f"Agent #{agent['token_id']}: {agent.get('name', 'unnamed')}")
-```
-
-That's it — your agent now has an on-chain identity that other agents and clients can discover.
 
 ---
 
 ## Quick Start: Run an APEX Agent Server
 
-Set up an agent server that accepts jobs, processes work, and gets paid. [Registering via ERC-8004](#quick-start-register-an-agent-erc-8004) first is recommended so clients can discover your agent, but it is not required — any wallet address can serve as a provider.
-
-The SDK offers two integration patterns:
-
-
-| Approach                                                        | What it does                                                | Best for                               |
-| --------------------------------------------------------------- | ----------------------------------------------------------- | -------------------------------------- |
-| `[create_apex_app()](#option-1-standalone-app-create_apex_app)` | Creates a complete FastAPI app with everything wired        | New agents, standalone services        |
-| [Sub-app mount](#option-2-mount-on-existing-app-sub-app)        | Mount a `create_apex_app()` instance onto your existing app | Adding APEX to an existing FastAPI app |
-
+Set up an agent server that accepts jobs, processes work, and gets paid.
 
 ### Prerequisites
 
 - `pip install "bnbagent[server,ipfs]"`
-- A `.env` file with your credentials
+- A `.env` file with your credentials (see [`examples/agent-server/.env.example`](examples/agent-server/.env.example))
 
 ### Option 1: Standalone App (`create_apex_app`)
-
-The simplest way to run an APEX agent — one function call gives you a complete, production-ready server:
 
 ```python
 # agent.py
 from bnbagent.apex.server import create_apex_app
 
 def execute_job(job: dict) -> str:
-    """Called automatically for each funded job. Return a result string."""
-    description = job.get("description", "")
-    return f"Processed: {description}"
+    """Called automatically for each FUNDED job. Return the deliverable string."""
+    return f"Processed: {job['description']}"
 
 app = create_apex_app(on_job=execute_job)
-# Routes at /submit, /status, /health, /job/execute, etc.
+# Routes at /apex/submit, /apex/status, /apex/job/{id}/settle, /apex/job/execute, etc.
 ```
 
 ```bash
 # .env
-PRIVATE_KEY=0x...
 WALLET_PASSWORD=your-secure-password
+PRIVATE_KEY=0x...                 # first run only; encrypted to ~/.bnbagent/wallets/
 STORAGE_PROVIDER=ipfs
 STORAGE_API_KEY=your-pinning-service-jwt
+APEX_SERVICE_PRICE=1000000000000000000 # 1 token (18 decimals)
 ```
 
 ```bash
-# Run the server
-uvicorn agent:app --port 8000
+uvicorn agent:app --port 8003
 ```
 
-That's it. `create_apex_app(on_job=...)` handles everything internally: wallet creation, startup scan for pending jobs, on-chain verification, calling your handler, and submitting the result. Jobs with budget below the configured `service_price` are automatically skipped.
-
-> **What `create_apex_app()` sets up for you:**
->
-> - **Wallet management** — auto-creates or loads an encrypted keystore (Keystore V3)
-> - **Startup scan** — on boot, batch-scans all on-chain jobs via Multicall3 and auto-processes any funded jobs assigned to you
-> - **`POST /job/execute`** — client-triggered execution with configurable timeout: returns 200 with full result (fast jobs) or 202 Accepted (background processing)
-> - **`POST /negotiate`** — off-chain price negotiation with on-chain hash anchoring
-> - **`POST /submit`** — verifies job on-chain, uploads deliverable to IPFS, submits content hash on-chain (auto-triggers evaluator assertion)
-> - **`GET /job/{id}/response`** — clients fetch completed deliverables
-> - **`GET /status`** — exposes service price and agent info so clients know the minimum budget
-> - **Budget protection** — automatically rejects underpaid jobs where `budget < service_price`
-
-> **Wallet lifecycle**: `PRIVATE_KEY` is only needed on the first run — it gets encrypted to `~/.bnbagent/wallets/<address>.json` (Keystore V3) and cleared from memory immediately. On subsequent runs, only `WALLET_PASSWORD` is needed. See [Wallet Providers](#wallet-providers) for details.
+`create_apex_app()` handles: wallet keystore, startup scan for pending funded jobs, on-chain verification, calling your handler, uploading the deliverable to storage, submitting on-chain, and **auto-settling** the provider's own submissions via the permissionless `router.settle` once the dispute window elapses. Jobs with `budget < service_price` are rejected with HTTP 402.
 
 ### Option 2: Mount on Existing App (sub-app)
-
-If you already have a FastAPI app, create an APEX app and mount it as a sub-application:
 
 ```python
 from contextlib import asynccontextmanager
@@ -330,492 +233,210 @@ from bnbagent.apex.server import create_apex_app
 def execute_job(job: dict) -> str:
     return f"Processed: {job['description']}"
 
-apex_app = create_apex_app(on_job=execute_job)
+apex_app = create_apex_app(on_job=execute_job, prefix="")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await apex_app.state.startup()  # trigger startup scan for pending jobs
+    await apex_app.state.startup()
     yield
 
 app = FastAPI(lifespan=lifespan)
 app.mount("/apex", apex_app)
-# APEX routes at /apex/submit, /apex/status, /apex/health, /apex/job/execute, etc.
-# Your own routes on app work alongside.
 ```
 
-> **Note**: Starlette does not propagate lifespan events to mounted sub-apps. You must call `apex_app.state.startup()` explicitly in your parent app's lifespan to enable the startup scan.
-
-`**create_apex_app()` parameters:**
-
-
-| Parameter        | Default                      | Description                                           |
-| ---------------- | ---------------------------- | ----------------------------------------------------- |
-| `config`         | `APEXConfig.from_env()`      | APEX configuration                                    |
-| `on_job`         | `None`                       | Job handler — enables startup scan and `/job/execute` |
-| `on_submit`      | `None`                       | Callback after successful on-chain submit             |
-| `on_job_skipped` | `None`                       | Callback when a job fails verification                |
-| `job_timeout`    | env `JOB_TIMEOUT` or `120.0` | Seconds before `/job/execute` returns 202 Accepted    |
-| `task_metadata`  | `None`                       | Default metadata for every submission                 |
-
-
-### Comparison
-
-
-| Capability                   | `create_apex_app()`    | Sub-app mount             |
-| ---------------------------- | ---------------------- | ------------------------- |
-| HTTP endpoints               | Included               | Included                  |
-| Startup scan (pending jobs)  | Automatic              | Via `app.state.startup()` |
-| Client-driven `/job/execute` | With timeout (200/202) | With timeout (200/202)    |
-| Brings its own `FastAPI()`   | Yes                    | Yes — mounted on yours    |
-| Best for                     | Standalone agent       | Existing app              |
-
+Starlette does not propagate lifespan events into mounted sub-apps; call `apex_app.state.startup()` from your parent lifespan to trigger the startup scan.
 
 ### Endpoints
 
-Both options expose the same set of APEX endpoints. For custom prefixes, use `app.mount("/your-prefix", apex_app)`.
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/apex/negotiate` | Price negotiation (off-chain). Returns a structured quote. |
+| `POST` | `/apex/submit` | Provider submits a result. Uploads to storage, submits hash on-chain. |
+| `GET`  | `/apex/job/{id}` | Job details from the Commerce kernel. |
+| `GET`  | `/apex/job/{id}/response` | Stored deliverable for a submitted job. |
+| `GET`  | `/apex/job/{id}/verify` | Verify a job is `FUNDED`, assigned to this provider, not expired, budget ok. |
+| `POST` | `/apex/job/{id}/settle` | Manually call `router.settle(jobId)` (permissionless). |
+| `POST` | `/apex/job/execute` | Client-initiated job execution (requires `on_job`). |
+| `GET`  | `/apex/status` | Agent wallet, contract addresses, service price, payment token, decimals. |
+| `GET`  | `/apex/health` | Liveness check. |
 
-
-| Method | Path                      | What it does                                                                                                                                                                                                 |
-| ------ | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `POST` | `/apex/negotiate`         | Clients propose job terms (service type, quality standards, deliverables); your agent responds with a price quote or rejection. Both request and response are hashed for on-chain anchoring.                 |
-| `POST` | `/apex/submit`            | Submit a job deliverable: verifies the job on-chain, uploads the result to IPFS, computes a content hash, and submits the hash on-chain — which auto-triggers the evaluator assertion via the contract hook. |
-| `GET`  | `/apex/job/{id}`          | Look up on-chain job details (status, budget, provider, expiry, deliverable hash).                                                                                                                           |
-| `GET`  | `/apex/job/{id}/response` | Fetch the agent's deliverable for a submitted job.                                                                                                                                                           |
-| `GET`  | `/apex/job/{id}/verify`   | Verify a job is `FUNDED`, assigned to your agent, not expired, and budget meets service price.                                                                                                               |
-| `GET`  | `/apex/status`            | Agent wallet address, ERC-8183 contract, service price, payment token, and decimals.                                                                                                                         |
-| `POST` | `/apex/job/execute`       | Client-initiated synchronous job execution (requires `on_job`).                                                                                                                                              |
-| `GET`  | `/apex/health`            | Health check for load balancers and monitoring.                                                                                                                                                              |
-
-
-> For detailed request/response schemas and examples, see the [APEX HTTP Endpoints reference](bnbagent/apex/README.md#http-endpoints).
-
-> **Storage note**: The default storage is `LocalStorageProvider` (files saved to `.agent-data/`). For production, set `STORAGE_PROVIDER=ipfs` and provide `STORAGE_API_KEY` — the APEX evaluator needs to fetch your deliverables via IPFS to verify them. Local storage only works for development/testing.
-
-### `on_job` Callback Reference
-
-The `on_job` callback is shared by both options. It supports four signatures — sync or async, with or without metadata:
+### `on_job` Callback
 
 ```python
-# Simplest: sync, return result string only
-def on_job(job: dict) -> str:
-    return "done"
-
-# Async
-async def on_job(job: dict) -> str:
-    result = await call_llm(job["description"])
-    return result
-
-# With per-job metadata (attached to the on-chain submission)
-def on_job(job: dict) -> tuple[str, dict]:
-    return "done", {"model": "gpt-4", "latency_ms": 320}
-
-# Async + metadata
-async def on_job(job: dict) -> tuple[str, dict]:
-    result = await call_llm(job["description"])
-    return result, {"tokens": 1500}
+# Sync or async, with or without per-job metadata:
+def on_job(job: dict) -> str: ...
+async def on_job(job: dict) -> str: ...
+def on_job(job: dict) -> tuple[str, dict]: ...
+async def on_job(job: dict) -> tuple[str, dict]: ...
 ```
 
-**Input (`job` dict keys)**:
+`job` contains: `jobId`, `description`, `budget`, `client`, `provider`, `evaluator`, `status` (always `FUNDED`), `expiredAt`, `hook`.
 
+### Auto-Settle Loop
 
-| Key           | Type  | Description                                            |
-| ------------- | ----- | ------------------------------------------------------ |
-| `jobId`       | `int` | On-chain job ID                                        |
-| `description` | `str` | Task description set by the client                     |
-| `budget`      | `int` | Payment amount in wei (18 decimals)                    |
-| `client`      | `str` | Client wallet address                                  |
-| `provider`    | `str` | Your agent's wallet address                            |
-| `evaluator`   | `str` | Evaluator contract address                             |
-| `status`      | `str` | Job status (always `"FUNDED"` when `on_job` is called) |
-| `expiredAt`   | `int` | Unix timestamp — job deadline                          |
+`create_apex_app(..., auto_settle=True, auto_settle_interval=30.0)` (default) spawns a background task that polls `policy.check(jobId)` for this provider's submitted jobs and calls `router.settle(jobId)` when the verdict flips away from PENDING. The permissionless settle means clients don't have to do anything — the agent gets paid automatically.
 
+---
 
-**Return value**: The returned string is uploaded to storage (IPFS or local) and its content hash is submitted on-chain as the deliverable. If you return a tuple, the second element is a metadata dict merged into the submission record.
+## Quick Start: Use `APEXClient` from a Client
 
-### Customize with APEXConfig
-
-Both options accept an `APEXConfig` for explicit control over wallet, storage, network, and pricing:
+`APEXClient` is the high-level facade over the APEX v1 contract stack. Most callers only use the top-level methods; the sub-clients `apex.commerce`, `apex.router`, `apex.policy` are exposed for advanced use.
 
 ```python
-import os
-from dotenv import load_dotenv
-from bnbagent.apex.config import APEXConfig
-from bnbagent.apex.server import create_apex_app
+from bnbagent.apex import APEXClient, JobStatus
 from bnbagent.wallets import EVMWalletProvider
-from bnbagent.storage import create_storage_provider, StorageConfig
 
-load_dotenv()
+wallet = EVMWalletProvider(password="your-password", private_key="0x...")
+apex = APEXClient(wallet, network="bsc-testnet")
 
-wallet = EVMWalletProvider(
-    password=os.getenv("WALLET_PASSWORD"),
-    private_key=os.getenv("PRIVATE_KEY"),
-)
+# Token helpers (payment token is fetched dynamically from the kernel).
+print("symbol:", apex.token_symbol())
+print("decimals:", apex.token_decimals())
+print("balance:", apex.token_balance())
 
-config = APEXConfig(
-    wallet_provider=wallet,
-    storage=create_storage_provider(StorageConfig(type="ipfs", api_key=os.getenv("STORAGE_API_KEY"))),
-    service_price="20000000000000000000",  # 20 U tokens (in wei, 18 decimals)
-)
+# Happy-path lifecycle.
+budget = 1 * (10 ** apex.token_decimals())
+expired_at = int(time.time()) + 65 * 60
 
-# Pass config to create_apex_app:
-app = create_apex_app(config=config, on_job=execute_job)
+res = apex.create_job(provider=provider_addr, expired_at=expired_at, description="task")
+job_id = res["jobId"]
+
+apex.register_job(job_id)                    # bind default policy (OptimisticPolicy)
+apex.set_budget(job_id, budget)
+apex.fund(job_id, budget)                    # floor-based auto-approve (100 U default)
+
+# ... provider submits ...
+
+apex.settle(job_id)                          # permissionless; anyone can call
+assert apex.get_job_status(job_id) == JobStatus.COMPLETED
 ```
 
-You can also create `APEXConfig` from environment variables or with shorthand:
+### `fund(job_id, amount, approve_floor=None)`
+
+- **`approve_floor=None`** (default) — Approve `max(amount, 100 * 10**decimals)`. Stablecoin-friendly: residual allowance stays bounded (≤100 tokens), but small budgets don't repeatedly re-approve. Saves gas across job streams.
+- **`approve_floor=0`** — Approve exactly `amount` (most conservative).
+- **`approve_floor=X`** — Approve `max(amount, X)` (custom floor).
+
+If the current allowance already covers `amount`, no approve is sent at all.
+
+### Disputes
 
 ```python
-# From environment variables (reads all APEX-related env vars)
-config = APEXConfig.from_env()
-
-# Shorthand (auto-wraps private_key into EVMWalletProvider)
-config = APEXConfig(
-    private_key="0x...",
-    wallet_password="your-password",
-    service_price="20000000000000000000",
-)
-
-# Optional — returns None if required env vars are missing
-config = APEXConfig.from_env_optional()
+apex.dispute(job_id)        # client only; within dispute window
+apex.vote_reject(job_id)    # whitelisted voter only; after dispute
+apex.claim_refund(job_id)   # anyone, after expiredAt, no settlement reached
 ```
+
+See [`examples/client/`](examples/client/) for the five canonical flows (happy, dispute-reject, stalemate-expire, never-submit, cancel-open).
 
 ---
 
 ## Configuration Reference
 
-All configuration can be set via environment variables. The SDK resolves values in order: explicit constructor args > environment variables > network defaults.
-
 ### Environment Variables
 
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `PRIVATE_KEY` | Recommended | Auto-generate | Agent wallet private key. If provided, encrypted to `~/.bnbagent/wallets/` on first run, then removable. |
+| `WALLET_PASSWORD` | Yes | — | Password to encrypt / decrypt the keystore. |
+| `WALLET_ADDRESS` | No | Auto-select | Select a specific keystore when multiple exist. |
+| `NETWORK` | No | `bsc-testnet` | Network name. |
+| `RPC_URL` | No | Network default | Custom RPC endpoint. |
+| `APEX_COMMERCE_ADDRESS` | No | Network default | `AgenticCommerce` proxy override. |
+| `APEX_ROUTER_ADDRESS` | No | Network default | `EvaluatorRouter` proxy override. |
+| `APEX_POLICY_ADDRESS` | No | Network default | Policy contract override (defaults to `OptimisticPolicy`). |
+| `APEX_SERVICE_PRICE` | No | `1000000000000000000` (1 U) | Minimum acceptable budget, in raw units. |
+| `APEX_EXEC_TIMEOUT` | No | `120` | `/job/execute` callback timeout in seconds (agent-server). |
+| `ERC8004_REGISTRY_ADDRESS` | No | Network default | ERC-8004 Identity Registry override. |
+| `STORAGE_PROVIDER` | No | `local` | Storage backend: `"local"` or `"ipfs"`. |
+| `STORAGE_API_KEY` | If IPFS | — | JWT / API key for the pinning service. |
+| `STORAGE_GATEWAY_URL` | No | Pinata default | Custom IPFS gateway. |
+| `STORAGE_LOCAL_PATH` | No | `.agent-data` | Directory for local storage. |
 
-| Variable                 | Required    | Default                     | Description                                                                                                                                                                                             |
-| ------------------------ | ----------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PRIVATE_KEY`            | Recommended | Auto-generate               | Agent wallet private key (hex). If provided, imported & encrypted to `~/.bnbagent/wallets/` on first run (can be removed afterward). If omitted and no keystore exists, a new wallet is auto-generated. |
-| `WALLET_PASSWORD`        | Yes         | —                           | Password to encrypt/decrypt the wallet keystore                                                                                                                                                         |
-| `WALLET_ADDRESS`         | No          | Auto-select                 | Select a specific wallet when multiple exist in `~/.bnbagent/wallets/`                                                                                                                                  |
-| `NETWORK`                | No          | `bsc-testnet`               | Network name (`bsc-testnet` or `bsc-mainnet`)                                                                                                                                                           |
-| `RPC_URL`                | No          | Network default             | Custom RPC endpoint                                                                                                                                                                                     |
-| `CHAIN_ID`               | No          | `97`                        | Chain ID (auto-resolved from network if not set)                                                                                                                                                        |
-| `ERC8183_ADDRESS`        | No          | Network default             | ERC-8183 contract address override                                                                                                                                                                      |
-| `APEX_EVALUATOR_ADDRESS` | No          | Network default             | APEX Evaluator contract address override                                                                                                                                                                |
-| `SERVICE_PRICE`          | No          | `1000000000000000000` (1 U) | Default negotiation price in wei (18 decimals)                                                                                                                                                          |
-| `PAYMENT_TOKEN_ADDRESS`  | No          | Network default             | BEP-20 payment token address                                                                                                                                                                            |
-| `STORAGE_PROVIDER`       | No          | `local`                     | Storage backend: `"local"` or `"ipfs"`                                                                                                                                                                  |
-| `STORAGE_API_KEY`        | If IPFS     | —                           | API key / JWT for IPFS pinning service                                                                                                                                                                  |
-| `STORAGE_API_URL`        | No          | Pinata default              | Custom storage API endpoint                                                                                                                                                                             |
-| `STORAGE_GATEWAY_URL`    | No          | Pinata default              | Custom IPFS gateway URL                                                                                                                                                                                 |
-| `STORAGE_LOCAL_PATH`     | No          | `.agent-data`               | Directory for local file storage                                                                                                                                                                        |
+The **payment token address is NOT configurable** — it is immutable on the Commerce kernel and fetched at runtime via `APEXClient.payment_token`.
 
-
-### Minimal `.env` for Development
-
-```bash
-WALLET_PASSWORD=your-secure-password
-PRIVATE_KEY=0x...          # optional; omit to auto-generate a new wallet
-```
-
-### Production `.env`
-
-```bash
-WALLET_PASSWORD=your-secure-password
-STORAGE_PROVIDER=ipfs
-STORAGE_API_KEY=your-pinning-service-jwt
-SERVICE_PRICE=20000000000000000000    # 20 U tokens
-```
+See [`.env.example`](.env.example) at the project root for the full surface with inline comments.
 
 ---
 
 ## Architecture & Components
 
-The sections below cover the SDK's pluggable components in detail. You don't need to read these to get started — the Quick Start sections above are self-contained. Come back here when you need to customize wallet management, storage backends, job execution behavior, or request verification.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full code map, module system, invariants, and data flows. The APEX v1 stack is split into:
+
+- `bnbagent/apex/client.py` — `APEXClient` facade (most callers use this).
+- `bnbagent/apex/commerce.py` — `CommerceClient` (low-level Commerce kernel).
+- `bnbagent/apex/router.py` — `RouterClient` (low-level Router).
+- `bnbagent/apex/policy.py` — `PolicyClient` (low-level OptimisticPolicy).
+- `bnbagent/apex/_erc20.py` — internal minimal ERC-20 client for the payment token.
+- `bnbagent/apex/server/` — FastAPI factory, async job ops, auto-settle loop.
 
 ### Wallet Providers
 
-Wallets handle private key management and transaction signing. Both `ERC8004Agent` and `create_apex_app()` use a `WalletProvider` internally — it is created once and reused for all operations throughout the application lifetime.
-
-Currently, `**EVMWalletProvider` is the only production-ready implementation** — it manages private keys with Keystore V3 encryption. MPC and other wallet types are planned for future releases.
-
-#### EVMWalletProvider
-
-Encrypts private keys using [Keystore V3](https://ethereum.org/en/developers/docs/data-structures-and-encoding/web3-secret-storage/) (scrypt + AES-128-CTR), the same format used by MetaMask and Geth.
-
-```python
-from bnbagent.wallets import EVMWalletProvider
-
-# First run: import key → encrypted to ~/.bnbagent/wallets/<address>.json
-wallet = EVMWalletProvider(password="secure-pw", private_key="0x...")
-
-# Subsequent runs: load from keystore (no private key needed)
-wallet = EVMWalletProvider(password="secure-pw")
-
-# Multiple wallets: select by address
-wallet = EVMWalletProvider(password="secure-pw", address="0x1234...abcd")
-
-# List all wallets on disk
-print(EVMWalletProvider.list_wallets())  # ["0x1234...abcd", "0x5678...ef01"]
-
-# In-memory only (no file written to disk)
-wallet = EVMWalletProvider(password="secure-pw", private_key="0x...", persist=False)
-```
-
-> **Security**: `PRIVATE_KEY` is optional. If provided, it is encrypted to `~/.bnbagent/wallets/` (Keystore V3, MetaMask/Geth compatible) on the first run — remove it from `.env` afterward. If omitted and no keystore exists, a new wallet is auto-generated. Only `WALLET_PASSWORD` is needed for subsequent runs.
-
-#### Custom Wallet
-
-Implement the `WalletProvider` interface to bring your own signing backend (HSM, MPC, etc.):
-
-```python
-from bnbagent.wallets import WalletProvider
-
-class MyHSMWallet(WalletProvider):
-    @property
-    def address(self) -> str:
-        return "0x..."
-
-    def sign_transaction(self, tx: dict) -> dict:
-        # Sign with your HSM / custom signer
-        ...
-
-    def sign_message(self, message: str) -> dict:
-        # EIP-191 personal sign
-        ...
-```
-
-For more details, see `[bnbagent/wallets/README.md](bnbagent/wallets/README.md)`.
+`EVMWalletProvider` is the production implementation: Keystore V3 (scrypt + AES-128-CTR) with in-place encryption. Custom providers implement the `WalletProvider` ABC (`address`, `sign_transaction`, `sign_message`).
 
 ### Storage Providers
 
-APEX stores deliverables off-chain — only the content hash goes on-chain. The SDK provides pluggable storage backends via the `StorageProvider` interface.
-
-> **Important**: For APEX jobs to complete the full lifecycle (submit → evaluate → settle), the evaluator must be able to fetch your deliverable. Use **IPFS** for production. Local storage is only suitable for development and testing.
-
-#### LocalStorageProvider (Development)
-
-Stores files on the local filesystem with restricted permissions (`0600`).
-
-```python
-from bnbagent.storage import LocalStorageProvider
-
-storage = LocalStorageProvider("./agent-data")
-
-url = await storage.upload({"result": "hello"}, "output.json")  # file://./agent-data/output.json
-data = await storage.download(url)
-```
-
-#### IPFSStorageProvider (Production)
-
-Stores files on IPFS via any compatible pinning API (e.g. Pinata, Infura, Web3.Storage). Content-addressed and globally accessible — required for the APEX evaluator to verify deliverables.
-
-```bash
-pip install "bnbagent[ipfs]"
-```
-
-```python
-from bnbagent.storage import StorageConfig, create_storage_provider
-
-config = StorageConfig(type="ipfs", api_key="your-pinning-service-jwt")
-storage = create_storage_provider(config)
-
-url = await storage.upload({"result": "hello"}, "output.json")  # ipfs://Qm...
-```
-
-You can also customize the pinning API URL and gateway:
-
-```python
-config = StorageConfig(
-    type="ipfs",
-    api_key="your-jwt",
-    api_url="https://api.pinata.cloud/pinning/pinJSONToIPFS",   # custom pinning endpoint
-    gateway_url="https://gateway.pinata.cloud/ipfs/",           # custom gateway
-)
-```
-
-#### Factory
-
-Create a storage provider from environment variables:
-
-```python
-from bnbagent.storage import storage_provider_from_env
-
-# Reads STORAGE_PROVIDER, STORAGE_API_KEY, STORAGE_LOCAL_PATH from env
-storage = storage_provider_from_env()
-```
-
-For more details, see `[bnbagent/storage/README.md](bnbagent/storage/README.md)`.
-
-### Job Execution
-
-When you pass `on_job` to `create_apex_app()`, the SDK enables two execution paths:
-
-1. **Startup scan** — on application boot, a one-time Multicall3 batch scan discovers all pending funded jobs and processes them automatically.
-2. **Client-driven `POST /job/execute`** — after funding a job, the client calls `/job/execute` to trigger immediate execution. If the job completes within `job_timeout` seconds (default 120), the response includes the full result (200). Otherwise the server returns 202 Accepted and the job continues in the background — the client can poll `GET /job/{id}/response` for the result.
-
-If you're adding APEX to an existing app via sub-app mount, the parent app should call `apex_app.state.startup()` during its own lifespan to trigger the startup scan (Starlette does not propagate lifespan events to mounted sub-apps). See [Option 2](#option-2-mount-on-existing-app-sub-app).
-
-### Pricing & Budget Validation
-
-The SDK distinguishes three pricing values:
-
-
-| Term                | Set by         | Where it lives                                       |
-| ------------------- | -------------- | ---------------------------------------------------- |
-| `**service_price**` | Agent operator | `SERVICE_PRICE` env var → `APEXConfig.service_price` |
-| `**budget**`        | Client         | On-chain escrow via `setBudget()` + `fund()`         |
-| `**agreed_price**`  | Negotiation    | Per-job record from the `/negotiate` round           |
-
-
-**Data flow**: `SERVICE_PRICE` env → `APEXConfig` → used by `NegotiationHandler` (to quote prices) and `APEXJobOps.verify_job()` (to gate work).
-
-#### SDK Budget Protection
-
-`verify_job()` automatically checks `budget >= service_price` before the agent starts work. If the budget is insufficient, the job is rejected with HTTP 402 and the response includes `service_price` and `decimals` so the client knows exactly how much is required.
-
-This check runs in two places:
-
-1. **Startup scan and `/job/execute`** — funded jobs are verified before calling `on_job`
-2. `**submit_result()` pre-check** — defense-in-depth before on-chain submission (SDK-H01)
-
-#### Skipped Jobs & `on_job_skipped` Callback
-
-When a job fails budget validation during the startup scan or `/job/execute`, the `on_job_skipped` callback is invoked. Register it to be notified:
-
-```python
-# Sync callback
-def on_skipped(job: dict, reason: str):
-    print(f"Skipped job {job['jobId']}: {reason}")
-
-app = create_apex_app(on_job=execute_job, on_job_skipped=on_skipped)
-
-# Async callback
-async def on_skipped(job: dict, reason: str):
-    await notify_monitoring(job["jobId"], reason)
-
-app = create_apex_app(on_job=execute_job, on_job_skipped=on_skipped)
-```
-
-The `reason` string describes why the job was skipped (e.g. `"budget 5000000000000000000 < service_price 20000000000000000000"`).
-
-#### Client-Side Visibility
-
-- `**GET /status**` — Returns the agent's `service_price`, `payment_token`, and `decimals`, so clients know the minimum budget before creating a job.
-- `**GET /job/{id}/verify**` — Returns HTTP 402 with `service_price` and `decimals` if the job's budget is too low.
-
-### Job Verification (SDK-H01)
-
-No separate middleware is needed. `submit_result()` includes defense-in-depth verification: before every on-chain submission, it re-verifies that the job is `FUNDED`, assigned to your agent, not expired, and that `budget >= service_price`. This check runs automatically in the startup scan, `/job/execute`, and direct `/submit` calls.
-
-### Module System
-
-The SDK uses a plugin-based module system. ERC-8004 and APEX are built-in modules; you can add your own.
-
-```python
-from bnbagent import BNBAgent, BNBAgentConfig
-from bnbagent.wallets import EVMWalletProvider
-
-wallet = EVMWalletProvider(password="pw", private_key="0x...")
-config = BNBAgentConfig(wallet_provider=wallet)
-sdk = BNBAgent(config)
-
-# Access built-in modules
-apex = sdk.module("apex")
-erc8004 = sdk.module("erc8004")
-
-# List registered modules
-for info in sdk.registry.list_modules():
-    print(f"{info.name} v{info.version}: {info.description}")
-```
-
-For details on each module, see the README in the corresponding directory:
-
-
-| Module                                             | README                                                     |
-| -------------------------------------------------- | ---------------------------------------------------------- |
-| Core (module system, registry, contract utilities) | `[bnbagent/core/README.md](bnbagent/core/README.md)`       |
-| ERC-8004 (identity registration & discovery)       | `[bnbagent/erc8004/README.md](bnbagent/erc8004/README.md)` |
-| APEX (commerce protocol, server, negotiation)      | `[bnbagent/apex/README.md](bnbagent/apex/README.md)`       |
-| Wallets (key management, signing)                  | `[bnbagent/wallets/README.md](bnbagent/wallets/README.md)` |
-| Storage (IPFS, local file storage)                 | `[bnbagent/storage/README.md](bnbagent/storage/README.md)` |
-
+Deliverables are stored off-chain; only the keccak256 hash goes on-chain. `LocalStorageProvider` for dev; `IPFSStorageProvider` (Pinata-compatible) for production.
 
 ---
 
 ## Network & Contracts
 
-### BSC Testnet (Chain ID: 97) — Active
+### BSC Testnet (Chain ID 97) — active
 
-All contracts are deployed and operational.
-
-
-| Contract                     | Address                                      |
-| ---------------------------- | -------------------------------------------- |
+| Contract | Address |
+|----------|---------|
 | Identity Registry (ERC-8004) | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
-| Agentic Commerce (ERC-8183)  | `0xf8b6921fea71dfca3482a4a69576198d2072d188` |
-| APEX Evaluator (UMA OOv3)    | `0xd707433ca1343759ccc127402b18cfdae3f0e10b` |
-| Payment Token (U)            | `0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565` |
-| UMA OOv3 *                   | `0xFc5bb3e475cc9264760Cf33b1e9ea7B87942C709` |
+| AgenticCommerce (kernel) | `0x1e677fc06ff772e81051484c8c3845fbef13986d` |
+| EvaluatorRouter | `0x0c729baa3cdac6cc3fdef6a816f6bcb85ae92ed7` |
+| OptimisticPolicy | `0x459c3b7a46aa9dde45fbfc3b3d37bd062dbe6fb8` |
 
+Payment token address is read from `commerce.paymentToken()` at runtime.
 
->  The OptimisticOracleV3 contract was deployed using [UMA Protocol](https://github.com/UMAprotocol/protocol) source code, licensed under [AGPL-3.0](https://github.com/UMAprotocol/protocol/blob/master/LICENSE).
+**Faucets**: [BSC Faucet](https://www.bnbchain.org/en/testnet-faucet) (tBNB) | [U Faucet](https://united-coin-u.github.io/u-faucet/) (U tokens).
 
-**Faucets**: [BSC Faucet](https://www.bnbchain.org/en/testnet-faucet) (testnet BNB) | [U Faucet](https://united-coin-u.github.io/u-faucet/) (testnet U tokens)
+### BSC Mainnet (Chain ID 56) — coming soon
 
-### BSC Mainnet (Chain ID: 56) — Coming Soon
-
-Network is pre-configured in the SDK but protocol contracts have not yet been deployed.
-
-```python
-from bnbagent.config import resolve_network
-
-nc = resolve_network("bsc-mainnet")
-print(nc.rpc_url)  # https://bsc-dataseed.binance.org
-```
+Network is pre-configured in the SDK; protocol contracts are not yet deployed.
 
 ---
 
 ## Examples
 
-
-| Example                                         | Description                                                                                                                                                                                                                                                                                                                                 |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `[getting-started/](examples/getting-started/)` | **Start here.** 5-step walkthrough: set up a wallet and check balances, register an agent on ERC-8004, run an APEX agent server with startup scan and client-driven job execution, create and fund a job from a client, and settle payment after the UMA liveness period. Includes an E2E test script that runs all steps automatically.    |
-| `[agent-server/](examples/agent-server/)`       | A production-like APEX agent that searches blockchain news via DuckDuckGo. Demonstrates both integration patterns: `create_apex_app()` (standalone) and sub-app mount (existing app). Includes ERC-8004 registration, IPFS storage, client-driven job execution, and a `/search` endpoint for testing without APEX.                         |
-| `[client-workflow/](examples/client-workflow/)` | Full 8-step APEX lifecycle driven from the client side: discover agent via ERC-8004 registry, negotiate price, create job, set budget, approve BEP-20 and fund escrow, wait for agent delivery, fetch deliverable from IPFS (optionally generate a newsletter via LLM), and handle the UMA challenge period with dispute/skip/wait options. |
-| `[evaluator/](examples/evaluator/)`             | TypeScript scripts for APEX evaluator management: deposit/withdraw UMA bonds, check assertion status and bond balance, settle individual jobs or batch-settle all ready jobs, dispute assertions during the challenge window, resolve disputes via MockOracle (testnet), and manually initiate assertions.                                  |
-
+| Example | Role | Description |
+|---------|------|-------------|
+| [`examples/client/`](examples/client/) | Client | Five stand-alone scripts for the canonical APEX flows: happy / dispute-reject / stalemate-expire / never-submit / cancel-open. |
+| [`examples/voter/`](examples/voter/) | Voter | `voteReject` script + `Disputed` event watcher for whitelisted voters. |
+| [`examples/agent-server/`](examples/agent-server/) | Provider | FastAPI agent that searches blockchain news via DuckDuckGo. Demonstrates `create_apex_app()`, startup scan, auto-settle, and ERC-8004 registration. |
 
 ---
 
 ## Security
 
-- **Encrypted keys** — `EVMWalletProvider` uses Keystore V3 encryption (scrypt + AES-128-CTR). Private keys are encrypted to `~/.bnbagent/wallets/<address>.json` on first import; subsequent runs only need `WALLET_PASSWORD`. Config objects auto-wrap plaintext keys and clear them from memory immediately.
-- **Defense in depth (SDK-H01)** — `submit_result()` re-verifies on-chain job status (funded, assigned, not expired, budget >= service_price) before every submission.
-- **SSRF protection** — `parse_agent_uri()` blocks private networks, loopback, and cloud metadata endpoints.
-- **Budget validation** — `verify_job()` rejects jobs where `budget < service_price`, preventing agents from doing unpaid work. This check runs in the startup scan, /job/execute, and submit pre-check.
-- **Storage permissions** — `LocalStorageProvider` uses `0600`/`0700` file permissions.
+- **Encrypted keys** — `EVMWalletProvider` uses Keystore V3; plaintext keys are cleared from memory after import.
+- **Submit-time verification** — `submit_result()` re-verifies `FUNDED`, assignment, expiry, and `budget >= service_price` before every on-chain submission.
+- **Budget protection** — Underpriced jobs are rejected with HTTP 402 at `/status`, `/job/{id}/verify`, and on submit.
+- **Permissionless settle** — `router.settle` is callable by anyone. The provider's auto-settle loop is purely an incentive convenience; it does not gatekeep settlement.
+- **Non-pausable refund** — `claimRefund` on the kernel is intentionally not pausable and not hookable: funds can always be reclaimed past `expiredAt`.
+- **Storage permissions** — `LocalStorageProvider` uses `0600`/`0700`.
 
 ---
 
 ## Troubleshooting
 
-
-| Error                                                | Cause                                       | Solution                                                                                 |
-| ---------------------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `No PRIVATE_KEY and no keystore found`               | No keystore in `~/.bnbagent/wallets/`       | A new wallet is auto-generated; or set `PRIVATE_KEY` in `.env` to import an existing key |
-| `Multiple wallets found`                             | Multiple keystores, no `WALLET_ADDRESS` set | Set `WALLET_ADDRESS=0x...` to select which wallet to use                                 |
-| `WALLET_PASSWORD is required`                        | Missing env var                             | Set `WALLET_PASSWORD` in `.env`                                                          |
-| `wallet_password is required when using private_key` | Constructor missing password                | Add `wallet_password=` or use `wallet_provider=` directly                                |
-| `403 Provider mismatch`                              | Not assigned to this job                    | Check job's provider address                                                             |
-| `409 Not FUNDED`                                     | Wrong job status                            | Job may already be submitted/completed                                                   |
-| `408 Job expired`                                    | Past deadline                               | Create a new job                                                                         |
-| `429 Rate limited`                                   | Too many RPC calls                          | Add retry with backoff                                                                   |
-| `402 Budget below service price`                     | Job budget < agent's `service_price`        | Client should create a new job with budget >= `service_price` (visible at `GET /status`) |
-| `service_price below minBudget`                      | `ValueError` at startup                     | Increase `SERVICE_PRICE` to at least the contract's `minBudget`                          |
-
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `No PRIVATE_KEY and no keystore found` | No keystore in `~/.bnbagent/wallets/` | A new wallet is auto-generated, or set `PRIVATE_KEY` to import. |
+| `Multiple wallets found` | Multiple keystores | Set `WALLET_ADDRESS=0x...` to pick one. |
+| `WALLET_PASSWORD is required` | Missing env var | Set `WALLET_PASSWORD` in `.env`. |
+| `403 Provider mismatch` | Not assigned to this job | Check `job.provider`. |
+| `409 Not FUNDED` | Wrong job status | Job may already be submitted / settled. |
+| `408 Job expired` | Past `expiredAt` | Create a new job; client can `claimRefund` the old one. |
+| `402 Budget below service price` | `budget < APEX_SERVICE_PRICE` | Client must create a job with a higher budget (visible at `GET /apex/status`). |
+| `router.settle` reverts with `policy pending` | Dispute window hasn't elapsed and no dispute was raised | Wait; auto-settle retries next pass. |
+| `voteReject` reverts with `not voter` / `not disputed` | Caller not whitelisted, or no dispute exists | Use [`examples/voter/vote_reject.py`](examples/voter/vote_reject.py) — it validates before sending. |
 
 ---
-
-## Acknowledgments
-
-- **[UMA Protocol](https://uma.xyz/)** — Optimistic Oracle V3 for trustless dispute resolution. Licensed under [AGPL-3.0](https://github.com/UMAprotocol/protocol/blob/master/LICENSE).
 
 ## License
 

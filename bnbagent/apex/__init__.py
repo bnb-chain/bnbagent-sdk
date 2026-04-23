@@ -1,17 +1,19 @@
-"""APEX (Agent Payment Exchange Protocol) — Negotiation + ERC-8183 Escrow + UMA Evaluator."""
+"""APEX Protocol v1 — AgenticCommerce kernel + EvaluatorRouter + OptimisticPolicy.
+
+Public surface:
+
+- ``APEXClient``   — high-level facade (most callers).
+- ``CommerceClient`` / ``RouterClient`` / ``PolicyClient`` — sub-clients for
+  users who need direct access to a single layer.
+- ``Job`` / ``JobStatus`` / ``Verdict`` — shared types.
+- ``NegotiationHandler`` / ``ServiceRecord`` — off-chain negotiation helpers.
+"""
 
 from __future__ import annotations
 
-from .client import (
-    DEFAULT_JOB_EXPIRY_SECONDS,
-    DEFAULT_LIVENESS_SECONDS,
-    DVM_BUFFER_SECONDS,
-    APEXClient,
-    APEXStatus,
-    get_default_expiry,
-)
+from .client import DEFAULT_APPROVE_FLOOR_UNITS, APEXClient
+from .commerce import CommerceClient
 from .constants import get_apex_config
-from .evaluator_client import APEXEvaluatorClient, AssertionInfo
 from .module import APEXModule, create_module
 from .negotiation import (
     NegotiationHandler,
@@ -21,6 +23,8 @@ from .negotiation import (
     ReasonCode,
     TermSpecification,
 )
+from .policy import PolicyClient
+from .router import RouterClient
 from .service_record import (
     NegotiationTerms,
     OnChainReferences,
@@ -29,28 +33,46 @@ from .service_record import (
     ServiceRecord,
     TimestampData,
 )
+from .types import (
+    REASON_APPROVED,
+    REASON_REJECTED,
+    ZERO_ADDRESS,
+    ZERO_REASON,
+    Job,
+    JobStatus,
+    Verdict,
+)
 
 __all__ = [
+    # Facade + sub-clients
     "APEXClient",
-    "APEXStatus",
-    "DEFAULT_LIVENESS_SECONDS",
-    "DVM_BUFFER_SECONDS",
-    "DEFAULT_JOB_EXPIRY_SECONDS",
-    "get_default_expiry",
-    "APEXEvaluatorClient",
-    "AssertionInfo",
+    "CommerceClient",
+    "RouterClient",
+    "PolicyClient",
+    "DEFAULT_APPROVE_FLOOR_UNITS",
+    # Types
+    "Job",
+    "JobStatus",
+    "Verdict",
+    "REASON_APPROVED",
+    "REASON_REJECTED",
+    "ZERO_ADDRESS",
+    "ZERO_REASON",
+    # Negotiation
     "NegotiationRequest",
     "NegotiationResponse",
     "TermSpecification",
     "ReasonCode",
     "NegotiationHandler",
     "NegotiationResult",
+    # Service record
     "ServiceRecord",
     "RequestData",
     "ResponseData",
     "NegotiationTerms",
     "TimestampData",
     "OnChainReferences",
+    # Module
     "get_apex_config",
     "APEXModule",
     "create_module",

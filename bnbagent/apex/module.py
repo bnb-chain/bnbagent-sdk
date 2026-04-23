@@ -23,9 +23,9 @@ class APEXModule(BNBAgentModule):
 
         nc = resolve_network()
         return {
-            "erc8183_contract": nc.erc8183_contract,
-            "apex_evaluator": nc.apex_evaluator,
-            "payment_token": nc.payment_token,
+            "commerce_contract": nc.commerce_contract,
+            "router_contract": nc.router_contract,
+            "policy_contract": nc.policy_contract,
         }
 
 

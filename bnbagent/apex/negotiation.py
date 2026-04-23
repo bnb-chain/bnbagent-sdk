@@ -546,19 +546,18 @@ class NegotiationHandler:
             NegotiationHandler with currency from contract
 
         Example:
-            from bnbagent import APEXClient, NegotiationHandler
-            from web3 import Web3
+            from bnbagent import APEXClient, EVMWalletProvider, NegotiationHandler
 
-            w3 = Web3(Web3.HTTPProvider(os.environ["RPC_URL"]))
-            apex = APEXClient(w3, os.environ["ERC8183_ADDRESS"])
+            wallet = EVMWalletProvider(password="...", private_key=os.environ["PRIVATE_KEY"])
+            apex = APEXClient(wallet, network="bsc-testnet")
 
             handler = NegotiationHandler.from_apex_client(
                 apex_client=apex,
-                service_price=os.environ["SERVICE_PRICE"],
+                service_price=os.environ["APEX_SERVICE_PRICE"],
                 supported_service_types=["translation"],
             )
         """
-        currency = apex_client.payment_token()
+        currency = apex_client.payment_token
 
         return cls(
             service_price=service_price,

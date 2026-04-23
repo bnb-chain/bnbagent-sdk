@@ -19,15 +19,18 @@ class ContractClientMixin:
 
     Subclasses must set:
         self.w3: Web3 instance
-        self._private_key: str | None
-        self._wallet_provider: WalletProvider | None
+        self._wallet_provider: WalletProvider | None  (None = read-only client)
         self._account: str | None
     """
 
-    def _send_tx(self, fn, value: int = 0, gas: int = 2_000_000, skip_preflight: bool = False) -> dict[str, Any]:
+    def _send_tx(
+        self, fn, value: int = 0, gas: int = 2_000_000, skip_preflight: bool = False
+    ) -> dict[str, Any]:
         """Build, sign, and send a transaction with nonce management and retry."""
-        if not self._private_key and not self._wallet_provider:
-            raise RuntimeError("private_key or wallet_provider required for write operations")
+        if not self._wallet_provider:
+            raise RuntimeError(
+                "wallet_provider is required for write operations (client is read-only)"
+            )
 
         nonce_mgr = NonceManager.for_account(self.w3, self._account)
         last_error = None
@@ -75,12 +78,8 @@ class ContractClientMixin:
                             else:
                                 raise RuntimeError(f"Transaction would revert: {preflight_err}") from preflight_err
 
-                if self._wallet_provider:
-                    signed = self._wallet_provider.sign_transaction(tx)
-                    raw_tx = signed["rawTransaction"]
-                else:
-                    signed = self.w3.eth.account.sign_transaction(tx, self._private_key)
-                    raw_tx = signed.raw_transaction
+                signed = self._wallet_provider.sign_transaction(tx)
+                raw_tx = signed["rawTransaction"]
                 tx_hash = self.w3.eth.send_raw_transaction(raw_tx)
                 receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash)
                 if receipt["status"] == 0:

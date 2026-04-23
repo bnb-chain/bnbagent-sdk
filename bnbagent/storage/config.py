@@ -1,9 +1,20 @@
-"""StorageConfig — unified configuration for storage providers."""
+"""StorageConfig — unified configuration for storage providers.
+
+Env surface (module-scoped, ``STORAGE_`` prefix):
+    STORAGE_PROVIDER    — "local" or "ipfs" (default: "local")
+    STORAGE_LOCAL_PATH  — base dir for local provider (default: ".agent-data")
+    STORAGE_API_KEY     — API key (e.g. Pinata JWT for IPFS)
+    STORAGE_API_URL     — custom pin service URL (optional)
+    STORAGE_GATEWAY_URL — HTTP gateway for reads
+"""
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
+
+from ..core.config import get_env
+
+STORAGE_ENV_PREFIX = "STORAGE_"
 
 
 @dataclass
@@ -29,17 +40,14 @@ class StorageConfig:
     def from_env(cls) -> StorageConfig:
         """Create config from environment variables.
 
-        Env vars:
-            STORAGE_PROVIDER: "local" or "ipfs" (default: "local")
-            STORAGE_API_KEY: API key (fallback: PINATA_JWT)
-            STORAGE_API_URL: Storage API URL (optional)
-            STORAGE_GATEWAY_URL: Gateway URL (fallback: PINATA_GATEWAY)
-            STORAGE_LOCAL_PATH: Local storage directory (default: ".agent-data")
+        See module docstring for the full env surface. Legacy ``PINATA_*``
+        fallbacks are no longer honoured — use the ``STORAGE_*`` keys.
         """
         return cls(
-            type=os.getenv("STORAGE_PROVIDER", "local").lower(),
-            base_dir=os.getenv("STORAGE_LOCAL_PATH", ".agent-data"),
-            api_key=os.getenv("STORAGE_API_KEY") or os.getenv("PINATA_JWT"),
-            api_url=os.getenv("STORAGE_API_URL"),
-            gateway_url=os.getenv("STORAGE_GATEWAY_URL") or os.getenv("PINATA_GATEWAY"),
+            type=(get_env("PROVIDER", "local", prefix=STORAGE_ENV_PREFIX) or "local").lower(),
+            base_dir=get_env("LOCAL_PATH", ".agent-data", prefix=STORAGE_ENV_PREFIX)
+            or ".agent-data",
+            api_key=get_env("API_KEY", prefix=STORAGE_ENV_PREFIX),
+            api_url=get_env("API_URL", prefix=STORAGE_ENV_PREFIX),
+            gateway_url=get_env("GATEWAY_URL", prefix=STORAGE_ENV_PREFIX),
         )

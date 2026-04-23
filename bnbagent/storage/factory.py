@@ -18,7 +18,7 @@ def create_storage_provider(config: StorageConfig) -> StorageProvider:
     """
     if config.type == "ipfs":
         if not config.api_key:
-            raise ValueError("api_key (PINATA_JWT) required for IPFS storage")
+            raise ValueError("api_key (STORAGE_API_KEY) required for IPFS storage")
         from .ipfs_provider import IPFSStorageProvider
 
         return IPFSStorageProvider(
@@ -39,8 +39,8 @@ def storage_provider_from_env(
 
     Reads:
         STORAGE_PROVIDER: "local" or "ipfs" (default: "local")
-        STORAGE_API_KEY / PINATA_JWT: Required if STORAGE_PROVIDER=ipfs
-        STORAGE_GATEWAY_URL / PINATA_GATEWAY: Optional gateway URL
+        STORAGE_API_KEY: Required if STORAGE_PROVIDER=ipfs
+        STORAGE_GATEWAY_URL: Optional gateway URL
 
     Returns:
         StorageProvider or None if configuration invalid

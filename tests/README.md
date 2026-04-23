@@ -26,15 +26,15 @@ pytest -v
 | `test_agent_uri.py` | `AgentURIGenerator` — URI generation and base64 encoding |
 | `test_models.py` | `AgentEndpoint` — validation and serialization |
 | `test_wallet.py` | `EVMWalletProvider` — keystore encryption, signing |
-| `test_apex_client.py` | `APEXClient` — ERC-8183 contract methods, events, retry logic |
-| `test_evaluator_client.py` | `APEXEvaluatorClient` — assertion queries, settlement, bonds |
+| `test_apex_client.py` | `APEXClient` — facade construction, approve_floor strategy, delegation |
 | `test_apex_config.py` | `APEXConfig` — validation, env var loading |
-| `test_apex_job_ops.py` | `APEXJobOps` — async submit, verify, pending jobs |
+| `test_apex_job_ops.py` | `APEXJobOps` — async verify / submit / auto-settle |
 | `test_negotiation.py` | `NegotiationHandler` — terms, hashing, price validation |
 | `test_service_record.py` | `ServiceRecord` — serialization, canonical JSON, hash computation |
 | `test_nonce_manager.py` | `NonceManager` — singleton, thread safety, error recovery |
 | `test_paymaster.py` | `Paymaster` — RPC helpers, sponsorability checks |
-| `test_quickstart_app.py` | `create_apex_app` — FastAPI app factory, standalone and mount modes |
 | `test_local_storage.py` | `LocalStorageProvider` — file I/O, permissions, path traversal |
 | `test_ipfs_storage.py` | `IPFSStorageProvider` — Pinata upload, CID validation, gateway |
 | `test_storage_factory.py` | `create_storage_provider` — factory selection, env config |
+| `test_module_system.py` | `BNBAgentModule` / `ModuleRegistry` — module composition |
+| `test_multicall.py` | `multicall_read` — Multicall3 batch reads |

@@ -1,390 +1,244 @@
-"""Tests for APEXClient — ERC-8183 contract interaction."""
+"""Tests for the ``APEXClient`` facade (APEX v1).
 
-import time
-from enum import IntEnum
+Covers:
+- Construction via ``(wallet_provider, network)``; ``NetworkConfig`` accepted directly.
+- Wallet-provider requirement (raw private keys never reach the facade).
+- Lazy payment-token caching.
+- Fund approval floor strategy.
+- create_job defaults Router as evaluator + hook.
+"""
+
 from unittest.mock import MagicMock, patch
 
 import pytest
-from web3 import Web3
 
-from bnbagent.apex.client import (
-    DEFAULT_LIVENESS_SECONDS,
-    DVM_BUFFER_SECONDS,
-    APEXClient,
-    APEXStatus,
-    get_default_expiry,
-)
-from tests.conftest import (
-    FAKE_ADDRESS,
-    FAKE_CONTRACT_ADDRESS,
-    FAKE_PRIVATE_KEY,
-    FAKE_TX_HASH,
-)
+from bnbagent.apex import APEXClient
+from bnbagent.apex.client import DEFAULT_APPROVE_FLOOR_UNITS
+from bnbagent.config import NetworkConfig
+from tests.conftest import FAKE_ADDRESS
+
+FAKE_COMMERCE = "0x" + "aa" * 20
+FAKE_ROUTER = "0x" + "bb" * 20
+FAKE_POLICY = "0x" + "cc" * 20
+FAKE_TOKEN = "0x" + "dd" * 20
 
 
-class TestAPEXStatus:
-    def test_enum_values(self):
-        assert APEXStatus.OPEN == 0
-        assert APEXStatus.FUNDED == 1
-        assert APEXStatus.SUBMITTED == 2
-        assert APEXStatus.COMPLETED == 3
-        assert APEXStatus.REJECTED == 4
-        assert APEXStatus.EXPIRED == 5
-
-    def test_is_int_enum(self):
-        assert issubclass(APEXStatus, IntEnum)
-        assert isinstance(APEXStatus.FUNDED, int)
+def _fake_network() -> NetworkConfig:
+    return NetworkConfig(
+        name="test-net",
+        rpc_url="https://fake-rpc.example.com",
+        chain_id=12345,
+        commerce_contract=FAKE_COMMERCE,
+        router_contract=FAKE_ROUTER,
+        policy_contract=FAKE_POLICY,
+    )
 
 
-class TestGetDefaultExpiry:
-    def test_returns_future_timestamp(self):
-        expiry = get_default_expiry()
-        assert expiry > int(time.time())
+def _mock_wallet() -> MagicMock:
+    wallet = MagicMock()
+    wallet.address = FAKE_ADDRESS
+    return wallet
 
-    def test_includes_dvm_buffer(self):
-        now = int(time.time())
-        expiry = get_default_expiry()
-        expected_min = now + DEFAULT_LIVENESS_SECONDS + DVM_BUFFER_SECONDS - 2
-        expected_max = now + DEFAULT_LIVENESS_SECONDS + DVM_BUFFER_SECONDS + 2
-        assert expected_min <= expiry <= expected_max
 
-    def test_custom_liveness(self):
-        now = int(time.time())
-        custom_liveness = 3600
-        expiry = get_default_expiry(liveness_seconds=custom_liveness)
-        expected_min = now + custom_liveness + DVM_BUFFER_SECONDS - 2
-        expected_max = now + custom_liveness + DVM_BUFFER_SECONDS + 2
-        assert expected_min <= expiry <= expected_max
+@pytest.fixture
+def facade(mock_web3):
+    """``APEXClient`` wired against mock sub-clients (no real web3 traffic)."""
+    with patch("bnbagent.apex.client.create_web3", return_value=mock_web3), \
+         patch("bnbagent.apex.client.CommerceClient") as mcc, \
+         patch("bnbagent.apex.client.RouterClient") as mrc, \
+         patch("bnbagent.apex.client.PolicyClient") as mpc:
+        commerce = MagicMock()
+        commerce.address = FAKE_COMMERCE
+        router = MagicMock()
+        router.address = FAKE_ROUTER
+        policy = MagicMock()
+        policy.address = FAKE_POLICY
+        mcc.return_value = commerce
+        mrc.return_value = router
+        mpc.return_value = policy
+
+        client = APEXClient(_mock_wallet(), network=_fake_network())
+        yield client
 
 
 class TestInit:
-    def test_with_private_key(self, mock_web3, fake_abi):
-        client = APEXClient(mock_web3, FAKE_CONTRACT_ADDRESS, FAKE_PRIVATE_KEY, fake_abi)
-        assert client._private_key == FAKE_PRIVATE_KEY
-        assert client._account == FAKE_ADDRESS
+    def test_requires_wallet_provider(self):
+        with pytest.raises(ValueError, match="wallet_provider is required"):
+            APEXClient(None, network=_fake_network())  # type: ignore[arg-type]
 
-    def test_without_private_key(self, mock_web3, fake_abi):
-        client = APEXClient(mock_web3, FAKE_CONTRACT_ADDRESS, abi=fake_abi)
-        assert client._private_key is None
-        assert client._account is None
-
-    def test_checksums_address(self, mock_web3, fake_abi):
-        lower_addr = FAKE_CONTRACT_ADDRESS.lower()
-        client = APEXClient(mock_web3, lower_addr, abi=fake_abi)
-        assert client.address == Web3.to_checksum_address(lower_addr)
-
-
-class TestWriteMethods:
-    def test_create_job(self, apex_client):
-        # Mock contract function chain
-        fn_mock = MagicMock()
-        apex_client.contract.functions.createJob.return_value = fn_mock
-        fn_mock.build_transaction.return_value = {"nonce": 0}
-
-        # Mock event processing
-        log = MagicMock()
-        log.__getitem__ = lambda self, key: {"args": {"jobId": 42}}[key] if key == "args" else None
-        # Simplify: mock _send_tx directly for most write tests
-        apex_client._send_tx = MagicMock(
-            return_value={
-                "transactionHash": FAKE_TX_HASH,
-                "status": 1,
-                "receipt": {"transactionHash": bytes.fromhex(FAKE_TX_HASH[2:]), "status": 1},
-            }
+    def test_rejects_network_missing_addresses(self, mock_web3):
+        incomplete = NetworkConfig(
+            name="broken",
+            rpc_url="https://x",
+            chain_id=1,
+            commerce_contract="",
+            router_contract=FAKE_ROUTER,
+            policy_contract=FAKE_POLICY,
         )
-        apex_client.contract.events.JobCreated.return_value.process_receipt.return_value = [
-            {"args": {"jobId": 42}}
-        ]
+        with patch("bnbagent.apex.client.create_web3", return_value=mock_web3):
+            with pytest.raises(ValueError, match="commerce_contract"):
+                APEXClient(_mock_wallet(), network=incomplete)
 
-        result = apex_client.create_job(
-            provider=FAKE_ADDRESS,
-            evaluator=FAKE_ADDRESS,
-            expired_at=9999999999,
-            description="test job",
-        )
-        assert result["jobId"] == 42
+    def test_address_comes_from_wallet(self, facade):
+        assert facade.address == FAKE_ADDRESS
 
-    def test_set_budget(self, apex_client):
-        apex_client._send_tx = MagicMock(
-            return_value={"transactionHash": FAKE_TX_HASH, "status": 1}
-        )
-        result = apex_client.set_budget(1, 1000)
-        apex_client.contract.functions.setBudget.assert_called_once_with(1, 1000, b"")
-        assert result["status"] == 1
-
-    def test_fund(self, apex_client):
-        apex_client._send_tx = MagicMock(
-            return_value={"transactionHash": FAKE_TX_HASH, "status": 1}
-        )
-        result = apex_client.fund(1, 1000)
-        apex_client.contract.functions.fund.assert_called_once_with(1, 1000, b"")
-        assert result["status"] == 1
-
-    def test_set_provider(self, apex_client):
-        apex_client._send_tx = MagicMock(
-            return_value={"transactionHash": FAKE_TX_HASH, "status": 1}
-        )
-        apex_client.set_provider(1, FAKE_ADDRESS)
-        apex_client.contract.functions.setProvider.assert_called_once()
-
-    def test_submit_valid(self, apex_client):
-        apex_client._send_tx = MagicMock(
-            return_value={"transactionHash": FAKE_TX_HASH, "status": 1}
-        )
-        deliverable = b"\x01" * 32
-        result = apex_client.submit(1, deliverable)
-        assert result["status"] == 1
-
-    def test_submit_invalid_length(self, apex_client):
-        with pytest.raises(ValueError, match="exactly 32 bytes"):
-            apex_client.submit(1, b"\x01" * 16)
-
-    def test_complete(self, apex_client):
-        apex_client._send_tx = MagicMock(
-            return_value={"transactionHash": FAKE_TX_HASH, "status": 1}
-        )
-        result = apex_client.complete(1)
-        apex_client.contract.functions.complete.assert_called_once()
-        assert result["status"] == 1
-
-    def test_reject(self, apex_client):
-        apex_client._send_tx = MagicMock(
-            return_value={"transactionHash": FAKE_TX_HASH, "status": 1}
-        )
-        result = apex_client.reject(1)
-        apex_client.contract.functions.reject.assert_called_once()
-        assert result["status"] == 1
-
-    def test_claim_refund(self, apex_client):
-        apex_client._send_tx = MagicMock(
-            return_value={"transactionHash": FAKE_TX_HASH, "status": 1}
-        )
-        result = apex_client.claim_refund(1)
-        apex_client.contract.functions.claimRefund.assert_called_once_with(1)
-        assert result["status"] == 1
-
-    def test_submit_with_opt_params(self, apex_client):
-        apex_client._send_tx = MagicMock(
-            return_value={"transactionHash": FAKE_TX_HASH, "status": 1}
-        )
-        deliverable = b"\x01" * 32
-        opt = b"custom_params"
-        apex_client.submit(1, deliverable, opt)
-        apex_client.contract.functions.submit.assert_called_once_with(1, deliverable, opt)
+    def test_accepts_network_string(self, mock_web3):
+        """String preset is resolved via ``resolve_network`` under the hood."""
+        fake_net = _fake_network()
+        with patch("bnbagent.apex.client.create_web3", return_value=mock_web3), \
+             patch(
+                 "bnbagent.apex.client.resolve_network", return_value=fake_net
+             ) as resolve, \
+             patch("bnbagent.apex.client.CommerceClient") as mcc, \
+             patch("bnbagent.apex.client.RouterClient") as mrc, \
+             patch("bnbagent.apex.client.PolicyClient") as mpc:
+            mcc.return_value.address = FAKE_COMMERCE
+            mrc.return_value.address = FAKE_ROUTER
+            mpc.return_value.address = FAKE_POLICY
+            APEXClient(_mock_wallet(), network="bsc-testnet")
+            resolve.assert_called_once_with("bsc-testnet")
 
 
-class TestReadMethods:
-    def test_get_job(self, apex_client):
-        raw = (
-            1,  # id
-            FAKE_ADDRESS,  # client
-            FAKE_ADDRESS,  # provider
-            FAKE_ADDRESS,  # evaluator
-            "test description",  # description
-            1000,  # budget
-            9999999999,  # expiredAt
-            1,  # status (FUNDED)
-            "0x" + "00" * 20,  # hook
-        )
-        apex_client.contract.functions.getJob.return_value.call.return_value = raw
-
-        job = apex_client.get_job(1)
-        assert job["jobId"] == 1
-        assert job["client"] == FAKE_ADDRESS
-        assert job["budget"] == 1000
-        assert job["status"] == APEXStatus.FUNDED
-        assert job["description"] == "test description"
-
-    def test_payment_token(self, apex_client):
-        apex_client.contract.functions.paymentToken.return_value.call.return_value = FAKE_ADDRESS
-        assert apex_client.payment_token() == FAKE_ADDRESS
-
-    def test_job_counter(self, apex_client):
-        apex_client.contract.functions.jobCounter.return_value.call.return_value = 10
-        assert apex_client.job_counter() == 10
+class TestTokenCache:
+    def test_payment_token_caches(self, facade):
+        facade.commerce.payment_token.return_value = FAKE_TOKEN
+        assert facade.payment_token == FAKE_TOKEN
+        assert facade.payment_token == FAKE_TOKEN
+        facade.commerce.payment_token.assert_called_once()
 
 
-class TestEventQueries:
-    def test_get_job_funded_events_no_filter(self, apex_client):
-        mock_log = MagicMock()
-        mock_log.__getitem__ = lambda s, k: {
-            "args": {"jobId": 1, "client": FAKE_ADDRESS, "provider": FAKE_ADDRESS, "amount": 100},
-            "blockNumber": 50,
-            "transactionHash": bytes.fromhex(FAKE_TX_HASH[2:]),
-        }[k]
-        apex_client.contract.events.JobFunded.return_value.get_logs.return_value = [mock_log]
+class TestCreateJob:
+    def test_defaults_to_router_as_evaluator_and_hook(self, facade):
+        facade.commerce.create_job.return_value = {"jobId": 1}
+        facade.create_job(expired_at=123, description="d")
+        facade.commerce.create_job.assert_called_once()
+        _, kwargs = facade.commerce.create_job.call_args
+        assert kwargs["evaluator"] == FAKE_ROUTER
+        assert kwargs["hook"] == FAKE_ROUTER
 
-        events = apex_client.get_job_funded_events(from_block=0)
-        assert len(events) == 1
-        assert events[0]["jobId"] == 1
-        assert events[0]["provider"] == FAKE_ADDRESS
-
-    def test_get_job_funded_events_with_provider_filter(self, apex_client):
-        apex_client.contract.events.JobFunded.return_value.get_logs.return_value = []
-        _events = apex_client.get_job_funded_events(from_block=0, provider=FAKE_ADDRESS)
-        call_kwargs = apex_client.contract.events.JobFunded.return_value.get_logs.call_args
-        filters = call_kwargs[1].get("argument_filters")
-        assert filters is not None
-        assert "provider" in filters
-
-    def test_get_job_created_events(self, apex_client):
-        apex_client.contract.events.JobCreated.return_value.get_logs.return_value = []
-        events = apex_client.get_job_created_events(from_block=0)
-        assert events == []
-
-    def test_get_budget_set_events_no_filter(self, apex_client):
-        apex_client.contract.events.BudgetSet.return_value.get_logs.return_value = []
-        events = apex_client.get_budget_set_events()
-        assert events == []
-
-    def test_get_budget_set_events_with_job_id(self, apex_client):
-        apex_client.contract.events.BudgetSet.return_value.get_logs.return_value = []
-        apex_client.get_budget_set_events(job_id=5)
-        call_kwargs = apex_client.contract.events.BudgetSet.return_value.get_logs.call_args
-        filters = call_kwargs[1].get("argument_filters")
-        assert filters is not None
-        assert filters["jobId"] == 5
-
-    def test_get_budget_set_events_returns_data(self, apex_client):
-        mock_log = MagicMock()
-        mock_log.__getitem__ = lambda s, k: {
-            "args": {"jobId": 5, "amount": 999},
-            "blockNumber": 60,
-            "transactionHash": bytes.fromhex(FAKE_TX_HASH[2:]),
-        }[k]
-        apex_client.contract.events.BudgetSet.return_value.get_logs.return_value = [mock_log]
-
-        events = apex_client.get_budget_set_events(job_id=5)
-        assert len(events) == 1
-        assert events[0]["amount"] == 999
+    def test_allows_overriding_hook(self, facade):
+        facade.commerce.create_job.return_value = {"jobId": 1}
+        custom_hook = "0x" + "11" * 20
+        facade.create_job(expired_at=123, description="d", hook=custom_hook)
+        _, kwargs = facade.commerce.create_job.call_args
+        assert kwargs["evaluator"] == FAKE_ROUTER
+        assert kwargs["hook"] == custom_hook
 
 
-class TestSendTx:
-    def test_requires_private_key(self, mock_web3, fake_abi):
-        client = APEXClient(mock_web3, FAKE_CONTRACT_ADDRESS, abi=fake_abi)
-        fn = MagicMock()
-        with pytest.raises(RuntimeError, match="private_key or wallet_provider required"):
-            client._send_tx(fn)
+class TestRegisterJob:
+    def test_binds_configured_policy_by_default(self, facade):
+        facade.register_job(1)
+        facade.router.register_job.assert_called_once_with(1, FAKE_POLICY)
 
-    def test_success_path(self, apex_client):
-        fn = MagicMock()
-        fn.build_transaction.return_value = {"nonce": 0}
-        result = apex_client._send_tx(fn)
-        assert result["status"] == 1
-        assert "transactionHash" in result
-
-    @patch("bnbagent.apex.client.time.sleep")
-    def test_nonce_retry(self, mock_sleep, apex_client):
-        fn = MagicMock()
-        fn.build_transaction.return_value = {"nonce": 0}
-        apex_client.w3.eth.send_raw_transaction.side_effect = [
-            Exception("nonce too low"),
-            bytes.fromhex(FAKE_TX_HASH[2:]),
-        ]
-        result = apex_client._send_tx(fn)
-        assert result["status"] == 1
-
-    @patch("bnbagent.apex.client.time.sleep")
-    def test_rate_limit_retry(self, mock_sleep, apex_client):
-        fn = MagicMock()
-        fn.build_transaction.return_value = {"nonce": 0}
-        apex_client.w3.eth.send_raw_transaction.side_effect = [
-            Exception("429 too many requests"),
-            bytes.fromhex(FAKE_TX_HASH[2:]),
-        ]
-        result = apex_client._send_tx(fn)
-        assert result["status"] == 1
-        mock_sleep.assert_called_once()
-
-    @patch("bnbagent.apex.client.time.sleep")
-    def test_exhausts_retries(self, mock_sleep, apex_client):
-        fn = MagicMock()
-        fn.build_transaction.return_value = {"nonce": 0}
-        apex_client.w3.eth.send_raw_transaction.side_effect = Exception("nonce too low")
-        with pytest.raises(Exception, match="nonce too low"):
-            apex_client._send_tx(fn)
-
-    def test_non_retryable_raises(self, apex_client):
-        fn = MagicMock()
-        fn.build_transaction.return_value = {"nonce": 0}
-        apex_client.w3.eth.send_raw_transaction.side_effect = Exception("execution reverted")
-        with pytest.raises(Exception, match="execution reverted"):
-            apex_client._send_tx(fn)
+    def test_policy_override(self, facade):
+        other_policy = "0x" + "ee" * 20
+        facade.register_job(1, other_policy)
+        facade.router.register_job.assert_called_once_with(1, other_policy)
 
 
-class TestCallWithRetry:
-    def test_success(self, apex_client):
-        fn = MagicMock()
-        fn.call.return_value = 42
-        result = apex_client._call_with_retry(fn)
-        assert result == 42
+class TestFund:
+    """Approval-floor strategy in ``APEXClient.fund``."""
 
-    @patch("bnbagent.apex.client.time.sleep")
-    def test_rate_limit_retry(self, mock_sleep, apex_client):
-        fn = MagicMock()
-        fn.call.side_effect = [Exception("429"), 99]
-        result = apex_client._call_with_retry(fn)
-        assert result == 99
+    def _prime(self, facade, current_allowance=0, decimals=18):
+        facade.commerce.payment_token.return_value = FAKE_TOKEN
+        facade._payment_token_address = FAKE_TOKEN
 
-    def test_non_retryable_raises(self, apex_client):
-        fn = MagicMock()
-        fn.call.side_effect = Exception("some other error")
-        with pytest.raises(Exception, match="some other error"):
-            apex_client._call_with_retry(fn)
+        erc20 = MagicMock()
+        erc20.allowance.return_value = current_allowance
+        erc20.decimals.return_value = decimals
+        erc20.symbol.return_value = "USDT"
+        erc20.approve.return_value = {"status": 1}
+        facade._erc20 = erc20
+        facade.commerce.fund.return_value = {"status": 1}
+        return erc20
 
+    def test_skips_approve_when_allowance_sufficient(self, facade):
+        erc20 = self._prime(facade, current_allowance=10_000)
+        facade.fund(job_id=1, amount=5_000)
+        erc20.approve.assert_not_called()
+        facade.commerce.fund.assert_called_once_with(1, 5_000)
 
-class TestGetJobsBatch:
-    def test_success(self, apex_client):
-        raw_jobs = [
-            (
-                i,                      # id
-                FAKE_ADDRESS,           # client
-                FAKE_ADDRESS,           # provider
-                FAKE_ADDRESS,           # evaluator
-                "test description",     # description
-                1000,                   # budget
-                9999999999,             # expiredAt
-                1,                      # status (FUNDED)
-                "0x" + "00" * 20,       # hook
-            )
-            for i in range(3)
-        ]
-
-        with patch("bnbagent.core.multicall.multicall_read") as mock_mc:
-            mock_mc.return_value = [
-                (True, raw_jobs[0]),
-                (True, raw_jobs[1]),
-                (True, raw_jobs[2]),
-            ]
-            jobs = apex_client.get_jobs_batch([0, 1, 2])
-
-        assert len(jobs) == 3
-        for i, job in enumerate(jobs):
-            assert job is not None
-            assert job["jobId"] == i
-            assert job["budget"] == 1000
-            assert job["status"] == APEXStatus.FUNDED
-
-    def test_partial_failure(self, apex_client):
-        raw_job = (
-            0, FAKE_ADDRESS, FAKE_ADDRESS, FAKE_ADDRESS,
-            "test", 1000, 9999999999, 1,
-            "0x" + "00" * 20,
+    def test_approves_default_floor_when_amount_below_floor(self, facade):
+        erc20 = self._prime(facade, current_allowance=0, decimals=6)
+        facade.fund(job_id=1, amount=1 * 10**6)
+        erc20.approve.assert_called_once_with(
+            FAKE_COMMERCE, DEFAULT_APPROVE_FLOOR_UNITS * 10**6
         )
 
-        with patch("bnbagent.core.multicall.multicall_read") as mock_mc:
-            mock_mc.return_value = [
-                (True, raw_job),
-                (False, None),
-                (True, raw_job),
-            ]
-            jobs = apex_client.get_jobs_batch([0, 1, 2])
+    def test_approves_exact_amount_when_above_default_floor(self, facade):
+        erc20 = self._prime(facade, current_allowance=0, decimals=6)
+        big = 500 * 10**6
+        facade.fund(job_id=1, amount=big)
+        erc20.approve.assert_called_once_with(FAKE_COMMERCE, big)
 
-        assert len(jobs) == 3
-        assert jobs[0] is not None
-        assert jobs[1] is None
-        assert jobs[2] is not None
+    def test_approve_floor_zero_means_exact(self, facade):
+        erc20 = self._prime(facade, current_allowance=0, decimals=6)
+        facade.fund(job_id=1, amount=5, approve_floor=0)
+        erc20.approve.assert_called_once_with(FAKE_COMMERCE, 5)
 
-    def test_empty(self, apex_client):
-        jobs = apex_client.get_jobs_batch([])
-        assert jobs == []
+    def test_approve_floor_custom(self, facade):
+        erc20 = self._prime(facade, current_allowance=0, decimals=6)
+        facade.fund(job_id=1, amount=5, approve_floor=1_000)
+        erc20.approve.assert_called_once_with(FAKE_COMMERCE, 1_000)
+
+    def test_approve_floor_negative_rejected(self, facade):
+        self._prime(facade, current_allowance=0)
+        with pytest.raises(ValueError, match="approve_floor must be >= 0"):
+            facade.fund(job_id=1, amount=5, approve_floor=-1)
+
+
+class TestWriteDelegation:
+    def test_settle_delegates_to_router(self, facade):
+        facade.settle(7, b"\x01")
+        facade.router.settle.assert_called_once_with(7, b"\x01")
+
+    def test_dispute_delegates_to_policy(self, facade):
+        facade.dispute(7)
+        facade.policy.dispute.assert_called_once_with(7)
+
+    def test_vote_reject_delegates_to_policy(self, facade):
+        facade.vote_reject(7)
+        facade.policy.vote_reject.assert_called_once_with(7)
+
+    def test_claim_refund_delegates_to_commerce(self, facade):
+        facade.claim_refund(7)
+        facade.commerce.claim_refund.assert_called_once_with(7)
+
+    def test_cancel_open_delegates_to_commerce_reject(self, facade):
+        facade.cancel_open(7)
+        facade.commerce.reject.assert_called_once()
+
+    def test_submit_encodes_data_url_as_opt_params(self, facade):
+        facade.submit(7, b"\x00" * 32, "https://example.com/job.json")
+        facade.commerce.submit.assert_called_once_with(
+            7, b"\x00" * 32, b"https://example.com/job.json"
+        )
+
+    def test_submit_empty_opt_params_when_no_url(self, facade):
+        facade.submit(7, b"\x00" * 32)
+        facade.commerce.submit.assert_called_once_with(7, b"\x00" * 32, b"")
+
+
+class TestReads:
+    def test_get_job_status(self, facade):
+        from bnbagent.apex.types import Job, JobStatus
+
+        facade.commerce.get_job.return_value = Job(
+            id=1,
+            client="0x" + "01" * 20,
+            provider="0x" + "02" * 20,
+            evaluator=FAKE_ROUTER,
+            description="d",
+            budget=100,
+            expired_at=0,
+            status=JobStatus.FUNDED,
+            hook=FAKE_ROUTER,
+        )
+        assert facade.get_job_status(1) == JobStatus.FUNDED
+
+    def test_get_verdict_delegates_to_policy(self, facade):
+        from bnbagent.apex.types import Verdict
+
+        facade.policy.check.return_value = (Verdict.APPROVE, b"\x00" * 32)
+        verdict, _ = facade.get_verdict(1)
+        assert verdict == Verdict.APPROVE

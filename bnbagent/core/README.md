@@ -23,8 +23,8 @@ re-exported from `bnbagent.core` for convenience.
 - **ContractClientMixin** -- mixin class that encapsulates build-sign-send
   logic with automatic nonce management and exponential-backoff retry on
   rate-limit and nonce errors. Prefers `WalletProvider.sign_transaction()`
-  when available, falls back to raw `private_key` signing. Used by both
-  `APEXClient` and `APEXEvaluatorClient`.
+  when available, falls back to raw `private_key` signing. Used by
+  `APEXClient`, `CommerceClient`, `RouterClient`, and `PolicyClient`.
 - **ModuleRegistry** -- discovers, validates dependencies, and initializes
   `BNBAgentModule` plugins. Supports built-in modules, explicit
   registration, and `pyproject.toml` entry points.
@@ -55,9 +55,11 @@ re-exported from `bnbagent.core` for convenience.
 ### `ContractClientMixin`
 
 Mixin for web3 contract clients. Subclasses set `self.w3`,
-`self._private_key`, `self._wallet_provider`, and `self._account`.
+`self._wallet_provider`, and `self._account`. A `None` wallet provider
+yields a read-only client (writes raise `RuntimeError`).
 
-Signing priority: `wallet_provider.sign_transaction()` > `web3.eth.account.sign_transaction(private_key)`.
+Signing flows exclusively through `wallet_provider.sign_transaction()` —
+raw private keys are never accepted at this layer.
 
 | Method | Description |
 |---|---|

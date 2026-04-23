@@ -1,9 +1,10 @@
-"""
-FastAPI application factory for APEX agents.
+"""FastAPI factory for APEX provider agents.
 
-Provides:
-- create_apex_app(): Create a self-contained FastAPI sub-app with APEX endpoints
-- _create_apex_routes(): Internal — build an APIRouter with APEX endpoints
+- ``create_apex_app(...)`` — build a FastAPI sub-app with the APEX endpoints
+  (negotiate / submit / status / job / settle) and optionally an
+  ``/job/execute`` endpoint driven by a user-provided ``on_job`` callback.
+- An optional auto-settle background loop drives ``router.settle(...)`` for
+  this provider's submitted jobs once the dispute window elapses.
 """
 
 from __future__ import annotations
@@ -11,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-import os
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -20,62 +20,67 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from ...core.config import get_env
 from ...storage import LocalStorageProvider
-from ..config import APEXConfig
+from ..config import APEX_ENV_PREFIX, APEXConfig
 from ..negotiation import NegotiationHandler
-from .job_ops import APEXJobOps
+from .job_ops import APEXJobOps, run_auto_settle_loop
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class APEXState:
-    """Shared state for APEX operations.
-
-    Initialized once and shared across all route handlers.
-    """
+    """Shared state for APEX routes."""
 
     config: APEXConfig
     job_ops: APEXJobOps
     negotiation_handler: NegotiationHandler
+    payment_token: str = ""
+    payment_token_decimals: int = 18
 
     def __repr__(self) -> str:
-        """Safe repr that hides sensitive data."""
         return (
             f"APEXState("
             f"agent_address='{self.job_ops.agent_address}', "
-            f"erc8183='{self.config.effective_erc8183_address}')"
+            f"commerce='{self.config.effective_commerce_address}')"
         )
 
 
 def create_apex_state(config: APEXConfig | None = None) -> APEXState:
-    """Create APEXState with all necessary components.
-
-    Args:
-        config: APEXConfig instance. If None, loads from env vars.
-
-    Returns:
-        APEXState with job_ops and negotiation_handler initialized.
-    """
+    """Build ``APEXState`` from config (env fallback) with sensible defaults."""
     if config is None:
         config = APEXConfig.from_env()
 
-    # Resolve storage: explicit > config.storage > local fallback
+    if config.wallet_provider is None:
+        raise ValueError(
+            "APEXConfig.wallet_provider is required to build APEXState. "
+            "Pass a wallet_provider= or set WALLET_PASSWORD (+ PRIVATE_KEY)."
+        )
+
     storage = config.storage or LocalStorageProvider()
 
     job_ops = APEXJobOps(
-        rpc_url=config.effective_rpc_url,
-        erc8183_address=config.effective_erc8183_address,
+        config.wallet_provider,
+        network=config.effective_network,
         storage_provider=storage,
-        chain_id=config.effective_chain_id,
-        wallet_provider=config.wallet_provider,
         service_price=int(config.service_price),
-        payment_token_decimals=config.payment_token_decimals,
     )
+
+    # Fetch payment token + decimals once at startup so /status responses
+    # don't cost an RPC per request. Non-fatal if lookup fails (e.g. RPC
+    # down during boot); we degrade to unknown and let later calls retry.
+    currency = ""
+    decimals = 18
+    try:
+        currency = job_ops.apex_client.payment_token
+        decimals = job_ops.apex_client.token_decimals()
+    except Exception as exc:
+        logger.warning(f"[APEX] payment_token lookup failed: {exc}")
 
     negotiation_handler = NegotiationHandler(
         service_price=config.service_price,
-        currency=config.effective_payment_token,
+        currency=currency,
         wallet_provider=config.wallet_provider,
     )
 
@@ -83,6 +88,8 @@ def create_apex_state(config: APEXConfig | None = None) -> APEXState:
         config=config,
         job_ops=job_ops,
         negotiation_handler=negotiation_handler,
+        payment_token=currency,
+        payment_token_decimals=decimals,
     )
 
 
@@ -90,66 +97,42 @@ def _create_apex_routes(
     state: APEXState,
     on_submit: Callable[[int, str, dict], Any] | None = None,
 ) -> APIRouter:
-    """Create an APIRouter with APEX endpoints (internal).
-
-    Used by ``create_apex_app()`` to build the route layer.
-
-    Args:
-        state: APEXState with config, job_ops, and negotiation_handler.
-        on_submit: Optional callback after successful submit.
-                   Called with (job_id, response_content, metadata)
-
-    Returns:
-        APIRouter with /submit, /job/{id}, /job/{id}/verify, /negotiate, /status, /health endpoints
-    """
     router = APIRouter(tags=["APEX"])
 
     @router.post("/submit")
     async def submit_result(request: Request):
-        """Submit job result on-chain."""
         try:
             body = await request.json()
         except Exception:
             return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-
         job_id = body.get("job_id")
-        response_content = body.get("response_content", "")
-        metadata = body.get("metadata")
-
         if job_id is None:
             return JSONResponse({"error": "job_id is required"}, status_code=400)
-
+        response_content = body.get("response_content", "")
+        metadata = body.get("metadata")
         result = await state.job_ops.submit_result(
             job_id=int(job_id),
             response_content=response_content,
             metadata=metadata,
         )
-
-        # Call callback if provided and successful
         if result.get("success") and on_submit:
             try:
                 on_submit(int(job_id), response_content, metadata or {})
-            except Exception as e:
-                logger.warning(f"[APEX] on_submit callback error: {e}")
-
-        status_code = 200 if result.get("success") else 500
-        return JSONResponse(result, status_code=status_code)
+            except Exception as exc:
+                logger.warning(f"[APEX] on_submit callback error: {exc}")
+        return JSONResponse(result, status_code=200 if result.get("success") else 500)
 
     @router.get("/job/{job_id}")
     async def get_job(job_id: int):
-        """Get job details from chain."""
         result = await state.job_ops.get_job(job_id)
         if not result.get("success"):
             return JSONResponse(result, status_code=500)
-        if "description" in result and isinstance(result["description"], bytes):
-            result["description"] = result["description"].decode("utf-8", errors="replace")
         if "status" in result and hasattr(result["status"], "value"):
             result["status"] = result["status"].value
         return JSONResponse(result)
 
     @router.get("/job/{job_id}/response")
     async def get_job_response(job_id: int):
-        """Get stored deliverable response for a job."""
         result = await state.job_ops.get_response(job_id)
         if not result.get("success"):
             return JSONResponse(result, status_code=404)
@@ -157,53 +140,59 @@ def _create_apex_routes(
 
     @router.get("/job/{job_id}/verify")
     async def verify_job(job_id: int):
-        """Verify if a job can be processed by this agent."""
         result = await state.job_ops.verify_job(job_id)
-        status_code = 200 if result.get("valid") else 400
-        return JSONResponse(result, status_code=status_code)
+        return JSONResponse(result, status_code=200 if result.get("valid") else 400)
+
+    @router.post("/job/{job_id}/settle")
+    async def settle_job(job_id: int):
+        """Manually trigger permissionless ``router.settle`` for a job.
+
+        Exposed for operators; the auto-settle loop handles the common case.
+        """
+        try:
+            result = await asyncio.to_thread(state.job_ops.apex_client.settle, job_id)
+            return JSONResponse({"success": True, "txHash": result["transactionHash"]})
+        except Exception as exc:
+            return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
     @router.post("/negotiate")
     async def negotiate(request: Request):
-        """Process negotiation request."""
         try:
             body = await request.json()
         except Exception:
             return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-
         if not isinstance(body, dict) or "terms" not in body:
             return JSONResponse(
                 {
                     "error": (
-                        "Request must include 'terms' with"
-                        " service_type, deliverables,"
-                        " quality_standards"
+                        "Request must include 'terms' with service_type,"
+                        " deliverables, quality_standards"
                     )
                 },
                 status_code=400,
             )
-
         try:
             result = state.negotiation_handler.negotiate(body)
             return JSONResponse(result.to_dict())
-        except Exception as e:
-            logger.error(f"[APEX] Negotiation failed: {e}")
+        except Exception as exc:
+            logger.error(f"[APEX] Negotiation failed: {exc}")
             return JSONResponse({"error": "Negotiation failed"}, status_code=500)
 
     @router.get("/status")
     async def status():
-        """Agent status endpoint."""
         return {
             "status": "ok",
             "agent_address": state.job_ops.agent_address,
-            "erc8183_address": state.config.effective_erc8183_address,
+            "commerce_address": state.config.effective_commerce_address,
+            "router_address": state.config.effective_router_address,
+            "policy_address": state.config.effective_policy_address,
             "service_price": state.config.service_price,
-            "currency": state.config.effective_payment_token,
-            "decimals": state.config.payment_token_decimals,
+            "currency": state.payment_token,
+            "decimals": state.payment_token_decimals,
         }
 
     @router.get("/health")
     async def health():
-        """Health check for load balancers and monitoring."""
         return {"status": "ok", "service": "APEX Agent"}
 
     return router
@@ -214,107 +203,77 @@ def create_apex_app(
     on_job: Callable[..., Any] | None = None,
     on_submit: Callable[[int, str, dict], Any] | None = None,
     on_job_skipped: Callable[[dict, str], Any] | None = None,
-    job_timeout: float | None = None,
+    exec_timeout: float | None = None,
     task_metadata: dict[str, Any] | None = None,
     prefix: str = "/apex",
+    auto_settle: bool = True,
+    auto_settle_interval: float = 30.0,
 ) -> FastAPI:
-    """Create a complete FastAPI application with APEX endpoints.
+    """Create a FastAPI application for an APEX provider agent.
 
-    **Standalone** (default) — run directly with ``uvicorn``::
+    Parameters
+    ----------
+    on_job
+        Job handler invoked for each pending funded job. One of::
 
-        app = create_apex_app(on_job=execute_job)
-        # Routes at /apex/submit, /apex/status, /apex/job/execute, etc.
-        # Root / endpoint with service info
+            def on_job(job: dict) -> str
+            async def on_job(job: dict) -> str
+            def on_job(job: dict) -> tuple[str, dict]    # per-job metadata
+            async def on_job(job: dict) -> tuple[str, dict]
 
-    **Mounted on a parent app** — pass ``prefix=""`` so the mount path
-    controls the prefix instead::
-
-        parent = FastAPI()
-        apex_app = create_apex_app(on_job=execute_job, prefix="")
-        parent.mount("/apex", apex_app)
-        # Routes at /apex/submit, /apex/status, /apex/job/execute, etc.
-
-    When ``on_job`` is provided, a one-time startup scan processes all
-    pending funded jobs, and a ``POST /job/execute`` endpoint is added
-    for client-initiated job execution with timeout support.
-
-    The ``on_job`` callback supports four signatures::
-
-        def on_job(job: dict) -> str                    # sync
-        async def on_job(job: dict) -> str              # async
-        def on_job(job: dict) -> tuple[str, dict]       # sync + per-job metadata
-        async def on_job(job: dict) -> tuple[str, dict] # async + per-job metadata
-
-    Without ``on_job``, the app only exposes HTTP endpoints (negotiate, submit,
-    job query, etc.) and you must handle job discovery yourself.
-
-    Args:
-        config: APEXConfig instance (default: loads from env)
-        on_job: Job handler called for each funded job. The SDK handles
-                verification and submission automatically.
-        on_submit: Optional callback after successful submit (lower-level;
-                   prefer ``on_job`` for most use cases)
-        on_job_skipped: Optional callback when a job fails verification and is
-                        skipped. Called with ``(job_dict, reason_string)``.
-                        Supports both sync and async callables.
-        job_timeout: Seconds to wait before returning 202 Accepted from
-                     ``/job/execute`` (default: env ``JOB_TIMEOUT`` or 120.0).
-                     The job continues in the background after timeout.
-        task_metadata: Default metadata attached to every submission
-        prefix: URL prefix for APEX routes (default: ``"/apex"``).
-                Use ``""`` when mounting as a sub-app so the mount path
-                controls the prefix.
-
-    Returns:
-        FastAPI application instance
+        The SDK handles verification, submission, and tracking for auto-settle.
+    exec_timeout
+        ``/job/execute`` callback timeout in seconds. Falls back to the
+        ``APEX_EXEC_TIMEOUT`` env var (default ``120``). This only caps
+        how long the HTTP request blocks before returning ``202 Accepted``
+        — on-chain ``job.expiredAt`` is a separate, stricter bound.
+    auto_settle
+        If True (default), spawn a background task that calls
+        ``router.settle(jobId)`` for this agent's submitted jobs once the
+        dispute window elapses. The permissionless settle keeps funds
+        flowing without relying on the client to settle.
+    auto_settle_interval
+        Seconds between auto-settle passes.
     """
     state = create_apex_state(config)
+    # /job/execute callback timeout (seconds). Only bounds how long the HTTP
+    # request blocks — on-chain job.expiredAt is a separate, stricter bound.
+    effective_exec_timeout = exec_timeout or float(
+        get_env("EXEC_TIMEOUT", "120.0", prefix=APEX_ENV_PREFIX) or "120.0"
+    )
 
-    effective_timeout = job_timeout or float(os.getenv("JOB_TIMEOUT", "120.0"))
-
-    # Shared set for dedup between startup scan and /job/execute endpoint
     processing_jobs: set[int] = set()
-
-    # Background tasks tracked for graceful shutdown
     background_tasks: set[asyncio.Task] = set()
-
-    is_async = inspect.iscoroutinefunction(on_job) if on_job else False
-
-    # ── Shared job execution logic ────────────────────────────────────────
+    stop_event = asyncio.Event()
+    is_async_on_job = inspect.iscoroutinefunction(on_job) if on_job else False
 
     async def _execute_job_internal(job_id: int) -> dict:
-        """Verify → on_job → submit_result. Used by startup scan and /job/execute."""
         verification = await state.job_ops.verify_job(job_id)
         if not verification.get("valid"):
             reason = verification.get("error", "unknown")
             if on_job_skipped:
                 try:
+                    target = verification.get("job", {"jobId": job_id})
                     if inspect.iscoroutinefunction(on_job_skipped):
-                        await on_job_skipped(verification.get("job", {"jobId": job_id}), reason)
+                        await on_job_skipped(target, reason)
                     else:
-                        await asyncio.to_thread(
-                            on_job_skipped, verification.get("job", {"jobId": job_id}), reason
-                        )
-                except Exception as e:
-                    logger.error(f"[APEX] on_job_skipped callback error: {e}")
+                        await asyncio.to_thread(on_job_skipped, target, reason)
+                except Exception as exc:
+                    logger.error(f"[APEX] on_job_skipped callback error: {exc}")
             return {"success": False, "error": reason}
 
         job = verification["job"]
 
-        # Call user's job handler
-        if is_async:
+        if is_async_on_job:
             task_result = await on_job(job)
         else:
             task_result = await asyncio.to_thread(on_job, job)
 
-        # Parse result: str or (str, dict)
         if isinstance(task_result, tuple):
             response_content, job_metadata = task_result
         else:
-            response_content = task_result
-            job_metadata = None
+            response_content, job_metadata = task_result, None
 
-        # Merge metadata: defaults ← per-job overrides
         merged_meta = dict(task_metadata) if task_metadata else {}
         if job_metadata:
             merged_meta.update(job_metadata)
@@ -324,36 +283,21 @@ def create_apex_app(
             response_content=response_content,
             metadata=merged_meta or None,
         )
-
         if submission.get("success"):
             submission["response_content"] = response_content
-            logger.info(f"[APEX] Job #{job_id} submitted! TX: {submission.get('txHash')}")
-
-            # Initiate UMA assertion so the liveness window starts immediately
-            assertion = await state.job_ops.initiate_assertion(job_id)
-            if assertion.get("success"):
-                logger.info(f"[APEX] Job #{job_id} assertion initiated! TX: {assertion.get('txHash')}")
-                submission["assertionTxHash"] = assertion.get("txHash")
-            else:
-                logger.error(f"[APEX] Job #{job_id} assertion failed: {assertion.get('error')}")
+            logger.info(f"[APEX] Job #{job_id} submitted, tx={submission.get('txHash')}")
         else:
             logger.error(f"[APEX] Job #{job_id} submission failed: {submission.get('error')}")
-
         return submission
 
-    # ── Startup scan ──────────────────────────────────────────────────────
-
     async def _startup_scan_worker():
-        """One-time scan: process all pending funded jobs."""
         try:
             result = await state.job_ops.get_pending_jobs()
             if not result.get("success"):
                 logger.warning(f"[APEX] Startup scan error: {result.get('error')}")
                 return
-
             jobs = result.get("jobs", [])
             logger.info(f"[APEX] Startup scan found {len(jobs)} pending job(s)")
-
             for job in jobs:
                 job_id = job["jobId"]
                 if job_id in processing_jobs:
@@ -361,27 +305,27 @@ def create_apex_app(
                 processing_jobs.add(job_id)
                 try:
                     await _execute_job_internal(job_id)
-                except Exception as e:
-                    logger.error(f"[APEX] Startup scan job #{job_id} failed: {e}")
+                except Exception as exc:
+                    logger.error(f"[APEX] Startup scan job #{job_id} failed: {exc}")
                 finally:
                     processing_jobs.discard(job_id)
-        except Exception as e:
-            logger.error(f"[APEX] Startup scan failed: {e}")
+        except Exception as exc:
+            logger.error(f"[APEX] Startup scan failed: {exc}")
 
-    async def _run_startup_scan():
-        """Launch startup scan as a background task."""
-        task = asyncio.create_task(_startup_scan_worker())
+    def _spawn(coro) -> asyncio.Task:
+        task = asyncio.create_task(coro)
         background_tasks.add(task)
         task.add_done_callback(background_tasks.discard)
-
-    # ── Lifespan (standalone mode) ────────────────────────────────────────
+        return task
 
     @asynccontextmanager
-    async def apex_lifespan(app: FastAPI):
+    async def apex_lifespan(_: FastAPI):
         if on_job:
-            await _run_startup_scan()
+            _spawn(_startup_scan_worker())
+        if auto_settle:
+            _spawn(run_auto_settle_loop(state.job_ops, auto_settle_interval, stop_event=stop_event))
         yield
-        # Shutdown: cancel all remaining background tasks
+        stop_event.set()
         for t in background_tasks:
             t.cancel()
         if background_tasks:
@@ -389,39 +333,28 @@ def create_apex_app(
 
     apex_app = FastAPI(
         title="APEX Agent",
-        description="APEX (Agent Payment Exchange Protocol) Agent",
+        description="APEX v1 provider agent (AgenticCommerce + Router + OptimisticPolicy)",
         lifespan=apex_lifespan,
     )
 
     router = _create_apex_routes(state=state, on_submit=on_submit)
     apex_app.include_router(router, prefix=prefix)
 
-    # Add /job/execute endpoint when on_job is provided
     if on_job:
         process_path = f"{prefix}/job/execute" if prefix else "/job/execute"
 
         @apex_app.post(process_path)
         async def process_job(request: Request):
-            """Client-initiated job execution with timeout.
-
-            Executes the job via on_job. If the job completes within
-            ``job_timeout`` seconds, returns 200 with the full result.
-            If it times out, returns 202 Accepted and the job continues
-            in the background.
-            """
             try:
                 body = await request.json()
             except Exception:
                 return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-
             raw_job_id = body.get("job_id")
             if raw_job_id is None:
                 return JSONResponse({"error": "job_id is required"}, status_code=400)
-
             job_id = int(raw_job_id)
 
-            # Per-request timeout override
-            req_timeout = effective_timeout
+            req_timeout = effective_exec_timeout
             if body.get("timeout") is not None:
                 try:
                     req_timeout = float(body["timeout"])
@@ -435,38 +368,29 @@ def create_apex_app(
 
             processing_jobs.add(job_id)
 
-            async def _job_wrapper():
+            async def _wrapper():
                 try:
                     return await _execute_job_internal(job_id)
                 finally:
                     processing_jobs.discard(job_id)
 
-            task = asyncio.create_task(_job_wrapper())
-            background_tasks.add(task)
-            task.add_done_callback(background_tasks.discard)
-
+            task = _spawn(_wrapper())
             done, _ = await asyncio.wait({task}, timeout=req_timeout)
-
             if done:
-                # Completed within timeout → 200/500 with full result
                 result = task.result()
-                status_code = 200 if result.get("success") else 500
-                return JSONResponse(result, status_code=status_code)
-            else:
-                # Timeout → 202 Accepted, task continues in background
-                return JSONResponse(
-                    {
-                        "status": "accepted",
-                        "job_id": job_id,
-                        "message": (
-                            "Job accepted, processing in background. "
-                            "Use GET /job/{id}/response to retrieve the result."
-                        ),
-                    },
-                    status_code=202,
-                )
+                return JSONResponse(result, status_code=200 if result.get("success") else 500)
+            return JSONResponse(
+                {
+                    "status": "accepted",
+                    "job_id": job_id,
+                    "message": (
+                        "Job accepted, processing in background."
+                        " Use GET /job/{id}/response to retrieve the result."
+                    ),
+                },
+                status_code=202,
+            )
 
-    # Standalone mode: add root endpoint with service info
     if prefix:
 
         @apex_app.get("/")
@@ -476,6 +400,7 @@ def create_apex_app(
                 "job": f"{prefix}/job/{{job_id}}",
                 "response": f"{prefix}/job/{{job_id}}/response",
                 "verify": f"{prefix}/job/{{job_id}}/verify",
+                "settle": f"{prefix}/job/{{job_id}}/settle",
                 "negotiate": f"{prefix}/negotiate",
                 "status": f"{prefix}/status",
                 "health": f"{prefix}/health",
@@ -488,11 +413,8 @@ def create_apex_app(
                 "endpoints": endpoints,
             }
 
-    # Store state for external access
     apex_app.state.apex = state
-
-    # Expose startup scan for gateway (mounted mode where lifespan doesn't propagate)
     if on_job:
-        apex_app.state.startup = _run_startup_scan
+        apex_app.state.startup = lambda: _spawn(_startup_scan_worker())
 
     return apex_app

@@ -33,26 +33,26 @@ class TestCreateStorageProvider:
 class TestStorageProviderFromEnv:
     def test_default_local(self, monkeypatch, tmp_path):
         monkeypatch.delenv("STORAGE_PROVIDER", raising=False)
-        monkeypatch.delenv("PINATA_JWT", raising=False)
+        monkeypatch.delenv("STORAGE_API_KEY", raising=False)
         provider = storage_provider_from_env(local_path=str(tmp_path / "local"))
         assert isinstance(provider, LocalStorageProvider)
 
     def test_ipfs_with_env(self, monkeypatch):
         monkeypatch.setenv("STORAGE_PROVIDER", "ipfs")
-        monkeypatch.setenv("PINATA_JWT", "test-jwt-env")
+        monkeypatch.setenv("STORAGE_API_KEY", "test-jwt-env")
         provider = storage_provider_from_env()
         assert isinstance(provider, IPFSStorageProvider)
 
-    def test_ipfs_missing_jwt_returns_none(self, monkeypatch):
+    def test_ipfs_missing_api_key_returns_none(self, monkeypatch):
         monkeypatch.setenv("STORAGE_PROVIDER", "ipfs")
-        monkeypatch.delenv("PINATA_JWT", raising=False)
+        monkeypatch.delenv("STORAGE_API_KEY", raising=False)
         provider = storage_provider_from_env()
         assert provider is None
 
     def test_custom_gateway(self, monkeypatch):
         monkeypatch.setenv("STORAGE_PROVIDER", "ipfs")
-        monkeypatch.setenv("PINATA_JWT", "test-jwt")
-        monkeypatch.setenv("PINATA_GATEWAY", "https://custom.gateway.io/ipfs/")
+        monkeypatch.setenv("STORAGE_API_KEY", "test-jwt")
+        monkeypatch.setenv("STORAGE_GATEWAY_URL", "https://custom.gateway.io/ipfs/")
         provider = storage_provider_from_env()
         assert isinstance(provider, IPFSStorageProvider)
         assert "custom.gateway.io" in provider._gateway

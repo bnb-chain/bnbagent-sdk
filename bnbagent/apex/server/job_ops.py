@@ -1,20 +1,17 @@
-"""
-APEXJobOps — simplified async job lifecycle operations for APEX agents.
+"""APEXJobOps — async job lifecycle operations for APEX provider agents.
 
-Wraps APEXClient with async operations for agent-side job handling.
+Wraps ``APEXClient`` (synchronous) for use from async frameworks (FastAPI etc.).
+All blocking web3 calls go through ``asyncio.to_thread(...)`` so the event loop
+is never blocked.
 
-Example:
-    ops = APEXJobOps(
-        rpc_url="https://bsc-testnet.bnbchain.org",
-        erc8183_address="0x...",
-        private_key="0x...",
-        storage_provider=ipfs_provider,  # optional
-    )
-
-    await ops.submit_result(
-        job_id=123,
-        response_content="Agent response...",
-    )
+Responsibilities
+----------------
+- Discover pending funded jobs for this agent.
+- Verify jobs (status / provider / expiry / budget / negotiation quote).
+- Submit deliverables (with optional off-chain upload via ``StorageProvider``).
+- Auto-settle the provider's own jobs once the dispute window elapses
+  (permissionless ``router.settle``; the provider just happens to be the
+  natural operator with incentive to do so).
 """
 
 from __future__ import annotations
@@ -23,196 +20,76 @@ import asyncio
 import json
 import logging
 import time
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from web3 import Web3
 
-if TYPE_CHECKING:
-    from ...wallets.wallet_provider import WalletProvider
-
+from ...config import NetworkConfig
 from ...storage.interface import StorageProvider
-from ..client import APEXClient, APEXStatus
-from ..evaluator_client import APEXEvaluatorClient
+from ...wallets.wallet_provider import WalletProvider
+from ..client import APEXClient
+from ..types import JobStatus, Verdict
 
 logger = logging.getLogger(__name__)
 
 
 class APEXJobOps:
-    """
-    Simplified job lifecycle operations for agents using ERC-8183.
+    """Async job-lifecycle operations for a provider agent.
 
-    Combines APEXClient and optional storage handling into a single interface.
-
-    Async/Sync Boundary
-    --------------------
-    APEXClient is **synchronous** — web3.py's HTTPProvider performs blocking I/O
-    and there is no mature async web3 transport.  Converting APEXClient to async
-    would be a large, risky change.
-
-    APEXJobOps is **async** so it can be used from async frameworks (FastAPI, etc.)
-    without blocking the event loop.  Every call to a synchronous APEXClient method
-    is wrapped in ``asyncio.to_thread()`` to offload the blocking I/O to a thread.
-
-    Storage providers (StorageProvider) are **async** — their ``upload()`` method
-    is awaited directly.
+    Parameters
+    ----------
+    wallet_provider
+        Provider signing material (required).
+    network
+        Preset name or a ``NetworkConfig`` for custom deployments.
+    storage_provider
+        Optional off-chain storage for deliverable payloads.
+    service_price
+        Minimum acceptable budget in token raw units. Used by
+        ``verify_job`` to reject under-priced jobs. Advertised decimals in
+        402 responses are fetched dynamically from the payment token.
     """
 
     def __init__(
         self,
-        rpc_url: str,
-        erc8183_address: str,
-        private_key: str = "",
+        wallet_provider: WalletProvider,
+        network: str | NetworkConfig = "bsc-testnet",
+        *,
         storage_provider: StorageProvider | None = None,
-        chain_id: int = 97,
-        wallet_provider: WalletProvider | None = None,
         service_price: int = 0,
-        payment_token_decimals: int = 18,
-        evaluator_address: str | None = None,
-    ):
-        """
-        Initialize job operations.
+    ) -> None:
+        if wallet_provider is None:
+            raise ValueError("wallet_provider is required for APEXJobOps")
 
-        Args:
-            rpc_url: RPC endpoint URL
-            erc8183_address: AgenticCommerceUpgradeable contract address (ERC-8183)
-            private_key: Agent wallet private key (optional if wallet_provider set)
-            storage_provider: Optional storage provider for response upload
-            chain_id: Chain ID (default: 97 for BSC Testnet)
-            wallet_provider: Optional wallet provider for signing transactions (preferred)
-            service_price: Agent's service price in token smallest unit.
-                           Jobs with budget below this are rejected by verify_job().
-                           0 means no budget check (default).
-            payment_token_decimals: Decimal places of the payment token (default: 18).
-                                   Included in verify_job() 402 responses so clients
-                                   can interpret the amounts.
-            evaluator_address: Optional APEXEvaluatorUpgradeable contract address.
-                               Required for initiate_assertion(). If not set,
-                               the evaluator address is read from the job's evaluator field.
-        """
-        self._rpc_url = rpc_url
-        self._erc8183_address = erc8183_address
-        if private_key:
-            self._private_key = private_key if private_key.startswith("0x") else f"0x{private_key}"
-        else:
-            self._private_key = None
-        self._storage = storage_provider
-        self._chain_id = chain_id
         self._wallet_provider = wallet_provider
+        self._network = network
+        self._storage = storage_provider
         self._service_price = service_price
-        self._payment_token_decimals = payment_token_decimals
-        self._evaluator_address = evaluator_address
+
         self._client: APEXClient | None = None
-        self._evaluator_client: APEXEvaluatorClient | None = None
-        self._deliverable_urls: dict[int, str] = {}  # job_id → data_url
-        self._last_scanned_block: int | None = None
-        self._startup_scan_done: bool = False
+        self._deliverable_urls: dict[int, str] = {}
         self._last_known_counter: int = 0
-        self._pending_open_ids: set[int] = set()  # OPEN jobs assigned to this agent
+        self._startup_scan_done: bool = False
+        self._pending_open_ids: set[int] = set()
+        # Jobs in Submitted state we own, for auto-settle tracking.
+        self._submitted_ids: set[int] = set()
+
+    # ----------------------------------------------------------- construction
 
     def _get_client(self) -> APEXClient:
-        """Get or create APEXClient instance (sync — no I/O on first call beyond ABI load)."""
         if self._client is None:
-            from ...core.abi_loader import create_web3
-
-            w3 = create_web3(self._rpc_url)
-            self._client = APEXClient(
-                web3=w3,
-                contract_address=self._erc8183_address,
-                private_key=self._private_key,
-                wallet_provider=self._wallet_provider,
-            )
+            self._client = APEXClient(self._wallet_provider, self._network)
         return self._client
-
-    def _get_evaluator_client(self, evaluator_address: str) -> APEXEvaluatorClient:
-        """Get or create APEXEvaluatorClient for the given evaluator address."""
-        if self._evaluator_client is None or self._evaluator_client.address.lower() != evaluator_address.lower():
-            from ...core.abi_loader import create_web3
-            w3 = create_web3(self._rpc_url)
-            self._evaluator_client = APEXEvaluatorClient(
-                web3=w3,
-                contract_address=evaluator_address,
-                private_key=self._private_key,
-                wallet_provider=self._wallet_provider,
-            )
-        return self._evaluator_client
 
     @property
     def agent_address(self) -> str:
-        """Get the agent's wallet address."""
-        if self._wallet_provider:
-            return self._wallet_provider.address
-        client = self._get_client()
-        return client._account or ""
+        return self._wallet_provider.address
 
-    async def initiate_assertion(self, job_id: int) -> dict[str, Any]:
-        """
-        Approve bond tokens and initiate a UMA assertion for a submitted job.
+    @property
+    def apex_client(self) -> APEXClient:
+        return self._get_client()
 
-        Must be called after submit_result(). The agent (provider) pays the bond.
-        The bond is returned to the agent after the liveness period (if not disputed).
-
-        Args:
-            job_id: The job ID
-
-        Returns:
-            Dict with success status and transaction hash
-        """
-        try:
-            client = self._get_client()
-
-            # Get job to find evaluator address
-            job = await asyncio.to_thread(client.get_job, job_id)
-            evaluator_addr = job.get("evaluator", "")
-            if not evaluator_addr or evaluator_addr == "0x" + "0" * 40:
-                return {"success": False, "error": "Job has no evaluator set"}
-
-            eval_client = self._get_evaluator_client(evaluator_addr)
-
-            # Idempotent: skip if assertion already initiated (e.g. by afterAction hook)
-            already = await asyncio.to_thread(eval_client.job_assertion_initiated, job_id)
-            if already:
-                logger.info(f"[APEXJobOps] initiate_assertion({job_id}): already initiated, skipping")
-                return {"success": True, "already_initiated": True}
-
-            # Pre-flight: check provider has enough bond tokens and allowance (0 gas)
-            provider_addr = self.agent_address
-            readiness = await asyncio.to_thread(eval_client.check_bond_readiness, provider_addr)
-            logger.info(
-                f"[APEXJobOps] bond readiness: balance={readiness['balance']},"
-                f" allowance={readiness['allowance']}, min={readiness['min_bond']}"
-            )
-
-            if readiness["needs_tokens"]:
-                return {
-                    "success": False,
-                    "error": (
-                        f"Provider has insufficient bond tokens: "
-                        f"have {readiness['balance']}, need {readiness['min_bond']} "
-                        f"of {readiness['bond_token']}"
-                    ),
-                }
-
-            # Approve evaluator with max uint256 (unlimited) so future jobs skip this step
-            if readiness["needs_approval"]:
-                MAX_UINT256 = 2**256 - 1
-                approve_result = await asyncio.to_thread(
-                    eval_client.approve_bond_token, readiness["bond_token"], MAX_UINT256
-                )
-                logger.info(f"[APEXJobOps] approve_bond({job_id}) tx: {approve_result['transactionHash']}")
-
-            # Initiate assertion — evaluator pulls bond from provider, then calls OOv3
-            result = await asyncio.to_thread(eval_client.initiate_assertion, job_id)
-            logger.info(f"[APEXJobOps] initiate_assertion({job_id}) tx: {result['transactionHash']}")
-
-            return {
-                "success": True,
-                "txHash": result["transactionHash"],
-                "bond": readiness["min_bond"],
-            }
-
-        except Exception as e:
-            logger.error(f"[APEXJobOps] initiate_assertion({job_id}) failed: {e}")
-            return {"success": False, "error": str(e)}
+    # ------------------------------------------------------------- submission
 
     async def submit_result(
         self,
@@ -222,28 +99,8 @@ class APEXJobOps:
         include_job_context: bool = True,
         include_negotiation_history: bool = True,
     ) -> dict[str, Any]:
-        """
-        Submit job result on-chain.
-
-        Args:
-            job_id: The job ID
-            response_content: Agent's response content
-            metadata: Optional metadata to include in storage
-            include_job_context: Include job details in IPFS data (default: True)
-            include_negotiation_history: Include budget negotiation history (default: True)
-
-        Returns:
-            Dict with success status, transaction hash, and data URL.
-            After this returns successfully, call initiate_assertion(job_id) to
-            start the UMA dispute window (the agent pays the bond).
-
-        Note:
-            Negotiation terms are stored on-chain in job.description (schema v1).
-            The IPFS deliverable data is supplementary — the on-chain description
-            is the authoritative record for UMA dispute resolution.
-        """
+        """Upload deliverable (if storage configured) and call ``submit`` on-chain."""
         try:
-            # Defense-in-depth: verify job before submitting (SDK-H01)
             verification = await self.verify_job(job_id)
             if not verification.get("valid"):
                 return {
@@ -251,458 +108,162 @@ class APEXJobOps:
                     "error": f"Job verification failed: {verification.get('error', 'unknown')}",
                 }
 
-            client = self._get_client()
+            apex = self._get_client()
 
-            data_url = ""
-            submit_timestamp = int(time.time())
+            submit_ts = int(time.time())
+            data: dict[str, Any] = {"response": response_content}
 
-            # Build deliverable data structure
-            deliverable_data: dict[str, Any] = {
-                "response": response_content,
-            }
-
-            # Include job context if requested
             if include_job_context or include_negotiation_history:
-                job_info = await asyncio.to_thread(client.get_job, job_id)
-
+                job = await asyncio.to_thread(apex.get_job, job_id)
                 if include_job_context:
-                    # Get payment token address
-                    try:
-                        payment_token = await asyncio.to_thread(client.payment_token)
-                    except Exception:
-                        payment_token = ""
-
-                    # Include ALL ERC-8183 Job fields
-                    deliverable_data["job"] = {
+                    data["job"] = {
                         "id": job_id,
-                        "description": job_info.get("description", ""),
-                        "budget": str(job_info.get("budget", 0)),
-                        "client": job_info.get("client", ""),
-                        "provider": job_info.get("provider", ""),
-                        "evaluator": job_info.get("evaluator", ""),
-                        "hook": job_info.get("hook", ""),
-                        "expired_at": job_info.get("expiredAt", 0),
-                        "payment_token": payment_token,
+                        "description": job.description,
+                        "budget": str(job.budget),
+                        "client": job.client,
+                        "provider": job.provider,
+                        "evaluator": job.evaluator,
+                        "hook": job.hook,
+                        "expired_at": job.expired_at,
+                        "payment_token": await asyncio.to_thread(lambda: apex.payment_token),
                     }
-
-                # Include negotiation history if requested
+                # Negotiation history is reconstructed from BudgetSet events.
                 if include_negotiation_history:
                     try:
-                        budget_events = await asyncio.to_thread(
-                            client.get_budget_set_events, job_id, 0
+                        events = await asyncio.to_thread(
+                            apex.commerce.contract.events.BudgetSet().get_logs,
+                            from_block=0,
+                            to_block="latest",
+                            argument_filters={"jobId": job_id},
                         )
-
-                        deliverable_data["negotiation"] = {
+                        data["negotiation"] = {
                             "budget_history": [
                                 {
-                                    "amount": str(event.get("amount")),
-                                    "block": event.get("blockNumber"),
-                                    "tx": event.get("transactionHash"),
+                                    "amount": str(e["args"]["amount"]),
+                                    "block": e["blockNumber"],
+                                    "tx": e["transactionHash"].hex(),
                                 }
-                                for event in budget_events
+                                for e in events
                             ],
                         }
-                    except Exception as e:
-                        logger.warning(f"[APEXJobOps] Failed to get negotiation history: {e}")
-                        deliverable_data["negotiation"] = {"budget_history": []}
+                    except Exception as exc:
+                        logger.warning(f"[APEXJobOps] negotiation history failed: {exc}")
+                        data["negotiation"] = {"budget_history": []}
 
-            # Build metadata with timestamps
             meta = metadata.copy() if metadata else {}
-            if "timestamps" not in meta:
-                meta["timestamps"] = {}
-            meta["timestamps"]["submitted_at"] = submit_timestamp
-            deliverable_data["metadata"] = meta
+            meta.setdefault("timestamps", {})["submitted_at"] = submit_ts
+            data["metadata"] = meta
 
-            # Use job-{jobId}.json naming convention
             filename = f"job-{job_id}.json"
-
-            # Storage providers are async — call upload() directly.
-            # Do NOT use save_sync() here; we are already in an async context.
+            data_url = ""
             if self._storage:
-                data_url = await self._storage.upload(deliverable_data, filename)
-                logger.info(f"[APEXJobOps] Response uploaded: {data_url}")
+                data_url = await self._storage.upload(data, filename)
+                logger.info(f"[APEXJobOps] Deliverable uploaded: {data_url}")
                 self._deliverable_urls[job_id] = data_url
 
             if data_url:
                 deliverable_hash = Web3.keccak(text=data_url)
-                # Pass data_url as opt_params for evaluator hooks (e.g., APEXEvaluator)
-                opt_params = data_url.encode("utf-8")
             else:
                 deliverable_hash = Web3.keccak(
-                    text=json.dumps(deliverable_data, sort_keys=True, separators=(",", ":"))
+                    text=json.dumps(data, sort_keys=True, separators=(",", ":"))
                 )
-                opt_params = b""
 
-            result = await asyncio.to_thread(client.submit, job_id, deliverable_hash, opt_params)
-
-            logger.info(f"[APEXJobOps] submit({job_id}) success: {result['transactionHash']}")
+            result = await asyncio.to_thread(
+                apex.submit, job_id, deliverable_hash, data_url or None
+            )
+            logger.info(f"[APEXJobOps] submit({job_id}) tx: {result['transactionHash']}")
+            # Track for auto-settle.
+            self._submitted_ids.add(job_id)
             return {
                 "success": True,
                 "txHash": result["transactionHash"],
                 "dataUrl": data_url,
                 "deliverableHash": "0x" + deliverable_hash.hex(),
             }
+        except Exception as exc:
+            logger.error(f"[APEXJobOps] submit({job_id}) failed: {exc}")
+            return {"success": False, "error": str(exc)}
 
-        except Exception as e:
-            logger.error(f"[APEXJobOps] submit({job_id}) failed: {e}")
-            return {"success": False, "error": str(e)}
+    # ------------------------------------------------------------------ reads
 
     async def get_job(self, job_id: int) -> dict[str, Any]:
-        """
-        Get job details from chain.
-
-        Args:
-            job_id: The job ID to query
-
-        Returns:
-            Job details dict with success status, or error dict on failure
-        """
         try:
-            client = self._get_client()
-            job = await asyncio.to_thread(client.get_job, job_id)
-            return {"success": True, **job}
-        except Exception as e:
-            logger.error(f"[APEXJobOps] get_job({job_id}) failed: {e}")
-            return {"success": False, "error": str(e)}
+            job = await asyncio.to_thread(self._get_client().get_job, job_id)
+            return {
+                "success": True,
+                "jobId": job.id,
+                "client": job.client,
+                "provider": job.provider,
+                "evaluator": job.evaluator,
+                "description": job.description,
+                "budget": job.budget,
+                "expiredAt": job.expired_at,
+                "status": job.status,
+                "hook": job.hook,
+            }
+        except Exception as exc:
+            logger.error(f"[APEXJobOps] get_job({job_id}) failed: {exc}")
+            return {"success": False, "error": str(exc)}
+
+    async def get_job_status(self, job_id: int) -> dict[str, Any]:
+        result = await self.get_job(job_id)
+        if not result.get("success"):
+            return result
+        return {"success": True, "status": result["status"]}
 
     async def get_response(self, job_id: int) -> dict[str, Any]:
-        """
-        Get stored deliverable response for a job.
-
-        Resolution order:
-        1. In-memory cache (populated by submit_result in the same process)
-        2. Convention filename for local storage (``job-{id}.json``)
-        3. On-chain fallback: decode ``optParams`` from the submit tx calldata
-           to recover the data URL, then download from storage.
-
-        The on-chain fallback (step 3) costs 2 RPC calls (``eth_getLogs`` on
-        the indexed ``JobSubmitted`` event + ``eth_getTransactionByHash``) and
-        only triggers when steps 1 and 2 miss — typically after a process
-        restart with IPFS storage.
-
-        Args:
-            job_id: The job ID
-
-        Returns:
-            Dict with success status and deliverable data (response, job, metadata, etc.)
-        """
+        """Retrieve stored deliverable (cache → local file → on-chain URL)."""
         if not self._storage:
             return {"success": False, "error": "No storage configured"}
 
-        # 1. In-memory cache (populated by submit_result)
         url = self._deliverable_urls.get(job_id)
         if url:
             try:
                 data = await self._storage.download(url)
                 return {"success": True, **data}
-            except Exception as e:
-                logger.warning(f"[APEXJobOps] get_response({job_id}) download failed: {e}")
+            except Exception as exc:
+                logger.warning(f"[APEXJobOps] get_response({job_id}) download failed: {exc}")
 
-        # 2. Convention filename for local storage
         if hasattr(self._storage, "_base"):
             try:
                 filepath = self._storage._base / f"job-{job_id}.json"
                 if filepath.exists():
-                    content = filepath.read_text(encoding="utf-8")
-                    data = json.loads(content)
+                    data = json.loads(filepath.read_text(encoding="utf-8"))
                     return {"success": True, **data}
-            except Exception as e:
-                logger.warning(f"[APEXJobOps] get_response({job_id}) file read failed: {e}")
+            except Exception as exc:
+                logger.warning(f"[APEXJobOps] get_response({job_id}) file read failed: {exc}")
 
-        # 3. On-chain fallback: recover data URL from submit tx calldata
         try:
-            client = self._get_client()
-            data_url = await asyncio.to_thread(client.get_submit_data_url, job_id)
+            apex = self._get_client()
+            data_url = await asyncio.to_thread(apex.commerce.get_submit_data_url, job_id)
             if data_url:
-                logger.info(
-                    f"[APEXJobOps] get_response({job_id}) recovered URL from chain: {data_url}"
-                )
-                # Cache for subsequent requests
                 self._deliverable_urls[job_id] = data_url
                 data = await self._storage.download(data_url)
                 return {"success": True, **data}
-        except Exception as e:
-            logger.warning(f"[APEXJobOps] get_response({job_id}) on-chain fallback failed: {e}")
+        except Exception as exc:
+            logger.warning(f"[APEXJobOps] get_response({job_id}) on-chain fallback failed: {exc}")
 
         return {"success": False, "error": f"Response not found for job {job_id}"}
 
-    async def get_job_status(self, job_id: int) -> dict[str, Any]:
-        """
-        Get job status from chain.
-
-        Args:
-            job_id: The job ID to query
-
-        Returns:
-            Dict with success status and APEXStatus value, or error dict on failure
-        """
-        try:
-            client = self._get_client()
-            job = await asyncio.to_thread(client.get_job, job_id)
-            return {"success": True, "status": job["status"]}
-        except Exception as e:
-            logger.error(f"[APEXJobOps] get_job_status({job_id}) failed: {e}")
-            return {"success": False, "error": str(e)}
-
-    async def _multicall_scan(self, job_ids: list[int]) -> dict[str, Any]:
-        """Scan a list of job IDs via Multicall3 and return funded jobs for this agent.
-
-        Uses a single ``eth_call`` (via ``get_jobs_batch``) instead of
-        ``eth_getLogs``, avoiding BSC public node rate limits on log queries.
-
-        Also tracks OPEN jobs assigned to this agent in ``_pending_open_ids``
-        so they can be re-checked on subsequent polls (a job may transition
-        from OPEN → FUNDED between polls without changing ``next_job_id``).
-
-        Args:
-            job_ids: Job IDs to check.
-
-        Returns:
-            ``{"success": True, "jobs": [...]}`` with funded, non-expired jobs
-            assigned to this agent.
-        """
-        if not job_ids:
-            return {"success": True, "jobs": []}
-
-        client = self._get_client()
-        my_address = self.agent_address.lower()
-
-        all_jobs = await asyncio.to_thread(client.get_jobs_batch, list(job_ids))
-
-        now = int(time.time())
-        pending_jobs = []
-        for job in all_jobs:
-            if job is None:
-                continue
-            provider = job.get("provider", "").lower()
-            status = job.get("status")
-            expired_at = job.get("expiredAt", 0)
-            job_id = job.get("jobId")
-
-            if provider != my_address:
-                # Not our job — stop tracking if we were
-                self._pending_open_ids.discard(job_id)
-                continue
-
-            if status == APEXStatus.FUNDED and expired_at > now:
-                pending_jobs.append({"success": True, **job})
-                self._pending_open_ids.discard(job_id)
-            elif status == APEXStatus.OPEN:
-                # Track OPEN jobs so we re-check them next poll
-                self._pending_open_ids.add(job_id)
-            else:
-                # Terminal state (COMPLETED, REJECTED, EXPIRED, etc.)
-                self._pending_open_ids.discard(job_id)
-
-        return {"success": True, "jobs": pending_jobs}
-
-    async def _startup_scan(self) -> dict[str, Any]:
-        """One-time batch scan of all jobs via Multicall3.
-
-        Called on the first invocation of ``get_pending_jobs()`` to bootstrap
-        the pending-job list without relying on ``eth_getLogs`` over a large
-        block range (which triggers rate limits on public BSC nodes).
-
-        After completing, sets ``_startup_scan_done = True`` and records the
-        block number at the time of the snapshot so that subsequent calls can
-        do progressive Multicall3 scanning from that point forward.
-
-        If the Multicall3 batch read fails, falls back to the original
-        event-based scan for this one call.
-        """
-        client = self._get_client()
-
-        # Record block BEFORE scanning so progressive scanning picks up
-        # any events emitted during or after the batch read.
-        snapshot_block = await asyncio.to_thread(lambda: client.w3.eth.block_number)
-
-        try:
-            counter = await asyncio.to_thread(client.job_counter)
-            if counter == 0:
-                self._last_scanned_block = snapshot_block
-                self._startup_scan_done = True
-                return {"success": True, "jobs": []}
-
-            result = await self._multicall_scan(list(range(1, counter + 1)))
-
-            self._last_scanned_block = snapshot_block
-            self._last_known_counter = counter
-            self._startup_scan_done = True
-            logger.info(
-                f"[APEXJobOps] Startup scan complete: {len(result['jobs'])} pending"
-                f" out of {counter} total jobs (snapshot block {snapshot_block})"
-            )
-            return result
-
-        except Exception as e:
-            logger.warning(
-                f"[APEXJobOps] Multicall startup scan failed ({e}),"
-                " falling back to event scan"
-            )
-            # Fall back to original event-based scan
-            my_address = self.agent_address.lower()
-            try:
-                latest_block = snapshot_block
-                from_block = max(0, latest_block - 45000)
-                result = await self._event_scan(from_block, "latest", my_address)
-                return result
-            except Exception as fallback_err:
-                logger.warning(
-                    f"[APEXJobOps] Event scan fallback also failed ({fallback_err}),"
-                    " will retry next poll"
-                )
-                return {"success": False, "error": str(fallback_err), "jobs": []}
-            finally:
-                self._last_scanned_block = snapshot_block
-                self._startup_scan_done = True
-
-    async def _event_scan(
-        self,
-        from_block: int,
-        to_block: str,
-        my_address: str,
-    ) -> dict[str, Any]:
-        """Scan JobFunded events and filter for pending jobs assigned to this agent."""
-        client = self._get_client()
-
-        logger.debug(f"[APEXJobOps] Querying JobFunded events from block {from_block}")
-        events = await asyncio.to_thread(client.get_job_funded_events, from_block, to_block)
-        logger.debug(f"[APEXJobOps] Found {len(events)} JobFunded events")
-
-        pending_jobs = []
-        for event in events:
-            job_id = event["jobId"]
-            job_result = await self.get_job(job_id)
-            if not job_result.get("success"):
-                logger.warning(f"[APEXJobOps] Failed to get job #{job_id}")
-                continue
-
-            provider = job_result.get("provider", "").lower()
-            status = job_result.get("status")
-            logger.debug(
-                f"[APEXJobOps] Job #{job_id}:"
-                f" provider={provider},"
-                f" status={status},"
-                f" my_address={my_address}"
-            )
-
-            if provider == my_address and status == APEXStatus.FUNDED:
-                pending_jobs.append(job_result)
-                logger.info(f"[APEXJobOps] Job #{job_id} matched! Adding to pending jobs")
-
-        return {"success": True, "jobs": pending_jobs}
-
-    async def get_pending_jobs(
-        self,
-        from_block: int | None = None,
-        to_block: str = "latest",
-        max_block_range: int = 45000,
-    ) -> dict[str, Any]:
-        """
-        Get funded jobs assigned to this agent.
-
-        Uses Multicall3 ``eth_call`` exclusively to avoid ``eth_getLogs`` rate
-        limits on BSC public nodes:
-
-        1. **Startup** (first call): Multicall3 batch scan of all existing jobs.
-        2. **Runtime** (subsequent calls): Check ``next_job_id()`` — if unchanged,
-           no new jobs exist (0 extra RPCs).  If new jobs exist, scan only the
-           new ID range via Multicall3 (1 ``eth_call``).
-
-        If the caller explicitly passes ``from_block``, the original event-based
-        scan is used instead (for backwards compatibility).
-
-        Args:
-            from_block: Starting block number. When None, uses Multicall3
-                scanning (startup scan on first call, then incremental).
-            to_block: Ending block number or "latest"
-            max_block_range: Maximum block range for fallback queries
-                (default: 45000, under BSC 50k limit)
-
-        Returns:
-            Dict with success status and list of pending job dicts, or error on failure
-        """
-        try:
-            # Explicit from_block: honor it directly, no state update
-            if from_block is not None:
-                my_address = self.agent_address.lower()
-                return await self._event_scan(from_block, to_block, my_address)
-
-            # First call: one-time startup scan via Multicall3
-            if not self._startup_scan_done:
-                return await self._startup_scan()
-
-            # Subsequent calls: progressive Multicall3 scanning
-            client = self._get_client()
-            counter = await asyncio.to_thread(client.job_counter)
-
-            # Collect IDs to scan: new job IDs + previously-seen OPEN jobs
-            scan_set: set[int] = set()
-            if counter > self._last_known_counter:
-                scan_set.update(range(self._last_known_counter + 1, counter + 1))
-            scan_set.update(self._pending_open_ids)
-
-            if not scan_set:
-                logger.debug(
-                    f"[APEXJobOps] Progressive scan: no changes"
-                    f" (counter={counter}, open={len(self._pending_open_ids)})"
-                )
-                return {"success": True, "jobs": []}
-
-            scan_ids = sorted(scan_set)
-            logger.info(
-                f"[APEXJobOps] Progressive scan: checking {len(scan_ids)} job(s)"
-                f" (new={counter - self._last_known_counter},"
-                f" open={len(self._pending_open_ids)})"
-            )
-            result = await self._multicall_scan(scan_ids)
-            self._last_known_counter = counter
-            found = len(result.get("jobs", []))
-            if found:
-                logger.info(
-                    f"[APEXJobOps] Progressive scan found {found} pending job(s)"
-                )
-            return result
-
-        except Exception as e:
-            logger.error(f"[APEXJobOps] get_pending_jobs failed: {e}")
-            return {"success": False, "error": str(e), "jobs": []}
+    # ---------------------------------------------------- verification helper
 
     async def verify_job(self, job_id: int) -> dict[str, Any]:
-        """
-        Verify if a job can be processed by this agent.
-
-        Checks:
-        - Job exists
-        - Job status is FUNDED
-        - This agent is the provider
-        - Job has not expired
-        - Security warnings (e.g., evaluator == client)
-
-        Args:
-            job_id: The job ID to verify
-
-        Returns:
-            Dict with valid status, job details, warnings, and error details
-        """
+        """Check job can be worked by this agent. Returns ``{valid, error, job, warnings}``."""
         try:
             job_result = await self.get_job(job_id)
-
             if not job_result.get("success"):
-                error_msg = job_result.get("error", "Unknown error")
-                is_network_error = any(
-                    kw in error_msg.lower() for kw in ["timeout", "connection", "network", "rpc"]
-                )
+                msg = job_result.get("error", "Unknown error")
+                is_net = any(k in msg.lower() for k in ["timeout", "connection", "network", "rpc"])
                 return {
                     "valid": False,
-                    "error": f"Failed to fetch job: {error_msg}",
-                    "error_code": 503 if is_network_error else 500,
+                    "error": f"Failed to fetch job: {msg}",
+                    "error_code": 503 if is_net else 500,
                 }
 
-            my_address = self.agent_address.lower()
+            me = self.agent_address.lower()
 
-            if job_result.get("status") != APEXStatus.FUNDED:
-                status = job_result.get("status")
+            status = job_result.get("status")
+            if status != JobStatus.FUNDED:
                 status_name = status.name if hasattr(status, "name") else str(status)
                 return {
                     "valid": False,
@@ -710,26 +271,17 @@ class APEXJobOps:
                     "error_code": 409,
                 }
 
-            if job_result.get("provider", "").lower() != my_address:
+            if str(job_result.get("provider", "")).lower() != me:
                 return {
                     "valid": False,
                     "error": "This agent is not the provider for this job",
                     "error_code": 403,
                 }
 
-            import time
-
             now = int(time.time())
-
             if job_result.get("expiredAt", 0) <= now:
-                return {
-                    "valid": False,
-                    "error": "Job has expired",
-                    "error_code": 408,
-                }
+                return {"valid": False, "error": "Job has expired", "error_code": 408}
 
-            # Quote expiry check: if description has a structured quote_expires_at,
-            # skip jobs where the original price quote has expired.
             description = job_result.get("description", "")
             if description:
                 try:
@@ -744,36 +296,33 @@ class APEXJobOps:
                                 "error_code": 410,
                             }
                 except Exception:
-                    pass  # Non-fatal: malformed description doesn't block job
+                    pass
 
-            # Budget check
             if self._service_price > 0:
-                job_budget = job_result.get("budget", 0)
-                if job_budget < self._service_price:
+                budget = job_result.get("budget", 0)
+                if budget < self._service_price:
+                    decimals = await asyncio.to_thread(self._get_client().token_decimals)
                     return {
                         "valid": False,
                         "error": (
-                            f"Job budget ({job_budget}) is below agent's "
-                            f"service price ({self._service_price})"
+                            f"Job budget ({budget}) is below agent's"
+                            f" service price ({self._service_price})"
                         ),
                         "error_code": 402,
                         "service_price": str(self._service_price),
-                        "decimals": self._payment_token_decimals,
+                        "decimals": decimals,
                     }
 
-            # Security warnings
             warnings = []
-            evaluator = job_result.get("evaluator", "").lower()
-            client = job_result.get("client", "").lower()
-
+            evaluator = str(job_result.get("evaluator", "")).lower()
+            client = str(job_result.get("client", "")).lower()
             if evaluator == client:
                 warnings.append(
                     {
                         "code": "CLIENT_AS_EVALUATOR",
                         "message": (
-                            "Evaluator is same as client -"
-                            " client can reject and get"
-                            " refund after you submit"
+                            "Evaluator equals client — client can self-reject"
+                            " and refund after you submit."
                         ),
                     }
                 )
@@ -783,19 +332,201 @@ class APEXJobOps:
                 "job": job_result,
                 "warnings": warnings if warnings else None,
             }
-
-        except Exception as e:
-            error_msg = str(e)
-            is_network_error = any(
-                kw in error_msg.lower() for kw in ["timeout", "connection", "network", "rpc"]
-            )
+        except Exception as exc:
+            msg = str(exc)
+            is_net = any(k in msg.lower() for k in ["timeout", "connection", "network", "rpc"])
             return {
                 "valid": False,
-                "error": f"Failed to verify job: {error_msg}",
-                "error_code": 503 if is_network_error else 500,
+                "error": f"Failed to verify job: {msg}",
+                "error_code": 503 if is_net else 500,
             }
 
-    @property
-    def apex_client(self) -> APEXClient:
-        """Get the underlying APEXClient instance."""
-        return self._get_client()
+    # ----------------------------------------------------- pending-job scanner
+
+    async def _multicall_scan(self, job_ids: list[int]) -> dict[str, Any]:
+        if not job_ids:
+            return {"success": True, "jobs": []}
+
+        apex = self._get_client()
+        me = self.agent_address.lower()
+
+        jobs = await asyncio.to_thread(apex.commerce.get_jobs_batch, list(job_ids))
+
+        now = int(time.time())
+        pending: list[dict[str, Any]] = []
+        for job in jobs:
+            if job is None:
+                continue
+            if job.provider.lower() != me:
+                self._pending_open_ids.discard(job.id)
+                continue
+            if job.status == JobStatus.FUNDED and job.expired_at > now:
+                pending.append(
+                    {
+                        "success": True,
+                        "jobId": job.id,
+                        "client": job.client,
+                        "provider": job.provider,
+                        "evaluator": job.evaluator,
+                        "description": job.description,
+                        "budget": job.budget,
+                        "expiredAt": job.expired_at,
+                        "status": job.status,
+                        "hook": job.hook,
+                    }
+                )
+                self._pending_open_ids.discard(job.id)
+            elif job.status == JobStatus.OPEN:
+                self._pending_open_ids.add(job.id)
+            elif job.status == JobStatus.SUBMITTED:
+                self._submitted_ids.add(job.id)
+            else:
+                self._pending_open_ids.discard(job.id)
+                self._submitted_ids.discard(job.id)
+
+        return {"success": True, "jobs": pending}
+
+    async def _startup_scan(self) -> dict[str, Any]:
+        apex = self._get_client()
+        try:
+            counter = await asyncio.to_thread(apex.commerce.job_counter)
+        except Exception as exc:
+            logger.warning(f"[APEXJobOps] startup scan counter failed: {exc}")
+            self._startup_scan_done = True
+            return {"success": False, "error": str(exc), "jobs": []}
+
+        if counter == 0:
+            self._startup_scan_done = True
+            return {"success": True, "jobs": []}
+
+        result = await self._multicall_scan(list(range(1, counter + 1)))
+        self._last_known_counter = counter
+        self._startup_scan_done = True
+        logger.info(
+            f"[APEXJobOps] Startup scan: {len(result['jobs'])} pending of {counter} total"
+        )
+        return result
+
+    async def get_pending_jobs(self) -> dict[str, Any]:
+        """Return funded, non-expired jobs assigned to this provider."""
+        try:
+            if not self._startup_scan_done:
+                return await self._startup_scan()
+
+            apex = self._get_client()
+            counter = await asyncio.to_thread(apex.commerce.job_counter)
+            scan_set: set[int] = set()
+            if counter > self._last_known_counter:
+                scan_set.update(range(self._last_known_counter + 1, counter + 1))
+            scan_set.update(self._pending_open_ids)
+            if not scan_set:
+                return {"success": True, "jobs": []}
+
+            result = await self._multicall_scan(sorted(scan_set))
+            self._last_known_counter = counter
+            return result
+        except Exception as exc:
+            logger.error(f"[APEXJobOps] get_pending_jobs failed: {exc}")
+            return {"success": False, "error": str(exc), "jobs": []}
+
+    # --------------------------------------------------------- auto-settle
+
+    def track_for_settle(self, job_id: int) -> None:
+        """Register a submitted job for the auto-settle loop."""
+        self._submitted_ids.add(job_id)
+
+    async def auto_settle_once(self) -> dict[str, Any]:
+        """Single pass of the auto-settle loop.
+
+        For each tracked ``Submitted`` job owned by this provider, read the
+        current verdict via the Policy's ``check`` and, if it is APPROVE or
+        REJECT, call ``router.settle(jobId)``. Pending verdicts are skipped
+        and retried on the next pass.
+        """
+        if not self._submitted_ids:
+            return {"success": True, "settled": [], "skipped": []}
+
+        apex = self._get_client()
+        me = self.agent_address.lower()
+        settled: list[int] = []
+        skipped: list[int] = []
+        errors: list[tuple[int, str]] = []
+
+        for job_id in list(self._submitted_ids):
+            try:
+                job = await asyncio.to_thread(apex.get_job, job_id)
+            except Exception as exc:
+                errors.append((job_id, f"get_job failed: {exc}"))
+                continue
+
+            if job.provider.lower() != me:
+                # Stop tracking foreign jobs (defensive).
+                self._submitted_ids.discard(job_id)
+                continue
+            if job.status != JobStatus.SUBMITTED:
+                # Already settled by someone else, or moved to a terminal state.
+                self._submitted_ids.discard(job_id)
+                continue
+
+            try:
+                verdict, _reason = await asyncio.to_thread(apex.get_verdict, job_id)
+            except Exception as exc:
+                errors.append((job_id, f"get_verdict failed: {exc}"))
+                continue
+
+            if verdict == Verdict.PENDING:
+                skipped.append(job_id)
+                continue
+
+            try:
+                result = await asyncio.to_thread(apex.settle, job_id)
+                logger.info(
+                    f"[APEXJobOps] auto-settle({job_id}) verdict={verdict.name}"
+                    f" tx={result['transactionHash']}"
+                )
+                settled.append(job_id)
+                self._submitted_ids.discard(job_id)
+            except Exception as exc:
+                # Another settler may have won the race; re-check next pass.
+                logger.warning(f"[APEXJobOps] settle({job_id}) failed: {exc}")
+                errors.append((job_id, f"settle failed: {exc}"))
+
+        return {
+            "success": True,
+            "settled": settled,
+            "skipped": skipped,
+            "errors": errors,
+        }
+
+
+async def run_auto_settle_loop(
+    ops: APEXJobOps,
+    interval: float = 30.0,
+    *,
+    stop_event: asyncio.Event | None = None,
+) -> None:
+    """Long-running background task: periodically call ``auto_settle_once``.
+
+    Stops when ``stop_event`` is set (if provided) or on cancellation.
+    Exceptions inside a pass are logged and the loop continues — permissionless
+    ``settle`` calls are inherently racey and transient failures are expected.
+    """
+    logger.info(f"[APEXJobOps] auto-settle loop starting (interval={interval:.1f}s)")
+    try:
+        while True:
+            try:
+                await ops.auto_settle_once()
+            except Exception as exc:
+                logger.warning(f"[APEXJobOps] auto-settle pass error: {exc}")
+
+            if stop_event is not None:
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=interval)
+                    break
+                except asyncio.TimeoutError:
+                    continue
+            else:
+                await asyncio.sleep(interval)
+    except asyncio.CancelledError:
+        logger.info("[APEXJobOps] auto-settle loop cancelled")
+        raise

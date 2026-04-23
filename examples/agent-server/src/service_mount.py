@@ -11,14 +11,14 @@ Usage:
     python src/service_mount.py
 
 Environment (agent-server/.env):
-    RPC_URL, ERC8183_ADDRESS                   — Required (ERC-8183)
+    RPC_URL, NETWORK                           — Required (RPC + network key)
     PRIVATE_KEY                                — Recommended (imported on first run)
-    APEX_EVALUATOR_ADDRESS                     — Required (evaluator)
-    STORAGE_PROVIDER=ipfs, STORAGE_API_KEY     — Required (IPFS upload)
-    SERVICE_PRICE=1000000000000000000           — Negotiation price (1 U)
-    PAYMENT_TOKEN_ADDRESS                      — BEP20 payment token
-    PORT=8003                                  — Server port
-    JOB_TIMEOUT=120                            — /job/execute timeout (seconds)
+    WALLET_PASSWORD                            — Required (keystore password)
+    APEX_COMMERCE_ADDRESS, APEX_ROUTER_ADDRESS, APEX_POLICY_ADDRESS — Optional overrides
+    STORAGE_PROVIDER=ipfs, STORAGE_API_KEY      — Required for IPFS upload
+    APEX_SERVICE_PRICE=1000000000000000000      — Negotiation price (1 U)
+    PORT=8003                                   — Server port
+    APEX_EXEC_TIMEOUT=120                       — /job/execute callback timeout (seconds)
 """
 
 import logging
@@ -232,16 +232,18 @@ if __name__ == "__main__":
   Blockchain News Agent (APEX — Mount Mode)
 {'='*55}
   Port:           {PORT}
-  ERC-8183:       {config.effective_erc8183_address}
-  Evaluator:      {config.effective_evaluator_address}
+  Commerce:       {config.effective_commerce_address}
+  Router:         {config.effective_router_address}
+  Policy:         {config.effective_policy_address}
   Storage:        {type(config.storage).__name__ if config.storage else "local (default)"}
   Price:          {int(config.service_price) / 10**18} U tokens
 
-  APEX endpoints (initialized):
-    POST /apex/negotiate   — Negotiation
-    POST /apex/submit      — Submit result
-    GET  /apex/job/{{id}}    — Job details
-    GET  /apex/status      — Agent status
+  APEX endpoints (mounted at /apex):
+    POST /apex/negotiate          — Negotiation
+    POST /apex/submit             — Submit result
+    GET  /apex/job/{{id}}           — Job details
+    POST /apex/job/{{id}}/settle    — Manual settle
+    GET  /apex/status             — Agent status
 
   App endpoints:
     GET  /              — Service info

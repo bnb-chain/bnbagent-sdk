@@ -555,7 +555,7 @@ class TestNegotiationHandler:
 
     def test_from_apex_client(self):
         mock_client = MagicMock()
-        mock_client.payment_token.return_value = "0xTokenAddr"
+        mock_client.payment_token = "0xTokenAddr"
         handler = NegotiationHandler.from_apex_client(
             apex_client=mock_client,
             service_price="20000000000000000000",
@@ -564,7 +564,7 @@ class TestNegotiationHandler:
 
     def test_from_apex_client_passes_wallet(self):
         mock_client = MagicMock()
-        mock_client.payment_token.return_value = "0xTokenAddr"
+        mock_client.payment_token = "0xTokenAddr"
         mock_wallet = MagicMock()
         handler = NegotiationHandler.from_apex_client(
             apex_client=mock_client,
