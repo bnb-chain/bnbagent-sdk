@@ -6,7 +6,7 @@ Public surface:
 - ``CommerceClient`` / ``RouterClient`` / ``PolicyClient`` — sub-clients for
   users who need direct access to a single layer.
 - ``Job`` / ``JobStatus`` / ``Verdict`` — shared types.
-- ``NegotiationHandler`` / ``ServiceRecord`` — off-chain negotiation helpers.
+- ``NegotiationHandler`` — off-chain negotiation helpers.
 """
 
 from __future__ import annotations
@@ -25,14 +25,6 @@ from .negotiation import (
 )
 from .policy import PolicyClient
 from .router import RouterClient
-from .service_record import (
-    NegotiationTerms,
-    OnChainReferences,
-    RequestData,
-    ResponseData,
-    ServiceRecord,
-    TimestampData,
-)
 from .types import (
     REASON_APPROVED,
     REASON_REJECTED,
@@ -65,13 +57,6 @@ __all__ = [
     "ReasonCode",
     "NegotiationHandler",
     "NegotiationResult",
-    # Service record
-    "ServiceRecord",
-    "RequestData",
-    "ResponseData",
-    "NegotiationTerms",
-    "TimestampData",
-    "OnChainReferences",
     # Module
     "get_apex_config",
     "APEXModule",

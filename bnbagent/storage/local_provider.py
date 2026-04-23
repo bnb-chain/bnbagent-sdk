@@ -1,7 +1,7 @@
 """
 LocalStorageProvider — file-system storage for development and testing.
 
-Stores ServiceRecord JSON as local files. URLs use the file:// scheme.
+Stores deliverable JSON as local files. URLs use the file:// scheme.
 """
 
 from __future__ import annotations
