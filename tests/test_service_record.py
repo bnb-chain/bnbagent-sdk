@@ -61,20 +61,19 @@ class TestResponseData:
 class TestNegotiationTerms:
     def test_to_dict(self):
         t = NegotiationTerms(
-            service_type="news",
             deliverables="summary",
             quality_standards="high",
             agreed_price="100",
             currency="0xTok",
         )
         d = t.to_dict()
-        assert d["service_type"] == "news"
+        assert d["deliverables"] == "summary"
         assert d["agreed_price"] == "100"
 
     def test_from_dict(self):
-        d = {"service_type": "x", "agreed_price": "50"}
+        d = {"deliverables": "output", "agreed_price": "50"}
         t = NegotiationTerms.from_dict(d)
-        assert t.service_type == "x"
+        assert t.deliverables == "output"
         assert t.agreed_price == "50"
 
 

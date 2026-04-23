@@ -75,22 +75,18 @@ class ResponseData:
 class NegotiationTerms:
     """Snapshot of the agreed APEX TermSpecification. quality_standards is the dispute anchor."""
 
-    service_type: str = ""
     deliverables: str = ""
     quality_standards: str = ""
     success_criteria: list[str] | None = None
     agreed_price: str = "0"
     currency: str = ""
-    deadline_seconds: int | None = None
 
     def to_dict(self) -> dict:
         result = {
-            "service_type": self.service_type,
             "deliverables": self.deliverables,
             "quality_standards": self.quality_standards,
             "agreed_price": self.agreed_price,
             "currency": self.currency,
-            "deadline_seconds": self.deadline_seconds,
         }
         if self.success_criteria is not None:
             result["success_criteria"] = self.success_criteria
@@ -99,13 +95,11 @@ class NegotiationTerms:
     @classmethod
     def from_dict(cls, data: dict) -> NegotiationTerms:
         return cls(
-            service_type=data.get("service_type", ""),
             deliverables=data.get("deliverables", ""),
             quality_standards=data.get("quality_standards", ""),
             success_criteria=data.get("success_criteria"),
             agreed_price=data.get("agreed_price", "0"),
             currency=data.get("currency", ""),
-            deadline_seconds=data.get("deadline_seconds"),
         )
 
 
