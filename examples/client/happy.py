@@ -6,8 +6,9 @@ window → settle → COMPLETED.
 
 from __future__ import annotations
 
-import hashlib
 import time
+
+from web3 import Web3
 
 from _helpers import banner, load_settings, make_client, minutes_from_now
 
@@ -49,7 +50,7 @@ def main() -> None:
         return
 
     provider = make_client(s.provider_pk, s.network)
-    content_hash = hashlib.sha256(f"happy-{job_id}-{int(time.time())}".encode()).digest()
+    content_hash = Web3.keccak(text=f"happy-{job_id}-{int(time.time())}")
     provider.submit(job_id, content_hash, deliverable_url="https://example.com/deliverable")
     print("[provider] submit OK (Funded -> Submitted)")
 

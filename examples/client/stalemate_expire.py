@@ -12,8 +12,9 @@ NOTE: ``expiredAt`` must be > jobExpiry; the demo uses a very small
 
 from __future__ import annotations
 
-import hashlib
 import time
+
+from web3 import Web3
 
 from _helpers import banner, load_settings, make_client, minutes_from_now
 
@@ -48,7 +49,8 @@ def main() -> None:
         print(f"\nProvider must submit jobId={job_id} before continuing.\n")
         return
     provider = make_client(s.provider_pk, s.network)
-    provider.submit(job_id, content_hash=hashlib.sha256(f"stalemate-{job_id}".encode()).digest())
+    content_hash = Web3.keccak(text=f"stalemate-{job_id}")
+    provider.submit(job_id, content_hash, deliverable_url="https://example.com/deliverable")
     print("[provider] submit OK")
 
     client.dispute(job_id)
