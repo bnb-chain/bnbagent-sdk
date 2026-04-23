@@ -96,10 +96,13 @@ class APEXJobOps:
         job_id: int,
         response_content: str,
         metadata: dict[str, Any] | None = None,
-        include_job_context: bool = True,
-        include_negotiation_history: bool = True,
     ) -> dict[str, Any]:
-        """Upload deliverable (if storage configured) and call ``submit`` on-chain."""
+        """Build a structured deliverable, upload it, and call ``submit`` on-chain.
+
+        The on-chain ``deliverable`` (bytes32) is ``keccak256(response_content)``.
+        The full deliverable JSON is uploaded to storage and its URL is passed
+        as ``optParams`` so verifiers can retrieve the off-chain payload.
+        """
         try:
             verification = await self.verify_job(job_id)
             if not verification.get("valid"):
@@ -110,75 +113,42 @@ class APEXJobOps:
 
             apex = self._get_client()
 
-            submit_ts = int(time.time())
-            data: dict[str, Any] = {"response": response_content}
+            chain_id = await asyncio.to_thread(lambda: apex.commerce.w3.eth.chain_id)
+            data: dict[str, Any] = {
+                "version": 1,
+                "job_id": job_id,
+                "chain_id": chain_id,
+                "contracts": {
+                    "commerce": apex.commerce.address,
+                    "router": apex.router.address,
+                    "policy": apex.policy.address,
+                },
+                "response": {
+                    "content": response_content,
+                    "content_type": "text/plain",
+                },
+                "submitted_at": int(time.time()),
+                "metadata": metadata or {},
+            }
 
-            if include_job_context or include_negotiation_history:
-                job = await asyncio.to_thread(apex.get_job, job_id)
-                if include_job_context:
-                    data["job"] = {
-                        "id": job_id,
-                        "description": job.description,
-                        "budget": str(job.budget),
-                        "client": job.client,
-                        "provider": job.provider,
-                        "evaluator": job.evaluator,
-                        "hook": job.hook,
-                        "expired_at": job.expired_at,
-                        "payment_token": await asyncio.to_thread(lambda: apex.payment_token),
-                    }
-                # Negotiation history is reconstructed from BudgetSet events.
-                if include_negotiation_history:
-                    try:
-                        events = await asyncio.to_thread(
-                            apex.commerce.contract.events.BudgetSet().get_logs,
-                            from_block=0,
-                            to_block="latest",
-                            argument_filters={"jobId": job_id},
-                        )
-                        data["negotiation"] = {
-                            "budget_history": [
-                                {
-                                    "amount": str(e["args"]["amount"]),
-                                    "block": e["blockNumber"],
-                                    "tx": e["transactionHash"].hex(),
-                                }
-                                for e in events
-                            ],
-                        }
-                    except Exception as exc:
-                        logger.warning(f"[APEXJobOps] negotiation history failed: {exc}")
-                        data["negotiation"] = {"budget_history": []}
+            content_hash = Web3.keccak(text=response_content)
 
-            meta = metadata.copy() if metadata else {}
-            meta.setdefault("timestamps", {})["submitted_at"] = submit_ts
-            data["metadata"] = meta
-
-            filename = f"job-{job_id}.json"
-            data_url = ""
+            deliverable_url = ""
             if self._storage:
-                data_url = await self._storage.upload(data, filename)
-                logger.info(f"[APEXJobOps] Deliverable uploaded: {data_url}")
-                self._deliverable_urls[job_id] = data_url
-
-            if data_url:
-                deliverable_hash = Web3.keccak(text=data_url)
-            else:
-                deliverable_hash = Web3.keccak(
-                    text=json.dumps(data, sort_keys=True, separators=(",", ":"))
-                )
+                deliverable_url = await self._storage.upload(data, f"job-{job_id}.json")
+                logger.info(f"[APEXJobOps] Deliverable uploaded: {deliverable_url}")
+                self._deliverable_urls[job_id] = deliverable_url
 
             result = await asyncio.to_thread(
-                apex.submit, job_id, deliverable_hash, data_url or None
+                apex.submit, job_id, content_hash, deliverable_url
             )
             logger.info(f"[APEXJobOps] submit({job_id}) tx: {result['transactionHash']}")
-            # Track for auto-settle.
             self._submitted_ids.add(job_id)
             return {
                 "success": True,
                 "txHash": result["transactionHash"],
-                "dataUrl": data_url,
-                "deliverableHash": "0x" + deliverable_hash.hex(),
+                "deliverableUrl": deliverable_url,
+                "contentHash": "0x" + content_hash.hex(),
             }
         except Exception as exc:
             logger.error(f"[APEXJobOps] submit({job_id}) failed: {exc}")
@@ -212,7 +182,7 @@ class APEXJobOps:
         return {"success": True, "status": result["status"]}
 
     async def get_response(self, job_id: int) -> dict[str, Any]:
-        """Retrieve stored deliverable (cache → local file → on-chain URL)."""
+        """Retrieve stored deliverable (cache -> local file -> on-chain URL)."""
         if not self._storage:
             return {"success": False, "error": "No storage configured"}
 
@@ -235,10 +205,12 @@ class APEXJobOps:
 
         try:
             apex = self._get_client()
-            data_url = await asyncio.to_thread(apex.commerce.get_submit_data_url, job_id)
-            if data_url:
-                self._deliverable_urls[job_id] = data_url
-                data = await self._storage.download(data_url)
+            deliverable_url = await asyncio.to_thread(
+                apex.commerce.get_deliverable_url, job_id
+            )
+            if deliverable_url:
+                self._deliverable_urls[job_id] = deliverable_url
+                data = await self._storage.download(deliverable_url)
                 return {"success": True, **data}
         except Exception as exc:
             logger.warning(f"[APEXJobOps] get_response({job_id}) on-chain fallback failed: {exc}")

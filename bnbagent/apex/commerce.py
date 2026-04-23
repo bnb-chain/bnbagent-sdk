@@ -251,10 +251,10 @@ class CommerceClient(ContractClientMixin):
             for log in logs
         ]
 
-    def get_submit_data_url(self, job_id: int) -> str | None:
-        """Recover the data URL from a ``submit`` transaction's ``optParams``.
+    def get_deliverable_url(self, job_id: int) -> str | None:
+        """Recover the deliverable URL from a ``submit`` transaction's ``optParams``.
 
-        The URL is not stored on-chain (only its keccak256 hash is). We
+        The URL is not stored on-chain (only the content hash is). We
         locate the submit tx via ``JobSubmitted`` (indexed by ``jobId``)
         and decode ``optParams`` from the calldata.
         """

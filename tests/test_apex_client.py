@@ -208,8 +208,8 @@ class TestWriteDelegation:
         facade.cancel_open(7)
         facade.commerce.reject.assert_called_once()
 
-    def test_submit_encodes_data_url_as_opt_params(self, facade):
-        facade.submit(7, b"\x00" * 32, "https://example.com/job.json")
+    def test_submit_encodes_deliverable_url_as_opt_params(self, facade):
+        facade.submit(7, b"\x00" * 32, deliverable_url="https://example.com/job.json")
         facade.commerce.submit.assert_called_once_with(
             7, b"\x00" * 32, b"https://example.com/job.json"
         )

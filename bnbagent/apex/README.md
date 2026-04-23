@@ -133,7 +133,7 @@ Single-round price negotiation. Request body: `{"terms": {...}, "task_descriptio
 
 #### `POST /submit`
 
-Provider submits a deliverable. The SDK uploads the payload to storage, submits `keccak256(data_url)` on-chain, and tracks the job for auto-settle. Body: `{"job_id", "response_content", "metadata"?}`.
+Provider submits a deliverable. The SDK builds a structured deliverable JSON, uploads it to storage, submits `keccak256(response_content)` on-chain as the content hash, and tracks the job for auto-settle. Body: `{"job_id", "response_content", "metadata"?}`.
 
 #### `POST /job/{id}/settle`
 
@@ -167,7 +167,7 @@ High-level facade. Most useful methods:
 | `register_job(job_id, policy=None)` | Bind the configured policy (or override) to a job on the Router. |
 | `set_budget(job_id, amount)` | Client sets the escrow amount. |
 | `fund(job_id, amount, *, approve_floor=None)` | Approves (if needed) and funds. See floor strategy above. |
-| `submit(job_id, deliverable, data_url=None)` | Provider submits 32-byte deliverable hash; `data_url` is stored as `optParams`. |
+| `submit(job_id, content_hash, deliverable_url="")` | Provider submits 32-byte content hash (`keccak256(response_content)`); `deliverable_url` is forwarded as `optParams`. |
 | `cancel_open(job_id, reason=...)` | Client cancels while OPEN; no escrow moved. |
 | `claim_refund(job_id)` | Refund via expiry. Non-pausable, non-hookable. |
 | `settle(job_id, evidence=b"")` | Permissionless verdict-application. |
@@ -183,7 +183,7 @@ Sub-clients: `apex.commerce`, `apex.router`, `apex.policy` (instances of `Commer
 
 ### `CommerceClient`
 
-1:1 wrapper over `AgenticCommerceUpgradeable`: `create_job`, `set_provider`, `set_budget`, `fund`, `submit`, `complete`, `reject`, `claim_refund`, `get_job`, `payment_token`, `platform_fee_bp`, `platform_treasury`, `get_jobs_batch` (Multicall3), plus event helpers (`get_job_funded_events`, `get_job_created_events`, `get_submit_data_url`).
+1:1 wrapper over `AgenticCommerceUpgradeable`: `create_job`, `set_provider`, `set_budget`, `fund`, `submit`, `complete`, `reject`, `claim_refund`, `get_job`, `payment_token`, `platform_fee_bp`, `platform_treasury`, `get_jobs_batch` (Multicall3), plus event helpers (`get_job_funded_events`, `get_job_created_events`, `get_deliverable_url`).
 
 ### `RouterClient`
 

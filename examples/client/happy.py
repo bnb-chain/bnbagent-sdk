@@ -49,8 +49,8 @@ def main() -> None:
         return
 
     provider = make_client(s.provider_pk, s.network)
-    deliverable = hashlib.sha256(f"happy-{job_id}-{int(time.time())}".encode()).digest()
-    provider.submit(job_id, deliverable, data_url="https://example.com/deliverable")
+    content_hash = hashlib.sha256(f"happy-{job_id}-{int(time.time())}".encode()).digest()
+    provider.submit(job_id, content_hash, deliverable_url="https://example.com/deliverable")
     print("[provider] submit OK (Funded -> Submitted)")
 
     window = client.policy.dispute_window()

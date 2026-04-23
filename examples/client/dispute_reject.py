@@ -43,8 +43,8 @@ def main() -> None:
         print(f"\nProvider must submit jobId={job_id} before continuing.\n")
         return
     provider = make_client(s.provider_pk, s.network)
-    deliverable = hashlib.sha256(f"dispute-{job_id}".encode()).digest()
-    provider.submit(job_id, deliverable)
+    content_hash = hashlib.sha256(f"dispute-{job_id}".encode()).digest()
+    provider.submit(job_id, content_hash)
     print("[provider] submit OK")
 
     client.dispute(job_id)

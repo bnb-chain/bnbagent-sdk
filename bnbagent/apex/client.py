@@ -223,12 +223,17 @@ class APEXClient:
     def submit(
         self,
         job_id: int,
-        deliverable: bytes,
-        data_url: str | None = None,
+        content_hash: bytes,
+        deliverable_url: str = "",
     ) -> dict[str, Any]:
-        """Provider submits. ``data_url`` is forwarded as ``optParams`` (UTF-8)."""
-        opt_params = data_url.encode("utf-8") if data_url else b""
-        return self.commerce.submit(job_id, deliverable, opt_params)
+        """Provider submits.
+
+        ``content_hash`` is the keccak256 of the response content (32 bytes).
+        ``deliverable_url`` points to the full deliverable JSON and is forwarded
+        as ``optParams`` (UTF-8) so verifiers can retrieve the off-chain payload.
+        """
+        opt_params = deliverable_url.encode("utf-8") if deliverable_url else b""
+        return self.commerce.submit(job_id, content_hash, opt_params)
 
     def cancel_open(
         self,
