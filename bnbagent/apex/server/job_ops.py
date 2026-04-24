@@ -148,7 +148,7 @@ class APEXJobOps:
                 "success": True,
                 "txHash": result["transactionHash"],
                 "deliverableUrl": deliverable_url,
-                "manifestHash": "0x" + deliverable.hex(),
+                "deliverable": "0x" + deliverable.hex(),
             }
         except Exception as exc:
             logger.error(f"[APEXJobOps] submit({job_id}) failed: {exc}")

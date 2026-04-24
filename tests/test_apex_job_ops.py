@@ -224,7 +224,7 @@ class TestSubmitResult:
         result = await ops.submit_result(1, "hello")
         assert result["success"] is True
         assert 1 in ops._submitted_ids
-        assert "manifestHash" in result
+        assert "deliverable" in result
         assert "deliverableUrl" in result
 
     @pytest.mark.asyncio
