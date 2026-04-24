@@ -129,7 +129,6 @@ class APEXJobOps:
                     "content": response_content,
                     "content_type": "text/plain",
                 },
-                submitted_at=int(time.time()),
                 metadata=metadata or {},
             )
             data = manifest.to_dict()
