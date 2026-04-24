@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import IntEnum
 
-from eth_utils import keccak
+from web3 import Web3
 
 
 class JobStatus(IntEnum):
@@ -44,8 +44,8 @@ class Verdict(IntEnum):
 # Reason codes (bytes32 keccak256 of ASCII label)
 # ---------------------------------------------------------------------------
 
-REASON_APPROVED: bytes = keccak(text="OPTIMISTIC_APPROVED")
-REASON_REJECTED: bytes = keccak(text="OPTIMISTIC_REJECTED")
+REASON_APPROVED: bytes = Web3.keccak(text="OPTIMISTIC_APPROVED")
+REASON_REJECTED: bytes = Web3.keccak(text="OPTIMISTIC_REJECTED")
 
 ZERO_REASON: bytes = b"\x00" * 32
 ZERO_ADDRESS: str = "0x" + "00" * 20

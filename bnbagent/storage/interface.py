@@ -1,7 +1,7 @@
 """
 StorageProvider — pluggable off-chain storage interface.
 
-Implementations handle upload/download of ServiceRecord JSON.
+Implementations handle upload/download of deliverable JSON.
 The chain only stores hashes; full data lives off-chain.
 
 Async/Sync Design

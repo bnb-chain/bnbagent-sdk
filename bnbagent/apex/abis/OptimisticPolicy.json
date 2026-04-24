@@ -197,6 +197,12 @@
         "internalType": "uint64",
         "name": "submittedAt",
         "type": "uint64"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes",
+        "name": "optParams",
+        "type": "bytes"
       }
     ],
     "name": "JobInitialised",
@@ -497,6 +503,11 @@
         "internalType": "bytes32",
         "name": "deliverable",
         "type": "bytes32"
+      },
+      {
+        "internalType": "bytes",
+        "name": "optParams",
+        "type": "bytes"
       }
     ],
     "name": "onSubmitted",

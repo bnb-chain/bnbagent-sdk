@@ -251,38 +251,15 @@ class CommerceClient(ContractClientMixin):
             for log in logs
         ]
 
-    def get_submit_data_url(self, job_id: int) -> str | None:
-        """Recover the data URL from a ``submit`` transaction's ``optParams``.
+    def get_deliverable_url(self, job_id: int) -> str | None:
+        """Deprecated. Use ``APEXClient.get_deliverable_url()`` instead.
 
-        The URL is not stored on-chain (only its keccak256 hash is). We
-        locate the submit tx via ``JobSubmitted`` (indexed by ``jobId``)
-        and decode ``optParams`` from the calldata.
+        The URL is now read from the ``JobInitialised`` event on the policy
+        contract (``optParams`` JSON field). This method has no policy address
+        and always returns ``None``.
         """
-        try:
-            current_block = self.w3.eth.block_number
-            from_block = max(0, current_block - 50_000)
-        except Exception:
-            from_block = 0
-
-        logs = self.contract.events.JobSubmitted().get_logs(
-            from_block=from_block,
-            to_block="latest",
-            argument_filters={"jobId": job_id},
+        logger.warning(
+            "[CommerceClient] get_deliverable_url() is deprecated; "
+            "use APEXClient.get_deliverable_url() instead."
         )
-        if not logs:
-            return None
-
-        tx = self.w3.eth.get_transaction(logs[0]["transactionHash"])
-        try:
-            _, params = self.contract.decode_function_input(tx.input)
-        except (ValueError, KeyError) as exc:
-            logger.warning(f"[CommerceClient] decode_function_input failed for job {job_id}: {exc}")
-            return None
-
-        opt_params: bytes = params.get("optParams", b"")
-        if not opt_params:
-            return None
-        try:
-            return opt_params.decode("utf-8")
-        except UnicodeDecodeError:
-            return None
+        return None

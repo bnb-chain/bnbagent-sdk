@@ -233,6 +233,12 @@
       },
       {
         "indexed": true,
+        "internalType": "address",
+        "name": "policy",
+        "type": "address"
+      },
+      {
+        "indexed": true,
         "internalType": "uint8",
         "name": "verdict",
         "type": "uint8"
