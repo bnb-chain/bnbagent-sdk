@@ -107,7 +107,7 @@ Built-in behaviour:
 - `POST /apex/job/execute` for client-triggered execution (200 fast-path, 202 Accepted with background continuation).
 - **Auto-settle loop**: polls `policy.check(jobId)` for this agent's submitted jobs and calls `router.settle(jobId)` when the verdict is no longer PENDING.
 
-### Voter-side: `voteReject`
+### Voter-side: `voteReject` + auto-settle
 
 ```python
 from bnbagent.apex import APEXClient
@@ -117,7 +117,14 @@ wallet = EVMWalletProvider(password="your-password", private_key=voter_pk)
 apex = APEXClient(wallet, network="bsc-testnet")
 if apex.policy.is_voter(apex.address) and apex.policy.disputed(job_id):
     apex.vote_reject(job_id)
+    # once rejectVotes >= voteQuorum, anyone can settle:
+    apex.settle(job_id)
 ```
+
+`examples/voter/watch.py` automates the full loop: it polls `Disputed` and
+`VoteCast` events, downloads the `DeliverableManifest` from IPFS, verifies the
+hash, prompts the voter to `[r]eject / [s]kip`, and calls `router.settle`
+automatically when `rejectVotes >= voteQuorum`.
 
 See [`examples/voter/`](../../examples/voter/).
 
@@ -133,7 +140,7 @@ Single-round price negotiation. Request body: `{"terms": {...}, "task_descriptio
 
 #### `POST /submit`
 
-Provider submits a deliverable. The SDK builds a `DeliverableManifest`, uploads it to storage, submits `manifest_hash()` (keccak256 of the canonical manifest JSON) on-chain as the `deliverable` bytes32, and tracks the job for auto-settle. Body: `{"job_id", "response_content", "metadata"?}`.
+Provider submits a deliverable. The SDK builds a `DeliverableManifest` (fields: `job_id`, `chain_id`, `provider`, `response`, `metadata`), uploads it to storage (IPFS or local), submits `manifest_hash()` — keccak256 of the canonical manifest JSON — on-chain as the `deliverable` bytes32, and stores `{"deliverable_url": "ipfs://..."}` in `optParams` so voters and clients can retrieve the full manifest. Body: `{"job_id", "response_content", "metadata"?}`.
 
 #### `POST /job/{id}/settle`
 
@@ -195,6 +202,7 @@ OptimisticPolicy surface:
 
 - **Writes**: `dispute` (client), `vote_reject` (voter), admin methods `add_voter`, `remove_voter`, `set_quorum`.
 - **Reads**: `check`, `submitted_at`, `disputed`, `reject_votes`, `has_voted`, `is_voter`, `dispute_window`, `vote_quorum`, `active_voter_count`, `admin`, `commerce`, `router`.
+- `get_deliverable_url(job_id, *, hint_block=None)` — reads `JobInitialised.optParams` to extract `deliverable_url`. Pass `hint_block` (e.g. the block number of the `Disputed` event) to keep the `eth_getLogs` window tight and avoid RPC block-range limits.
 
 ### `APEXJobOps`
 
