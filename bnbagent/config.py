@@ -62,9 +62,9 @@ NETWORKS: dict[str, NetworkConfig] = {
         paymaster_url="https://bsc-megafuel-testnet.nodereal.io",
         use_paymaster=True,
         registry_contract="0x8004A818BFB912233c491871b3d84c89A494BD9e",
-        commerce_contract="0x1e677fc06ff772e81051484c8c3845fbef13986d",
-        router_contract="0x0c729baa3cdac6cc3fdef6a816f6bcb85ae92ed7",
-        policy_contract="0x459c3b7a46aa9dde45fbfc3b3d37bd062dbe6fb8",
+        commerce_contract="0x93765f3f1578def4ac116505ed329f57c7edca92",
+        router_contract="0xb2c106e45e968bfa52668efc7e9bc5c7c6fba91a",
+        policy_contract="0x1fb9aa98fdd6f0a52f51814c6b2e2c03d3c603bb",
     ),
     "bsc-mainnet": NetworkConfig(
         name="bsc-mainnet",
