@@ -23,7 +23,6 @@ import time
 
 from _helpers import banner, load_settings, make_client, minutes_from_now
 
-AGENT_SERVER_ADDRESS = "0xD8c45dA4e4036f4946132B18fc7568096CB7535f"
 POLL_INTERVAL = 5   # seconds between status polls
 POLL_TIMEOUT  = 180 # give agent up to 3 min to submit
 
@@ -40,7 +39,7 @@ def main() -> None:
     # --- 1. Create + register + fund ----------------------------------------
     expired_at = minutes_from_now(65)
     res = client.create_job(
-        provider=AGENT_SERVER_ADDRESS,
+        provider=s.provider_address,
         expired_at=expired_at,
         description="Latest BNB Chain ecosystem news",
     )
