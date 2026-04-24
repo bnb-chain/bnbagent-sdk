@@ -133,7 +133,7 @@ Single-round price negotiation. Request body: `{"terms": {...}, "task_descriptio
 
 #### `POST /submit`
 
-Provider submits a deliverable. The SDK builds a structured deliverable JSON, uploads it to storage, submits `keccak256(response_content)` on-chain as the content hash, and tracks the job for auto-settle. Body: `{"job_id", "response_content", "metadata"?}`.
+Provider submits a deliverable. The SDK builds a `DeliverableManifest`, uploads it to storage, submits `manifest_hash()` (keccak256 of the canonical manifest JSON) on-chain as the `deliverable` bytes32, and tracks the job for auto-settle. Body: `{"job_id", "response_content", "metadata"?}`.
 
 #### `POST /job/{id}/settle`
 
@@ -167,7 +167,7 @@ High-level facade. Most useful methods:
 | `register_job(job_id, policy=None)` | Bind the configured policy (or override) to a job on the Router. |
 | `set_budget(job_id, amount)` | Client sets the escrow amount. |
 | `fund(job_id, amount, *, approve_floor=None)` | Approves (if needed) and funds. See floor strategy above. |
-| `submit(job_id, content_hash, deliverable_url="")` | Provider submits 32-byte content hash (`keccak256(response_content)`); `deliverable_url` is forwarded as `optParams`. |
+| `submit(job_id, deliverable, opt_params)` | Provider submits 32-byte `deliverable` (`DeliverableManifest.manifest_hash()`, keccak256 of canonical manifest JSON); `opt_params` dict (must contain `deliverable_url`) is serialized to JSON and forwarded as `optParams`. |
 | `cancel_open(job_id, reason=...)` | Client cancels while OPEN; no escrow moved. |
 | `claim_refund(job_id)` | Refund via expiry. Non-pausable, non-hookable. |
 | `settle(job_id, evidence=b"")` | Permissionless verdict-application. |

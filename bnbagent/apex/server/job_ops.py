@@ -98,9 +98,10 @@ class APEXJobOps:
     ) -> dict[str, Any]:
         """Build a structured deliverable, upload it, and call ``submit`` on-chain.
 
-        The on-chain ``deliverable`` (bytes32) is ``keccak256(response_content)``.
-        The full deliverable JSON is uploaded to storage and its URL is passed
-        as ``optParams`` so verifiers can retrieve the off-chain payload.
+        The on-chain ``deliverable`` (bytes32) is ``DeliverableManifest.manifest_hash()``
+        — keccak256 of the canonical manifest JSON (all fields, not just content).
+        The full manifest JSON is uploaded to storage and its URL is passed as
+        ``optParams`` so verifiers can fetch, re-hash, and confirm integrity.
         """
         try:
             verification = await self.verify_job(job_id)
@@ -147,7 +148,7 @@ class APEXJobOps:
                 "success": True,
                 "txHash": result["transactionHash"],
                 "deliverableUrl": deliverable_url,
-                "contentHash": "0x" + deliverable.hex(),
+                "manifestHash": "0x" + deliverable.hex(),
             }
         except Exception as exc:
             logger.error(f"[APEXJobOps] submit({job_id}) failed: {exc}")
