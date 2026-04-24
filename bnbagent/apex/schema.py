@@ -29,7 +29,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from eth_utils import keccak
+from web3 import Web3
 
 SCHEMA_VERSION = 1
 _SUPPORTED_VERSIONS = {SCHEMA_VERSION}
@@ -75,7 +75,7 @@ class DeliverableManifest:
         and calling ``DeliverableManifest.from_dict(fetched).manifest_hash()``.
         """
         canonical = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
-        return keccak(text=canonical)
+        return Web3.keccak(text=canonical)
 
     def verify(self, on_chain_hash: bytes) -> bool:
         """Return ``True`` if ``on_chain_hash`` matches ``manifest_hash()``."""

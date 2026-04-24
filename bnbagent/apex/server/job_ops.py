@@ -22,6 +22,8 @@ import logging
 import time
 from typing import Any
 
+from web3 import Web3
+
 from ...config import NetworkConfig
 from ...storage.interface import StorageProvider
 from ...wallets.wallet_provider import WalletProvider
@@ -148,7 +150,7 @@ class APEXJobOps:
                 "success": True,
                 "txHash": result["transactionHash"],
                 "deliverableUrl": deliverable_url,
-                "deliverable": "0x" + deliverable.hex(),
+                "deliverable": Web3.to_hex(deliverable),
             }
         except Exception as exc:
             logger.error(f"[APEXJobOps] submit({job_id}) failed: {exc}")
