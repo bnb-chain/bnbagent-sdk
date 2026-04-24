@@ -52,12 +52,14 @@ def main() -> None:
             "policy": provider.policy.address,
         },
         response={"content": f"dispute test result for job {job_id}", "content_type": "text/plain"},
-        submitted_at=int(time.time()),
+        submitted_at=0,  # back-filled with block.timestamp after submit
     )
     # In production: upload manifest.to_dict() to IPFS/storage first, then pass the URL.
     # deliverable_url = storage.upload(manifest.to_dict(), f"job-{job_id}.json")
     deliverable_url = ""  # no storage in this example
-    provider.submit(job_id, manifest.manifest_hash(), {"deliverable_url": deliverable_url})
+    receipt = provider.submit(job_id, manifest.manifest_hash(), {"deliverable_url": deliverable_url})
+    manifest.submitted_at = provider.w3.eth.get_block(receipt["blockNumber"])["timestamp"]
+    # In production: re-upload manifest.to_dict() now that submitted_at is set.
     print("[provider] submit OK")
 
     client.dispute(job_id)

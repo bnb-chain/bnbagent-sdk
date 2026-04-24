@@ -15,12 +15,17 @@ On-chain hash contract
 ``DeliverableManifest.manifest_hash()`` returns the ``bytes32`` that the provider
 passes to ``AgenticCommerceUpgradeable.submit(jobId, deliverable, optParams)``:
 
-    deliverable (bytes32) = keccak256(canonical manifest JSON)  # full manifest commitment
-    optParams   (bytes)   = deliverable_url (UTF-8)              # retrieval pointer
+    deliverable (bytes32) = keccak256(canonical manifest JSON excluding submitted_at)
+    optParams   (bytes)   = JSON {"deliverable_url": "..."}  # retrieval pointer
 
-The canonical form is ``json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))``
-— deterministic across all platforms. Verifiers (voters, indexers) reproduce it by
-fetching the manifest JSON and applying the same serialisation.
+``submitted_at`` is intentionally excluded from the hash because the provider must
+compute the hash *before* the tx is mined, then back-fill ``submitted_at`` with
+``block.timestamp`` from the receipt before uploading to storage.  Verifiers
+(voters, indexers) reproduce the hash via ``DeliverableManifest.from_dict(fetched).manifest_hash()``
+which applies the same ``_hash_dict()`` projection.
+
+The canonical form is ``json.dumps(self._hash_dict(), sort_keys=True, separators=(",", ":"))``
+— deterministic across all platforms.
 """
 
 from __future__ import annotations
@@ -61,20 +66,38 @@ class DeliverableManifest:
     chain_id: int
     contracts: dict[str, str]
     response: dict[str, str]
-    submitted_at: int
+    submitted_at: int  # block.timestamp from submit tx receipt; 0 before submission
     metadata: dict[str, Any] = field(default_factory=dict)
 
     # ------------------------------------------------------------------ hash
+
+    def _hash_dict(self) -> dict[str, Any]:
+        """Return the canonical dict used for hashing — excludes ``submitted_at``.
+
+        ``submitted_at`` is populated from ``block.timestamp`` after the tx lands,
+        so it cannot be part of the pre-image that is passed to ``submit()``.
+        Verifiers exclude this field when recomputing the hash from a downloaded
+        manifest.
+        """
+        return {
+            "version": self.version,
+            "job_id": self.job_id,
+            "chain_id": self.chain_id,
+            "contracts": self.contracts,
+            "response": self.response,
+            "metadata": self.metadata,
+        }
 
     def manifest_hash(self) -> bytes:
         """Return ``keccak256(canonical manifest JSON)`` as 32 bytes.
 
         This is the ``deliverable`` bytes32 passed to
-        ``AgenticCommerceUpgradeable.submit``. Verifiers (voters, indexers)
-        reproduce it by fetching the manifest from the URL in ``optParams``
-        and calling ``DeliverableManifest.from_dict(fetched).manifest_hash()``.
+        ``AgenticCommerceUpgradeable.submit``. ``submitted_at`` is excluded from
+        the hash so providers can compute it before the tx lands and then back-fill
+        the field with ``block.timestamp`` from the receipt. Verifiers reproduce the
+        hash by calling ``DeliverableManifest.from_dict(fetched).manifest_hash()``.
         """
-        canonical = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
+        canonical = json.dumps(self._hash_dict(), sort_keys=True, separators=(",", ":"))
         return Web3.keccak(text=canonical)
 
     def verify(self, on_chain_hash: bytes) -> bool:
@@ -105,7 +128,7 @@ class DeliverableManifest:
         response = d["response"]
         if "content" not in response:
             raise ValueError("DeliverableManifest.response must contain 'content'")
-        for field in ("job_id", "chain_id", "contracts", "submitted_at"):
+        for field in ("job_id", "chain_id", "contracts"):
             if field not in d:
                 raise ValueError(f"DeliverableManifest missing required field: '{field}'")
         return cls(
@@ -114,7 +137,7 @@ class DeliverableManifest:
             chain_id=d["chain_id"],
             contracts=d["contracts"],
             response=response,
-            submitted_at=d["submitted_at"],
+            submitted_at=d.get("submitted_at", 0),
             metadata=d.get("metadata", {}),
         )
 
