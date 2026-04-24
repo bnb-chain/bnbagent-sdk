@@ -115,11 +115,11 @@ def process_task(job: dict) -> tuple[str, dict]:
     The SDK calls this for each funded job automatically.
     Receives the full job dict, returns (result_string, metadata).
     """
-    from bnbagent.apex.negotiation import parse_job_description
+    from bnbagent.apex import JobDescription
 
     raw_description = job.get("description", "blockchain news")
-    parsed = parse_job_description(raw_description)
-    query = parsed["task"] if parsed else raw_description
+    parsed = JobDescription.from_str(raw_description)
+    query = parsed.task if parsed else raw_description
     logger.info(f"Searching news for: {query[:80]}...")
 
     raw_results = search_news(query, max_results=10)

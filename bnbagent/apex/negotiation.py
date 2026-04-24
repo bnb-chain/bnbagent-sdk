@@ -419,28 +419,17 @@ def build_job_description(negotiation_result: dict, max_length: int = 2000) -> s
     return description
 
 
-def parse_job_description(description: str) -> dict | None:
-    """
-    Parse a structured on-chain job description (schema v1+).
+def parse_job_description(description: str) -> "JobDescription | None":
+    """Parse a structured on-chain job description (schema v1+).
 
-    Returns the parsed dict if the description is a valid structured JSON with
-    a 'version' field, or None for legacy plain-text descriptions.
+    Returns a ``JobDescription`` if the description is a valid structured JSON,
+    or ``None`` for plain-text / unstructured descriptions.
 
     Args:
         description: The job.description string from on-chain.
-
-    Returns:
-        Parsed dict, or None if not a structured description.
     """
-    if not description or not description.strip().startswith("{"):
-        return None
-    try:
-        parsed = json.loads(description)
-        if isinstance(parsed, dict) and "version" in parsed:
-            return parsed
-        return None
-    except (json.JSONDecodeError, ValueError):
-        return None
+    from .schema import JobDescription
+    return JobDescription.from_str(description)
 
 
 class NegotiationHandler:

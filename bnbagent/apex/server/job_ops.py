@@ -22,12 +22,11 @@ import logging
 import time
 from typing import Any
 
-from web3 import Web3
-
 from ...config import NetworkConfig
 from ...storage.interface import StorageProvider
 from ...wallets.wallet_provider import WalletProvider
 from ..client import APEXClient
+from ..schema import SCHEMA_VERSION, DeliverableManifest
 from ..types import JobStatus, Verdict
 
 logger = logging.getLogger(__name__)
@@ -114,24 +113,24 @@ class APEXJobOps:
             apex = self._get_client()
 
             chain_id = await asyncio.to_thread(lambda: apex.commerce.w3.eth.chain_id)
-            data: dict[str, Any] = {
-                "version": 1,
-                "job_id": job_id,
-                "chain_id": chain_id,
-                "contracts": {
+            manifest = DeliverableManifest(
+                version=SCHEMA_VERSION,
+                job_id=job_id,
+                chain_id=chain_id,
+                contracts={
                     "commerce": apex.commerce.address,
                     "router": apex.router.address,
                     "policy": apex.policy.address,
                 },
-                "response": {
+                response={
                     "content": response_content,
                     "content_type": "text/plain",
                 },
-                "submitted_at": int(time.time()),
-                "metadata": metadata or {},
-            }
-
-            content_hash = Web3.keccak(text=response_content)
+                submitted_at=int(time.time()),
+                metadata=metadata or {},
+            )
+            data = manifest.to_dict()
+            deliverable = manifest.manifest_hash()
 
             deliverable_url = ""
             if self._storage:
@@ -140,7 +139,7 @@ class APEXJobOps:
                 self._deliverable_urls[job_id] = deliverable_url
 
             result = await asyncio.to_thread(
-                apex.submit, job_id, content_hash, deliverable_url
+                apex.submit, job_id, deliverable, {"deliverable_url": deliverable_url}
             )
             logger.info(f"[APEXJobOps] submit({job_id}) tx: {result['transactionHash']}")
             self._submitted_ids.add(job_id)
@@ -148,7 +147,7 @@ class APEXJobOps:
                 "success": True,
                 "txHash": result["transactionHash"],
                 "deliverableUrl": deliverable_url,
-                "contentHash": "0x" + content_hash.hex(),
+                "contentHash": "0x" + deliverable.hex(),
             }
         except Exception as exc:
             logger.error(f"[APEXJobOps] submit({job_id}) failed: {exc}")
@@ -206,7 +205,7 @@ class APEXJobOps:
         try:
             apex = self._get_client()
             deliverable_url = await asyncio.to_thread(
-                apex.commerce.get_deliverable_url, job_id
+                apex.get_deliverable_url, job_id
             )
             if deliverable_url:
                 self._deliverable_urls[job_id] = deliverable_url
@@ -260,8 +259,8 @@ class APEXJobOps:
                     from ..negotiation import parse_job_description
 
                     parsed = parse_job_description(description)
-                    if parsed and parsed.get("quote_expires_at"):
-                        if now > parsed["quote_expires_at"]:
+                    if parsed and parsed.quote_expires_at:
+                        if now > parsed.quote_expires_at:
                             return {
                                 "valid": False,
                                 "error": "Negotiation quote has expired",

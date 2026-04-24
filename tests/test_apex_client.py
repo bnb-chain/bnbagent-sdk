@@ -208,15 +208,15 @@ class TestWriteDelegation:
         facade.cancel_open(7)
         facade.commerce.reject.assert_called_once()
 
-    def test_submit_encodes_deliverable_url_as_opt_params(self, facade):
-        facade.submit(7, b"\x00" * 32, deliverable_url="https://example.com/job.json")
+    def test_submit_encodes_opt_params_as_json_bytes(self, facade):
+        facade.submit(7, b"\x00" * 32, {"deliverable_url": "https://example.com/job.json"})
         facade.commerce.submit.assert_called_once_with(
-            7, b"\x00" * 32, b"https://example.com/job.json"
+            7, b"\x00" * 32, b'{"deliverable_url":"https://example.com/job.json"}'
         )
 
-    def test_submit_empty_opt_params_when_no_url(self, facade):
-        facade.submit(7, b"\x00" * 32)
-        facade.commerce.submit.assert_called_once_with(7, b"\x00" * 32, b"")
+    def test_submit_raises_without_deliverable_url(self, facade):
+        with pytest.raises(ValueError, match="deliverable_url"):
+            facade.submit(7, b"\x00" * 32, {})
 
 
 class TestReads:

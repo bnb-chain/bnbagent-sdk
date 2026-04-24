@@ -291,6 +291,9 @@ class TestSanitizeForClaim:
 
 
 class TestBuildJobDescription:
+    # Note: build_job_description() returns a JSON *string*, so tests here use
+    # json.loads(desc) which produces a plain dict — not a JobDescription object.
+    # For parse_job_description() (which returns JobDescription), see TestParseJobDescription.
     def test_basic_structure(self):
         result = _make_accepted_result()
         desc = build_job_description(result)
@@ -386,8 +389,8 @@ class TestParseJobDescription:
         desc = build_job_description(result)
         parsed = parse_job_description(desc)
         assert parsed is not None
-        assert parsed["version"] == 1
-        assert "task" in parsed
+        assert parsed.version == 1
+        assert parsed.task
 
     def test_returns_none_for_plain_text(self):
         assert parse_job_description("Search for BNB Chain news") is None
@@ -405,8 +408,8 @@ class TestParseJobDescription:
         result = _make_accepted_result()
         desc = build_job_description(result)
         parsed = parse_job_description(desc)
-        assert parsed["task"] == "Get latest news"
-        assert parsed["price"] == "20000000000000000000"
+        assert parsed.task == "Get latest news"
+        assert parsed.price == "20000000000000000000"
 
 
 class TestNegotiationHandler:

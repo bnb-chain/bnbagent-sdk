@@ -7,6 +7,8 @@ Public surface:
   users who need direct access to a single layer.
 - ``Job`` / ``JobStatus`` / ``Verdict`` — shared types.
 - ``NegotiationHandler`` — off-chain negotiation helpers.
+- ``JobDescription`` / ``DeliverableManifest`` — canonical schema classes for
+  on-chain description and off-chain deliverable JSON.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from .negotiation import (
 )
 from .policy import PolicyClient
 from .router import RouterClient
+from .schema import SCHEMA_VERSION, DeliverableManifest, JobDescription
 from .types import (
     REASON_APPROVED,
     REASON_REJECTED,
@@ -57,6 +60,10 @@ __all__ = [
     "ReasonCode",
     "NegotiationHandler",
     "NegotiationResult",
+    # Schema
+    "JobDescription",
+    "DeliverableManifest",
+    "SCHEMA_VERSION",
     # Module
     "get_apex_config",
     "APEXModule",
