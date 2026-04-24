@@ -1,7 +1,6 @@
 """Tests for bnbagent/apex/schema.py — JobDescription and DeliverableManifest."""
 
 import json
-import time
 
 import pytest
 from web3 import Web3
@@ -32,7 +31,6 @@ def _manifest_dict(content="hello world", metadata=None) -> dict:
             "content": content,
             "content_type": "text/plain",
         },
-        "submitted_at": 1_700_000_000,
         "metadata": metadata or {},
     }
 
@@ -51,21 +49,12 @@ class TestDeliverableManifest:
         assert m.contracts["commerce"] == FAKE_COMMERCE
         assert m.response["content"] == "test content"
         assert m.response["content_type"] == "text/plain"
-        assert m.submitted_at == 1_700_000_000
 
-    def test_manifest_hash_is_keccak256_of_canonical_manifest_json_excluding_submitted_at(self):
+    def test_manifest_hash_is_keccak256_of_canonical_manifest_json(self):
         m = DeliverableManifest.from_dict(_manifest_dict())
-        # hash excludes submitted_at so providers can compute it before the tx lands
-        canonical = json.dumps(m._hash_dict(), sort_keys=True, separators=(",", ":"))
+        canonical = json.dumps(m.to_dict(), sort_keys=True, separators=(",", ":"))
         expected = Web3.keccak(text=canonical)
         assert m.manifest_hash() == expected
-
-    def test_manifest_hash_unaffected_by_submitted_at(self):
-        """submitted_at is metadata-only; changing it must not change the hash."""
-        m1 = DeliverableManifest.from_dict(_manifest_dict())
-        m2 = DeliverableManifest.from_dict(_manifest_dict())
-        m2.submitted_at = 9_999_999_999
-        assert m1.manifest_hash() == m2.manifest_hash()
 
     def test_manifest_hash_returns_bytes32(self):
         m = DeliverableManifest.from_dict(_manifest_dict())
@@ -115,12 +104,6 @@ class TestDeliverableManifest:
         d.pop("job_id")
         with pytest.raises(ValueError, match="job_id"):
             DeliverableManifest.from_dict(d)
-
-    def test_from_dict_submitted_at_defaults_to_zero_when_absent(self):
-        d = _manifest_dict()
-        d.pop("submitted_at")
-        m = DeliverableManifest.from_dict(d)
-        assert m.submitted_at == 0
 
     def test_from_dict_raises_on_missing_response_content(self):
         d = _manifest_dict()
