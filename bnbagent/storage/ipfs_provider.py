@@ -69,7 +69,7 @@ class IPFSStorageProvider(StorageProvider):
         else:
             job_data = data.get("job", {})
             job_id = job_data.get("id") if isinstance(job_data, dict) else None
-            pin_name = f"job-{job_id}" if job_id else "deliverable"
+            pin_name = f"apex-job-{job_id}" if job_id else "deliverable"
 
         payload = {
             "pinataContent": data,

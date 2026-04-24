@@ -135,6 +135,42 @@ def process_task(job: dict) -> tuple[str, dict]:
 
 app = create_apex_app(config=config, on_job=process_task)
 
+# ---------------------------------------------------------------------------
+# Startup banner — printed at import time so it shows regardless of how
+# the server is launched (run_agent.py, uvicorn CLI, __main__, etc.)
+# ---------------------------------------------------------------------------
+from bnbagent.storage.ipfs_provider import IPFSStorageProvider as _IPFS
+
+_storage_info = "local (default)"
+if isinstance(config.storage, _IPFS):
+    _storage_info = f"IPFS via Pinata  (gateway: {config.storage._gateway})"
+elif config.storage:
+    _storage_info = type(config.storage).__name__
+
+print(f"""
+{'='*55}
+  Blockchain News Agent (APEX Provider)
+{'='*55}
+  Port:           {PORT}
+  Commerce:       {config.effective_commerce_address}
+  Router:         {config.effective_router_address}
+  Policy:         {config.effective_policy_address}
+  Storage:        {_storage_info}
+  Price:          {int(config.service_price) / 10**18} U tokens
+
+  APEX endpoints:
+    POST /apex/negotiate          — Negotiation
+    POST /apex/submit             — Submit result
+    GET  /apex/job/{{id}}           — Job details
+    POST /apex/job/{{id}}/settle    — Manual settle
+    GET  /apex/status             — Agent status
+
+  Direct endpoints (testing):
+    POST /search          — Direct news search
+    GET  /apex/health     — Health check
+{'='*55}
+""")
+
 
 # ---------------------------------------------------------------------------
 # Pydantic models for direct /search endpoint
@@ -204,29 +240,5 @@ async def search_endpoint(request: SearchRequest):
 
 if __name__ == "__main__":
     import uvicorn
-
-    print(f"""
-{'='*55}
-  Blockchain News Agent (APEX Provider)
-{'='*55}
-  Port:           {PORT}
-  Commerce:       {config.effective_commerce_address}
-  Router:         {config.effective_router_address}
-  Policy:         {config.effective_policy_address}
-  Storage:        {type(config.storage).__name__ if config.storage else "local (default)"}
-  Price:          {int(config.service_price) / 10**18} U tokens
-
-  APEX endpoints:
-    POST /apex/negotiate          — Negotiation
-    POST /apex/submit             — Submit result
-    GET  /apex/job/{{id}}           — Job details
-    POST /apex/job/{{id}}/settle    — Manual settle
-    GET  /apex/status             — Agent status
-
-  Direct endpoints (testing):
-    POST /search          — Direct news search
-    GET  /apex/health     — Health check
-{'='*55}
-""")
 
     uvicorn.run(app, host="0.0.0.0", port=PORT)

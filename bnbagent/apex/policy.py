@@ -92,23 +92,40 @@ class PolicyClient(ContractClientMixin):
             self.contract.functions.isVoter(Web3.to_checksum_address(voter))
         )
 
-    def get_deliverable_url(self, job_id: int) -> str | None:
+    def get_deliverable_url(self, job_id: int, *, hint_block: int | None = None) -> str | None:
         """Return the ``deliverable_url`` for a submitted job.
 
         Reads the ``JobInitialised`` event emitted by ``onSubmitted`` and
         parses ``optParams`` (JSON bytes) to extract ``deliverable_url``.
         Returns ``None`` if the event is not found or the field is absent.
+
+        Args:
+            hint_block: if the caller knows roughly when the job was submitted
+                (e.g. the block number of the ``Disputed`` event), passing it
+                allows the query to use a tight window and avoid RPC block-range
+                limits.  When omitted a 5 000-block lookback is used.
         """
+        _LOOKBACK = 5_000
+
         try:
             current_block = self.w3.eth.block_number
-            from_block = max(0, current_block - 50_000)
         except Exception:
+            current_block = None
+
+        if hint_block is not None:
+            from_block = max(0, hint_block - _LOOKBACK)
+            to_block = hint_block + 10
+        elif current_block is not None:
+            from_block = max(0, current_block - _LOOKBACK)
+            to_block = "latest"
+        else:
             from_block = 0
+            to_block = "latest"
 
         try:
             logs = self.contract.events.JobInitialised().get_logs(
                 from_block=from_block,
-                to_block="latest",
+                to_block=to_block,
                 argument_filters={"jobId": job_id},
             )
         except Exception as exc:
