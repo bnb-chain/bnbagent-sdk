@@ -273,14 +273,19 @@ class APEXClient:
     def get_job_status(self, job_id: int) -> JobStatus:
         return self.commerce.get_job(job_id).status
 
-    def get_deliverable_url(self, job_id: int) -> str | None:
+    def get_deliverable_url(self, job_id: int, *, hint_block: int | None = None) -> str | None:
         """Return the ``deliverable_url`` for a submitted job.
 
         Reads the ``JobInitialised`` event emitted by the policy and parses
         ``optParams`` JSON to extract ``deliverable_url``. Returns ``None``
         if the event is not found or the job has not been submitted yet.
+
+        Args:
+            hint_block: approximate block where the job was submitted.
+                Passing this narrows the log query window and avoids RPC
+                block-range limits on providers like NodeReal.
         """
-        return self.policy.get_deliverable_url(job_id)
+        return self.policy.get_deliverable_url(job_id, hint_block=hint_block)
 
     def get_verdict(self, job_id: int, evidence: bytes = b"") -> tuple[Verdict, bytes]:
         """Simulate the verdict the Router would see right now."""

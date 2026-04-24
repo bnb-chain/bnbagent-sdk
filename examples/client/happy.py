@@ -6,6 +6,8 @@ window → settle → COMPLETED.
 
 from __future__ import annotations
 
+import time
+
 from _helpers import banner, load_settings, make_client, minutes_from_now
 
 from bnbagent.apex import DeliverableManifest, JobStatus, SCHEMA_VERSION
