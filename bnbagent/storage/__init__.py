@@ -1,4 +1,4 @@
-"""Pluggable off-chain storage for ServiceRecord persistence."""
+"""Pluggable off-chain storage for deliverable persistence."""
 
 from __future__ import annotations
 

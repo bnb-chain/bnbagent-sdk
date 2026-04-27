@@ -6,12 +6,11 @@ window → settle → COMPLETED.
 
 from __future__ import annotations
 
-import hashlib
 import time
 
 from _helpers import banner, load_settings, make_client, minutes_from_now
 
-from bnbagent.apex import JobStatus
+from bnbagent.apex import DeliverableManifest, JobStatus, SCHEMA_VERSION
 
 
 def main() -> None:
@@ -49,8 +48,21 @@ def main() -> None:
         return
 
     provider = make_client(s.provider_pk, s.network)
-    deliverable = hashlib.sha256(f"happy-{job_id}-{int(time.time())}".encode()).digest()
-    provider.submit(job_id, deliverable, data_url="https://example.com/deliverable")
+    manifest = DeliverableManifest(
+        version=SCHEMA_VERSION,
+        job_id=job_id,
+        chain_id=provider.network.chain_id,
+        contracts={
+            "commerce": provider.commerce.address,
+            "router": provider.router.address,
+            "policy": provider.policy.address,
+        },
+        response={"content": f"happy path result for job {job_id}", "content_type": "text/plain"},
+    )
+    # In production: upload manifest.to_dict() to IPFS/storage first, then pass the URL.
+    # deliverable_url = storage.upload(manifest.to_dict(), f"job-{job_id}.json")
+    deliverable_url = ""  # no storage in this example
+    provider.submit(job_id, manifest.manifest_hash(), {"deliverable_url": deliverable_url})
     print("[provider] submit OK (Funded -> Submitted)")
 
     window = client.policy.dispute_window()

@@ -216,21 +216,23 @@ class TestSubmitResult:
         client = _inject_client(ops)
         client.get_job.return_value = _job(status=JobStatus.FUNDED)
         client.submit.return_value = {"transactionHash": "0xaa"}
+        client.commerce.address = "0x" + "11" * 20
+        client.router.address = "0x" + "22" * 20
+        client.policy.address = "0x" + "33" * 20
+        client.commerce.w3.eth.chain_id = 97
 
-        result = await ops.submit_result(
-            1, "hello", include_job_context=False, include_negotiation_history=False
-        )
+        result = await ops.submit_result(1, "hello")
         assert result["success"] is True
         assert 1 in ops._submitted_ids
+        assert "deliverable" in result
+        assert "deliverableUrl" in result
 
     @pytest.mark.asyncio
     async def test_submit_blocked_on_failed_verify(self):
         ops = _make_ops()
         client = _inject_client(ops)
         client.get_job.return_value = _job(status=JobStatus.OPEN)
-        result = await ops.submit_result(
-            1, "x", include_job_context=False, include_negotiation_history=False
-        )
+        result = await ops.submit_result(1, "x")
         assert result["success"] is False
         client.submit.assert_not_called()
 

@@ -165,7 +165,7 @@ def _create_apex_routes(
             return JSONResponse(
                 {
                     "error": (
-                        "Request must include 'terms' with service_type,"
+                        "Request must include 'terms' with"
                         " deliverables, quality_standards"
                     )
                 },

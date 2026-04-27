@@ -28,6 +28,7 @@ Design notes
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -224,11 +225,24 @@ class APEXClient:
         self,
         job_id: int,
         deliverable: bytes,
-        data_url: str | None = None,
+        opt_params: dict,
     ) -> dict[str, Any]:
-        """Provider submits. ``data_url`` is forwarded as ``optParams`` (UTF-8)."""
-        opt_params = data_url.encode("utf-8") if data_url else b""
-        return self.commerce.submit(job_id, deliverable, opt_params)
+        """Provider submits.
+
+        ``deliverable`` is ``DeliverableManifest.manifest_hash()`` — the
+        keccak256 of the canonical manifest JSON (32 bytes). Stored on-chain
+        as the ERC-8183 ``deliverable`` field (bytes32).
+
+        ``opt_params`` is a dict serialised to JSON bytes and stored on-chain
+        as ``optParams``. Must contain ``"deliverable_url"`` (the URL where
+        the full manifest JSON can be fetched for verification). Example::
+
+            {"deliverable_url": "ipfs://Qm..."}
+        """
+        if "deliverable_url" not in opt_params:
+            raise ValueError("opt_params must contain 'deliverable_url'")
+        encoded = json.dumps(opt_params, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return self.commerce.submit(job_id, deliverable, encoded)
 
     def cancel_open(
         self,
@@ -258,6 +272,20 @@ class APEXClient:
 
     def get_job_status(self, job_id: int) -> JobStatus:
         return self.commerce.get_job(job_id).status
+
+    def get_deliverable_url(self, job_id: int, *, hint_block: int | None = None) -> str | None:
+        """Return the ``deliverable_url`` for a submitted job.
+
+        Reads the ``JobInitialised`` event emitted by the policy and parses
+        ``optParams`` JSON to extract ``deliverable_url``. Returns ``None``
+        if the event is not found or the job has not been submitted yet.
+
+        Args:
+            hint_block: approximate block where the job was submitted.
+                Passing this narrows the log query window and avoids RPC
+                block-range limits on providers like NodeReal.
+        """
+        return self.policy.get_deliverable_url(job_id, hint_block=hint_block)
 
     def get_verdict(self, job_id: int, evidence: bytes = b"") -> tuple[Verdict, bytes]:
         """Simulate the verdict the Router would see right now."""

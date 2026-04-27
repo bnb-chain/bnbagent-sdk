@@ -14,8 +14,11 @@ There is no ``voteApprove`` on-chain; jobs without dispute auto-approve when
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from web3 import Web3
 from web3.contract import Contract
@@ -88,6 +91,59 @@ class PolicyClient(ContractClientMixin):
         return self._call_with_retry(
             self.contract.functions.isVoter(Web3.to_checksum_address(voter))
         )
+
+    def get_deliverable_url(self, job_id: int, *, hint_block: int | None = None) -> str | None:
+        """Return the ``deliverable_url`` for a submitted job.
+
+        Reads the ``JobInitialised`` event emitted by ``onSubmitted`` and
+        parses ``optParams`` (JSON bytes) to extract ``deliverable_url``.
+        Returns ``None`` if the event is not found or the field is absent.
+
+        Args:
+            hint_block: if the caller knows roughly when the job was submitted
+                (e.g. the block number of the ``Disputed`` event), passing it
+                allows the query to use a tight window and avoid RPC block-range
+                limits.  When omitted a 5 000-block lookback is used.
+        """
+        _LOOKBACK = 5_000
+
+        try:
+            current_block = self.w3.eth.block_number
+        except Exception:
+            current_block = None
+
+        if hint_block is not None:
+            from_block = max(0, hint_block - _LOOKBACK)
+            to_block = hint_block + 10
+        elif current_block is not None:
+            from_block = max(0, current_block - _LOOKBACK)
+            to_block = "latest"
+        else:
+            from_block = 0
+            to_block = "latest"
+
+        try:
+            logs = self.contract.events.JobInitialised().get_logs(
+                from_block=from_block,
+                to_block=to_block,
+                argument_filters={"jobId": job_id},
+            )
+        except Exception as exc:
+            logger.warning("[PolicyClient] get_deliverable_url(%s) event query failed: %s", job_id, exc)
+            return None
+
+        if not logs:
+            return None
+
+        raw: bytes = logs[0]["args"].get("optParams", b"")
+        if not raw:
+            return None
+        try:
+            params = json.loads(raw.decode("utf-8"))
+            return params.get("deliverable_url") or None
+        except Exception as exc:
+            logger.warning("[PolicyClient] get_deliverable_url(%s) parse failed: %s", job_id, exc)
+            return None
 
     def dispute_window(self) -> int:
         return self._call_with_retry(self.contract.functions.disputeWindow())

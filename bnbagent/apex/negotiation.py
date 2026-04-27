@@ -5,7 +5,7 @@ V1 implements single-round HTTP negotiation:
   User sends requirements + quality standards → Agent returns price or rejects.
 
 The TermSpecification follows APEX's structured terms:
-  Agreed Service + Constraints + Compensation + Evaluation.
+  Agreed Service + Compensation + Evaluation.
 
 NegotiationHandler provides a ready-to-use negotiation processor for agents:
   handler = NegotiationHandler(service_price="20e18", currency="0x...")
@@ -18,12 +18,12 @@ createJob(). It embeds the full agreed terms + provider signature so neither
 party can tamper with the negotiation record after the job is on-chain.
 
   {
-    "v": 1,
+    "version": 1,
     "negotiated_at": <unix ts>,
     "quote_expires_at": <unix ts>,
     "task": "<task_description>",
-    "terms": { "service_type", "deliverables", "quality_standards",
-               "success_criteria"?, "deadline_seconds" },
+    "terms": { "deliverables", "quality_standards",
+               "success_criteria"? },
     "price": "<wei>",
     "currency": "<token address>",
     "negotiation_hash": "0x...",   # keccak256 of above (without hash/sig fields)
@@ -62,20 +62,16 @@ class TermSpecification:
     APEX protocol term specification — the core output of negotiation.
     Shared between V1 (single-round HTTP) and V2 (multi-round Memo + on-chain PoA).
 
-    Fields map to APEX's four categories:
-      - Agreed Service: service_type, deliverables, quality_standards, success_criteria
-      - Constraints: deadline_seconds
+    Fields map to APEX's categories:
+      - Agreed Service: deliverables, quality_standards, success_criteria
       - Compensation: price, currency
       - Evaluation: evaluation_required, evaluator_type
     """
 
-    service_type: str
     deliverables: str
     quality_standards: str
 
     success_criteria: list[str] | None = None
-
-    deadline_seconds: int | None = None
 
     price: str | None = None
     currency: str | None = None
@@ -85,10 +81,8 @@ class TermSpecification:
 
     def to_dict(self) -> dict:
         result = {
-            "service_type": self.service_type,
             "deliverables": self.deliverables,
             "quality_standards": self.quality_standards,
-            "deadline_seconds": self.deadline_seconds,  # Always include (null if not set)
             "evaluation_required": self.evaluation_required,
             "evaluator_type": self.evaluator_type,
         }
@@ -103,11 +97,9 @@ class TermSpecification:
     @classmethod
     def from_dict(cls, data: dict) -> TermSpecification:
         return cls(
-            service_type=data["service_type"],
             deliverables=data["deliverables"],
             quality_standards=data["quality_standards"],
             success_criteria=data.get("success_criteria"),
-            deadline_seconds=data.get("deadline_seconds"),
             price=data.get("price"),
             currency=data.get("currency"),
             evaluation_required=data.get("evaluation_required", True),
@@ -196,7 +188,7 @@ class NegotiationResponse:
     Agent → User: pricing response.
 
     If accepted, Agent fills in price/currency in terms.
-    Agent may adjust deadline_seconds and success_criteria but NOT quality_standards.
+    Agent may adjust success_criteria but NOT quality_standards.
 
     The response_hash is computed by the Agent and anchored on-chain by the Client
     at createJobAndLock to prevent post-hoc tampering of agreed terms.
@@ -356,12 +348,10 @@ def _build_description_content(negotiation_result: dict) -> dict:
     if not currency:
         raise ValueError("Negotiation response missing currency")
 
-    # Build terms section (service/quality fields only, no price/currency)
+    # Build terms section (quality fields only, no price/currency)
     terms: dict = {
-        "service_type": _sanitize_for_claim(response_terms.get("service_type", "")),
         "deliverables": _sanitize_for_claim(response_terms.get("deliverables", "")),
         "quality_standards": _sanitize_for_claim(response_terms.get("quality_standards", "")),
-        "deadline_seconds": response_terms.get("deadline_seconds"),
     }
     success_criteria = response_terms.get("success_criteria")
     if success_criteria:
@@ -371,7 +361,7 @@ def _build_description_content(negotiation_result: dict) -> dict:
     quote_expires_at = negotiation_result.get("quote_expires_at") or response.get("quote_expires_at")
 
     content: dict = {
-        "v": 1,
+        "version": 1,
         "negotiated_at": negotiated_at,
         "task": _sanitize_for_claim(request.get("task_description", "")),
         "terms": terms,
@@ -429,28 +419,17 @@ def build_job_description(negotiation_result: dict, max_length: int = 2000) -> s
     return description
 
 
-def parse_job_description(description: str) -> dict | None:
-    """
-    Parse a structured on-chain job description (schema v1+).
+def parse_job_description(description: str) -> "JobDescription | None":
+    """Parse a structured on-chain job description (schema v1+).
 
-    Returns the parsed dict if the description is a valid structured JSON with
-    a 'v' version field, or None for legacy plain-text descriptions.
+    Returns a ``JobDescription`` if the description is a valid structured JSON,
+    or ``None`` for plain-text / unstructured descriptions.
 
     Args:
         description: The job.description string from on-chain.
-
-    Returns:
-        Parsed dict, or None if not a structured description.
     """
-    if not description or not description.strip().startswith("{"):
-        return None
-    try:
-        parsed = json.loads(description)
-        if isinstance(parsed, dict) and "v" in parsed:
-            return parsed
-        return None
-    except (json.JSONDecodeError, ValueError):
-        return None
+    from .schema import JobDescription
+    return JobDescription.from_str(description)
 
 
 class NegotiationHandler:
@@ -476,7 +455,6 @@ class NegotiationHandler:
         handler = NegotiationHandler.from_apex_client(
             apex_client=apex_client,
             service_price="20000000000000000000",
-            supported_service_types=["blockchain-news"],
         )
 
         # In your /negotiate endpoint:
@@ -488,7 +466,6 @@ class NegotiationHandler:
         self,
         service_price: str,
         currency: str,
-        supported_service_types: list[str] | None = None,
         estimated_completion_seconds: int = 120,
         require_quality_standards: bool = True,
         wallet_provider: WalletProvider | None = None,
@@ -500,7 +477,6 @@ class NegotiationHandler:
         Args:
             service_price: Price in token smallest unit (e.g., "20000000000000000000" for 20 tokens)
             currency: BEP20 token contract address
-            supported_service_types: List of supported service types (None = accept all)
             estimated_completion_seconds: Estimated time to complete the service
             require_quality_standards: Whether to require quality_standards in request
             wallet_provider: Wallet for signing negotiation_hash. When set, the
@@ -511,9 +487,6 @@ class NegotiationHandler:
         """
         self._service_price = service_price
         self._currency = currency
-        self._supported_types: set[str] | None = None
-        if supported_service_types:
-            self._supported_types = {t.lower() for t in supported_service_types}
         self._estimated_completion = estimated_completion_seconds
         self._require_quality_standards = require_quality_standards
         self._wallet_provider = wallet_provider
@@ -524,7 +497,6 @@ class NegotiationHandler:
         cls,
         apex_client: APEXClient,
         service_price: str,
-        supported_service_types: list[str] | None = None,
         estimated_completion_seconds: int = 120,
         require_quality_standards: bool = True,
         wallet_provider: WalletProvider | None = None,
@@ -536,7 +508,6 @@ class NegotiationHandler:
         Args:
             apex_client: APEXClient instance for on-chain queries
             service_price: Price in token smallest unit
-            supported_service_types: List of supported service types
             estimated_completion_seconds: Estimated completion time
             require_quality_standards: Whether to require quality_standards
             wallet_provider: Wallet for signing negotiation results
@@ -554,7 +525,6 @@ class NegotiationHandler:
             handler = NegotiationHandler.from_apex_client(
                 apex_client=apex,
                 service_price=os.environ["APEX_SERVICE_PRICE"],
-                supported_service_types=["translation"],
             )
         """
         currency = apex_client.payment_token
@@ -562,7 +532,6 @@ class NegotiationHandler:
         return cls(
             service_price=service_price,
             currency=currency,
-            supported_service_types=supported_service_types,
             estimated_completion_seconds=estimated_completion_seconds,
             require_quality_standards=require_quality_standards,
             wallet_provider=wallet_provider,
@@ -600,18 +569,6 @@ class NegotiationHandler:
 
         request_hash = self._ensure_hex_prefix(req.compute_hash())
 
-        service_type = req.terms.service_type.lower()
-        if self._supported_types and service_type not in self._supported_types:
-            return self._reject(
-                request_data=req.to_dict(),
-                request_hash=request_hash,
-                reason_code=ReasonCode.UNSUPPORTED,
-                reason=(
-                    f"Unsupported service type: {service_type}."
-                    f" Supported: {', '.join(sorted(self._supported_types))}"
-                ),
-            )
-
         if self._require_quality_standards and not req.terms.quality_standards:
             return self._reject(
                 request_data=req.to_dict(),
@@ -624,11 +581,9 @@ class NegotiationHandler:
         quote_expires_at = now + self._quote_ttl_seconds
 
         response_terms = TermSpecification(
-            service_type=req.terms.service_type,
             deliverables=req.terms.deliverables,
             quality_standards=req.terms.quality_standards,
             success_criteria=req.terms.success_criteria,
-            deadline_seconds=req.terms.deadline_seconds,
             price=self._service_price,
             currency=self._currency,
         )

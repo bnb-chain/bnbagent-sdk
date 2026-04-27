@@ -21,7 +21,6 @@ from bnbagent.apex.negotiation import (
 
 def _make_terms(**overrides):
     defaults = {
-        "service_type": "blockchain-news",
         "deliverables": "news summary",
         "quality_standards": "accurate, sourced",
     }
@@ -51,10 +50,8 @@ def _make_accepted_result(
         "request": {
             "task_description": task,
             "terms": {
-                "service_type": "blockchain-news",
                 "deliverables": "news summary",
                 "quality_standards": "accurate, sourced",
-                "deadline_seconds": None,
                 "evaluation_required": True,
                 "evaluator_type": "uma_oov3",
             },
@@ -63,10 +60,8 @@ def _make_accepted_result(
         "response": {
             "accepted": True,
             "terms": {
-                "service_type": "blockchain-news",
                 "deliverables": "news summary",
                 "quality_standards": "accurate, sourced",
-                "deadline_seconds": None,
                 "evaluation_required": True,
                 "evaluator_type": "uma_oov3",
                 "price": price,
@@ -85,10 +80,8 @@ class TestTermSpecification:
     def test_to_dict_required(self):
         t = _make_terms()
         d = t.to_dict()
-        assert d["service_type"] == "blockchain-news"
         assert d["deliverables"] == "news summary"
         assert d["quality_standards"] == "accurate, sourced"
-        assert "deadline_seconds" in d  # Always included (None)
 
     def test_to_dict_optional(self):
         t = _make_terms(
@@ -105,7 +98,7 @@ class TestTermSpecification:
         t = _make_terms(price="50", currency="0xABC")
         d = t.to_dict()
         t2 = TermSpecification.from_dict(d)
-        assert t2.service_type == t.service_type
+        assert t2.deliverables == t.deliverables
         assert t2.price == t.price
 
     def test_defaults(self):
@@ -147,14 +140,13 @@ class TestNegotiationRequest:
         d = {
             "task_description": "Do something",
             "terms": {
-                "service_type": "test",
                 "deliverables": "output",
                 "quality_standards": "high",
             },
         }
         req = NegotiationRequest.from_dict(d)
         assert req.task_description == "Do something"
-        assert req.terms.service_type == "test"
+        assert req.terms.deliverables == "output"
 
     def test_compute_hash_0x_prefix(self):
         req = _make_request()
@@ -299,11 +291,14 @@ class TestSanitizeForClaim:
 
 
 class TestBuildJobDescription:
+    # Note: build_job_description() returns a JSON *string*, so tests here use
+    # json.loads(desc) which produces a plain dict — not a JobDescription object.
+    # For parse_job_description() (which returns JobDescription), see TestParseJobDescription.
     def test_basic_structure(self):
         result = _make_accepted_result()
         desc = build_job_description(result)
         parsed = json.loads(desc)
-        assert parsed["v"] == 1
+        assert parsed["version"] == 1
         assert parsed["task"] == "Get latest news"
         assert "terms" in parsed
         assert parsed["price"] == "20000000000000000000"
@@ -316,10 +311,10 @@ class TestBuildJobDescription:
         desc = build_job_description(result)
         parsed = json.loads(desc)
         terms = parsed["terms"]
-        assert terms["service_type"] == "blockchain-news"
         assert terms["deliverables"] == "news summary"
         assert terms["quality_standards"] == "accurate, sourced"
-        # price and currency should NOT be in terms
+        assert "service_type" not in terms
+        assert "deadline_seconds" not in terms
         assert "price" not in terms
         assert "currency" not in terms
 
@@ -394,8 +389,8 @@ class TestParseJobDescription:
         desc = build_job_description(result)
         parsed = parse_job_description(desc)
         assert parsed is not None
-        assert parsed["v"] == 1
-        assert "task" in parsed
+        assert parsed.version == 1
+        assert parsed.task
 
     def test_returns_none_for_plain_text(self):
         assert parse_job_description("Search for BNB Chain news") is None
@@ -406,15 +401,15 @@ class TestParseJobDescription:
     def test_returns_none_for_invalid_json(self):
         assert parse_job_description("{not valid json}") is None
 
-    def test_returns_none_for_json_without_v(self):
+    def test_returns_none_for_json_without_version(self):
         assert parse_job_description('{"task": "something"}') is None
 
     def test_roundtrip(self):
         result = _make_accepted_result()
         desc = build_job_description(result)
         parsed = parse_job_description(desc)
-        assert parsed["task"] == "Get latest news"
-        assert parsed["price"] == "20000000000000000000"
+        assert parsed.task == "Get latest news"
+        assert parsed.price == "20000000000000000000"
 
 
 class TestNegotiationHandler:
@@ -431,7 +426,6 @@ class TestNegotiationHandler:
         request_data = {
             "task_description": "Get news",
             "terms": {
-                "service_type": "blockchain-news",
                 "deliverables": "summary",
                 "quality_standards": "accurate",
             },
@@ -447,7 +441,6 @@ class TestNegotiationHandler:
         request_data = {
             "task_description": "Get news",
             "terms": {
-                "service_type": "blockchain-news",
                 "deliverables": "summary",
                 "quality_standards": "accurate",
             },
@@ -467,7 +460,6 @@ class TestNegotiationHandler:
         request_data = {
             "task_description": "Get news",
             "terms": {
-                "service_type": "blockchain-news",
                 "deliverables": "summary",
                 "quality_standards": "accurate",
             },
@@ -483,7 +475,6 @@ class TestNegotiationHandler:
         request_data = {
             "task_description": "Get news",
             "terms": {
-                "service_type": "blockchain-news",
                 "deliverables": "summary",
                 "quality_standards": "accurate",
             },
@@ -503,7 +494,6 @@ class TestNegotiationHandler:
         request_data = {
             "task_description": "Get news",
             "terms": {
-                "service_type": "blockchain-news",
                 "deliverables": "summary",
                 "quality_standards": "accurate",
             },
@@ -525,26 +515,11 @@ class TestNegotiationHandler:
         assert result.accepted is False
         assert result.response.get("reason_code") == ReasonCode.AMBIGUOUS_TERMS
 
-    def test_unsupported_service_type(self):
-        handler = self._make_handler(supported_service_types=["translation"])
-        request_data = {
-            "task_description": "Get news",
-            "terms": {
-                "service_type": "blockchain-news",
-                "deliverables": "summary",
-                "quality_standards": "accurate",
-            },
-        }
-        result = handler.negotiate(request_data)
-        assert result.accepted is False
-        assert result.response.get("reason_code") == ReasonCode.UNSUPPORTED
-
     def test_missing_quality_standards(self):
         handler = self._make_handler(require_quality_standards=True)
         request_data = {
             "task_description": "Do something",
             "terms": {
-                "service_type": "test",
                 "deliverables": "output",
                 "quality_standards": "",
             },
