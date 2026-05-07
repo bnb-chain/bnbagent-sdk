@@ -231,6 +231,11 @@ def create_apex_app(
         verification = await state.job_ops.verify_job(job_id)
         if not verification.get("valid"):
             reason = verification.get("error", "unknown")
+            error_code = verification.get("error_code")
+            logger.warning(
+                f"[APEX] Job #{job_id} skipped: {reason}"
+                + (f" (error_code={error_code})" if error_code is not None else "")
+            )
             if on_job_skipped:
                 try:
                     target = verification.get("job", {"jobId": job_id})

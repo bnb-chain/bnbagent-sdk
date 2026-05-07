@@ -305,8 +305,33 @@ class APEXJobOps:
                 }
 
             now = int(time.time())
-            if job_result.get("expiredAt", 0) <= now:
+            expired_at = job_result.get("expiredAt", 0)
+            if expired_at <= now:
                 return {"valid": False, "error": "Job has expired", "error_code": 408}
+
+            # OptimisticPolicy reverts ``commerce.submit`` with ``SubmissionTooLate``
+            # once ``now > expiredAt - disputeWindow``. Detect that here so the
+            # agent doesn't keep retrying every funded-poll tick on a job whose
+            # submit deadline has already passed.
+            try:
+                dispute_window = await asyncio.to_thread(
+                    self._get_client().policy.dispute_window
+                )
+                submit_deadline = expired_at - int(dispute_window)
+                if now > submit_deadline:
+                    return {
+                        "valid": False,
+                        "error": (
+                            "Submission deadline has passed "
+                            f"(expiredAt - disputeWindow = {submit_deadline}, now = {now})"
+                        ),
+                        "error_code": 410,
+                    }
+            except Exception as exc:
+                logger.warning(
+                    f"[APEXJobOps] dispute_window lookup failed; proceeding without "
+                    f"submit-deadline check: {exc}"
+                )
 
             description = job_result.get("description", "")
             if description:

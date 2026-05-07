@@ -124,6 +124,13 @@ class ContractClientMixin:
                     time.sleep(delay)
                     continue
 
+                # Any other error path (preflight revert, receipt timeout,
+                # transient RPC failure): the cached nonce was already
+                # incremented in get_nonce() but the tx may not have been
+                # mined or even broadcast. Invalidate the cache so the next
+                # caller re-seeds from chain instead of leaving a permanent
+                # nonce gap that strands every subsequent tx in mempool.
+                nonce_mgr.reset()
                 raise
 
         raise last_error  # type: ignore
