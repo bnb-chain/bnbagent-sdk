@@ -178,11 +178,14 @@ High-level facade. Most useful methods:
 | `cancel_open(job_id, reason=...)` | Client cancels while OPEN; no escrow moved. |
 | `claim_refund(job_id)` | Refund via expiry. Non-pausable, non-hookable. |
 | `settle(job_id, evidence=b"")` | Permissionless verdict-application. |
+| `mark_expired(job_id)` | Permissionless reconciliation of the Router's in-flight counter for jobs that exited via `claim_refund`. |
 | `dispute(job_id)` | Client raises a dispute (within window). |
 | `vote_reject(job_id)` | Whitelisted voter casts a reject vote. |
-| `get_job(job_id)` | Returns typed `Job` dataclass. |
+| `get_job(job_id)` | Returns typed `Job` dataclass (incl. on-chain `deliverable` bytes32). |
 | `get_job_status(job_id)` | Returns a `JobStatus` enum. |
 | `get_verdict(job_id)` | Simulate `Policy.check` — returns `(Verdict, reason)`. |
+| `inflight_job_count()` | Number of jobs the Router currently tracks as in-flight. |
+| `dispute_quorum_snapshot(job_id)` | Reject-quorum snapshotted at `dispute()` time. |
 
 Token helpers: `payment_token` (cached address), `token_decimals()`, `token_symbol()`, `token_balance(address=None)`, `token_allowance(owner, spender)`, `approve_payment_token(spender, amount)`.
 
@@ -194,14 +197,14 @@ Sub-clients: `apex.commerce`, `apex.router`, `apex.policy` (instances of `Commer
 
 ### `RouterClient`
 
-Router surface: `register_job`, `settle`, `commerce`, `job_policy`, `policy_whitelist`, `paused`, `get_job_registered_events`, `get_job_settled_events`.
+Router surface: `register_job`, `settle`, `mark_expired`, `commerce`, `job_policy`, `policy_whitelist`, `paused`, `inflight_job_count`, `get_job_registered_events`, `get_job_settled_events`, `get_job_finalised_events`.
 
 ### `PolicyClient`
 
 OptimisticPolicy surface:
 
 - **Writes**: `dispute` (client), `vote_reject` (voter), admin methods `add_voter`, `remove_voter`, `set_quorum`.
-- **Reads**: `check`, `submitted_at`, `disputed`, `reject_votes`, `has_voted`, `is_voter`, `dispute_window`, `vote_quorum`, `active_voter_count`, `admin`, `commerce`, `router`.
+- **Reads**: `check`, `submitted_at`, `disputed`, `reject_votes`, `has_voted`, `is_voter`, `dispute_window`, `vote_quorum`, `dispute_quorum_snapshot`, `active_voter_count`, `admin`, `commerce`, `router`.
 - `get_deliverable_url(job_id, *, hint_block=None)` — reads `JobInitialised.optParams` to extract `deliverable_url`. Pass `hint_block` (e.g. the block number of the `Disputed` event) to keep the `eth_getLogs` window tight and avoid RPC block-range limits.
 
 ### `APEXJobOps`
@@ -218,7 +221,7 @@ Single-round negotiation processor. `negotiate(request) → NegotiationResult`; 
 - `JobStatus` — `OPEN, FUNDED, SUBMITTED, COMPLETED, REJECTED, EXPIRED` (matches `IACP.JobStatus`).
 - `Verdict` — `PENDING, APPROVE, REJECT` (matches `VERDICT_*`).
 - `REASON_APPROVED`, `REASON_REJECTED` — `keccak256("OPTIMISTIC_APPROVED" / "OPTIMISTIC_REJECTED")`.
-- `Job` — typed dataclass returned by `CommerceClient.get_job`.
+- `Job` — typed dataclass returned by `CommerceClient.get_job`. Fields: `id`, `client`, `provider`, `evaluator`, `description`, `budget`, `expired_at`, `status`, `hook`, `deliverable` (bytes32, set by `submit`; `b"\x00" * 32` until then).
 
 ### `APEXConfig`
 

@@ -64,3 +64,6 @@ class Job:
     expired_at: int
     status: JobStatus
     hook: str
+    # ``keccak256(canonical manifest JSON)`` written by ``submit``; 32 zero
+    # bytes for jobs that have not been submitted yet (audit I05).
+    deliverable: bytes = ZERO_REASON

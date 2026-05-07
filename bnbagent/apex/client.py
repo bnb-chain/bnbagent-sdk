@@ -259,6 +259,11 @@ class APEXClient:
         """Permissionless: pull the policy verdict and apply it on-chain."""
         return self.router.settle(job_id, evidence)
 
+    def mark_expired(self, job_id: int) -> dict[str, Any]:
+        """Permissionless: reconcile the Router's in-flight counter for a
+        job that exited via ``claimRefund`` (audit L03)."""
+        return self.router.mark_expired(job_id)
+
     def dispute(self, job_id: int) -> dict[str, Any]:
         return self.policy.dispute(job_id)
 
@@ -290,3 +295,11 @@ class APEXClient:
     def get_verdict(self, job_id: int, evidence: bytes = b"") -> tuple[Verdict, bytes]:
         """Simulate the verdict the Router would see right now."""
         return self.policy.check(job_id, evidence)
+
+    def inflight_job_count(self) -> int:
+        """Number of jobs the Router currently considers in-flight (audit L03)."""
+        return self.router.inflight_job_count()
+
+    def dispute_quorum_snapshot(self, job_id: int) -> int:
+        """Quorum threshold snapshotted at ``dispute()`` time (audit L08)."""
+        return self.policy.dispute_quorum_snapshot(job_id)

@@ -48,6 +48,11 @@
   },
   {
     "inputs": [],
+    "name": "ExpiryTooLong",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "ExpiryTooShort",
     "type": "error"
   },
@@ -69,6 +74,11 @@
   {
     "inputs": [],
     "name": "HookMissingInterface",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "HookRequired",
     "type": "error"
   },
   {
@@ -106,6 +116,11 @@
       }
     ],
     "name": "OwnableUnauthorizedAccount",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ProviderAlreadySet",
     "type": "error"
   },
   {
@@ -291,6 +306,12 @@
         "indexed": true,
         "internalType": "address",
         "name": "client",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "provider",
         "type": "address"
       },
       {
@@ -546,6 +567,32 @@
   },
   {
     "inputs": [],
+    "name": "MAX_EXPIRY_DURATION",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "MAX_PLATFORM_FEE_BP",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "UPGRADE_INTERFACE_VERSION",
     "outputs": [
       {
@@ -718,6 +765,16 @@
             "internalType": "address",
             "name": "hook",
             "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "submittedAt",
+            "type": "uint256"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "deliverable",
+            "type": "bytes32"
           }
         ],
         "internalType": "struct IACP.Job",
@@ -837,6 +894,16 @@
         "internalType": "address",
         "name": "hook",
         "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "submittedAt",
+        "type": "uint256"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "deliverable",
+        "type": "bytes32"
       }
     ],
     "stateMutability": "view",

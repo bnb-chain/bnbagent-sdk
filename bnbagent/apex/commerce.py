@@ -30,7 +30,13 @@ def _load_abi() -> list:
 
 
 def _decode_job(raw: Any) -> Job:
-    """Convert the tuple returned by ``getJob`` into a ``Job`` dataclass."""
+    """Convert the tuple returned by ``getJob`` into a ``Job`` dataclass.
+
+    Tuple layout (post-audit ABI): ``(id, client, provider, evaluator,
+    description, budget, expiredAt, status, hook, submittedAt, deliverable)``.
+    ``submittedAt`` (index 9) is intentionally not surfaced on ``Job`` —
+    callers that need it should read ``submittedAt(jobId)`` on the policy.
+    """
     return Job(
         id=raw[0],
         client=Web3.to_checksum_address(raw[1]),
@@ -41,6 +47,7 @@ def _decode_job(raw: Any) -> Job:
         expired_at=raw[6],
         status=JobStatus(raw[7]),
         hook=Web3.to_checksum_address(raw[8]),
+        deliverable=bytes(raw[10]),
     )
 
 
@@ -222,6 +229,7 @@ class CommerceClient(ContractClientMixin):
             {
                 "jobId": log["args"]["jobId"],
                 "client": log["args"]["client"],
+                "provider": log["args"]["provider"],
                 "amount": log["args"]["amount"],
                 "blockNumber": log["blockNumber"],
                 "transactionHash": log["transactionHash"].hex(),

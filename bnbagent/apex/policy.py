@@ -151,6 +151,17 @@ class PolicyClient(ContractClientMixin):
     def vote_quorum(self) -> int:
         return self._call_with_retry(self.contract.functions.voteQuorum())
 
+    def dispute_quorum_snapshot(self, job_id: int) -> int:
+        """``voteQuorum`` value snapshotted at ``dispute()`` time (audit L08).
+
+        Returns ``0`` if the job has never been disputed. After ``dispute``
+        the snapshot is the threshold ``check`` will use, even if an admin
+        later calls ``setQuorum`` — protects pending disputes from
+        retroactive admin adjustments."""
+        return self._call_with_retry(
+            self.contract.functions.disputeQuorumSnapshot(job_id)
+        )
+
     def active_voter_count(self) -> int:
         return self._call_with_retry(self.contract.functions.activeVoterCount())
 

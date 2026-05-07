@@ -171,6 +171,7 @@ class APEXJobOps:
                 "expiredAt": job.expired_at,
                 "status": job.status,
                 "hook": job.hook,
+                "deliverable": Web3.to_hex(job.deliverable),
             }
         except Exception as exc:
             logger.error(f"[APEXJobOps] get_job({job_id}) failed: {exc}")
@@ -346,6 +347,7 @@ class APEXJobOps:
                         "expiredAt": job.expired_at,
                         "status": job.status,
                         "hook": job.hook,
+                        "deliverable": Web3.to_hex(job.deliverable),
                     }
                 )
                 self._pending_open_ids.discard(job.id)

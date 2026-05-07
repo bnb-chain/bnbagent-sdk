@@ -48,6 +48,11 @@
   },
   {
     "inputs": [],
+    "name": "HasInflightJobs",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "InvalidInitialization",
     "type": "error"
   },
@@ -64,6 +69,11 @@
   {
     "inputs": [],
     "name": "NotDecided",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotExpired",
     "type": "error"
   },
   {
@@ -195,6 +205,25 @@
       }
     ],
     "name": "Initialized",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "jobId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "enum IACP.JobStatus",
+        "name": "status",
+        "type": "uint8"
+      }
+    ],
+    "name": "JobFinalised",
     "type": "event"
   },
   {
@@ -429,6 +458,19 @@
     "type": "function"
   },
   {
+    "inputs": [],
+    "name": "inflightJobCount",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [
       {
         "internalType": "address",
@@ -463,6 +505,19 @@
       }
     ],
     "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "jobId",
+        "type": "uint256"
+      }
+    ],
+    "name": "markExpired",
+    "outputs": [],
+    "stateMutability": "nonpayable",
     "type": "function"
   },
   {

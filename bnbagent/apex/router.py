@@ -20,7 +20,7 @@ from web3.contract import Contract
 
 from ..core.contract_mixin import ContractClientMixin
 from ..wallets.wallet_provider import WalletProvider
-from .types import Verdict
+from .types import JobStatus, Verdict
 
 
 def _load_abi() -> list:
@@ -61,10 +61,24 @@ class RouterClient(ContractClientMixin):
         fn = self.contract.functions.settle(job_id, evidence)
         return self._send_tx(fn)
 
+    def mark_expired(self, job_id: int) -> dict[str, Any]:
+        """Permissionless: reconcile the in-flight counter for a job that
+        exited via ``claimRefund`` (which has no hook). Reverts ``NotExpired``
+        if the job is still live, ``WrongStatus`` if it never reached an
+        expirable state. Required before ``setCommerce`` can be called once
+        any job took the ``claimRefund`` path (audit L03)."""
+        fn = self.contract.functions.markExpired(job_id)
+        return self._send_tx(fn)
+
     # ------------------------------------------------------------------ views
 
     def commerce(self) -> str:
         return self._call_with_retry(self.contract.functions.commerce())
+
+    def inflight_job_count(self) -> int:
+        """Number of jobs registered but not yet finalised. ``setCommerce``
+        reverts ``HasInflightJobs`` while this is non-zero (audit L03)."""
+        return self._call_with_retry(self.contract.functions.inflightJobCount())
 
     def job_policy(self, job_id: int) -> str:
         return self._call_with_retry(self.contract.functions.jobPolicy(job_id))
@@ -123,6 +137,33 @@ class RouterClient(ContractClientMixin):
                 "jobId": log["args"]["jobId"],
                 "verdict": Verdict(log["args"]["verdict"]),
                 "reason": log["args"]["reason"],
+                "blockNumber": log["blockNumber"],
+                "transactionHash": log["transactionHash"].hex(),
+            }
+            for log in logs
+        ]
+
+    def get_job_finalised_events(
+        self,
+        from_block: int,
+        to_block: str = "latest",
+        status: JobStatus | int | None = None,
+    ) -> list[dict[str, Any]]:
+        """``JobFinalised(jobId, status)`` — emitted whenever the in-flight
+        counter is decremented (kernel ``afterAction`` for complete/reject,
+        or ``markExpired``). Useful for off-chain reconciliation (audit L03)."""
+        filt: dict[str, Any] = {}
+        if status is not None:
+            filt["status"] = int(status)
+        logs = self.contract.events.JobFinalised().get_logs(
+            from_block=from_block,
+            to_block=to_block,
+            argument_filters=filt if filt else None,
+        )
+        return [
+            {
+                "jobId": log["args"]["jobId"],
+                "status": JobStatus(log["args"]["status"]),
                 "blockNumber": log["blockNumber"],
                 "transactionHash": log["transactionHash"].hex(),
             }

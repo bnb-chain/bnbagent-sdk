@@ -97,6 +97,11 @@
   },
   {
     "inputs": [],
+    "name": "SubmissionTooLate",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "UnknownVoter",
     "type": "error"
   },
@@ -206,6 +211,25 @@
       }
     ],
     "name": "JobInitialised",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "jobId",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint16",
+        "name": "rejectVotes",
+        "type": "uint16"
+      }
+    ],
+    "name": "QuorumReached",
     "type": "event"
   },
   {
@@ -415,6 +439,25 @@
     "name": "dispute",
     "outputs": [],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "jobId",
+        "type": "uint256"
+      }
+    ],
+    "name": "disputeQuorumSnapshot",
+    "outputs": [
+      {
+        "internalType": "uint16",
+        "name": "",
+        "type": "uint16"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {

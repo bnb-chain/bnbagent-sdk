@@ -387,9 +387,9 @@ Deliverables are stored off-chain; only the keccak256 hash goes on-chain. `Local
 | Contract | Address |
 |----------|---------|
 | Identity Registry (ERC-8004) | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
-| AgenticCommerce (kernel) | `0x1e677fc06ff772e81051484c8c3845fbef13986d` |
-| EvaluatorRouter | `0x0c729baa3cdac6cc3fdef6a816f6bcb85ae92ed7` |
-| OptimisticPolicy | `0x459c3b7a46aa9dde45fbfc3b3d37bd062dbe6fb8` |
+| AgenticCommerce (kernel) | `0xa206c0517b6371c6638cd9e4a42cc9f02a33b0de` |
+| EvaluatorRouter | `0xd7d36d66d2f1b608a0f943f722d27e3744f66f25` |
+| OptimisticPolicy | `0x4f4678d4439fec812ac7674bb3efb4c8f5fb78a6` |
 
 Payment token address is read from `commerce.paymentToken()` at runtime.
 
