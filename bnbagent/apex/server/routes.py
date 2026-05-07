@@ -6,7 +6,7 @@
   newly funded jobs assigned to this provider and dispatches each through
   ``on_job`` → ``submit_result`` without exposing an external trigger.
 - Settle is permissionless on-chain and is delegated to operator scripts;
-  the agent server no longer auto-settles or exposes a settle endpoint.
+  the agent server does not auto-settle and does not expose a settle endpoint.
 """
 
 from __future__ import annotations
