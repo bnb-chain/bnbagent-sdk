@@ -103,8 +103,7 @@ app = create_apex_app(on_job=execute_job)
 
 Built-in behaviour:
 
-- One-time Multicall3 scan of `jobCounter` on boot; auto-processes all FUNDED jobs assigned to this provider.
-- `POST /apex/job/execute` for client-triggered execution (200 fast-path, 202 Accepted with background continuation).
+- **Funded-job poll loop** (default 30 s, override via `APEX_FUNDED_POLL_INTERVAL`): incrementally scans `jobCounter` and auto-processes every newly FUNDED job assigned to this provider — no external trigger required.
 - **Auto-settle loop**: polls `policy.check(jobId)` for this agent's submitted jobs and calls `router.settle(jobId)` when the verdict is no longer PENDING.
 
 ### Voter-side: `voteReject` + auto-settle
@@ -145,10 +144,6 @@ Provider submits a deliverable. The SDK builds a `DeliverableManifest` (fields: 
 #### `POST /job/{id}/settle`
 
 Permissionless `router.settle(jobId)`. Useful for operators; the auto-settle loop handles the common case.
-
-#### `POST /job/execute`
-
-Client-initiated synchronous execution. Requires `on_job` in `create_apex_app`.
 
 #### `GET /job/{id}` / `/response` / `/verify`
 

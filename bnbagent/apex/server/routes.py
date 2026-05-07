@@ -1,8 +1,10 @@
 """FastAPI factory for APEX provider agents.
 
 - ``create_apex_app(...)`` — build a FastAPI sub-app with the APEX endpoints
-  (negotiate / submit / status / job / settle) and optionally an
-  ``/job/execute`` endpoint driven by a user-provided ``on_job`` callback.
+  (negotiate / submit / status / job / settle).
+- When ``on_job`` is provided, a background poll loop scans on-chain for
+  newly funded jobs assigned to this provider and dispatches each through
+  ``on_job`` → ``submit_result`` without exposing an external trigger.
 - An optional auto-settle background loop drives ``router.settle(...)`` for
   this provider's submitted jobs once the dispute window elapses.
 """
@@ -203,11 +205,11 @@ def create_apex_app(
     on_job: Callable[..., Any] | None = None,
     on_submit: Callable[[int, str, dict], Any] | None = None,
     on_job_skipped: Callable[[dict, str], Any] | None = None,
-    exec_timeout: float | None = None,
     task_metadata: dict[str, Any] | None = None,
     prefix: str = "/apex",
     auto_settle: bool = True,
     auto_settle_interval: float = 30.0,
+    funded_poll_interval: float | None = None,
 ) -> FastAPI:
     """Create a FastAPI application for an APEX provider agent.
 
@@ -222,11 +224,11 @@ def create_apex_app(
             async def on_job(job: dict) -> tuple[str, dict]
 
         The SDK handles verification, submission, and tracking for auto-settle.
-    exec_timeout
-        ``/job/execute`` callback timeout in seconds. Falls back to the
-        ``APEX_EXEC_TIMEOUT`` env var (default ``120``). This only caps
-        how long the HTTP request blocks before returning ``202 Accepted``
-        — on-chain ``job.expiredAt`` is a separate, stricter bound.
+        When set, a background poll loop scans on-chain for newly funded jobs
+        and dispatches each through ``on_job``.
+    funded_poll_interval
+        Seconds between funded-job poll passes. Falls back to the
+        ``APEX_FUNDED_POLL_INTERVAL`` env var (default ``30``).
     auto_settle
         If True (default), spawn a background task that calls
         ``router.settle(jobId)`` for this agent's submitted jobs once the
@@ -236,10 +238,8 @@ def create_apex_app(
         Seconds between auto-settle passes.
     """
     state = create_apex_state(config)
-    # /job/execute callback timeout (seconds). Only bounds how long the HTTP
-    # request blocks — on-chain job.expiredAt is a separate, stricter bound.
-    effective_exec_timeout = exec_timeout or float(
-        get_env("EXEC_TIMEOUT", "120.0", prefix=APEX_ENV_PREFIX) or "120.0"
+    effective_poll_interval = funded_poll_interval or float(
+        get_env("FUNDED_POLL_INTERVAL", "30.0", prefix=APEX_ENV_PREFIX) or "30.0"
     )
 
     processing_jobs: set[int] = set()
@@ -290,27 +290,50 @@ def create_apex_app(
             logger.error(f"[APEX] Job #{job_id} submission failed: {submission.get('error')}")
         return submission
 
-    async def _startup_scan_worker():
+    async def _funded_poll_loop():
+        logger.info(
+            f"[APEX] Funded-job poll loop starting (interval={effective_poll_interval:.1f}s)"
+        )
         try:
-            result = await state.job_ops.get_pending_jobs()
-            if not result.get("success"):
-                logger.warning(f"[APEX] Startup scan error: {result.get('error')}")
-                return
-            jobs = result.get("jobs", [])
-            logger.info(f"[APEX] Startup scan found {len(jobs)} pending job(s)")
-            for job in jobs:
-                job_id = job["jobId"]
-                if job_id in processing_jobs:
-                    continue
-                processing_jobs.add(job_id)
+            while True:
                 try:
-                    await _execute_job_internal(job_id)
+                    result = await state.job_ops.get_pending_jobs()
+                    if result.get("success"):
+                        jobs = result.get("jobs", [])
+                        if jobs:
+                            logger.info(
+                                f"[APEX] Funded-poll picked up {len(jobs)} pending job(s)"
+                            )
+                        for job in jobs:
+                            job_id = job["jobId"]
+                            if job_id in processing_jobs:
+                                continue
+                            processing_jobs.add(job_id)
+                            try:
+                                await _execute_job_internal(job_id)
+                            except Exception as exc:
+                                logger.error(
+                                    f"[APEX] Funded-poll job #{job_id} failed: {exc}"
+                                )
+                            finally:
+                                processing_jobs.discard(job_id)
+                    else:
+                        logger.warning(
+                            f"[APEX] Funded-poll error: {result.get('error')}"
+                        )
                 except Exception as exc:
-                    logger.error(f"[APEX] Startup scan job #{job_id} failed: {exc}")
-                finally:
-                    processing_jobs.discard(job_id)
-        except Exception as exc:
-            logger.error(f"[APEX] Startup scan failed: {exc}")
+                    logger.error(f"[APEX] Funded-poll iteration failed: {exc}")
+
+                try:
+                    await asyncio.wait_for(
+                        stop_event.wait(), timeout=effective_poll_interval
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    continue
+        except asyncio.CancelledError:
+            logger.info("[APEX] Funded-job poll loop cancelled")
+            raise
 
     def _spawn(coro) -> asyncio.Task:
         task = asyncio.create_task(coro)
@@ -321,7 +344,7 @@ def create_apex_app(
     @asynccontextmanager
     async def apex_lifespan(_: FastAPI):
         if on_job:
-            _spawn(_startup_scan_worker())
+            _spawn(_funded_poll_loop())
         if auto_settle:
             _spawn(run_auto_settle_loop(state.job_ops, auto_settle_interval, stop_event=stop_event))
         yield
@@ -340,57 +363,6 @@ def create_apex_app(
     router = _create_apex_routes(state=state, on_submit=on_submit)
     apex_app.include_router(router, prefix=prefix)
 
-    if on_job:
-        process_path = f"{prefix}/job/execute" if prefix else "/job/execute"
-
-        @apex_app.post(process_path)
-        async def process_job(request: Request):
-            try:
-                body = await request.json()
-            except Exception:
-                return JSONResponse({"error": "Invalid JSON"}, status_code=400)
-            raw_job_id = body.get("job_id")
-            if raw_job_id is None:
-                return JSONResponse({"error": "job_id is required"}, status_code=400)
-            job_id = int(raw_job_id)
-
-            req_timeout = effective_exec_timeout
-            if body.get("timeout") is not None:
-                try:
-                    req_timeout = float(body["timeout"])
-                except (TypeError, ValueError):
-                    pass
-
-            if job_id in processing_jobs:
-                return JSONResponse(
-                    {"error": "Job already being processed"}, status_code=409
-                )
-
-            processing_jobs.add(job_id)
-
-            async def _wrapper():
-                try:
-                    return await _execute_job_internal(job_id)
-                finally:
-                    processing_jobs.discard(job_id)
-
-            task = _spawn(_wrapper())
-            done, _ = await asyncio.wait({task}, timeout=req_timeout)
-            if done:
-                result = task.result()
-                return JSONResponse(result, status_code=200 if result.get("success") else 500)
-            return JSONResponse(
-                {
-                    "status": "accepted",
-                    "job_id": job_id,
-                    "message": (
-                        "Job accepted, processing in background."
-                        " Use GET /job/{id}/response to retrieve the result."
-                    ),
-                },
-                status_code=202,
-            )
-
     if prefix:
 
         @apex_app.get("/")
@@ -405,8 +377,6 @@ def create_apex_app(
                 "status": f"{prefix}/status",
                 "health": f"{prefix}/health",
             }
-            if on_job:
-                endpoints["process"] = f"{prefix}/job/execute"
             return {
                 "service": "APEX Agent",
                 "agent_address": state.job_ops.agent_address,
@@ -415,6 +385,6 @@ def create_apex_app(
 
     apex_app.state.apex = state
     if on_job:
-        apex_app.state.startup = lambda: _spawn(_startup_scan_worker())
+        apex_app.state.startup = lambda: _spawn(_funded_poll_loop())
 
     return apex_app

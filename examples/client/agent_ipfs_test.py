@@ -2,8 +2,9 @@
 
 Flow:
   1. Client creates + registers + funds a job (provider = agent-server wallet)
-  2. Agent-server picks it up, searches news, uploads DeliverableManifest to
-     Pinata IPFS, and calls submit() on-chain with the IPFS URL as deliverable_url
+  2. Agent-server's funded-job poll loop picks it up, searches news, uploads
+     DeliverableManifest to Pinata IPFS, and calls submit() on-chain with the
+     IPFS URL as deliverable_url
   3. Client polls until job reaches SUBMITTED
   4. Client reads the deliverable_url from the on-chain optParams and prints
      the Pinata gateway URL so we can verify the manifest
@@ -23,8 +24,8 @@ import time
 
 from _helpers import banner, load_settings, make_client, minutes_from_now
 
-POLL_INTERVAL = 5   # seconds between status polls
-POLL_TIMEOUT  = 180 # give agent up to 3 min to submit
+POLL_INTERVAL = 5    # seconds between status polls
+POLL_TIMEOUT  = 240  # allow for one full poll cycle + on-chain submission
 
 
 def main() -> None:
@@ -55,35 +56,25 @@ def main() -> None:
     client.fund(job_id, budget)
     print("[client] fund OK (Open -> Funded)")
 
-    # --- 2. Trigger the agent via its HTTP endpoint -------------------------
-    import httpx
-    agent_url = "http://localhost:8003/apex/job/execute"
-    print(f"\n[client] triggering agent via POST {agent_url} ...")
-    resp = httpx.post(agent_url, json={"job_id": job_id, "timeout": POLL_TIMEOUT}, timeout=POLL_TIMEOUT + 5)
-    agent_result = resp.json()
-    print(f"  status:          {resp.status_code}")
-    print(f"  success:         {agent_result.get('success')}")
-    print(f"  txHash:          {agent_result.get('txHash')}")
-    print(f"  deliverableUrl:  {agent_result.get('deliverableUrl')}")
-    print(f"  deliverable:     {agent_result.get('deliverable')}")
+    # --- 2. Wait for the agent's funded-poll loop to pick up the job --------
+    from bnbagent.apex import JobStatus
+    print(f"\n[client] waiting for agent to submit (up to {POLL_TIMEOUT}s)...")
+    deadline = time.time() + POLL_TIMEOUT
+    job = client.get_job(job_id)
+    while time.time() < deadline and job.status != JobStatus.SUBMITTED:
+        time.sleep(POLL_INTERVAL)
+        job = client.get_job(job_id)
 
     # --- 3. Confirm job reached SUBMITTED -----------------------------------
-    from bnbagent.apex import JobStatus
-    job = client.get_job(job_id)
-    if job.status != JobStatus.SUBMITTED:
-        deadline = time.time() + 30
-        while time.time() < deadline:
-            job = client.get_job(job_id)
-            if job.status == JobStatus.SUBMITTED:
-                break
-            time.sleep(POLL_INTERVAL)
     if job.status != JobStatus.SUBMITTED:
         print(f"\n[client] job {job_id} is {job.status.name} — expected SUBMITTED, aborting")
         return
-    print(f"\n[client] job {job_id} is SUBMITTED ✓")
+    print(f"[client] job {job_id} is SUBMITTED ✓")
 
     # --- 4. Verify manifest hash via IPFS -----------------------------------
-    deliverable_url = agent_result.get("deliverableUrl", "")
+    import httpx
+    deliverable_url = client.commerce.get_deliverable_url(job_id)
+    print(f"  deliverableUrl:  {deliverable_url}")
     if deliverable_url.startswith("ipfs://"):
         cid = deliverable_url[len("ipfs://"):]
         gateway_url = f"https://gateway.pinata.cloud/ipfs/{cid}"
@@ -93,9 +84,7 @@ def main() -> None:
             fetch = httpx.get(gateway_url, timeout=15)
             fetch.raise_for_status()
             manifest = DeliverableManifest.from_dict(fetch.json())
-            on_chain_hex = agent_result.get("deliverable", "")
-            on_chain_hash = bytes.fromhex(on_chain_hex[2:] if on_chain_hex.startswith("0x") else on_chain_hex)
-            match = manifest.verify(on_chain_hash)
+            match = manifest.verify(job.deliverable)
             print(f"  manifest.job_id    : {manifest.job_id}")
             print(f"  manifest.chain_id  : {manifest.chain_id}")
             print(f"  response length    : {len(manifest.response.get('content', ''))} chars")
@@ -103,7 +92,7 @@ def main() -> None:
         except Exception as e:
             print(f"  could not verify manifest: {e}")
     else:
-        print("\n[client] no IPFS URL in agent response — skipping manifest verification")
+        print("\n[client] no IPFS URL on-chain — skipping manifest verification")
 
     # --- 5. Dispute — voter reviews via watch.py ----------------------------
     print("\n[client] raising dispute...")

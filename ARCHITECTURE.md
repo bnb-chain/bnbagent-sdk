@@ -111,8 +111,8 @@ High-level facade over three contracts. Most callers only touch `APEXClient`.
 
 | File | Purpose |
 |------|---------|
-| `routes.py` | `create_apex_app()` FastAPI factory; `APEXState`; `/apex/submit`, `/apex/job/{id}`, `/apex/job/{id}/settle`, `/apex/negotiate`, `/apex/status`, `/apex/health`, optional `/apex/job/execute` |
-| `job_ops.py` | `APEXJobOps` — async wrapper over `APEXClient`; startup scan; `auto_settle_once` + `run_auto_settle_loop` for permissionless `router.settle` on this provider's submitted jobs |
+| `routes.py` | `create_apex_app()` FastAPI factory; `APEXState`; `/apex/submit`, `/apex/job/{id}`, `/apex/job/{id}/settle`, `/apex/negotiate`, `/apex/status`, `/apex/health`; funded-job background poll loop when `on_job` is provided |
+| `job_ops.py` | `APEXJobOps` — async wrapper over `APEXClient`; incremental scan for newly funded jobs; `auto_settle_once` + `run_auto_settle_loop` for permissionless `router.settle` on this provider's submitted jobs |
 
 ### `bnbagent/wallets/` — Wallet Providers
 
@@ -139,7 +139,7 @@ High-level facade over three contracts. Most callers only touch `APEXClient`.
 |-----------|------|----------------------|
 | `client/` | Client | 5 stand-alone scripts — happy / dispute-reject / stalemate-expire / never-submit / cancel-open |
 | `voter/` | Voter | `voteReject` script + `Disputed` event watcher |
-| `agent-server/` | Provider | FastAPI agent with startup scan, direct negotiate/submit endpoints, and auto-settle background loop |
+| `agent-server/` | Provider | FastAPI agent with funded-job poll loop, direct negotiate/submit endpoints, and auto-settle background loop |
 
 ### `tests/` — Test Suite
 

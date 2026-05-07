@@ -97,7 +97,6 @@ src/
 | GET  | `/apex/job/{id}/response` | Stored deliverable response |
 | GET  | `/apex/job/{id}/verify` | Job verification |
 | POST | `/apex/job/{id}/settle` | Manual permissionless `router.settle` |
-| POST | `/apex/job/execute` | Client-initiated job execution (requires `on_job`) |
 | GET  | `/apex/status` | Agent status (wallet, contracts, service price) |
 | GET  | `/apex/health` | Health check |
 

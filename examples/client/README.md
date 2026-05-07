@@ -66,7 +66,7 @@ cd examples/client && python agent_ipfs_test.py
 
 The script:
 1. Creates, registers, budgets, and funds a job for the agent-server provider.
-2. Triggers execution via `POST /apex/job/execute`.
+2. Waits for the agent-server's funded-job poll loop to pick up the job.
 3. Polls until the job reaches `SUBMITTED`.
 4. Fetches the `DeliverableManifest` from the IPFS gateway and verifies its
    keccak256 hash against the on-chain `deliverable` bytes32.

@@ -205,7 +205,7 @@ def execute_job(job: dict) -> str:
     return f"Processed: {job['description']}"
 
 app = create_apex_app(on_job=execute_job)
-# Routes at /apex/submit, /apex/status, /apex/job/{id}/settle, /apex/job/execute, etc.
+# Routes at /apex/submit, /apex/status, /apex/job/{id}/settle, etc.
 ```
 
 ```bash
@@ -221,7 +221,7 @@ APEX_SERVICE_PRICE=1000000000000000000 # 1 token (18 decimals)
 uvicorn agent:app --port 8003
 ```
 
-`create_apex_app()` handles: wallet keystore, startup scan for pending funded jobs, on-chain verification, calling your handler, uploading the deliverable to storage, submitting on-chain, and **auto-settling** the provider's own submissions via the permissionless `router.settle` once the dispute window elapses. Jobs with `budget < service_price` are rejected with HTTP 402.
+`create_apex_app()` handles: wallet keystore, periodic on-chain poll for newly FUNDED jobs assigned to this provider, on-chain verification, calling your handler, uploading the deliverable to storage, submitting on-chain, and **auto-settling** the provider's own submissions via the permissionless `router.settle` once the dispute window elapses. Jobs with `budget < service_price` are rejected with HTTP 402.
 
 ### Option 2: Mount on Existing App (sub-app)
 
@@ -244,7 +244,7 @@ app = FastAPI(lifespan=lifespan)
 app.mount("/apex", apex_app)
 ```
 
-Starlette does not propagate lifespan events into mounted sub-apps; call `apex_app.state.startup()` from your parent lifespan to trigger the startup scan.
+Starlette does not propagate lifespan events into mounted sub-apps; call `apex_app.state.startup()` from your parent lifespan to launch the funded-job poll loop.
 
 ### Endpoints
 
@@ -256,7 +256,6 @@ Starlette does not propagate lifespan events into mounted sub-apps; call `apex_a
 | `GET`  | `/apex/job/{id}/response` | Stored deliverable for a submitted job. |
 | `GET`  | `/apex/job/{id}/verify` | Verify a job is `FUNDED`, assigned to this provider, not expired, budget ok. |
 | `POST` | `/apex/job/{id}/settle` | Manually call `router.settle(jobId)` (permissionless). |
-| `POST` | `/apex/job/execute` | Client-initiated job execution (requires `on_job`). |
 | `GET`  | `/apex/status` | Agent wallet, contract addresses, service price, payment token, decimals. |
 | `GET`  | `/apex/health` | Liveness check. |
 
@@ -346,7 +345,7 @@ See [`examples/client/`](examples/client/) for the five canonical flows (happy, 
 | `APEX_ROUTER_ADDRESS` | No | Network default | `EvaluatorRouter` proxy override. |
 | `APEX_POLICY_ADDRESS` | No | Network default | Policy contract override (defaults to `OptimisticPolicy`). |
 | `APEX_SERVICE_PRICE` | No | `1000000000000000000` (1 U) | Minimum acceptable budget, in raw units. |
-| `APEX_EXEC_TIMEOUT` | No | `120` | `/job/execute` callback timeout in seconds (agent-server). |
+| `APEX_FUNDED_POLL_INTERVAL` | No | `30` | Seconds between funded-job poll passes (agent-server). |
 | `ERC8004_REGISTRY_ADDRESS` | No | Network default | ERC-8004 Identity Registry override. |
 | `STORAGE_PROVIDER` | No | `local` | Storage backend: `"local"` or `"ipfs"`. |
 | `STORAGE_API_KEY` | If IPFS | — | JWT / API key for the pinning service. |

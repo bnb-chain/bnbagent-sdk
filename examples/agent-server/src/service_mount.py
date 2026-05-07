@@ -18,7 +18,7 @@ Environment (agent-server/.env):
     STORAGE_PROVIDER=ipfs, STORAGE_API_KEY      — Required for IPFS upload
     APEX_SERVICE_PRICE=1000000000000000000      — Negotiation price (1 U)
     PORT=8003                                   — Server port
-    APEX_EXEC_TIMEOUT=120                       — /job/execute callback timeout (seconds)
+    APEX_FUNDED_POLL_INTERVAL=30                — Funded-job poll interval (seconds)
 """
 
 import logging
