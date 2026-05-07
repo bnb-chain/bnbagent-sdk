@@ -1,25 +1,29 @@
 """Integration test — client <-> agent-server with IPFS storage.
 
-Flow:
+Default flow (happy path):
   1. Client creates + registers + funds a job (provider = agent-server wallet)
   2. Agent-server's funded-job poll loop picks it up, searches news, uploads
      DeliverableManifest to Pinata IPFS, and calls submit() on-chain with the
      IPFS URL as deliverable_url
   3. Client polls until job reaches SUBMITTED
-  4. Client reads the deliverable_url from the on-chain optParams and prints
-     the Pinata gateway URL so we can verify the manifest
-  5. Client disputes → voter voteReject → settle (skips the 600s window)
+  4. Client reads deliverable_url and verifies the manifest hash matches chain
+
+With ``--dispute``, an additional step:
+  5. Client raises dispute(jobId) — voter then reviews via examples/voter/watch.py
 
 Run:
     # Terminal 1 — start the agent-server
     cd examples/agent-server && uv run python src/service.py
 
-    # Terminal 2 — run this script
+    # Terminal 2 — run this script (happy path, no dispute)
     cd examples/client && python agent_ipfs_test.py
+    # Or exercise the dispute branch:
+    python agent_ipfs_test.py --dispute
 """
 
 from __future__ import annotations
 
+import argparse
 import time
 
 from _helpers import banner, expiry_for, load_settings, make_client
@@ -29,10 +33,21 @@ POLL_TIMEOUT  = 240  # allow for one full poll cycle + on-chain submission
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--dispute",
+        action="store_true",
+        help="After SUBMITTED, raise a dispute to exercise the voter / settle branch.",
+    )
+    args = parser.parse_args()
+
     s = load_settings()
     client = make_client(s.client_pk, s.network)
 
-    banner("AGENT + IPFS — client funds job, agent submits to IPFS, dispute→settle")
+    banner(
+        "AGENT + IPFS — fund job, agent submits to IPFS, "
+        + ("dispute → voter" if args.dispute else "verify manifest")
+    )
 
     decimals = client.token_decimals()
     budget   = 1 * (10 ** decimals)
@@ -94,13 +109,19 @@ def main() -> None:
     else:
         print("\n[client] no IPFS URL on-chain — skipping manifest verification")
 
-    # --- 5. Dispute — voter reviews via watch.py ----------------------------
-    print("\n[client] raising dispute...")
-    client.dispute(job_id)
-    print(f"[client] dispute({job_id}) OK")
-    print(f"\n  job {job_id} is now DISPUTED")
-    print(f"  → voter can review and vote in watch.py")
-    print(f"  → after voting, settle with: client.settle({job_id})")
+    # --- 5. Dispute (only when --dispute) -----------------------------------
+    if args.dispute:
+        print("\n[client] raising dispute...")
+        client.dispute(job_id)
+        print(f"[client] dispute({job_id}) OK")
+        print(f"\n  job {job_id} is now DISPUTED")
+        print(f"  → voter can review and vote in examples/voter/watch.py")
+        print(f"  → after quorum, anyone can call settle({job_id})")
+    else:
+        print(
+            f"\n  job {job_id} stays SUBMITTED. After disputeWindow elapses without"
+            " dispute, anyone can settle to APPROVE → COMPLETED."
+        )
 
 
 if __name__ == "__main__":

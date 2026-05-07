@@ -14,7 +14,7 @@ provider address.
 | `stalemate_expire.py` | submit → client `dispute` → quorum not reached → job expires → `claimRefund` → **EXPIRED** | refund via expiry |
 | `never_submit.py` | provider never submits → job expires → `claimRefund` → **EXPIRED** | refund via expiry |
 | `cancel_open.py` | client cancels before funding (`reject`) → **REJECTED** | nothing escrowed |
-| `agent_ipfs_test.py` | client funds → agent's funded-poll loop submits → IPFS verify → `dispute` | full IPFS integration test |
+| `agent_ipfs_test.py` | client funds → agent's funded-poll loop submits → IPFS verify (add `--dispute` to also exercise the dispute branch) | integration test against agent-server |
 
 ## Setup
 
@@ -70,4 +70,6 @@ The script:
 3. Polls until the job reaches `SUBMITTED`.
 4. Fetches the `DeliverableManifest` from the IPFS gateway and verifies its
    keccak256 hash against the on-chain `deliverable` bytes32.
-5. Raises a dispute — leaving the voter to review via `examples/voter/watch.py`.
+5. (only with `--dispute`) Raises a dispute — leaving the voter to review via
+   `examples/voter/watch.py`. Without the flag, the script ends here and the
+   job can be settled to `COMPLETED` after the dispute window elapses.
