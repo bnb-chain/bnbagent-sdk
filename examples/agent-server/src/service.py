@@ -134,7 +134,7 @@ def process_task(job: dict) -> tuple[str, dict]:
 
 
 # ---------------------------------------------------------------------------
-# App — create_apex_app handles routes, startup scan, and lifecycle
+# App — create_apex_app handles routes, the funded-job poll loop, and lifecycle
 # ---------------------------------------------------------------------------
 
 app = create_apex_app(config=config, on_job=process_task)

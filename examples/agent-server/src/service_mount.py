@@ -136,7 +136,8 @@ apex_app = create_apex_app(config=config, on_job=process_task, prefix="")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Trigger the one-time startup scan for pending jobs
+    # Launch the funded-job poll loop (Starlette doesn't propagate lifespan to
+    # mounted sub-apps, so we drive the apex sub-app's startup ourselves).
     await apex_app.state.startup()
     yield
 

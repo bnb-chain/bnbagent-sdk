@@ -8,7 +8,7 @@ For each disputed job:
   5. Prompts: [r]eject / [s]kip
 
 For each VoteCast event:
-  - If rejectVotes >= quorum → auto-settle and print JobSettled result
+  - If rejectVotes >= voteQuorum → settles automatically and prints JobSettled result
 
 Usage:
     cd examples/voter
