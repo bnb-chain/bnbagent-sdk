@@ -177,14 +177,31 @@ class JobDescription:
                 f"Unsupported JobDescription version {version!r}. "
                 f"Supported: {sorted(_SUPPORTED_VERSIONS)}"
             )
+
+        negotiated_at = d["negotiated_at"]
+        if not isinstance(negotiated_at, int) or isinstance(negotiated_at, bool):
+            raise ValueError(
+                f"negotiated_at must be int, got {type(negotiated_at).__name__}"
+            )
+
+        quote_expires_at = d.get("quote_expires_at")
+        if quote_expires_at is not None and (
+            not isinstance(quote_expires_at, int)
+            or isinstance(quote_expires_at, bool)
+        ):
+            raise ValueError(
+                f"quote_expires_at must be int or null, "
+                f"got {type(quote_expires_at).__name__}"
+            )
+
         return cls(
             version=version,
-            negotiated_at=d["negotiated_at"],
+            negotiated_at=negotiated_at,
             task=d["task"],
             terms=d["terms"],
             price=d["price"],
             currency=d["currency"],
-            quote_expires_at=d.get("quote_expires_at"),
+            quote_expires_at=quote_expires_at,
             negotiation_hash=d.get("negotiation_hash"),
             provider_sig=d.get("provider_sig"),
         )

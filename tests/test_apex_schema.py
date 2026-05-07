@@ -205,6 +205,36 @@ class TestJobDescription:
         assert "negotiation_hash" not in result
         assert "provider_sig" not in result
 
+    def test_negotiated_at_must_be_int(self):
+        d = _description_dict()
+        d["negotiated_at"] = "1700000000"
+        with pytest.raises(ValueError, match="negotiated_at must be int"):
+            JobDescription.from_dict(d)
+
+    def test_negotiated_at_rejects_bool(self):
+        d = _description_dict()
+        d["negotiated_at"] = True
+        with pytest.raises(ValueError, match="negotiated_at must be int"):
+            JobDescription.from_dict(d)
+
+    def test_quote_expires_at_must_be_int_or_null(self):
+        d = _description_dict()
+        d["quote_expires_at"] = "1700000123"
+        with pytest.raises(ValueError, match="quote_expires_at must be int"):
+            JobDescription.from_dict(d)
+
+    def test_quote_expires_at_rejects_bool(self):
+        d = _description_dict()
+        d["quote_expires_at"] = False
+        with pytest.raises(ValueError, match="quote_expires_at must be int"):
+            JobDescription.from_dict(d)
+
+    def test_quote_expires_at_int_passes(self):
+        d = _description_dict()
+        d["quote_expires_at"] = 1_700_000_500
+        jd = JobDescription.from_dict(d)
+        assert jd.quote_expires_at == 1_700_000_500
+
     def test_to_dict_is_json_serializable(self):
         jd = JobDescription.from_dict(_description_dict())
         serialized = json.dumps(jd.to_dict())

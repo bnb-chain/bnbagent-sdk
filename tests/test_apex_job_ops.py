@@ -113,6 +113,54 @@ class TestVerifyJob:
         assert result["service_price"] == "5000"
 
     @pytest.mark.asyncio
+    async def test_rejects_malformed_description_fail_closed(self):
+        import json as _json
+
+        bad = _json.dumps(
+            {
+                "version": 1,
+                "negotiated_at": 1_700_000_000,
+                "task": "x",
+                "terms": {"deliverables": "y", "quality_standards": "z"},
+                "price": "1",
+                "currency": "0x" + "00" * 20,
+                # type-confused: string instead of int
+                "quote_expires_at": "not-an-int",
+            }
+        )
+        ops = _make_ops()
+        client = _inject_client(ops)
+        client.get_job.return_value = _job(description=bad)
+        result = await ops.verify_job(1)
+        assert result["valid"] is False
+        assert result["error_code"] == 410
+        assert "Malformed" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_rejects_expired_quote(self):
+        import json as _json
+
+        past = int(time.time()) - 1
+        good = _json.dumps(
+            {
+                "version": 1,
+                "negotiated_at": past - 60,
+                "task": "x",
+                "terms": {"deliverables": "y", "quality_standards": "z"},
+                "price": "1",
+                "currency": "0x" + "00" * 20,
+                "quote_expires_at": past,
+            }
+        )
+        ops = _make_ops()
+        client = _inject_client(ops)
+        client.get_job.return_value = _job(description=good)
+        result = await ops.verify_job(1)
+        assert result["valid"] is False
+        assert result["error_code"] == 410
+        assert "expired" in result["error"].lower()
+
+    @pytest.mark.asyncio
     async def test_accepts_equal_or_higher_budget(self):
         ops = _make_ops(service_price=1000)
         client = _inject_client(ops)

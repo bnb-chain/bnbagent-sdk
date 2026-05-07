@@ -255,19 +255,23 @@ class APEXJobOps:
 
             description = job_result.get("description", "")
             if description:
-                try:
-                    from ..negotiation import parse_job_description
+                from ..negotiation import parse_job_description
 
+                try:
                     parsed = parse_job_description(description)
-                    if parsed and parsed.quote_expires_at:
-                        if now > parsed.quote_expires_at:
-                            return {
-                                "valid": False,
-                                "error": "Negotiation quote has expired",
-                                "error_code": 410,
-                            }
-                except Exception:
-                    pass
+                except Exception as exc:
+                    return {
+                        "valid": False,
+                        "error": f"Malformed job description: {exc}",
+                        "error_code": 410,
+                    }
+                if parsed and parsed.quote_expires_at is not None:
+                    if now > parsed.quote_expires_at:
+                        return {
+                            "valid": False,
+                            "error": "Negotiation quote has expired",
+                            "error_code": 410,
+                        }
 
             if self._service_price > 0:
                 budget = job_result.get("budget", 0)
