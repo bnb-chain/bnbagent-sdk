@@ -27,6 +27,7 @@ from ...storage import LocalStorageProvider
 from ..config import APEX_ENV_PREFIX, APEXConfig
 from ..negotiation import NegotiationHandler
 from .job_ops import APEXJobOps
+from .rate_limit import SlidingWindowLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -95,8 +96,32 @@ def create_apex_state(config: APEXConfig | None = None) -> APEXState:
     )
 
 
+def _build_negotiate_limiter() -> SlidingWindowLimiter:
+    """Read APEX_NEGOTIATE_RATE_LIMIT / APEX_NEGOTIATE_RATE_WINDOW from env."""
+    raw_max = get_env("NEGOTIATE_RATE_LIMIT", "120", prefix=APEX_ENV_PREFIX) or "120"
+    raw_window = (
+        get_env("NEGOTIATE_RATE_WINDOW", "60.0", prefix=APEX_ENV_PREFIX) or "60.0"
+    )
+    try:
+        max_requests = int(raw_max)
+    except ValueError:
+        logger.warning(
+            f"[APEX] APEX_NEGOTIATE_RATE_LIMIT={raw_max!r} invalid, using 120"
+        )
+        max_requests = 120
+    try:
+        window_seconds = float(raw_window)
+    except ValueError:
+        logger.warning(
+            f"[APEX] APEX_NEGOTIATE_RATE_WINDOW={raw_window!r} invalid, using 60.0"
+        )
+        window_seconds = 60.0
+    return SlidingWindowLimiter(max_requests=max_requests, window_seconds=window_seconds)
+
+
 def _create_apex_routes(state: APEXState) -> APIRouter:
     router = APIRouter(tags=["APEX"])
+    negotiate_limiter = _build_negotiate_limiter()
 
     @router.get("/job/{job_id}")
     async def get_job(job_id: int):
@@ -121,6 +146,9 @@ def _create_apex_routes(state: APEXState) -> APIRouter:
 
     @router.post("/negotiate")
     async def negotiate(request: Request):
+        client_ip = request.client.host if request.client else "unknown"
+        negotiate_limiter.check(client_ip)
+
         try:
             body = await request.json()
         except Exception:

@@ -21,6 +21,8 @@ Environment (agent-server/.env):
     APEX_SERVICE_PRICE=1000000000000000000      — Negotiation price (1 U)
     PORT=8003                                   — Server port
     APEX_FUNDED_POLL_INTERVAL=30                — Funded-job poll interval (seconds)
+    APEX_NEGOTIATE_RATE_LIMIT=120               — /negotiate per-IP rate limit (requests)
+    APEX_NEGOTIATE_RATE_WINDOW=60               — /negotiate rate-limit window (seconds)
 """
 
 import logging

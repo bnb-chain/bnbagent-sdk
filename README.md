@@ -250,7 +250,7 @@ Starlette does not propagate lifespan events into mounted sub-apps; call `apex_a
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/apex/negotiate` | Price negotiation (off-chain). Returns a structured quote. |
+| `POST` | `/apex/negotiate` | Price negotiation (off-chain). Returns a structured quote. Rate-limited per client IP. |
 | `GET`  | `/apex/job/{id}` | Job details from the Commerce kernel. |
 | `GET`  | `/apex/job/{id}/response` | Stored deliverable for a submitted job. |
 | `GET`  | `/apex/job/{id}/verify` | Verify a job is `FUNDED`, assigned to this provider, not expired, budget ok. |
@@ -344,6 +344,8 @@ See [`examples/client/`](examples/client/) for the five canonical flows (happy, 
 | `APEX_POLICY_ADDRESS` | No | Network default | Policy contract override (defaults to `OptimisticPolicy`). |
 | `APEX_SERVICE_PRICE` | No | `1000000000000000000` (1 U) | Minimum acceptable budget, in raw units. |
 | `APEX_FUNDED_POLL_INTERVAL` | No | `30` | Seconds between funded-job poll passes (agent-server). |
+| `APEX_NEGOTIATE_RATE_LIMIT` | No | `120` | Max `/negotiate` requests per window per client IP. |
+| `APEX_NEGOTIATE_RATE_WINDOW` | No | `60` | Sliding-window length for `/negotiate` rate limit, in seconds. |
 | `ERC8004_REGISTRY_ADDRESS` | No | Network default | ERC-8004 Identity Registry override. |
 | `STORAGE_PROVIDER` | No | `local` | Storage backend: `"local"` or `"ipfs"`. |
 | `STORAGE_API_KEY` | If IPFS | — | JWT / API key for the pinning service. |

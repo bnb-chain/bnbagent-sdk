@@ -437,7 +437,7 @@ class TestNegotiationHandler:
         assert result.response_hash.startswith("0x")
 
     def test_quote_expires_at_in_response(self):
-        handler = self._make_handler(quote_ttl_seconds=1800)
+        handler = self._make_handler(quote_ttl_seconds=180)
         request_data = {
             "task_description": "Get news",
             "terms": {
@@ -450,7 +450,23 @@ class TestNegotiationHandler:
         quote_exp = result.response.get("quote_expires_at")
         assert quote_exp is not None
         assert quote_exp > int(time.time())
-        assert quote_exp <= int(time.time()) + 1800 + 5  # small tolerance
+        assert quote_exp <= int(time.time()) + 180 + 5  # small tolerance
+
+    def test_quote_ttl_cap_enforced(self):
+        with pytest.raises(ValueError, match="quote_ttl_seconds"):
+            self._make_handler(quote_ttl_seconds=301)
+        with pytest.raises(ValueError, match="quote_ttl_seconds"):
+            self._make_handler(quote_ttl_seconds=0)
+        with pytest.raises(ValueError, match="quote_ttl_seconds"):
+            self._make_handler(quote_ttl_seconds=-1)
+        # Boundary: 300 is the max and must succeed.
+        self._make_handler(quote_ttl_seconds=300)
+
+    def test_quote_ttl_must_be_int(self):
+        with pytest.raises(ValueError, match="quote_ttl_seconds"):
+            self._make_handler(quote_ttl_seconds="120")  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match="quote_ttl_seconds"):
+            self._make_handler(quote_ttl_seconds=True)  # type: ignore[arg-type]
 
     def test_signs_with_wallet_provider(self):
         mock_wallet = MagicMock()

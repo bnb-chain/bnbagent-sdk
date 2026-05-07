@@ -462,6 +462,8 @@ class NegotiationHandler:
         return result.to_dict()
     """
 
+    MAX_QUOTE_TTL_SECONDS = 300  # 5 minutes — bounds the lifetime of provider_sig
+
     def __init__(
         self,
         service_price: str,
@@ -469,7 +471,7 @@ class NegotiationHandler:
         estimated_completion_seconds: int = 120,
         require_quality_standards: bool = True,
         wallet_provider: WalletProvider | None = None,
-        quote_ttl_seconds: int = 3600,
+        quote_ttl_seconds: int = 300,
     ):
         """
         Initialize the negotiation handler.
@@ -482,9 +484,20 @@ class NegotiationHandler:
             wallet_provider: Wallet for signing negotiation_hash. When set, the
                              NegotiationResult will include provider_sig allowing
                              clients to verify the agent agreed to the terms.
-            quote_ttl_seconds: How long the price quote is valid (default: 3600s = 1h).
-                               Sets quote_expires_at = now + quote_ttl_seconds.
+            quote_ttl_seconds: How long the price quote is valid (default: 300s).
+                               Capped at MAX_QUOTE_TTL_SECONDS so leaked / replayed
+                               provider_sig values cannot accumulate value over time.
         """
+        if not isinstance(quote_ttl_seconds, int) or isinstance(quote_ttl_seconds, bool):
+            raise ValueError(
+                f"quote_ttl_seconds must be int, got {type(quote_ttl_seconds).__name__}"
+            )
+        if quote_ttl_seconds <= 0 or quote_ttl_seconds > self.MAX_QUOTE_TTL_SECONDS:
+            raise ValueError(
+                f"quote_ttl_seconds must be in (0, {self.MAX_QUOTE_TTL_SECONDS}], "
+                f"got {quote_ttl_seconds}"
+            )
+
         self._service_price = service_price
         self._currency = currency
         self._estimated_completion = estimated_completion_seconds
@@ -500,7 +513,7 @@ class NegotiationHandler:
         estimated_completion_seconds: int = 120,
         require_quality_standards: bool = True,
         wallet_provider: WalletProvider | None = None,
-        quote_ttl_seconds: int = 3600,
+        quote_ttl_seconds: int = 300,
     ) -> NegotiationHandler:
         """
         Create a NegotiationHandler with currency fetched from the ERC-8183 contract.
