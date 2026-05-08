@@ -1,8 +1,8 @@
-"""APEX Protocol v1 — AgenticCommerce kernel + EvaluatorRouter + OptimisticPolicy.
+"""ERC-8183 Protocol — AgenticCommerce kernel + EvaluatorRouter + OptimisticPolicy.
 
 Public surface:
 
-- ``APEXClient``   — high-level facade (most callers).
+- ``ERC8183Client``   — high-level facade (most callers).
 - ``CommerceClient`` / ``RouterClient`` / ``PolicyClient`` — sub-clients for
   users who need direct access to a single layer.
 - ``Job`` / ``JobStatus`` / ``Verdict`` — shared types.
@@ -13,10 +13,10 @@ Public surface:
 
 from __future__ import annotations
 
-from .client import DEFAULT_APPROVE_FLOOR_UNITS, APEXClient
+from .client import DEFAULT_APPROVE_FLOOR_UNITS, ERC8183Client
 from .commerce import CommerceClient
-from .constants import get_apex_config
-from .module import APEXModule, create_module
+from .constants import get_erc8183_config
+from .module import ERC8183Module, create_module
 from .negotiation import (
     NegotiationHandler,
     NegotiationRequest,
@@ -40,7 +40,7 @@ from .types import (
 
 __all__ = [
     # Facade + sub-clients
-    "APEXClient",
+    "ERC8183Client",
     "CommerceClient",
     "RouterClient",
     "PolicyClient",
@@ -65,7 +65,7 @@ __all__ = [
     "DeliverableManifest",
     "SCHEMA_VERSION",
     # Module
-    "get_apex_config",
-    "APEXModule",
+    "get_erc8183_config",
+    "ERC8183Module",
     "create_module",
 ]

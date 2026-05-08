@@ -1,16 +1,18 @@
-"""Shared helpers for the APEX client flow demos."""
+"""Shared helpers for the ERC-8183 client flow demos."""
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values
 
-from bnbagent.apex import APEXClient
+from bnbagent.erc8183 import ERC8183Client
 from bnbagent.wallets import EVMWalletProvider
+from bnbagent.config import resolve_network
 
 ROOT = Path(__file__).resolve().parent
 
@@ -56,15 +58,23 @@ def make_wallet(pk: str) -> EVMWalletProvider:
     return EVMWalletProvider(password="example", private_key=pk, persist=False)
 
 
-def make_client(pk: str, network: str = "bsc-testnet") -> APEXClient:
-    return APEXClient(make_wallet(pk), network=network)
+def make_client(pk: str, network: str = "bsc-testnet") -> ERC8183Client:
+    # Prefer the NodeReal RPC from voter/.env — it has a higher block-range
+    # limit (5 000 blocks per get_logs) vs the public default endpoint.
+    voter_env = dotenv_values(ROOT.parent / "voter" / ".env")
+    rpc_url   = voter_env.get("RPC_URL")
+    wallet    = make_wallet(pk)
+    if rpc_url:
+        nc = dataclasses.replace(resolve_network(network), rpc_url=rpc_url)
+        return ERC8183Client(wallet, network=nc)
+    return ERC8183Client(wallet, network=network)
 
 
 def minutes_from_now(minutes: int) -> int:
     return int(time.time()) + minutes * 60
 
 
-def expiry_for(client: APEXClient, slack_minutes: int = 10) -> int:
+def expiry_for(client: ERC8183Client, slack_minutes: int = 10) -> int:
     """Return an ``expiredAt`` that fits the policy's dispute window.
 
     The on-chain ``OptimisticPolicy`` rejects ``commerce.submit`` with

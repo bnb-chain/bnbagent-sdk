@@ -7,7 +7,7 @@ import time
 import pytest
 from fastapi import HTTPException
 
-from bnbagent.apex.server.rate_limit import SlidingWindowLimiter
+from bnbagent.erc8183.server.rate_limit import SlidingWindowLimiter
 
 
 class TestSlidingWindowLimiter:

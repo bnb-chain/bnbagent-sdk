@@ -1,4 +1,4 @@
-"""Tests for the ``APEXClient`` facade (APEX v1).
+"""Tests for the ``ERC8183Client`` facade (ERC-8183).
 
 Covers:
 - Construction via ``(wallet_provider, network)``; ``NetworkConfig`` accepted directly.
@@ -12,8 +12,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from bnbagent.apex import APEXClient
-from bnbagent.apex.client import DEFAULT_APPROVE_FLOOR_UNITS
+from bnbagent.erc8183 import ERC8183Client
+from bnbagent.erc8183.client import DEFAULT_APPROVE_FLOOR_UNITS
 from bnbagent.config import NetworkConfig
 from tests.conftest import FAKE_ADDRESS
 
@@ -42,11 +42,11 @@ def _mock_wallet() -> MagicMock:
 
 @pytest.fixture
 def facade(mock_web3):
-    """``APEXClient`` wired against mock sub-clients (no real web3 traffic)."""
-    with patch("bnbagent.apex.client.create_web3", return_value=mock_web3), \
-         patch("bnbagent.apex.client.CommerceClient") as mcc, \
-         patch("bnbagent.apex.client.RouterClient") as mrc, \
-         patch("bnbagent.apex.client.PolicyClient") as mpc:
+    """``ERC8183Client`` wired against mock sub-clients (no real web3 traffic)."""
+    with patch("bnbagent.erc8183.client.create_web3", return_value=mock_web3), \
+         patch("bnbagent.erc8183.client.CommerceClient") as mcc, \
+         patch("bnbagent.erc8183.client.RouterClient") as mrc, \
+         patch("bnbagent.erc8183.client.PolicyClient") as mpc:
         commerce = MagicMock()
         commerce.address = FAKE_COMMERCE
         router = MagicMock()
@@ -57,14 +57,14 @@ def facade(mock_web3):
         mrc.return_value = router
         mpc.return_value = policy
 
-        client = APEXClient(_mock_wallet(), network=_fake_network())
+        client = ERC8183Client(_mock_wallet(), network=_fake_network())
         yield client
 
 
 class TestInit:
     def test_requires_wallet_provider(self):
         with pytest.raises(ValueError, match="wallet_provider is required"):
-            APEXClient(None, network=_fake_network())  # type: ignore[arg-type]
+            ERC8183Client(None, network=_fake_network())  # type: ignore[arg-type]
 
     def test_rejects_network_missing_addresses(self, mock_web3):
         incomplete = NetworkConfig(
@@ -75,9 +75,9 @@ class TestInit:
             router_contract=FAKE_ROUTER,
             policy_contract=FAKE_POLICY,
         )
-        with patch("bnbagent.apex.client.create_web3", return_value=mock_web3):
+        with patch("bnbagent.erc8183.client.create_web3", return_value=mock_web3):
             with pytest.raises(ValueError, match="commerce_contract"):
-                APEXClient(_mock_wallet(), network=incomplete)
+                ERC8183Client(_mock_wallet(), network=incomplete)
 
     def test_address_comes_from_wallet(self, facade):
         assert facade.address == FAKE_ADDRESS
@@ -85,17 +85,17 @@ class TestInit:
     def test_accepts_network_string(self, mock_web3):
         """String preset is resolved via ``resolve_network`` under the hood."""
         fake_net = _fake_network()
-        with patch("bnbagent.apex.client.create_web3", return_value=mock_web3), \
+        with patch("bnbagent.erc8183.client.create_web3", return_value=mock_web3), \
              patch(
-                 "bnbagent.apex.client.resolve_network", return_value=fake_net
+                 "bnbagent.erc8183.client.resolve_network", return_value=fake_net
              ) as resolve, \
-             patch("bnbagent.apex.client.CommerceClient") as mcc, \
-             patch("bnbagent.apex.client.RouterClient") as mrc, \
-             patch("bnbagent.apex.client.PolicyClient") as mpc:
+             patch("bnbagent.erc8183.client.CommerceClient") as mcc, \
+             patch("bnbagent.erc8183.client.RouterClient") as mrc, \
+             patch("bnbagent.erc8183.client.PolicyClient") as mpc:
             mcc.return_value.address = FAKE_COMMERCE
             mrc.return_value.address = FAKE_ROUTER
             mpc.return_value.address = FAKE_POLICY
-            APEXClient(_mock_wallet(), network="bsc-testnet")
+            ERC8183Client(_mock_wallet(), network="bsc-testnet")
             resolve.assert_called_once_with("bsc-testnet")
 
 
@@ -137,7 +137,7 @@ class TestRegisterJob:
 
 
 class TestFund:
-    """Approval-floor strategy in ``APEXClient.fund``."""
+    """Approval-floor strategy in ``ERC8183Client.fund``."""
 
     def _prime(self, facade, current_allowance=0, decimals=18):
         facade.commerce.payment_token.return_value = FAKE_TOKEN
@@ -225,7 +225,7 @@ class TestWriteDelegation:
 
 class TestReads:
     def test_get_job_status(self, facade):
-        from bnbagent.apex.types import Job, JobStatus
+        from bnbagent.erc8183.types import Job, JobStatus
 
         facade.commerce.get_job.return_value = Job(
             id=1,
@@ -241,7 +241,7 @@ class TestReads:
         assert facade.get_job_status(1) == JobStatus.FUNDED
 
     def test_get_verdict_delegates_to_policy(self, facade):
-        from bnbagent.apex.types import Verdict
+        from bnbagent.erc8183.types import Verdict
 
         facade.policy.check.return_value = (Verdict.APPROVE, b"\x00" * 32)
         verdict, _ = facade.get_verdict(1)

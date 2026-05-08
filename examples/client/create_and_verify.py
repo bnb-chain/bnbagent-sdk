@@ -1,24 +1,23 @@
-"""Integration test — client <-> agent-server with IPFS storage.
+"""Flow E — client sends a job to a live agent-server and verifies the result.
 
-Default flow (happy path):
+Default flow:
   1. Client creates + registers + funds a job (provider = agent-server wallet)
-  2. Agent-server's funded-job poll loop picks it up, searches news, uploads
-     DeliverableManifest to Pinata IPFS, and calls submit() on-chain with the
-     IPFS URL as deliverable_url
+  2. Agent-server's funded-job poll loop picks it up, processes the request,
+     uploads DeliverableManifest to storage, and calls submit() on-chain
   3. Client polls until job reaches SUBMITTED
-  4. Client reads deliverable_url and verifies the manifest hash matches chain
+  4. Client reads deliverable_url from the chain and verifies the manifest hash
 
-With ``--dispute``, an additional step:
+With ``--dispute``:
   5. Client raises dispute(jobId) — voter then reviews via examples/voter/watch.py
 
 Run:
     # Terminal 1 — start the agent-server
-    cd examples/agent-server && uv run python src/service.py
+    cd examples/agent-server && uv run python scripts/run_agent.py
 
-    # Terminal 2 — run this script (happy path, no dispute)
-    cd examples/client && python agent_ipfs_test.py
-    # Or exercise the dispute branch:
-    python agent_ipfs_test.py --dispute
+    # Terminal 2 — run this script (default: verify manifest after submit)
+    cd examples/client && uv run python create_and_verify.py
+    # Or raise a dispute after submit:
+    uv run python create_and_verify.py --dispute
 """
 
 from __future__ import annotations
@@ -72,7 +71,7 @@ def main() -> None:
     print("[client] fund OK (Open -> Funded)")
 
     # --- 2. Wait for the agent's funded-poll loop to pick up the job --------
-    from bnbagent.apex import JobStatus
+    from bnbagent.erc8183 import JobStatus
     print(f"\n[client] waiting for agent to submit (up to {POLL_TIMEOUT}s)...")
     deadline = time.time() + POLL_TIMEOUT
     job = client.get_job(job_id)
@@ -94,7 +93,7 @@ def main() -> None:
         cid = deliverable_url[len("ipfs://"):]
         gateway_url = f"https://gateway.pinata.cloud/ipfs/{cid}"
         print(f"\n[client] fetching manifest from IPFS: {gateway_url}")
-        from bnbagent.apex.schema import DeliverableManifest
+        from bnbagent.erc8183.schema import DeliverableManifest
         try:
             fetch = httpx.get(gateway_url, timeout=15)
             fetch.raise_for_status()

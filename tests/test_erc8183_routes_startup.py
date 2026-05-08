@@ -1,12 +1,12 @@
-"""Tests for create_apex_state startup validation — APEX_AGENT_URL requirement."""
+"""Tests for create_erc8183_state startup validation — ERC8183_AGENT_URL requirement."""
 
 from unittest.mock import MagicMock
 
 import pytest
 
-from bnbagent.apex.config import APEXConfig
-from bnbagent.apex.server.routes import create_apex_state
-from bnbagent.storage.local_provider import LocalStorageProvider
+from bnbagent.erc8183.config import ERC8183Config
+from bnbagent.erc8183.server.routes import create_erc8183_state
+from bnbagent.storage.local_storage_provider import LocalStorageProvider
 
 
 def _mock_wallet():
@@ -16,17 +16,17 @@ def _mock_wallet():
 
 
 def _config(storage, agent_url=None):
-    return APEXConfig(
+    return ERC8183Config(
         wallet_provider=_mock_wallet(),
         storage=storage,
         agent_url=agent_url,
     )
 
 
-class TestCreateApexStateStartupValidation:
+class TestCreateERC8183StateStartupValidation:
     def test_local_storage_without_agent_url_raises(self, monkeypatch):
         monkeypatch.setattr(
-            "bnbagent.apex.server.routes.APEXJobOps.apex_client",
+            "bnbagent.erc8183.server.routes.ERC8183JobOps.erc8183_client",
             property(lambda self: MagicMock(
                 payment_token="0x" + "00" * 20,
                 token_decimals=MagicMock(return_value=18),
@@ -34,40 +34,40 @@ class TestCreateApexStateStartupValidation:
             raising=False,
         )
         config = _config(LocalStorageProvider(".agent-data"), agent_url=None)
-        with pytest.raises(ValueError, match="APEX_AGENT_URL"):
-            create_apex_state(config)
+        with pytest.raises(ValueError, match="ERC8183_AGENT_URL"):
+            create_erc8183_state(config)
 
     def test_local_storage_with_agent_url_succeeds(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            "bnbagent.apex.server.routes.APEXJobOps",
+            "bnbagent.erc8183.server.routes.ERC8183JobOps",
             _FakeJobOps,
         )
         config = _config(
             LocalStorageProvider(str(tmp_path)),
-            agent_url="http://localhost:8003/apex",
+            agent_url="http://localhost:8003/erc8183",
         )
-        state = create_apex_state(config)
+        state = create_erc8183_state(config)
         assert state is not None
 
     def test_custom_storage_without_agent_url_succeeds(self, monkeypatch):
         monkeypatch.setattr(
-            "bnbagent.apex.server.routes.APEXJobOps",
+            "bnbagent.erc8183.server.routes.ERC8183JobOps",
             _FakeJobOps,
         )
         mock_storage = MagicMock(spec=[])  # not a LocalStorageProvider
         config = _config(mock_storage, agent_url=None)
-        state = create_apex_state(config)
+        state = create_erc8183_state(config)
         assert state is not None
 
 
 class _FakeJobOps:
-    """Minimal APEXJobOps stand-in that skips RPC calls."""
+    """Minimal ERC8183JobOps stand-in that skips RPC calls."""
 
     def __init__(self, wallet_provider, network=None, **kwargs):
         self.agent_address = wallet_provider.address
 
     @property
-    def apex_client(self):
+    def erc8183_client(self):
         client = MagicMock()
         client.payment_token = "0x" + "00" * 20
         client.token_decimals = MagicMock(return_value=18)

@@ -21,13 +21,13 @@ class StorageProvider(ABC):
     """Abstract base for pluggable off-chain storage.
 
     All core methods are async.  Use ``await upload()`` from async contexts
-    (e.g. APEXJobOps).  For synchronous callers use
+    (e.g. ERC8183JobOps).  For synchronous callers use
     ``bnbagent.storage.upload_sync(provider, data)``.
 
     Built-in implementations (``LocalStorageProvider``, ``IPFSStorageProvider``)
     each provide a ``from_env()`` classmethod that reads their own env vars.
     Custom backends subclass this ABC and inject via
-    ``APEXConfig(storage=MyStorage(...))``.
+    ``ERC8183Config(storage=MyStorage(...))``.
     """
 
     @abstractmethod
@@ -35,7 +35,7 @@ class StorageProvider(ABC):
         """Upload JSON data.  Returns a URL (ipfs://..., file://..., https://...).
 
         The URL must be reachable by client/voter unless the agent is running
-        with ``APEX_AGENT_URL`` configured (which routes through the agent's
+        with ``ERC8183_AGENT_URL`` configured (which routes through the agent's
         own ``/job/{id}/response`` endpoint for file:// or empty URLs).
 
         Args:
@@ -53,6 +53,14 @@ class StorageProvider(ABC):
     async def exists(self, url: str) -> bool:
         """Check whether data at the given URL exists."""
         ...
+
+    uses_file_url: bool = False
+    """Set to True on providers whose upload() returns a file:// URL.
+
+    The SDK uses this flag at startup to require ERC8183_AGENT_URL and to
+    know that GET /erc8183/job/{id}/response is the public endpoint for the
+    deliverable (instead of an externally reachable URL).
+    """
 
     @staticmethod
     def compute_hash(data: dict) -> bytes:

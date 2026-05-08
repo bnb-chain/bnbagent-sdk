@@ -1,10 +1,10 @@
 """
-Blockchain News Agent — APEX Protocol Provider.
+Blockchain News Agent — ERC-8183 Protocol Provider.
 
 Built with bnbagent-sdk.
 
 A news search agent that:
-  1. Receives search queries from clients via APEX
+  1. Receives search queries from clients via ERC-8183
   2. Searches DuckDuckGo for blockchain news
   3. Returns formatted news results
 
@@ -16,15 +16,16 @@ Environment (agent-server/.env):
     RPC_URL, NETWORK                           — Required (RPC + network key)
     PRIVATE_KEY                                — Recommended (imported on first run; auto-generates if omitted)
     WALLET_PASSWORD                            — Required (keystore password)
-    APEX_COMMERCE_ADDRESS, APEX_ROUTER_ADDRESS, APEX_POLICY_ADDRESS — Optional overrides (defaults from NETWORK)
+    ERC8183_COMMERCE_ADDRESS, ERC8183_ROUTER_ADDRESS, ERC8183_POLICY_ADDRESS — Optional overrides (defaults from NETWORK)
     STORAGE_API_KEY      — Required for IPFS upload (when swapping to IPFSStorageProvider)
-    APEX_SERVICE_PRICE=1000000000000000000      — Negotiation price (1 U)
+    ERC8183_AGENT_URL=http://localhost:8003/erc8183  — Required for LocalStorageProvider
+    ERC8183_SERVICE_PRICE=1000000000000000000      — Negotiation price (1 U)
     PORT=8003                                   — Server port
-    APEX_FUNDED_POLL_INTERVAL=30                — Funded-job poll interval (seconds)
-    APEX_NEGOTIATE_RATE_LIMIT=120               — /negotiate per-IP rate limit (requests)
-    APEX_NEGOTIATE_RATE_WINDOW=60               — /negotiate rate-limit window (seconds)
-    APEX_MAX_RESPONSE_BYTES=5242880             — submit_result response_content cap (5 MB)
-    APEX_MAX_METADATA_BYTES=262144              — submit_result metadata cap (256 KB)
+    ERC8183_FUNDED_POLL_INTERVAL=30                — Funded-job poll interval (seconds)
+    ERC8183_NEGOTIATE_RATE_LIMIT=120               — /negotiate per-IP rate limit (requests)
+    ERC8183_NEGOTIATE_RATE_WINDOW=60               — /negotiate rate-limit window (seconds)
+    ERC8183_MAX_RESPONSE_BYTES=5242880             — submit_result response_content cap (5 MB)
+    ERC8183_MAX_METADATA_BYTES=262144              — submit_result metadata cap (256 KB)
 """
 
 import logging
@@ -41,8 +42,8 @@ env_file = os.path.basename(os.environ.get("ENV_FILE", ".env"))
 load_dotenv(Path(__file__).resolve().parent.parent / env_file)
 
 # SDK imports
-from bnbagent.apex.config import APEXConfig
-from bnbagent.apex.server import create_apex_app
+from bnbagent.erc8183.config import ERC8183Config
+from bnbagent.erc8183.server import create_erc8183_app
 
 logging.basicConfig(
     level=logging.INFO,
@@ -54,7 +55,7 @@ logger = logging.getLogger("blockchain_news")
 # Configuration
 # ---------------------------------------------------------------------------
 
-# Storage backend — pick ONE of the three options below by uncommenting it.
+# Storage backend — pick ONE of the two options below by uncommenting it.
 
 # (a) Local filesystem (default)
 from bnbagent.storage import LocalStorageProvider
@@ -64,12 +65,7 @@ _storage = LocalStorageProvider.from_env()
 # from bnbagent.storage import IPFSStorageProvider
 # _storage = IPFSStorageProvider.from_env()
 
-# (c) SQLite custom backend — see src/sqlite_provider.py.
-#     Live APEX deliverables also need a GET /storage/{key} HTTP route.
-# from sqlite_provider import SQLiteStorageProvider
-# _storage = SQLiteStorageProvider.from_env()
-
-config = APEXConfig.from_env(storage=_storage)
+config = ERC8183Config.from_env(storage=_storage)
 PORT = int(os.getenv("PORT", "8003"))
 
 # ---------------------------------------------------------------------------
@@ -123,18 +119,18 @@ def format_news_results(query: str, raw_results: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# APEX task handler — the ONLY function you need to write
+# ERC-8183 task handler — the ONLY function you need to write
 # ---------------------------------------------------------------------------
 
 
 def process_task(job: dict) -> tuple[str, dict]:
     """
-    Process a funded APEX job and return the result.
+    Process a funded ERC-8183 job and return the result.
 
     The SDK calls this for each funded job automatically.
     Receives the full job dict, returns (result_string, metadata).
     """
-    from bnbagent.apex import JobDescription
+    from bnbagent.erc8183 import JobDescription
 
     raw_description = job.get("description", "blockchain news")
     parsed = JobDescription.from_str(raw_description)
@@ -149,10 +145,10 @@ def process_task(job: dict) -> tuple[str, dict]:
 
 
 # ---------------------------------------------------------------------------
-# App — create_apex_app handles routes, the funded-job poll loop, and lifecycle
+# App — create_erc8183_app handles routes, the funded-job poll loop, and lifecycle
 # ---------------------------------------------------------------------------
 
-app = create_apex_app(config=config, on_job=process_task)
+app = create_erc8183_app(config=config, on_job=process_task)
 
 # ---------------------------------------------------------------------------
 # Startup banner — printed at import time so it shows regardless of how
@@ -162,7 +158,7 @@ _storage_info = type(_storage).__name__
 
 print(f"""
 {'='*55}
-  Blockchain News Agent (APEX Provider)
+  Blockchain News Agent (ERC-8183 Provider)
 {'='*55}
   Port:           {PORT}
   Commerce:       {config.effective_commerce_address}
@@ -171,14 +167,14 @@ print(f"""
   Storage:        {_storage_info}
   Price:          {int(config.service_price) / 10**18} U tokens
 
-  APEX endpoints:
-    POST /apex/negotiate          — Negotiation
-    GET  /apex/job/{{id}}           — Job details
-    GET  /apex/status             — Agent status
+  ERC-8183 endpoints:
+    POST /erc8183/negotiate          — Negotiation
+    GET  /erc8183/job/{{id}}           — Job details
+    GET  /erc8183/status             — Agent status
 
   Direct endpoints (testing):
     POST /search          — Direct news search
-    GET  /apex/health     — Health check
+    GET  /erc8183/health     — Health check
 {'='*55}
 """)
 
@@ -209,7 +205,7 @@ class SearchResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Direct HTTP endpoints (for testing without APEX)
+# Direct HTTP endpoints (for testing without ERC-8183)
 # ---------------------------------------------------------------------------
 
 
@@ -217,7 +213,7 @@ class SearchResponse(BaseModel):
 async def search_endpoint(request: SearchRequest):
     """
     Direct HTTP search endpoint (for testing).
-    For production, use APEX protocol via /apex/* endpoints.
+    For production, use ERC-8183 protocol via /erc8183/* endpoints.
     """
     try:
         raw_results = search_news(request.query, request.max_results)

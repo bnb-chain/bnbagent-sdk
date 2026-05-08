@@ -1,6 +1,6 @@
-"""FastAPI factory for APEX provider agents.
+"""FastAPI factory for ERC-8183 provider agents.
 
-- ``create_apex_app(...)`` — build a FastAPI sub-app with the APEX endpoints
+- ``create_erc8183_app(...)`` — build a FastAPI sub-app with the ERC-8183 endpoints
   (negotiate / status / health / job read-only).
 - When ``on_job`` is provided, a background poll loop scans on-chain for
   newly funded jobs assigned to this provider and dispatches each through
@@ -23,54 +23,54 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from ...core.config import get_env
-from ...storage import LocalStorageProvider
-from ..config import APEX_ENV_PREFIX, APEXConfig
+from ...storage import LocalStorageProvider, StorageProvider
+from ..config import ERC8183_ENV_PREFIX, ERC8183Config
 from ..negotiation import NegotiationHandler
-from .job_ops import APEXJobOps
+from .job_ops import ERC8183JobOps
 from .rate_limit import SlidingWindowLimiter
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class APEXState:
-    """Shared state for APEX routes."""
+class ERC8183State:
+    """Shared state for ERC-8183 routes."""
 
-    config: APEXConfig
-    job_ops: APEXJobOps
+    config: ERC8183Config
+    job_ops: ERC8183JobOps
     negotiation_handler: NegotiationHandler
     payment_token: str = ""
     payment_token_decimals: int = 18
 
     def __repr__(self) -> str:
         return (
-            f"APEXState("
+            f"ERC8183State("
             f"agent_address='{self.job_ops.agent_address}', "
             f"commerce='{self.config.effective_commerce_address}')"
         )
 
 
-def create_apex_state(config: APEXConfig | None = None) -> APEXState:
-    """Build ``APEXState`` from config (env fallback) with sensible defaults."""
+def create_erc8183_state(config: ERC8183Config | None = None) -> ERC8183State:
+    """Build ``ERC8183State`` from config (env fallback) with sensible defaults."""
     if config is None:
-        config = APEXConfig.from_env()
+        config = ERC8183Config.from_env()
 
     if config.wallet_provider is None:
         raise ValueError(
-            "APEXConfig.wallet_provider is required to build APEXState. "
+            "ERC8183Config.wallet_provider is required to build ERC8183State. "
             "Pass a wallet_provider= or set WALLET_PASSWORD (+ PRIVATE_KEY)."
         )
 
     storage = config.storage or LocalStorageProvider()
 
-    if isinstance(storage, LocalStorageProvider) and not config.agent_url:
+    if isinstance(storage, StorageProvider) and storage.uses_file_url and not config.agent_url:
         raise ValueError(
-            "APEX_AGENT_URL must be set when using LocalStorageProvider. "
-            "Set it to the agent's public base URL including /apex "
-            "(e.g. http://localhost:8003/apex)."
+            f"ERC8183_AGENT_URL must be set when using {type(storage).__name__}. "
+            "Set it to the agent's public base URL including /erc8183 "
+            "(e.g. http://localhost:8003/erc8183)."
         )
 
-    job_ops = APEXJobOps(
+    job_ops = ERC8183JobOps(
         config.wallet_provider,
         network=config.effective_network,
         storage_provider=storage,
@@ -84,10 +84,10 @@ def create_apex_state(config: APEXConfig | None = None) -> APEXState:
     currency = ""
     decimals = 18
     try:
-        currency = job_ops.apex_client.payment_token
-        decimals = job_ops.apex_client.token_decimals()
+        currency = job_ops.erc8183_client.payment_token
+        decimals = job_ops.erc8183_client.token_decimals()
     except Exception as exc:
-        logger.warning(f"[APEX] payment_token lookup failed: {exc}")
+        logger.warning(f"[ERC-8183] payment_token lookup failed: {exc}")
 
     negotiation_handler = NegotiationHandler(
         service_price=config.service_price,
@@ -95,7 +95,7 @@ def create_apex_state(config: APEXConfig | None = None) -> APEXState:
         wallet_provider=config.wallet_provider,
     )
 
-    return APEXState(
+    return ERC8183State(
         config=config,
         job_ops=job_ops,
         negotiation_handler=negotiation_handler,
@@ -105,30 +105,30 @@ def create_apex_state(config: APEXConfig | None = None) -> APEXState:
 
 
 def _build_negotiate_limiter() -> SlidingWindowLimiter:
-    """Read APEX_NEGOTIATE_RATE_LIMIT / APEX_NEGOTIATE_RATE_WINDOW from env."""
-    raw_max = get_env("NEGOTIATE_RATE_LIMIT", "120", prefix=APEX_ENV_PREFIX) or "120"
+    """Read ERC8183_NEGOTIATE_RATE_LIMIT / ERC8183_NEGOTIATE_RATE_WINDOW from env."""
+    raw_max = get_env("NEGOTIATE_RATE_LIMIT", "120", prefix=ERC8183_ENV_PREFIX) or "120"
     raw_window = (
-        get_env("NEGOTIATE_RATE_WINDOW", "60.0", prefix=APEX_ENV_PREFIX) or "60.0"
+        get_env("NEGOTIATE_RATE_WINDOW", "60.0", prefix=ERC8183_ENV_PREFIX) or "60.0"
     )
     try:
         max_requests = int(raw_max)
     except ValueError:
         logger.warning(
-            f"[APEX] APEX_NEGOTIATE_RATE_LIMIT={raw_max!r} invalid, using 120"
+            f"[ERC-8183] ERC8183_NEGOTIATE_RATE_LIMIT={raw_max!r} invalid, using 120"
         )
         max_requests = 120
     try:
         window_seconds = float(raw_window)
     except ValueError:
         logger.warning(
-            f"[APEX] APEX_NEGOTIATE_RATE_WINDOW={raw_window!r} invalid, using 60.0"
+            f"[ERC-8183] ERC8183_NEGOTIATE_RATE_WINDOW={raw_window!r} invalid, using 60.0"
         )
         window_seconds = 60.0
     return SlidingWindowLimiter(max_requests=max_requests, window_seconds=window_seconds)
 
 
-def _create_apex_routes(state: APEXState) -> APIRouter:
-    router = APIRouter(tags=["APEX"])
+def _create_erc8183_routes(state: ERC8183State) -> APIRouter:
+    router = APIRouter(tags=["ERC-8183"])
     negotiate_limiter = _build_negotiate_limiter()
 
     @router.get("/job/{job_id}")
@@ -175,7 +175,7 @@ def _create_apex_routes(state: APEXState) -> APIRouter:
             result = state.negotiation_handler.negotiate(body)
             return JSONResponse(result.to_dict())
         except Exception as exc:
-            logger.error(f"[APEX] Negotiation failed: {exc}")
+            logger.error(f"[ERC-8183] Negotiation failed: {exc}")
             return JSONResponse({"error": "Negotiation failed"}, status_code=500)
 
     @router.get("/status")
@@ -193,20 +193,20 @@ def _create_apex_routes(state: APEXState) -> APIRouter:
 
     @router.get("/health")
     async def health():
-        return {"status": "ok", "service": "APEX Agent"}
+        return {"status": "ok", "service": "ERC-8183 Agent"}
 
     return router
 
 
-def create_apex_app(
-    config: APEXConfig | None = None,
+def create_erc8183_app(
+    config: ERC8183Config | None = None,
     on_job: Callable[..., Any] | None = None,
     on_job_skipped: Callable[[dict, str], Any] | None = None,
     task_metadata: dict[str, Any] | None = None,
-    prefix: str = "/apex",
+    prefix: str = "/erc8183",
     funded_poll_interval: float | None = None,
 ) -> FastAPI:
-    """Create a FastAPI application for an APEX provider agent.
+    """Create a FastAPI application for an ERC-8183 provider agent.
 
     Parameters
     ----------
@@ -223,11 +223,11 @@ def create_apex_app(
         and submission internally.
     funded_poll_interval
         Seconds between funded-job poll passes. Falls back to the
-        ``APEX_FUNDED_POLL_INTERVAL`` env var (default ``30``).
+        ``ERC8183_FUNDED_POLL_INTERVAL`` env var (default ``30``).
     """
-    state = create_apex_state(config)
+    state = create_erc8183_state(config)
     effective_poll_interval = funded_poll_interval or float(
-        get_env("FUNDED_POLL_INTERVAL", "30.0", prefix=APEX_ENV_PREFIX) or "30.0"
+        get_env("FUNDED_POLL_INTERVAL", "30.0", prefix=ERC8183_ENV_PREFIX) or "30.0"
     )
 
     processing_jobs: set[int] = set()
@@ -241,7 +241,7 @@ def create_apex_app(
             reason = verification.get("error", "unknown")
             error_code = verification.get("error_code")
             logger.warning(
-                f"[APEX] Job #{job_id} skipped: {reason}"
+                f"[ERC-8183] Job #{job_id} skipped: {reason}"
                 + (f" (error_code={error_code})" if error_code is not None else "")
             )
             if on_job_skipped:
@@ -252,7 +252,7 @@ def create_apex_app(
                     else:
                         await asyncio.to_thread(on_job_skipped, target, reason)
                 except Exception as exc:
-                    logger.error(f"[APEX] on_job_skipped callback error: {exc}")
+                    logger.error(f"[ERC-8183] on_job_skipped callback error: {exc}")
             return {"success": False, "error": reason}
 
         job = verification["job"]
@@ -278,14 +278,14 @@ def create_apex_app(
         )
         if submission.get("success"):
             submission["response_content"] = response_content
-            logger.info(f"[APEX] Job #{job_id} submitted, tx={submission.get('txHash')}")
+            logger.info(f"[ERC-8183] Job #{job_id} submitted, tx={submission.get('txHash')}")
         else:
-            logger.error(f"[APEX] Job #{job_id} submission failed: {submission.get('error')}")
+            logger.error(f"[ERC-8183] Job #{job_id} submission failed: {submission.get('error')}")
         return submission
 
     async def _funded_poll_loop():
         logger.info(
-            f"[APEX] Funded-job poll loop starting (interval={effective_poll_interval:.1f}s)"
+            f"[ERC-8183] Funded-job poll loop starting (interval={effective_poll_interval:.1f}s)"
         )
         try:
             while True:
@@ -295,7 +295,7 @@ def create_apex_app(
                         jobs = result.get("jobs", [])
                         if jobs:
                             logger.info(
-                                f"[APEX] Funded-poll picked up {len(jobs)} pending job(s)"
+                                f"[ERC-8183] Funded-poll picked up {len(jobs)} pending job(s)"
                             )
                         for job in jobs:
                             job_id = job["jobId"]
@@ -306,16 +306,16 @@ def create_apex_app(
                                 await _execute_job_internal(job_id)
                             except Exception as exc:
                                 logger.error(
-                                    f"[APEX] Funded-poll job #{job_id} failed: {exc}"
+                                    f"[ERC-8183] Funded-poll job #{job_id} failed: {exc}"
                                 )
                             finally:
                                 processing_jobs.discard(job_id)
                     else:
                         logger.warning(
-                            f"[APEX] Funded-poll error: {result.get('error')}"
+                            f"[ERC-8183] Funded-poll error: {result.get('error')}"
                         )
                 except Exception as exc:
-                    logger.error(f"[APEX] Funded-poll iteration failed: {exc}")
+                    logger.error(f"[ERC-8183] Funded-poll iteration failed: {exc}")
 
                 try:
                     await asyncio.wait_for(
@@ -325,7 +325,7 @@ def create_apex_app(
                 except asyncio.TimeoutError:
                     continue
         except asyncio.CancelledError:
-            logger.info("[APEX] Funded-job poll loop cancelled")
+            logger.info("[ERC-8183] Funded-job poll loop cancelled")
             raise
 
     def _spawn(coro) -> asyncio.Task:
@@ -335,7 +335,7 @@ def create_apex_app(
         return task
 
     @asynccontextmanager
-    async def apex_lifespan(_: FastAPI):
+    async def erc8183_lifespan(_: FastAPI):
         if on_job:
             _spawn(_funded_poll_loop())
         yield
@@ -345,18 +345,18 @@ def create_apex_app(
         if background_tasks:
             await asyncio.gather(*background_tasks, return_exceptions=True)
 
-    apex_app = FastAPI(
-        title="APEX Agent",
-        description="APEX v1 provider agent (AgenticCommerce + Router + OptimisticPolicy)",
-        lifespan=apex_lifespan,
+    erc8183_app = FastAPI(
+        title="ERC-8183 Agent",
+        description="ERC-8183 provider agent (AgenticCommerce + Router + OptimisticPolicy)",
+        lifespan=erc8183_lifespan,
     )
 
-    router = _create_apex_routes(state=state)
-    apex_app.include_router(router, prefix=prefix)
+    router = _create_erc8183_routes(state=state)
+    erc8183_app.include_router(router, prefix=prefix)
 
     if prefix:
 
-        @apex_app.get("/")
+        @erc8183_app.get("/")
         async def root():
             endpoints = {
                 "job": f"{prefix}/job/{{job_id}}",
@@ -367,13 +367,13 @@ def create_apex_app(
                 "health": f"{prefix}/health",
             }
             return {
-                "service": "APEX Agent",
+                "service": "ERC-8183 Agent",
                 "agent_address": state.job_ops.agent_address,
                 "endpoints": endpoints,
             }
 
-    apex_app.state.apex = state
+    erc8183_app.state.erc8183 = state
     if on_job:
-        apex_app.state.startup = lambda: _spawn(_funded_poll_loop())
+        erc8183_app.state.startup = lambda: _spawn(_funded_poll_loop())
 
-    return apex_app
+    return erc8183_app

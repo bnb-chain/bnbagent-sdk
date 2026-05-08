@@ -1,6 +1,6 @@
-"""``APEXClient`` — single-entry facade over the APEX v1 contract stack.
+"""``ERC8183Client`` — single-entry facade over the ERC-8183 contract stack.
 
-APEX v1 is a three-layer protocol:
+ERC-8183 is a three-layer protocol:
 
 - ``AgenticCommerceUpgradeable`` — ERC-8183 kernel (escrow).
 - ``EvaluatorRouterUpgradeable`` — routing layer acting as ``job.evaluator``
@@ -8,7 +8,7 @@ APEX v1 is a three-layer protocol:
 - ``OptimisticPolicy``           — UMA-style silence-approves policy with
   a whitelisted-voter reject quorum.
 
-``APEXClient`` composes three thin sub-clients (``commerce`` / ``router`` /
+``ERC8183Client`` composes three thin sub-clients (``commerce`` / ``router`` /
 ``policy``) and a minimal ERC-20 helper. Most callers only use the top-level
 methods; advanced users can reach the sub-clients via attributes.
 
@@ -35,7 +35,7 @@ from typing import Any
 from ..config import NetworkConfig, resolve_network
 from ..core.abi_loader import create_web3
 from ..wallets.wallet_provider import WalletProvider
-from ._erc20 import MinimalERC20Client
+from ..erc20.client import MinimalERC20Client
 from .commerce import CommerceClient
 from .policy import PolicyClient
 from .router import RouterClient
@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_APPROVE_FLOOR_UNITS: int = 100
 
 
-class APEXClient:
+class ERC8183Client:
     """High-level facade over Commerce + Router + Policy.
 
     Parameters
@@ -87,7 +87,7 @@ class APEXClient:
             if not getattr(nc, field_name):
                 raise ValueError(
                     f"network '{nc.name}' is missing {field_name}; "
-                    "pass a NetworkConfig with all three APEX addresses set."
+                    "pass a NetworkConfig with all three ERC-8183 addresses set."
                 )
 
         self.debug = debug
@@ -201,7 +201,7 @@ class APEXClient:
         Note
         ----
         Callers who want full manual control should pre-approve via
-        ``apex.approve_payment_token(spender, cap)``; the allowance check
+        ``erc8183.approve_payment_token(spender, cap)``; the allowance check
         above will then detect the existing allowance and skip the approve.
         """
         current = self.token_allowance(self.address, self.commerce.address)
@@ -214,7 +214,7 @@ class APEXClient:
                 floor = approve_floor
             cap = max(amount, floor)
             logger.debug(
-                "[APEXClient] topping up allowance: current=%s amount=%s cap=%s",
+                "[ERC8183Client] topping up allowance: current=%s amount=%s cap=%s",
                 current, amount, cap,
             )
             self.approve_payment_token(self.commerce.address, cap)
@@ -288,12 +288,40 @@ class APEXClient:
         ``optParams`` JSON to extract ``deliverable_url``. Returns ``None``
         if the event is not found or the job has not been submitted yet.
 
-        Args:
-            hint_block: approximate block where the job was submitted.
-                Passing this narrows the log query window and avoids RPC
-                block-range limits on providers like NodeReal.
+        When ``hint_block`` is not provided the method self-resolves it by
+        querying Commerce's ``JobSubmitted`` event first (tight 5-block window
+        around current head, walking back in 1 000-block steps until found).
+        This avoids wide log scans that exceed NodeReal's block-range limit.
         """
+        if hint_block is None:
+            hint_block = self._resolve_submit_block(job_id)
         return self.policy.get_deliverable_url(job_id, hint_block=hint_block)
+
+    def _resolve_submit_block(self, job_id: int, *, lookback: int = 50_000, step: int = 1_000) -> int | None:
+        """Find the block where ``JobSubmitted`` was emitted for *job_id*.
+
+        Walks backwards from the current head in ``step``-block windows so
+        each individual RPC call stays within NodeReal's 5 000-block limit.
+        Returns the block number, or ``None`` if not found within ``lookback``.
+        """
+        try:
+            current = self.commerce.w3.eth.block_number
+        except Exception:
+            return None
+
+        for end in range(current, max(0, current - lookback) - 1, -step):
+            start = max(0, end - step + 1)
+            try:
+                logs = self.commerce.contract.events.JobSubmitted().get_logs(
+                    from_block=start,
+                    to_block=end,
+                    argument_filters={"jobId": job_id},
+                )
+                if logs:
+                    return logs[0]["blockNumber"]
+            except Exception:
+                pass
+        return None
 
     def get_verdict(self, job_id: int, evidence: bytes = b"") -> tuple[Verdict, bytes]:
         """Simulate the verdict the Router would see right now."""

@@ -1,7 +1,7 @@
-# Client examples — APEX v1 flows
+# Client examples — ERC-8183 flows
 
 Stand-alone scripts that exercise the canonical ERC-8183 flows from the
-client side. Mirrors `apex-contracts/test/e2e/flows/*` one-to-one, plus an
+client side. Mirrors `erc8183-contracts/test/e2e/flows/*` one-to-one, plus an
 end-to-end IPFS integration test.
 
 All scripts share `_helpers.py` for env loading, job description, expiry, and
@@ -14,7 +14,7 @@ provider address.
 | `stalemate_expire.py` | submit → client `dispute` → quorum not reached → job expires → `claimRefund` → **EXPIRED** | refund via expiry |
 | `never_submit.py` | provider never submits → job expires → `claimRefund` → **EXPIRED** | refund via expiry |
 | `cancel_open.py` | client cancels before funding (`reject`) → **REJECTED** | nothing escrowed |
-| `agent_ipfs_test.py` | client funds → agent's funded-poll loop submits → IPFS verify (add `--dispute` to also exercise the dispute branch) | integration test against agent-server |
+| `create_and_verify.py` | client funds → agent's funded-poll loop submits → IPFS verify (add `--dispute` to also exercise the dispute branch) | integration test against agent-server |
 
 ## Setup
 
@@ -34,9 +34,9 @@ PROVIDER_ADDRESS     provider EOA
 # Optional
 NETWORK                    bsc-testnet (default)
 RPC_URL                    override RPC
-APEX_COMMERCE_ADDRESS      override commerce proxy
-APEX_ROUTER_ADDRESS        override router proxy
-APEX_POLICY_ADDRESS        override policy
+ERC8183_COMMERCE_ADDRESS      override commerce proxy
+ERC8183_ROUTER_ADDRESS        override router proxy
+ERC8183_POLICY_ADDRESS        override policy
 ```
 
 ## Notes
@@ -51,7 +51,7 @@ APEX_POLICY_ADDRESS        override policy
 - Every script is idempotent-ish: it creates a new job each run, so reruns
   don't collide.
 
-## `agent_ipfs_test.py`
+## `create_and_verify.py`
 
 End-to-end test against a running `agent-server`. Requires the agent-server
 to be started first with IPFS storage configured:
@@ -61,7 +61,7 @@ to be started first with IPFS storage configured:
 cd examples/agent-server && uv run python scripts/run_agent.py
 
 # Terminal 2
-cd examples/client && python agent_ipfs_test.py
+cd examples/client && python create_and_verify.py
 ```
 
 The script:

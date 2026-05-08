@@ -6,7 +6,7 @@ import stat
 import pytest
 
 from bnbagent.exceptions import StorageError
-from bnbagent.storage.local_provider import LocalStorageProvider
+from bnbagent.storage.local_storage_provider import LocalStorageProvider
 
 
 class TestLocalStorageProvider:

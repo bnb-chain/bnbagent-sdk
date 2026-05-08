@@ -1,4 +1,4 @@
-"""Tests for ``APEXJobOps`` — async provider-side lifecycle ops (APEX v1).
+"""Tests for ``ERC8183JobOps`` — async provider-side lifecycle ops (ERC-8183).
 
 Focus areas:
 - ``verify_job`` — status / provider / expiry / budget gating.
@@ -10,8 +10,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from bnbagent.apex.server.job_ops import APEXJobOps
-from bnbagent.apex.types import Job, JobStatus
+from bnbagent.erc8183.server.job_ops import ERC8183JobOps
+from bnbagent.erc8183.types import Job, JobStatus
 
 ME = "0x" + "aa" * 20
 OTHER = "0x" + "bb" * 20
@@ -25,7 +25,7 @@ def _make_wallet(address=ME):
 
 
 def _make_ops(storage=None, service_price=0, wallet=None, agent_url=None):
-    ops = APEXJobOps(
+    ops = ERC8183JobOps(
         wallet or _make_wallet(),
         storage_provider=storage,
         service_price=service_price,
@@ -62,7 +62,7 @@ class TestAgentAddress:
 
     def test_requires_wallet_provider(self):
         with pytest.raises(ValueError, match="wallet_provider is required"):
-            APEXJobOps(None)  # type: ignore[arg-type]
+            ERC8183JobOps(None)  # type: ignore[arg-type]
 
 
 class TestVerifyJob:
@@ -173,10 +173,10 @@ class TestVerifyJob:
 class TestSubmitResult:
     @pytest.mark.asyncio
     async def test_submit_uploads_and_returns_deliverable(self, tmp_path):
-        from bnbagent.storage.local_provider import LocalStorageProvider
+        from bnbagent.storage.local_storage_provider import LocalStorageProvider
 
         storage = LocalStorageProvider(str(tmp_path))
-        ops = _make_ops(storage=storage, agent_url="http://agent.example/apex")
+        ops = _make_ops(storage=storage, agent_url="http://agent.example/erc8183")
         client = _inject_client(ops)
         client.get_job.return_value = _job(status=JobStatus.FUNDED)
         client.submit.return_value = {"transactionHash": "0xaa"}
@@ -201,7 +201,7 @@ class TestSubmitResult:
 
     @pytest.mark.asyncio
     async def test_response_content_size_cap_enforced(self, monkeypatch):
-        monkeypatch.setenv("APEX_MAX_RESPONSE_BYTES", "1024")
+        monkeypatch.setenv("ERC8183_MAX_RESPONSE_BYTES", "1024")
         ops = _make_ops()
         client = _inject_client(ops)
         client.get_job.return_value = _job(status=JobStatus.FUNDED)
@@ -213,7 +213,7 @@ class TestSubmitResult:
 
     @pytest.mark.asyncio
     async def test_metadata_size_cap_enforced(self, monkeypatch):
-        monkeypatch.setenv("APEX_MAX_METADATA_BYTES", "256")
+        monkeypatch.setenv("ERC8183_MAX_METADATA_BYTES", "256")
         ops = _make_ops()
         client = _inject_client(ops)
         client.get_job.return_value = _job(status=JobStatus.FUNDED)
@@ -225,10 +225,10 @@ class TestSubmitResult:
 
     @pytest.mark.asyncio
     async def test_within_caps_proceeds(self, tmp_path):
-        from bnbagent.storage.local_provider import LocalStorageProvider
+        from bnbagent.storage.local_storage_provider import LocalStorageProvider
 
         storage = LocalStorageProvider(str(tmp_path))
-        ops = _make_ops(storage=storage, agent_url="http://agent.example/apex")
+        ops = _make_ops(storage=storage, agent_url="http://agent.example/erc8183")
         client = _inject_client(ops)
         client.get_job.return_value = _job(status=JobStatus.FUNDED)
         client.submit.return_value = {"transactionHash": "0xaa"}
@@ -242,10 +242,10 @@ class TestSubmitResult:
 
     @pytest.mark.asyncio
     async def test_file_url_rewritten_to_agent_endpoint(self, tmp_path):
-        from bnbagent.storage.local_provider import LocalStorageProvider
+        from bnbagent.storage.local_storage_provider import LocalStorageProvider
 
         storage = LocalStorageProvider(str(tmp_path))
-        ops = _make_ops(storage=storage, agent_url="http://myagent.example/apex")
+        ops = _make_ops(storage=storage, agent_url="http://myagent.example/erc8183")
         client = _inject_client(ops)
         client.get_job.return_value = _job(status=JobStatus.FUNDED)
         client.submit.return_value = {"transactionHash": "0xab"}
@@ -256,11 +256,11 @@ class TestSubmitResult:
 
         result = await ops.submit_result(1, "payload")
         assert result["success"] is True
-        assert result["deliverableUrl"] == "http://myagent.example/apex/job/1/response"
+        assert result["deliverableUrl"] == "http://myagent.example/erc8183/job/1/response"
         # chain submit received the agent endpoint URL, not the file:// URL
         call_kwargs = client.submit.call_args
         opt_params = call_kwargs[0][2]
-        assert opt_params["deliverable_url"] == "http://myagent.example/apex/job/1/response"
+        assert opt_params["deliverable_url"] == "http://myagent.example/erc8183/job/1/response"
         # internal cache still holds the raw file:// URL
         assert ops._deliverable_urls[1].startswith("file://")
 
@@ -285,7 +285,7 @@ class TestSubmitResult:
 
     @pytest.mark.asyncio
     async def test_file_url_without_agent_url_raises(self, tmp_path):
-        from bnbagent.storage.local_provider import LocalStorageProvider
+        from bnbagent.storage.local_storage_provider import LocalStorageProvider
 
         storage = LocalStorageProvider(str(tmp_path))
         ops = _make_ops(storage=storage, agent_url=None)
@@ -298,7 +298,7 @@ class TestSubmitResult:
 
         result = await ops.submit_result(1, "payload")
         assert result["success"] is False
-        assert "APEX_AGENT_URL" in result["error"]
+        assert "ERC8183_AGENT_URL" in result["error"]
 
 
 class TestGetPendingJobs:

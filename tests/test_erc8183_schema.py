@@ -1,11 +1,11 @@
-"""Tests for bnbagent/apex/schema.py — JobDescription and DeliverableManifest."""
+"""Tests for bnbagent/erc8183/schema.py — JobDescription and DeliverableManifest."""
 
 import json
 
 import pytest
 from web3 import Web3
 
-from bnbagent.apex.schema import SCHEMA_VERSION, DeliverableManifest, JobDescription
+from bnbagent.erc8183.schema import SCHEMA_VERSION, DeliverableManifest, JobDescription
 
 FAKE_COMMERCE = "0x" + "aa" * 20
 FAKE_ROUTER = "0x" + "bb" * 20

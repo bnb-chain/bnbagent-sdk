@@ -1,8 +1,8 @@
-"""Minimal ERC-20 client used by ``APEXClient`` for payment-token helpers.
+"""Minimal ERC-20 client used by ``ERC8183Client`` for payment-token helpers.
 
-Underscore-prefixed: not part of the public SDK surface. External callers
-should use the helpers exposed on ``APEXClient`` (``token_decimals``,
-``token_balance``, ``approve_payment_token``, ...) which delegate here.
+External callers should use the helpers exposed on ``ERC8183Client``
+(``token_decimals``, ``token_balance``, ``approve_payment_token``, ...)
+which delegate here.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from ..wallets.wallet_provider import WalletProvider
 
 
 def _load_abi() -> list:
-    abi_path = Path(__file__).parent / "abis" / "ERC20Minimal.json"
+    abi_path = Path(__file__).parent / "abis" / "ERC20.json"
     return json.loads(abi_path.read_text())
 
 

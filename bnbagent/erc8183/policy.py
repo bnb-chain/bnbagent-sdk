@@ -1,4 +1,4 @@
-"""Thin wrapper around ``OptimisticPolicy`` (APEX v1 reference policy).
+"""Thin wrapper around ``OptimisticPolicy`` (ERC-8183 reference policy).
 
 Surface:
 
@@ -99,13 +99,12 @@ class PolicyClient(ContractClientMixin):
         parses ``optParams`` (JSON bytes) to extract ``deliverable_url``.
         Returns ``None`` if the event is not found or the field is absent.
 
-        Args:
-            hint_block: if the caller knows roughly when the job was submitted
-                (e.g. the block number of the ``Disputed`` event), passing it
-                allows the query to use a tight window and avoid RPC block-range
-                limits.  When omitted a 5 000-block lookback is used.
+        Prefer calling ``ERC8183Client.get_deliverable_url`` which auto-resolves
+        ``hint_block`` via Commerce's ``JobSubmitted`` event.  If called directly
+        without ``hint_block`` a 1 000-block fallback window is used.
         """
-        _LOOKBACK = 5_000
+        _TIGHT = 10    # blocks either side when hint is known
+        _FALLBACK = 1_000
 
         try:
             current_block = self.w3.eth.block_number
@@ -113,10 +112,10 @@ class PolicyClient(ContractClientMixin):
             current_block = None
 
         if hint_block is not None:
-            from_block = max(0, hint_block - _LOOKBACK)
-            to_block = hint_block + 10
+            from_block = max(0, hint_block - _TIGHT)
+            to_block = hint_block + _TIGHT
         elif current_block is not None:
-            from_block = max(0, current_block - _LOOKBACK)
+            from_block = max(0, current_block - _FALLBACK)
             to_block = "latest"
         else:
             from_block = 0

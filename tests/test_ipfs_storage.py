@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from bnbagent.exceptions import StorageError
-from bnbagent.storage.ipfs_provider import IPFSStorageProvider
+from bnbagent.storage.ipfs_storage_provider import IPFSStorageProvider
 
 # Valid CIDv0 for tests (Qm + 44 base58 chars)
 VALID_CID = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"
@@ -34,7 +34,7 @@ class TestIPFSStorageProvider:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("bnbagent.storage.ipfs_provider.httpx.AsyncClient", return_value=mock_client):
+        with patch("bnbagent.storage.ipfs_storage_provider.httpx.AsyncClient", return_value=mock_client):
             url = await provider.upload({"test": "data"})
 
         assert url == f"ipfs://{VALID_CID}"
@@ -54,7 +54,7 @@ class TestIPFSStorageProvider:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("bnbagent.storage.ipfs_provider.httpx.AsyncClient", return_value=mock_client):
+        with patch("bnbagent.storage.ipfs_storage_provider.httpx.AsyncClient", return_value=mock_client):
             url = await provider.upload({"data": 1})
 
         assert url.startswith("ipfs://")
@@ -71,7 +71,7 @@ class TestIPFSStorageProvider:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("bnbagent.storage.ipfs_provider.httpx.AsyncClient", return_value=mock_client):
+        with patch("bnbagent.storage.ipfs_storage_provider.httpx.AsyncClient", return_value=mock_client):
             _url = await provider.upload({"data": 1}, filename="job-5.json")
 
         call_kwargs = mock_client.post.call_args
@@ -90,7 +90,7 @@ class TestIPFSStorageProvider:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("bnbagent.storage.ipfs_provider.httpx.AsyncClient", return_value=mock_client):
+        with patch("bnbagent.storage.ipfs_storage_provider.httpx.AsyncClient", return_value=mock_client):
             with pytest.raises(StorageError, match="Unexpected pinning response"):
                 await provider.upload({"data": 1})
 
@@ -106,7 +106,7 @@ class TestIPFSStorageProvider:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("bnbagent.storage.ipfs_provider.httpx.AsyncClient", return_value=mock_client):
+        with patch("bnbagent.storage.ipfs_storage_provider.httpx.AsyncClient", return_value=mock_client):
             result = await provider.download(f"ipfs://{VALID_CID}")
 
         assert result["downloaded"] is True
@@ -125,7 +125,7 @@ class TestIPFSStorageProvider:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("bnbagent.storage.ipfs_provider.httpx.AsyncClient", return_value=mock_client):
+        with patch("bnbagent.storage.ipfs_storage_provider.httpx.AsyncClient", return_value=mock_client):
             assert await provider.exists(f"ipfs://{VALID_CID}") is True
 
     @pytest.mark.asyncio
@@ -139,7 +139,7 @@ class TestIPFSStorageProvider:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("bnbagent.storage.ipfs_provider.httpx.AsyncClient", return_value=mock_client):
+        with patch("bnbagent.storage.ipfs_storage_provider.httpx.AsyncClient", return_value=mock_client):
             assert await provider.exists(f"ipfs://{VALID_CID_2}") is False
 
     def test_get_gateway_url(self):
@@ -160,7 +160,7 @@ class TestIPFSStorageProvider:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("bnbagent.storage.ipfs_provider.httpx.AsyncClient", return_value=mock_client):
+        with patch("bnbagent.storage.ipfs_storage_provider.httpx.AsyncClient", return_value=mock_client):
             url = await provider.upload({"test": 1})
 
         assert url == f"ipfs://{VALID_CID_3}"

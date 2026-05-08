@@ -1,10 +1,10 @@
 """
-Negotiation data structures and handler aligned with APEX (Agent Payment Exchange Protocol).
+Negotiation data structures and handler aligned with ERC-8183 (ERC-8183 Protocol).
 
 V1 implements single-round HTTP negotiation:
   User sends requirements + quality standards → Agent returns price or rejects.
 
-The TermSpecification follows APEX's structured terms:
+The TermSpecification follows ERC-8183's structured terms:
   Agreed Service + Compensation + Evaluation.
 
 NegotiationHandler provides a ready-to-use negotiation processor for agents:
@@ -41,12 +41,12 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .client import APEXClient
+    from .client import ERC8183Client
     from ..wallets.wallet_provider import WalletProvider
 
 
 class ReasonCode:
-    """APEX standard rejection codes (aligned with whitepaper + PRD FR-06)."""
+    """ERC-8183 standard rejection codes (aligned with whitepaper + PRD FR-06)."""
 
     PRICE_TOO_LOW = "0x01"
     DEADLINE_TOO_TIGHT = "0x02"
@@ -59,10 +59,10 @@ class ReasonCode:
 @dataclass
 class TermSpecification:
     """
-    APEX protocol term specification — the core output of negotiation.
+    ERC-8183 protocol term specification — the core output of negotiation.
     Shared between V1 (single-round HTTP) and V2 (multi-round Memo + on-chain PoA).
 
-    Fields map to APEX's categories:
+    Fields map to ERC-8183's categories:
       - Agreed Service: deliverables, quality_standards, success_criteria
       - Compensation: price, currency
       - Evaluation: evaluation_required, evaluator_type
@@ -452,8 +452,8 @@ class NegotiationHandler:
         )
 
         # Or auto-fetch currency from contract:
-        handler = NegotiationHandler.from_apex_client(
-            apex_client=apex_client,
+        handler = NegotiationHandler.from_erc8183_client(
+            erc8183_client=erc8183_client,
             service_price="20000000000000000000",
         )
 
@@ -506,9 +506,9 @@ class NegotiationHandler:
         self._quote_ttl_seconds = quote_ttl_seconds
 
     @classmethod
-    def from_apex_client(
+    def from_erc8183_client(
         cls,
-        apex_client: APEXClient,
+        erc8183_client: ERC8183Client,
         service_price: str,
         estimated_completion_seconds: int = 120,
         require_quality_standards: bool = True,
@@ -519,7 +519,7 @@ class NegotiationHandler:
         Create a NegotiationHandler with currency fetched from the ERC-8183 contract.
 
         Args:
-            apex_client: APEXClient instance for on-chain queries
+            erc8183_client: ERC8183Client instance for on-chain queries
             service_price: Price in token smallest unit
             estimated_completion_seconds: Estimated completion time
             require_quality_standards: Whether to require quality_standards
@@ -530,17 +530,17 @@ class NegotiationHandler:
             NegotiationHandler with currency from contract
 
         Example:
-            from bnbagent import APEXClient, EVMWalletProvider, NegotiationHandler
+            from bnbagent import ERC8183Client, EVMWalletProvider, NegotiationHandler
 
             wallet = EVMWalletProvider(password="...", private_key=os.environ["PRIVATE_KEY"])
-            apex = APEXClient(wallet, network="bsc-testnet")
+            erc8183 = ERC8183Client(wallet, network="bsc-testnet")
 
-            handler = NegotiationHandler.from_apex_client(
-                apex_client=apex,
-                service_price=os.environ["APEX_SERVICE_PRICE"],
+            handler = NegotiationHandler.from_erc8183_client(
+                erc8183_client=erc8183,
+                service_price=os.environ["ERC8183_SERVICE_PRICE"],
             )
         """
-        currency = apex_client.payment_token
+        currency = erc8183_client.payment_token
 
         return cls(
             service_price=service_price,

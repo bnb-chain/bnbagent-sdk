@@ -1,6 +1,6 @@
 # Examples
 
-End-to-end examples for APEX v1 (AgenticCommerce + EvaluatorRouter + OptimisticPolicy).
+End-to-end examples for ERC-8183 (AgenticCommerce + EvaluatorRouter + OptimisticPolicy).
 
 ## Directory layout
 
@@ -34,4 +34,4 @@ End-to-end examples for APEX v1 (AgenticCommerce + EvaluatorRouter + OptimisticP
 | OptimisticPolicy | `0x4f4678d4439fec812ac7674bb3efb4c8f5fb78a6` |
 | Identity Registry (ERC-8004) | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
 
-Payment token address is fetched at runtime via `APEXClient.payment_token`.
+Payment token address is fetched at runtime via `ERC8183Client.payment_token`.

@@ -12,7 +12,7 @@ uv sync --extra dev
 pytest
 
 # Run specific file
-pytest tests/test_apex_client.py
+pytest tests/test_erc8183_client.py
 
 # Verbose output
 pytest -v
@@ -26,9 +26,9 @@ pytest -v
 | `test_agent_uri.py` | `AgentURIGenerator` — URI generation and base64 encoding |
 | `test_models.py` | `AgentEndpoint` — validation and serialization |
 | `test_wallet.py` | `EVMWalletProvider` — keystore encryption, signing |
-| `test_apex_client.py` | `APEXClient` — facade construction, approve_floor strategy, delegation |
-| `test_apex_config.py` | `APEXConfig` — validation, env var loading |
-| `test_apex_job_ops.py` | `APEXJobOps` — async verify / submit / pending-job scan |
+| `test_erc8183_client.py` | `ERC8183Client` — facade construction, approve_floor strategy, delegation |
+| `test_erc8183_config.py` | `ERC8183Config` — validation, env var loading |
+| `test_erc8183_job_ops.py` | `ERC8183JobOps` — async verify / submit / pending-job scan |
 | `test_negotiation.py` | `NegotiationHandler` — terms, hashing, price validation |
 | `test_service_record.py` | `ServiceRecord` — serialization, canonical JSON, hash computation |
 | `test_nonce_manager.py` | `NonceManager` — singleton, thread safety, error recovery |

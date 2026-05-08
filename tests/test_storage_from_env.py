@@ -2,8 +2,8 @@
 
 import pytest
 
-from bnbagent.storage.local_provider import LocalStorageProvider
-from bnbagent.storage.ipfs_provider import IPFSStorageProvider
+from bnbagent.storage.local_storage_provider import LocalStorageProvider
+from bnbagent.storage.ipfs_storage_provider import IPFSStorageProvider
 
 
 class TestLocalProviderFromEnv:

@@ -1,27 +1,27 @@
-"""APEXConfig — APEX-agent configuration (v1).
+"""ERC8183Config — ERC-8183 agent configuration (v1).
 
 Inherits ``wallet_provider`` + ``network`` plumbing from :class:`AgentConfig`
-and adds the three APEX-specific concerns:
+and adds the three ERC-8183-specific concerns:
 
 - ``storage``      — off-chain deliverable store.
 - ``service_price`` — minimum budget (in raw token units) this provider
-  will accept; used by ``APEXJobOps.verify_job`` (HTTP 402) and by the
+  will accept; used by ``ERC8183JobOps.verify_job`` (HTTP 402) and by the
   ``NegotiationHandler`` to advertise a floor in ``/negotiate`` responses.
 
 Contract-address overrides are NOT fields on this class. Use either:
 
-- Env vars ``APEX_COMMERCE_ADDRESS`` / ``APEX_ROUTER_ADDRESS`` /
-  ``APEX_POLICY_ADDRESS`` (applied in :meth:`effective_network`).
+- Env vars ``ERC8183_COMMERCE_ADDRESS`` / ``ERC8183_ROUTER_ADDRESS`` /
+  ``ERC8183_POLICY_ADDRESS`` (applied in :meth:`effective_network`).
 - A pre-built ``NetworkConfig`` passed as ``network=NetworkConfig(...)``
   (fully explicit, env overrides are ignored in this mode).
 
-Env var surface (module-scoped, ``APEX_`` prefix)
+Env var surface (module-scoped, ``ERC8183_`` prefix)
 -------------------------------------------------
-    APEX_COMMERCE_ADDRESS — override commerce_contract
-    APEX_ROUTER_ADDRESS   — override router_contract
-    APEX_POLICY_ADDRESS   — override policy_contract
-    APEX_SERVICE_PRICE    — minimum budget floor (raw token units)
-    APEX_AGENT_URL        — public base URL of this agent, e.g. "http://host:8003/apex"
+    ERC8183_COMMERCE_ADDRESS — override commerce_contract
+    ERC8183_ROUTER_ADDRESS   — override router_contract
+    ERC8183_POLICY_ADDRESS   — override policy_contract
+    ERC8183_SERVICE_PRICE    — minimum budget floor (raw token units)
+    ERC8183_AGENT_URL        — public base URL of this agent, e.g. "http://host:8003/erc8183"
                             (required when storage returns file:// scheme)
 
 Storage env vars (read by each provider's own ``from_env()``):
@@ -34,7 +34,7 @@ Global env vars consumed via :class:`AgentConfig`:
     NETWORK / RPC_URL / PRIVATE_KEY / WALLET_PASSWORD / WALLET_ADDRESS
 
 Payment token address is NOT configurable — it is immutable on the Commerce
-kernel and fetched at runtime via ``APEXClient.payment_token``.
+kernel and fetched at runtime via ``ERC8183Client.payment_token``.
 """
 
 from __future__ import annotations
@@ -52,12 +52,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-APEX_ENV_PREFIX = "APEX_"
+ERC8183_ENV_PREFIX = "ERC8183_"
 
 
 @dataclass
-class APEXConfig(AgentConfig):
-    """Configuration for an APEX agent (typically a provider).
+class ERC8183Config(AgentConfig):
+    """Configuration for an ERC-8183 agent (typically a provider).
 
     Primary API (see :class:`AgentConfig` for wallet + network fields):
         storage
@@ -68,12 +68,12 @@ class APEXConfig(AgentConfig):
 
     storage: StorageProvider | None = field(default=None, repr=False)
     service_price: str = "1000000000000000000"  # 1 token (18 decimals default)
-    agent_url: str | None = None  # public base URL of this agent, e.g. "http://host:8003/apex"
+    agent_url: str | None = None  # public base URL of this agent, e.g. "http://host:8003/erc8183"
 
     def __repr__(self) -> str:
         nc = self.effective_network
         return (
-            f"APEXConfig("
+            f"ERC8183Config("
             f"network='{nc.name}', "
             f"{self._wallet_info_repr()}, "
             f"commerce='{nc.commerce_contract[:10]}...', "
@@ -84,11 +84,11 @@ class APEXConfig(AgentConfig):
 
     @property
     def effective_network(self) -> NetworkConfig:
-        """Resolve ``network`` and overlay APEX-scoped env overrides.
+        """Resolve ``network`` and overlay ERC-8183-scoped env overrides.
 
         Overlay precedence (highest → lowest):
-            1. ``APEX_COMMERCE_ADDRESS`` / ``APEX_ROUTER_ADDRESS`` /
-               ``APEX_POLICY_ADDRESS`` env vars.
+            1. ``ERC8183_COMMERCE_ADDRESS`` / ``ERC8183_ROUTER_ADDRESS`` /
+               ``ERC8183_POLICY_ADDRESS`` env vars.
             2. ``RPC_URL`` env var (applied during preset resolution).
             3. Preset defaults from ``NETWORKS``.
 
@@ -100,9 +100,9 @@ class APEXConfig(AgentConfig):
             return base
         return self._with_network_overlay(
             base,
-            commerce_contract=get_env("COMMERCE_ADDRESS", prefix=APEX_ENV_PREFIX),
-            router_contract=get_env("ROUTER_ADDRESS", prefix=APEX_ENV_PREFIX),
-            policy_contract=get_env("POLICY_ADDRESS", prefix=APEX_ENV_PREFIX),
+            commerce_contract=get_env("COMMERCE_ADDRESS", prefix=ERC8183_ENV_PREFIX),
+            router_contract=get_env("ROUTER_ADDRESS", prefix=ERC8183_ENV_PREFIX),
+            policy_contract=get_env("POLICY_ADDRESS", prefix=ERC8183_ENV_PREFIX),
         )
 
     # ------------------------------------- convenience shorthand properties
@@ -133,11 +133,11 @@ class APEXConfig(AgentConfig):
     def from_env(
         cls,
         storage: "StorageProvider | None" = None,
-    ) -> APEXConfig:
-        """Load APEX configuration from the environment.
+    ) -> ERC8183Config:
+        """Load ERC-8183 configuration from the environment.
 
         Global env vars (``NETWORK``, wallet keys) are read via
-        :class:`AgentConfig`. APEX-specific fields use the ``APEX_`` prefix
+        :class:`AgentConfig`. ERC-8183-specific fields use the ``ERC8183_`` prefix
         and are resolved lazily by :meth:`effective_network` so the env is
         always the single source of truth.
 
@@ -150,7 +150,7 @@ class APEXConfig(AgentConfig):
         wallet_password = get_env("WALLET_PASSWORD") or ""
         if not wallet_password:
             raise ValueError(
-                "APEXConfig validation failed: WALLET_PASSWORD is required. "
+                "ERC8183Config validation failed: WALLET_PASSWORD is required. "
                 "Set WALLET_PASSWORD to encrypt/decrypt the wallet keystore."
             )
 
@@ -163,12 +163,12 @@ class APEXConfig(AgentConfig):
 
             if EVMWalletProvider.keystore_exists(address=wallet_address or None):
                 logger.info(
-                    "[APEXConfig] Loading wallet from existing keystore "
+                    "[ERC8183Config] Loading wallet from existing keystore "
                     "(PRIVATE_KEY not set)"
                 )
             else:
                 logger.info(
-                    "[APEXConfig] No PRIVATE_KEY and no keystore found — "
+                    "[ERC8183Config] No PRIVATE_KEY and no keystore found — "
                     "a new wallet will be auto-generated"
                 )
 
@@ -180,16 +180,16 @@ class APEXConfig(AgentConfig):
             network=get_env("NETWORK", "bsc-testnet"),
             storage=storage,
             service_price=get_env(
-                "SERVICE_PRICE", "1000000000000000000", prefix=APEX_ENV_PREFIX
+                "SERVICE_PRICE", "1000000000000000000", prefix=ERC8183_ENV_PREFIX
             ),
-            agent_url=get_env("AGENT_URL", prefix=APEX_ENV_PREFIX),
+            agent_url=get_env("AGENT_URL", prefix=ERC8183_ENV_PREFIX),
             **wallet_kwargs,
         )
 
     @classmethod
-    def from_env_optional(cls) -> APEXConfig | None:
+    def from_env_optional(cls) -> ERC8183Config | None:
         try:
             return cls.from_env()
         except ValueError as exc:
-            logger.info("[APEXConfig] APEX not configured: %s", exc)
+            logger.info("[ERC8183Config] ERC-8183 not configured: %s", exc)
             return None

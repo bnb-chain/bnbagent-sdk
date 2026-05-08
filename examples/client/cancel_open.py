@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from _helpers import banner, expiry_for, load_settings, make_client
 
-from bnbagent.apex import JobStatus
+from bnbagent.erc8183 import JobStatus
 
 
 def main() -> None:
@@ -21,7 +21,7 @@ def main() -> None:
     res = client.create_job(
         provider=s.provider_address,
         expired_at=expired_at,
-        description="APEX demo: cancel-open",
+        description="ERC-8183 demo: cancel-open",
     )
     job_id = res["jobId"]
     print(f"[client] createJob jobId={job_id}")

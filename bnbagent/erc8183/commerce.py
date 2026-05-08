@@ -1,7 +1,7 @@
-"""Thin Python wrapper around ``AgenticCommerceUpgradeable`` (the APEX v1 kernel).
+"""Thin Python wrapper around ``AgenticCommerceUpgradeable`` (the ERC-8183 kernel).
 
 This client is **low-level**: each method maps 1:1 to a Solidity function.
-Approval management and batching are intentionally left to ``APEXClient``
+Approval management and batching are intentionally left to ``ERC8183Client``
 (the facade) — ``CommerceClient`` only speaks raw kernel.
 
 Synchronous by design; async callers should use ``asyncio.to_thread(...)``.
@@ -260,7 +260,7 @@ class CommerceClient(ContractClientMixin):
         ]
 
     def get_deliverable_url(self, job_id: int) -> str | None:
-        """Deprecated. Use ``APEXClient.get_deliverable_url()`` instead.
+        """Deprecated. Use ``ERC8183Client.get_deliverable_url()`` instead.
 
         The URL is now read from the ``JobInitialised`` event on the policy
         contract (``optParams`` JSON field). This method has no policy address
@@ -268,6 +268,6 @@ class CommerceClient(ContractClientMixin):
         """
         logger.warning(
             "[CommerceClient] get_deliverable_url() is deprecated; "
-            "use APEXClient.get_deliverable_url() instead."
+            "use ERC8183Client.get_deliverable_url() instead."
         )
         return None

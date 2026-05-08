@@ -1,4 +1,4 @@
-"""Operator-side settle for a SUBMITTED APEX job — v1 helper.
+"""Operator-side settle for a SUBMITTED ERC-8183 job — v1 helper.
 
 The typical reason an agent operator runs this is to claim payment after
 the dispute window elapses without dispute (verdict = APPROVE). Settle
@@ -8,7 +8,7 @@ checks for the common operator workflow.
 
 NOTE: This is a v1 helper. A future ``bnbagent`` CLI will replace these
 ad-hoc per-task scripts with a unified subcommand surface (e.g.
-``bnbagent apex settle <jobId>``).
+``bnbagent erc8183 settle <jobId>``).
 
 Usage:
     uv run python scripts/settle.py <jobId>
@@ -38,8 +38,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from bnbagent.apex import APEXClient
-from bnbagent.apex.types import JobStatus, Verdict
+from bnbagent.erc8183 import ERC8183Client
+from bnbagent.erc8183.types import JobStatus, Verdict
 from bnbagent.wallets import EVMWalletProvider
 
 ROOT = Path(__file__).resolve().parent.parent  # examples/agent-server/
@@ -47,7 +47,7 @@ ROOT = Path(__file__).resolve().parent.parent  # examples/agent-server/
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Settle a SUBMITTED APEX job (v1 operator helper).",
+        description="Settle a SUBMITTED ERC-8183 job (v1 operator helper).",
     )
     parser.add_argument("job_id", type=int, help="On-chain jobId to settle")
     parser.add_argument(
@@ -64,10 +64,10 @@ def main() -> int:
         return 2
 
     wallet = EVMWalletProvider(password=wallet_password, private_key=private_key)
-    apex = APEXClient(wallet, network=os.getenv("NETWORK", "bsc-testnet"))
-    me = apex.address
+    erc8183 = ERC8183Client(wallet, network=os.getenv("NETWORK", "bsc-testnet"))
+    me = erc8183.address
 
-    job = apex.get_job(args.job_id)
+    job = erc8183.get_job(args.job_id)
 
     if job.status != JobStatus.SUBMITTED:
         print(
@@ -76,7 +76,7 @@ def main() -> int:
         )
         return 1
 
-    verdict, _reason = apex.get_verdict(args.job_id)
+    verdict, _reason = erc8183.get_verdict(args.job_id)
     if verdict == Verdict.PENDING:
         print(
             f"jobId={args.job_id} verdict is PENDING — wait until the dispute "
@@ -96,10 +96,10 @@ def main() -> int:
         )
 
     print(f"[settler={me}] settling jobId={args.job_id} (verdict={verdict.name}) ...")
-    result = apex.settle(args.job_id)
+    result = erc8183.settle(args.job_id)
     print(f"[settler] settle tx: {result['transactionHash']}")
 
-    final = apex.get_job(args.job_id)
+    final = erc8183.get_job(args.job_id)
     print(f"[settler] jobId={args.job_id} status -> {final.status.name}")
     return 0
 

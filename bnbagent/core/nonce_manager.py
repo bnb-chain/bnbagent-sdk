@@ -6,7 +6,7 @@ Production-grade nonce management for sequential blockchain transactions:
   - Local increment avoids RPC on every send
   - Auto re-syncs on nonce errors (too low, already known, underpriced)
   - Thread-safe via Lock (safe with asyncio.to_thread)
-  - Singleton per (rpc_url, account) — shared across APEXClient instances
+  - Singleton per (rpc_url, account) — shared across ERC8183Client instances
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ class NonceManager:
         """
         Get or create a NonceManager singleton for this account + RPC endpoint.
 
-        Two APEXClient instances sharing the same wallet and RPC will
+        Two ERC8183Client instances sharing the same wallet and RPC will
         automatically share the same NonceManager.
         """
         account = Web3.to_checksum_address(account)

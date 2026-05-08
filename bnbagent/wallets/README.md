@@ -8,7 +8,7 @@ objects accept a `WalletProvider` instance, making it straightforward to swap
 between different signing backends without changing application code.
 
 As of v0.2.0, `WalletProvider` is the **primary** way to configure signing
-across the SDK. Both `BNBAgentConfig` and `APEXConfig` accept
+across the SDK. Both `BNBAgentConfig` and `ERC8183Config` accept
 `wallet_provider=` directly, or auto-wrap `private_key` + `wallet_password`
 into an `EVMWalletProvider` at construction time (clearing the plaintext key
 immediately).
@@ -80,18 +80,18 @@ Raises `NotImplementedError` on instantiation.
 
 ## Config Auto-Wrap
 
-Both `BNBAgentConfig` and `APEXConfig` support a convenience pattern:
+Both `BNBAgentConfig` and `ERC8183Config` support a convenience pattern:
 
 ```python
-from bnbagent.apex.config import APEXConfig
+from bnbagent.erc8183.config import ERC8183Config
 from bnbagent.wallets import EVMWalletProvider
 
 # These are equivalent:
-config = APEXConfig(
+config = ERC8183Config(
     wallet_provider=EVMWalletProvider(password="pw", private_key="0x...", persist=False)
 )
 
-config = APEXConfig(private_key="0x...", wallet_password="pw")
+config = ERC8183Config(private_key="0x...", wallet_password="pw")
 # -> __post_init__ auto-wraps into EVMWalletProvider(persist=False)
 # -> private_key is cleared to "" (no plaintext retained)
 ```
@@ -125,12 +125,12 @@ class HardwareWalletProvider(WalletProvider):
   on first load.
 - Keystore files are saved with `0o600` permissions (owner read/write only).
 - `export_private_key()` logs a warning -- avoid calling it in production.
-- Config objects (`APEXConfig`, `BNBAgentConfig`) clear the `private_key`
+- Config objects (`ERC8183Config`, `BNBAgentConfig`) clear the `private_key`
   field to `""` immediately after wrapping into a `WalletProvider`. No
   plaintext private key is retained in config objects.
 
 ## Related
 
 - [`erc8004`](../erc8004/README.md) -- uses `WalletProvider` for agent registration.
-- [`apex`](../apex/README.md) -- uses `WalletProvider` via `APEXConfig` for job transactions.
+- [`erc8183`](../erc8183/README.md) -- uses `WalletProvider` via `ERC8183Config` for job transactions.
 - [`core`](../core/README.md) -- `ContractClientMixin` delegates signing to `WalletProvider`.

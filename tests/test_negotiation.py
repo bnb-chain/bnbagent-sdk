@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from bnbagent.apex.negotiation import (
+from bnbagent.erc8183.negotiation import (
     NegotiationHandler,
     NegotiationRequest,
     NegotiationResponse,
@@ -501,7 +501,7 @@ class TestNegotiationHandler:
 
     def test_negotiation_hash_is_keccak256_of_content(self):
         from web3 import Web3
-        from bnbagent.apex.negotiation import _build_description_content
+        from bnbagent.erc8183.negotiation import _build_description_content
 
         mock_wallet = MagicMock()
         mock_wallet.sign_message.return_value = {"signature": b"\xab" * 65}
@@ -544,21 +544,21 @@ class TestNegotiationHandler:
         assert result.accepted is False
         assert result.response.get("reason_code") == ReasonCode.AMBIGUOUS_TERMS
 
-    def test_from_apex_client(self):
+    def test_from_erc8183_client(self):
         mock_client = MagicMock()
         mock_client.payment_token = "0xTokenAddr"
-        handler = NegotiationHandler.from_apex_client(
-            apex_client=mock_client,
+        handler = NegotiationHandler.from_erc8183_client(
+            erc8183_client=mock_client,
             service_price="20000000000000000000",
         )
         assert handler._currency == "0xTokenAddr"
 
-    def test_from_apex_client_passes_wallet(self):
+    def test_from_erc8183_client_passes_wallet(self):
         mock_client = MagicMock()
         mock_client.payment_token = "0xTokenAddr"
         mock_wallet = MagicMock()
-        handler = NegotiationHandler.from_apex_client(
-            apex_client=mock_client,
+        handler = NegotiationHandler.from_erc8183_client(
+            erc8183_client=mock_client,
             service_price="20000000000000000000",
             wallet_provider=mock_wallet,
         )

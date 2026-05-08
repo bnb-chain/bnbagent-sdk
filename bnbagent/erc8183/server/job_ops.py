@@ -1,6 +1,6 @@
-"""APEXJobOps — async job lifecycle operations for APEX provider agents.
+"""ERC8183JobOps — async job lifecycle operations for ERC-8183 provider agents.
 
-Wraps ``APEXClient`` (synchronous) for use from async frameworks (FastAPI etc.).
+Wraps ``ERC8183Client`` (synchronous) for use from async frameworks (FastAPI etc.).
 All blocking web3 calls go through ``asyncio.to_thread(...)`` so the event loop
 is never blocked.
 
@@ -25,8 +25,8 @@ from ...config import NetworkConfig
 from ...core.config import get_env
 from ...storage.storage_provider import StorageProvider
 from ...wallets.wallet_provider import WalletProvider
-from ..client import APEXClient
-from ..config import APEX_ENV_PREFIX
+from ..client import ERC8183Client
+from ..config import ERC8183_ENV_PREFIX
 from ..schema import SCHEMA_VERSION, DeliverableManifest
 from ..types import JobStatus
 
@@ -38,7 +38,7 @@ _DEFAULT_MAX_METADATA_BYTES = 256 * 1024       # 256 KB
 
 
 def _read_int_env(key: str, default: int) -> int:
-    raw = get_env(key, prefix=APEX_ENV_PREFIX)
+    raw = get_env(key, prefix=ERC8183_ENV_PREFIX)
     if raw is None:
         return default
     try:
@@ -48,8 +48,8 @@ def _read_int_env(key: str, default: int) -> int:
         return value
     except ValueError:
         logger.warning(
-            "[APEXJobOps] %s%s=%r invalid, using default %d",
-            APEX_ENV_PREFIX, key, raw, default,
+            "[ERC8183JobOps] %s%s=%r invalid, using default %d",
+            ERC8183_ENV_PREFIX, key, raw, default,
         )
         return default
 
@@ -62,7 +62,7 @@ def _max_metadata_bytes() -> int:
     return _read_int_env("MAX_METADATA_BYTES", _DEFAULT_MAX_METADATA_BYTES)
 
 
-class APEXJobOps:
+class ERC8183JobOps:
     """Async job-lifecycle operations for a provider agent.
 
     Parameters
@@ -89,7 +89,7 @@ class APEXJobOps:
         agent_url: str | None = None,
     ) -> None:
         if wallet_provider is None:
-            raise ValueError("wallet_provider is required for APEXJobOps")
+            raise ValueError("wallet_provider is required for ERC8183JobOps")
 
         self._wallet_provider = wallet_provider
         self._network = network
@@ -97,7 +97,7 @@ class APEXJobOps:
         self._service_price = service_price
         self._agent_url = agent_url
 
-        self._client: APEXClient | None = None
+        self._client: ERC8183Client | None = None
         self._deliverable_urls: dict[int, str] = {}
         self._last_known_counter: int = 0
         self._startup_scan_done: bool = False
@@ -111,24 +111,24 @@ class APEXJobOps:
         Non-file:// URLs (ipfs://, https://, etc.) are passed through unchanged.
         file:// (or empty) URLs fall back to the agent's own HTTP endpoint
         ``{agent_url}/job/{job_id}/response``.  Raises RuntimeError when the
-        fallback is needed but APEX_AGENT_URL was not configured.
+        fallback is needed but ERC8183_AGENT_URL was not configured.
         """
         if storage_url and not storage_url.startswith("file://"):
             return storage_url
         if not self._agent_url:
             raise RuntimeError(
                 "Cannot publish deliverable: storage returned a non-public URL "
-                "and APEX_AGENT_URL is not set. "
-                "Set APEX_AGENT_URL to the agent's public base URL including /apex "
-                "(e.g. http://localhost:8003/apex)."
+                "and ERC8183_AGENT_URL is not set. "
+                "Set ERC8183_AGENT_URL to the agent's public base URL including /erc8183 "
+                "(e.g. http://localhost:8003/erc8183)."
             )
         return f"{self._agent_url.rstrip('/')}/job/{job_id}/response"
 
     # ----------------------------------------------------------- construction
 
-    def _get_client(self) -> APEXClient:
+    def _get_client(self) -> ERC8183Client:
         if self._client is None:
-            self._client = APEXClient(self._wallet_provider, self._network)
+            self._client = ERC8183Client(self._wallet_provider, self._network)
         return self._client
 
     @property
@@ -136,7 +136,7 @@ class APEXJobOps:
         return self._wallet_provider.address
 
     @property
-    def apex_client(self) -> APEXClient:
+    def erc8183_client(self) -> ERC8183Client:
         return self._get_client()
 
     # ------------------------------------------------------------- submission
@@ -189,17 +189,17 @@ class APEXJobOps:
                         "error_code": 413,
                     }
 
-            apex = self._get_client()
+            erc8183 = self._get_client()
 
-            chain_id = await asyncio.to_thread(lambda: apex.commerce.w3.eth.chain_id)
+            chain_id = await asyncio.to_thread(lambda: erc8183.commerce.w3.eth.chain_id)
             manifest = DeliverableManifest(
                 version=SCHEMA_VERSION,
                 job_id=job_id,
                 chain_id=chain_id,
                 contracts={
-                    "commerce": apex.commerce.address,
-                    "router": apex.router.address,
-                    "policy": apex.policy.address,
+                    "commerce": erc8183.commerce.address,
+                    "router": erc8183.router.address,
+                    "policy": erc8183.policy.address,
                 },
                 response={
                     "content": response_content,
@@ -212,15 +212,15 @@ class APEXJobOps:
 
             storage_url = ""
             if self._storage:
-                storage_url = await self._storage.upload(data, f"apex-job-{job_id}.json")
-                logger.info(f"[APEXJobOps] Deliverable uploaded: {storage_url}")
+                storage_url = await self._storage.upload(data, f"erc8183-job-{job_id}.json")
+                logger.info(f"[ERC8183JobOps] Deliverable uploaded: {storage_url}")
                 self._deliverable_urls[job_id] = storage_url
 
             public_url = self._public_deliverable_url(job_id, storage_url)
             result = await asyncio.to_thread(
-                apex.submit, job_id, deliverable, {"deliverable_url": public_url}
+                erc8183.submit, job_id, deliverable, {"deliverable_url": public_url}
             )
-            logger.info(f"[APEXJobOps] submit({job_id}) tx: {result['transactionHash']}")
+            logger.info(f"[ERC8183JobOps] submit({job_id}) tx: {result['transactionHash']}")
             return {
                 "success": True,
                 "txHash": result["transactionHash"],
@@ -228,7 +228,7 @@ class APEXJobOps:
                 "deliverable": Web3.to_hex(deliverable),
             }
         except Exception as exc:
-            logger.error(f"[APEXJobOps] submit({job_id}) failed: {exc}")
+            logger.error(f"[ERC8183JobOps] submit({job_id}) failed: {exc}")
             return {"success": False, "error": str(exc)}
 
     # ------------------------------------------------------------------ reads
@@ -250,7 +250,7 @@ class APEXJobOps:
                 "deliverable": Web3.to_hex(job.deliverable),
             }
         except Exception as exc:
-            logger.error(f"[APEXJobOps] get_job({job_id}) failed: {exc}")
+            logger.error(f"[ERC8183JobOps] get_job({job_id}) failed: {exc}")
             return {"success": False, "error": str(exc)}
 
     async def get_job_status(self, job_id: int) -> dict[str, Any]:
@@ -270,28 +270,28 @@ class APEXJobOps:
                 data = await self._storage.download(url)
                 return {"success": True, **data}
             except Exception as exc:
-                logger.warning(f"[APEXJobOps] get_response({job_id}) download failed: {exc}")
+                logger.warning(f"[ERC8183JobOps] get_response({job_id}) download failed: {exc}")
 
         if hasattr(self._storage, "_base"):
             try:
-                filepath = self._storage._base / f"apex-job-{job_id}.json"
+                filepath = self._storage._base / f"erc8183-job-{job_id}.json"
                 if filepath.exists():
                     data = json.loads(filepath.read_text(encoding="utf-8"))
                     return {"success": True, **data}
             except Exception as exc:
-                logger.warning(f"[APEXJobOps] get_response({job_id}) file read failed: {exc}")
+                logger.warning(f"[ERC8183JobOps] get_response({job_id}) file read failed: {exc}")
 
         try:
-            apex = self._get_client()
+            erc8183 = self._get_client()
             deliverable_url = await asyncio.to_thread(
-                apex.get_deliverable_url, job_id
+                erc8183.get_deliverable_url, job_id
             )
             if deliverable_url:
                 self._deliverable_urls[job_id] = deliverable_url
                 data = await self._storage.download(deliverable_url)
                 return {"success": True, **data}
         except Exception as exc:
-            logger.warning(f"[APEXJobOps] get_response({job_id}) on-chain fallback failed: {exc}")
+            logger.warning(f"[ERC8183JobOps] get_response({job_id}) on-chain fallback failed: {exc}")
 
         return {"success": False, "error": f"Response not found for job {job_id}"}
 
@@ -353,7 +353,7 @@ class APEXJobOps:
                     }
             except Exception as exc:
                 logger.warning(
-                    f"[APEXJobOps] dispute_window lookup failed; proceeding without "
+                    f"[ERC8183JobOps] dispute_window lookup failed; proceeding without "
                     f"submit-deadline check: {exc}"
                 )
 
@@ -426,10 +426,10 @@ class APEXJobOps:
         if not job_ids:
             return {"success": True, "jobs": []}
 
-        apex = self._get_client()
+        erc8183 = self._get_client()
         me = self.agent_address.lower()
 
-        jobs = await asyncio.to_thread(apex.commerce.get_jobs_batch, list(job_ids))
+        jobs = await asyncio.to_thread(erc8183.commerce.get_jobs_batch, list(job_ids))
 
         now = int(time.time())
         pending: list[dict[str, Any]] = []
@@ -438,7 +438,7 @@ class APEXJobOps:
                 continue
             if job.provider.lower() != me:
                 logger.debug(
-                    f"[APEXJobOps] job #{job.id} skipped: provider={job.provider} != agent={me}"
+                    f"[ERC8183JobOps] job #{job.id} skipped: provider={job.provider} != agent={me}"
                 )
                 self._pending_open_ids.discard(job.id)
                 continue
@@ -467,11 +467,11 @@ class APEXJobOps:
         return {"success": True, "jobs": pending}
 
     async def _startup_scan(self) -> dict[str, Any]:
-        apex = self._get_client()
+        erc8183 = self._get_client()
         try:
-            counter = await asyncio.to_thread(apex.commerce.job_counter)
+            counter = await asyncio.to_thread(erc8183.commerce.job_counter)
         except Exception as exc:
-            logger.warning(f"[APEXJobOps] startup scan counter failed: {exc}")
+            logger.warning(f"[ERC8183JobOps] startup scan counter failed: {exc}")
             self._startup_scan_done = True
             return {"success": False, "error": str(exc), "jobs": []}
 
@@ -483,7 +483,7 @@ class APEXJobOps:
         self._last_known_counter = counter
         self._startup_scan_done = True
         logger.info(
-            f"[APEXJobOps] Startup scan: {len(result['jobs'])} pending of {counter} total"
+            f"[ERC8183JobOps] Startup scan: {len(result['jobs'])} pending of {counter} total"
             f" (agent={self.agent_address})"
         )
         return result
@@ -494,8 +494,8 @@ class APEXJobOps:
             if not self._startup_scan_done:
                 return await self._startup_scan()
 
-            apex = self._get_client()
-            counter = await asyncio.to_thread(apex.commerce.job_counter)
+            erc8183 = self._get_client()
+            counter = await asyncio.to_thread(erc8183.commerce.job_counter)
             scan_set: set[int] = set()
             if counter > self._last_known_counter:
                 scan_set.update(range(self._last_known_counter + 1, counter + 1))
@@ -507,6 +507,6 @@ class APEXJobOps:
             self._last_known_counter = counter
             return result
         except Exception as exc:
-            logger.error(f"[APEXJobOps] get_pending_jobs failed: {exc}")
+            logger.error(f"[ERC8183JobOps] get_pending_jobs failed: {exc}")
             return {"success": False, "error": str(exc), "jobs": []}
 

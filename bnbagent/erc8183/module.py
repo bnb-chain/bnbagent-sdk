@@ -1,4 +1,4 @@
-"""APEX protocol module — Agent Payment Exchange Protocol."""
+"""ERC-8183 protocol module — ERC-8183 Protocol."""
 
 from __future__ import annotations
 
@@ -7,13 +7,13 @@ from typing import Any
 from ..core.module import BNBAgentModule, ModuleInfo
 
 
-class APEXModule(BNBAgentModule):
+class ERC8183Module(BNBAgentModule):
     def info(self) -> ModuleInfo:
         return ModuleInfo(
-            name="apex",
+            name="erc8183",
             version="0.1.0",
             description=(
-                "APEX Protocol — job lifecycle, escrow, negotiation, evaluation & settlement"
+                "ERC-8183 Protocol — job lifecycle, escrow, negotiation, evaluation & settlement"
             ),
             dependencies=("erc8004",),
         )
@@ -29,5 +29,5 @@ class APEXModule(BNBAgentModule):
         }
 
 
-def create_module() -> APEXModule:
-    return APEXModule()
+def create_module() -> ERC8183Module:
+    return ERC8183Module()

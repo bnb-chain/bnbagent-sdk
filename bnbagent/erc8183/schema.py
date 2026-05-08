@@ -1,4 +1,4 @@
-"""Canonical schema definitions for APEX v1 on-chain and off-chain data structures.
+"""Canonical schema definitions for ERC-8183 on-chain and off-chain data structures.
 
 Two public classes:
 
@@ -124,7 +124,7 @@ class DeliverableManifest:
 class JobDescription:
     """Structured form of ``job.description`` stored on-chain at ``createJob``.
 
-    Built by ``bnbagent.apex.negotiation.build_job_description`` and parsed
+    Built by ``bnbagent.erc8183.negotiation.build_job_description`` and parsed
     back by ``JobDescription.from_str``.
 
     Fields

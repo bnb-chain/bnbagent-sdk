@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 
 class LocalStorageProvider(StorageProvider):
+    uses_file_url = True
+
     def __init__(self, base_dir: str = ".agent-data"):
         self._base = Path(base_dir)
         try:

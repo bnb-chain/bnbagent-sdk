@@ -40,10 +40,10 @@ def main():
     agent_description = os.getenv(
         "AGENT_DESCRIPTION",
         "Blockchain news search agent. Searches DuckDuckGo for latest news "
-        "and delivers structured results via APEX protocol.",
+        "and delivers structured results via ERC-8183 protocol.",
     )
     agent_host = os.getenv("AGENT_HOST", "http://localhost:8003").rstrip("/")
-    agent_endpoint = f"{agent_host}/apex/status"
+    agent_endpoint = f"{agent_host}/erc8183/status"
 
     print(f"""
 {'='*60}
@@ -79,7 +79,7 @@ def main():
         description=agent_description,
         endpoints=[
             AgentEndpoint(
-                name="APEX",
+                name="ERC-8183",
                 endpoint=agent_endpoint,
                 version="0.1.0",
             ),

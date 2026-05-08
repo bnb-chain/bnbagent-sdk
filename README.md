@@ -7,9 +7,9 @@ Python SDK for building on-chain AI agents on BNB Chain — register identities,
 BNBAgent SDK provides two core capabilities:
 
 - **ERC-8004 (Agent Identity)** — Register your AI agent on-chain with a unique identity token, manage wallets, and make your agent discoverable. Registration is gas-free on BSC Testnet via MegaFuel paymaster sponsorship.
-- **APEX Protocol v1 (Agent Payment Exchange)** — A three-layer agentic commerce stack (AgenticCommerce kernel + EvaluatorRouter + OptimisticPolicy) where agents negotiate pricing, accept jobs, deliver work, and settle payment automatically. Uses optimistic settlement: silence past the dispute window is implicit approval, and clients can dispute within the window to trigger a whitelisted-voter quorum reject.
+- **ERC-8183 Protocol (Agentic Commerce)** — A three-layer agentic commerce stack (AgenticCommerce kernel + EvaluatorRouter + OptimisticPolicy) where agents negotiate pricing, accept jobs, deliver work, and settle payment automatically. Uses optimistic settlement: silence past the dispute window is implicit approval, and clients can dispute within the window to trigger a whitelisted-voter quorum reject.
 
-> **Relationship between ERC-8004 and APEX**: These two capabilities are independent. APEX does not require ERC-8004 registration — any wallet address can be a provider. ERC-8004 is recommended for agent discovery, but it is not a prerequisite for accepting and completing APEX jobs.
+> **Relationship between ERC-8004 and ERC-8183**: These two capabilities are independent. ERC-8183 provider. ERC-8004 is recommended for agent discovery, but it is not a prerequisite for accepting and completing ERC-8183 jobs.
 
 ## Installation
 
@@ -19,13 +19,13 @@ Install from [PyPI](https://pypi.org/project/bnbagent/):
 pip install bnbagent
 ```
 
-The base package includes ERC-8004 identity registration and the APEX client stack. Install optional extras for additional features:
+The base package includes ERC-8004 identity registration and the ERC-8183 client stack. Install optional extras for additional features:
 
 ```bash
-# APEX server components (FastAPI + Uvicorn)
+# ERC-8183 server components (FastAPI + Uvicorn)
 pip install "bnbagent[server]"
 
-# IPFS storage (recommended for production APEX agents)
+# IPFS storage (HTTP pinning service backend, e.g. Pinata)
 pip install "bnbagent[ipfs]"
 
 # All extras
@@ -35,10 +35,10 @@ pip install "bnbagent[server,ipfs]"
 ## Table of Contents
 
 - [What is ERC-8004?](#what-is-erc-8004)
-- [What is APEX?](#what-is-apex)
+- [What is ERC-8183?](#what-is-erc-8183)
 - [Quick Start: Register an Agent (ERC-8004)](#quick-start-register-an-agent-erc-8004)
-- [Quick Start: Run an APEX Agent Server](#quick-start-run-an-apex-agent-server)
-- [Quick Start: Use `APEXClient` from a Client](#quick-start-use-apexclient-from-a-client)
+- [Quick Start: Run an ERC-8183 Agent Server](#quick-start-run-an-erc-8183-agent-server)
+- [Quick Start: Use `ERC8183Client` from a Client](#quick-start-use-erc8183client-from-a-client)
 - [Configuration Reference](#configuration-reference)
 - [Architecture & Components](#architecture--components)
 - [Network & Contracts](#network--contracts)
@@ -59,9 +59,9 @@ pip install "bnbagent[server,ipfs]"
 
 **Gas-free registration**: On BSC Testnet, registration transactions are sponsored by [MegaFuel paymaster](https://docs.nodereal.io/docs/megafuel) — you don't need tBNB for gas.
 
-## What is APEX?
+## What is ERC-8183?
 
-**APEX (Agent Payment Exchange Protocol) v1** is a trustless commerce stack for AI agents built around [ERC-8183](https://eips.ethereum.org/EIPS/eip-8183) with a pluggable, UMA-style optimistic evaluator. Two agents — a **client** who pays and a **provider** who delivers — transact through three contracts:
+**ERC-8183 (ERC-8183 Protocol) v1** is a trustless commerce stack for AI agents built around [ERC-8183](https://eips.ethereum.org/EIPS/eip-8183) with a pluggable, UMA-style optimistic evaluator. Two agents — a **client** who pays and a **provider** who delivers — transact through three contracts:
 
 1. **AgenticCommerce** — the ERC-8183 kernel. Owns job state and escrow.
 2. **EvaluatorRouter** — the routing layer. Binds each job to a policy; doubles as `job.evaluator` and `job.hook`. `settle(jobId)` is permissionless and pulls the verdict.
@@ -76,9 +76,9 @@ pip install "bnbagent[server,ipfs]"
 | **Provider** | The agent that performs the work and submits a deliverable. |
 | **Escrow** | Payment tokens locked in the Commerce kernel on `fund`, released to provider on `complete` or refunded on `reject` / `claimRefund`. |
 | **Negotiation** | Off-chain HTTP exchange where client and provider agree on price / terms / deliverables. The agreed description is anchored on-chain. |
-| **Service Price** | The provider's minimum acceptable budget. Configured via `APEX_SERVICE_PRICE`. |
+| **Service Price** | The provider's minimum acceptable budget. Configured via `ERC8183_SERVICE_PRICE`. |
 | **Budget** | The amount the client sets via `setBudget` and then escrows via `fund`. |
-| **Deliverable** | The work output. Stored off-chain (IPFS); only the keccak256 hash goes on-chain. |
+| **Deliverable** | The work output. Stored off-chain via a `StorageProvider` (local file, IPFS, or custom backend); only the keccak256 hash goes on-chain. |
 | **Policy** | A contract implementing `IPolicy` that produces a verdict for a given job. `OptimisticPolicy` is the only v1 policy. |
 | **Dispute Window** | The grace period after `submit` during which the client can call `policy.dispute(jobId)`. Silence = approve. |
 | **Quorum** | Number of `voteReject` calls from whitelisted voters required to flip the verdict to REJECT. |
@@ -86,7 +86,7 @@ pip install "bnbagent[server,ipfs]"
 | **Platform Fee** | Basis points deducted from the budget on `complete` and sent to the platform treasury. |
 | **Expiry Refund** | `claimRefund(jobId)` after `expiredAt`. Non-pausable, non-hookable — the universal escape hatch. |
 
-### How APEX Works
+### How ERC-8183 Works
 
 ```
 Client                          Contracts                              Provider (your agent)
@@ -172,8 +172,8 @@ agent_uri = sdk.generate_agent_uri(
     description="AI agent for document processing",
     endpoints=[
         AgentEndpoint(
-            name="APEX",
-            endpoint="https://my-agent.example.com/apex/status",
+            name="ERC-8183",
+            endpoint="https://my-agent.example.com/erc8183/status",
             version="0.1.0",
         ),
     ],
@@ -185,7 +185,7 @@ print(f"Agent registered! ID: {result['agentId']}, TX: {result['transactionHash'
 
 ---
 
-## Quick Start: Run an APEX Agent Server
+## Quick Start: Run an ERC-8183 Agent Server
 
 Set up an agent server that accepts jobs, processes work, and gets paid.
 
@@ -194,74 +194,75 @@ Set up an agent server that accepts jobs, processes work, and gets paid.
 - `pip install "bnbagent[server,ipfs]"`
 - A `.env` file with your credentials (see [`examples/agent-server/.env.example`](examples/agent-server/.env.example))
 
-### Option 1: Standalone App (`create_apex_app`)
+### Option 1: Standalone App (`create_erc8183_app`)
 
 ```python
 # agent.py
-from bnbagent.apex.server import create_apex_app
+from bnbagent.erc8183.server import create_erc8183_app
 
 def execute_job(job: dict) -> str:
     """Called automatically for each FUNDED job. Return the deliverable string."""
     return f"Processed: {job['description']}"
 
-app = create_apex_app(on_job=execute_job)
-# Routes at /apex/negotiate, /apex/status, /apex/job/{id}, etc.
+app = create_erc8183_app(on_job=execute_job)
+# Routes at /erc8183/negotiate, /erc8183/status, /erc8183/job/{id}, etc.
 ```
 
 ```bash
 # .env
 WALLET_PASSWORD=your-secure-password
-PRIVATE_KEY=0x...                 # first run only; encrypted to ~/.bnbagent/wallets/
-STORAGE_PROVIDER=ipfs
-STORAGE_API_KEY=your-pinning-service-jwt
-APEX_SERVICE_PRICE=1000000000000000000 # 1 token (18 decimals)
+PRIVATE_KEY=0x...                                # first run only; encrypted to ~/.bnbagent/wallets/
+ERC8183_AGENT_URL=http://localhost:8003/erc8183  # required for LocalStorageProvider (default)
+ERC8183_SERVICE_PRICE=1000000000000000000        # 1 token (18 decimals)
+# To use IPFS instead, swap to IPFSStorageProvider in your service code and set:
+# STORAGE_API_KEY=your-pinning-service-jwt
 # Optional knobs (see env-var table below for full reference):
-# APEX_FUNDED_POLL_INTERVAL=30      # default poll cadence (s)
-# APEX_NEGOTIATE_RATE_LIMIT=120     # /negotiate per-IP request budget
-# APEX_NEGOTIATE_RATE_WINDOW=60     # rate-limit window (s)
-# APEX_MAX_RESPONSE_BYTES=5242880   # response_content cap (5 MB)
-# APEX_MAX_METADATA_BYTES=262144    # metadata cap (256 KB)
+# ERC8183_FUNDED_POLL_INTERVAL=30      # default poll cadence (s)
+# ERC8183_NEGOTIATE_RATE_LIMIT=120     # /negotiate per-IP request budget
+# ERC8183_NEGOTIATE_RATE_WINDOW=60     # rate-limit window (s)
+# ERC8183_MAX_RESPONSE_BYTES=5242880   # response_content cap (5 MB)
+# ERC8183_MAX_METADATA_BYTES=262144    # metadata cap (256 KB)
 ```
 
 ```bash
 uvicorn agent:app --port 8003
 ```
 
-`create_apex_app()` handles: wallet keystore, periodic on-chain poll for newly FUNDED jobs assigned to this provider, on-chain verification, calling your handler, uploading the deliverable to storage, and submitting on-chain. Jobs with `budget < service_price` are rejected with HTTP 402. Settle is permissionless — run a separate operator script to call `router.settle(jobId)` once the dispute window elapses.
+`create_erc8183_app()` handles: wallet keystore, periodic on-chain poll for newly FUNDED jobs assigned to this provider, on-chain verification, calling your handler, uploading the deliverable to storage, and submitting on-chain. Jobs with `budget < service_price` are rejected with HTTP 402. Settle is permissionless — run a separate operator script to call `router.settle(jobId)` once the dispute window elapses.
 
 ### Option 2: Mount on Existing App (sub-app)
 
 ```python
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
-from bnbagent.apex.server import create_apex_app
+from bnbagent.erc8183.server import create_erc8183_app
 
 def execute_job(job: dict) -> str:
     return f"Processed: {job['description']}"
 
-apex_app = create_apex_app(on_job=execute_job, prefix="")
+erc8183_app = create_erc8183_app(on_job=execute_job, prefix="")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await apex_app.state.startup()
+    await erc8183_app.state.startup()
     yield
 
 app = FastAPI(lifespan=lifespan)
-app.mount("/apex", apex_app)
+app.mount("/erc8183", erc8183_app)
 ```
 
-Starlette does not propagate lifespan events into mounted sub-apps; call `apex_app.state.startup()` from your parent lifespan to launch the funded-job poll loop.
+Starlette does not propagate lifespan events into mounted sub-apps; call `erc8183_app.state.startup()` from your parent lifespan to launch the funded-job poll loop.
 
 ### Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/apex/negotiate` | Price negotiation (off-chain). Returns a structured quote. Rate-limited per client IP. |
-| `GET`  | `/apex/job/{id}` | Job details from the Commerce kernel. |
-| `GET`  | `/apex/job/{id}/response` | Stored deliverable for a submitted job. |
-| `GET`  | `/apex/job/{id}/verify` | Verify a job is `FUNDED`, assigned to this provider, not expired, budget ok. |
-| `GET`  | `/apex/status` | Agent wallet, contract addresses, service price, payment token, decimals. |
-| `GET`  | `/apex/health` | Liveness check. |
+| `POST` | `/erc8183/negotiate` | Price negotiation (off-chain). Returns a structured quote. Rate-limited per client IP. |
+| `GET`  | `/erc8183/job/{id}` | Job details from the Commerce kernel. |
+| `GET`  | `/erc8183/job/{id}/response` | Stored deliverable for a submitted job. |
+| `GET`  | `/erc8183/job/{id}/verify` | Verify a job is `FUNDED`, assigned to this provider, not expired, budget ok. |
+| `GET`  | `/erc8183/status` | Agent wallet, contract addresses, service price, payment token, decimals. |
+| `GET`  | `/erc8183/health` | Liveness check. |
 
 ### `on_job` Callback
 
@@ -277,41 +278,41 @@ async def on_job(job: dict) -> tuple[str, dict]: ...
 
 ### Settle
 
-`router.settle(jobId)` is permissionless — any party can finalise a submitted job once its dispute window elapses. The SDK does not run an in-server settle loop; operators are expected to run a separate script that polls verdicts and calls `APEXClient.settle(jobId)` when ready.
+`router.settle(jobId)` is permissionless — any party can finalise a submitted job once its dispute window elapses. The SDK does not run an in-server settle loop; operators are expected to run a separate script that polls verdicts and calls `ERC8183Client.settle(jobId)` when ready.
 
 ---
 
-## Quick Start: Use `APEXClient` from a Client
+## Quick Start: Use `ERC8183Client` from a Client
 
-`APEXClient` is the high-level facade over the APEX v1 contract stack. Most callers only use the top-level methods; the sub-clients `apex.commerce`, `apex.router`, `apex.policy` are exposed for advanced use.
+`ERC8183Client` is the high-level facade over the ERC-8183 contract stack. Most callers only use the top-level methods; the sub-clients `erc8183.commerce`, `erc8183.router`, `erc8183.policy` are exposed for advanced use.
 
 ```python
-from bnbagent.apex import APEXClient, JobStatus
+from bnbagent.erc8183 import ERC8183Client, JobStatus
 from bnbagent.wallets import EVMWalletProvider
 
 wallet = EVMWalletProvider(password="your-password", private_key="0x...")
-apex = APEXClient(wallet, network="bsc-testnet")
+erc8183 = ERC8183Client(wallet, network="bsc-testnet")
 
 # Token helpers (payment token is fetched dynamically from the kernel).
-print("symbol:", apex.token_symbol())
-print("decimals:", apex.token_decimals())
-print("balance:", apex.token_balance())
+print("symbol:", erc8183.token_symbol())
+print("decimals:", erc8183.token_decimals())
+print("balance:", erc8183.token_balance())
 
 # Happy-path lifecycle.
-budget = 1 * (10 ** apex.token_decimals())
+budget = 1 * (10 ** erc8183.token_decimals())
 expired_at = int(time.time()) + 65 * 60
 
-res = apex.create_job(provider=provider_addr, expired_at=expired_at, description="task")
+res = erc8183.create_job(provider=provider_addr, expired_at=expired_at, description="task")
 job_id = res["jobId"]
 
-apex.register_job(job_id)                    # bind default policy (OptimisticPolicy)
-apex.set_budget(job_id, budget)
-apex.fund(job_id, budget)                    # floor-based auto-approve (100 U default)
+erc8183.register_job(job_id)                    # bind default policy (OptimisticPolicy)
+erc8183.set_budget(job_id, budget)
+erc8183.fund(job_id, budget)                    # floor-based auto-approve (100 U default)
 
 # ... provider submits ...
 
-apex.settle(job_id)                          # permissionless; anyone can call
-assert apex.get_job_status(job_id) == JobStatus.COMPLETED
+erc8183.settle(job_id)                          # permissionless; anyone can call
+assert erc8183.get_job_status(job_id) == JobStatus.COMPLETED
 ```
 
 ### `fund(job_id, amount, approve_floor=None)`
@@ -325,9 +326,9 @@ If the current allowance already covers `amount`, no approve is sent at all.
 ### Disputes
 
 ```python
-apex.dispute(job_id)        # client only; within dispute window
-apex.vote_reject(job_id)    # whitelisted voter only; after dispute
-apex.claim_refund(job_id)   # anyone, after expiredAt, no settlement reached
+erc8183.dispute(job_id)        # client only; within dispute window
+erc8183.vote_reject(job_id)    # whitelisted voter only; after dispute
+erc8183.claim_refund(job_id)   # anyone, after expiredAt, no settlement reached
 ```
 
 See [`examples/client/`](examples/client/) for the five canonical flows (happy, dispute-reject, stalemate-expire, never-submit, cancel-open).
@@ -345,22 +346,22 @@ See [`examples/client/`](examples/client/) for the five canonical flows (happy, 
 | `WALLET_ADDRESS` | No | Auto-select | Select a specific keystore when multiple exist. |
 | `NETWORK` | No | `bsc-testnet` | Network name. |
 | `RPC_URL` | No | Network default | Custom RPC endpoint. |
-| `APEX_COMMERCE_ADDRESS` | No | Network default | `AgenticCommerce` proxy override. |
-| `APEX_ROUTER_ADDRESS` | No | Network default | `EvaluatorRouter` proxy override. |
-| `APEX_POLICY_ADDRESS` | No | Network default | Policy contract override (defaults to `OptimisticPolicy`). |
-| `APEX_SERVICE_PRICE` | No | `1000000000000000000` (1 U) | Minimum acceptable budget, in raw units. |
-| `APEX_FUNDED_POLL_INTERVAL` | No | `30` | Seconds between funded-job poll passes (agent-server). |
-| `APEX_NEGOTIATE_RATE_LIMIT` | No | `120` | Max `/negotiate` requests per window per client IP. |
-| `APEX_NEGOTIATE_RATE_WINDOW` | No | `60` | Sliding-window length for `/negotiate` rate limit, in seconds. |
-| `APEX_MAX_RESPONSE_BYTES` | No | `5242880` (5 MB) | Cap on `response_content` size in `submit_result`. |
-| `APEX_MAX_METADATA_BYTES` | No | `262144` (256 KB) | Cap on serialised metadata size in `submit_result`. |
+| `ERC8183_COMMERCE_ADDRESS` | No | Network default | `AgenticCommerce` proxy override. |
+| `ERC8183_ROUTER_ADDRESS` | No | Network default | `EvaluatorRouter` proxy override. |
+| `ERC8183_POLICY_ADDRESS` | No | Network default | Policy contract override (defaults to `OptimisticPolicy`). |
+| `ERC8183_AGENT_URL` | If LocalStorageProvider | — | Agent's public base URL including `/erc8183`. Required when storage returns `file://` URLs; the SDK rewrites them to `{ERC8183_AGENT_URL}/job/{id}/response`. |
+| `ERC8183_SERVICE_PRICE` | No | `1000000000000000000` (1 U) | Minimum acceptable budget, in raw units. |
+| `ERC8183_FUNDED_POLL_INTERVAL` | No | `30` | Seconds between funded-job poll passes (agent-server). |
+| `ERC8183_NEGOTIATE_RATE_LIMIT` | No | `120` | Max `/negotiate` requests per window per client IP. |
+| `ERC8183_NEGOTIATE_RATE_WINDOW` | No | `60` | Sliding-window length for `/negotiate` rate limit, in seconds. |
+| `ERC8183_MAX_RESPONSE_BYTES` | No | `5242880` (5 MB) | Cap on `response_content` size in `submit_result`. |
+| `ERC8183_MAX_METADATA_BYTES` | No | `262144` (256 KB) | Cap on serialised metadata size in `submit_result`. |
 | `ERC8004_REGISTRY_ADDRESS` | No | Network default | ERC-8004 Identity Registry override. |
-| `STORAGE_PROVIDER` | No | `local` | Storage backend: `"local"` or `"ipfs"`. |
-| `STORAGE_API_KEY` | If IPFS | — | JWT / API key for the pinning service. |
+| `STORAGE_API_KEY` | If IPFSStorageProvider | — | JWT / API key for the pinning service. |
 | `STORAGE_GATEWAY_URL` | No | Pinata default | Custom IPFS gateway. |
 | `STORAGE_LOCAL_PATH` | No | `.agent-data` | Directory for local storage. |
 
-The **payment token address is NOT configurable** — it is immutable on the Commerce kernel and fetched at runtime via `APEXClient.payment_token`.
+The **payment token address is NOT configurable** — it is immutable on the Commerce kernel and fetched at runtime via `ERC8183Client.payment_token`.
 
 See [`.env.example`](.env.example) at the project root for the full surface with inline comments.
 
@@ -368,22 +369,39 @@ See [`.env.example`](.env.example) at the project root for the full surface with
 
 ## Architecture & Components
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full code map, module system, invariants, and data flows. The APEX v1 stack is split into:
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full code map, module system, invariants, and data flows. The ERC-8183 stack is split into:
 
-- `bnbagent/apex/client.py` — `APEXClient` facade (most callers use this).
-- `bnbagent/apex/commerce.py` — `CommerceClient` (low-level Commerce kernel).
-- `bnbagent/apex/router.py` — `RouterClient` (low-level Router).
-- `bnbagent/apex/policy.py` — `PolicyClient` (low-level OptimisticPolicy).
-- `bnbagent/apex/_erc20.py` — internal minimal ERC-20 client for the payment token.
-- `bnbagent/apex/server/` — FastAPI factory and async job ops with funded-job poll loop.
+- `bnbagent/erc8183/client.py` — `ERC8183Client` facade (most callers use this).
+- `bnbagent/erc8183/commerce.py` — `CommerceClient` (low-level Commerce kernel).
+- `bnbagent/erc8183/router.py` — `RouterClient` (low-level Router).
+- `bnbagent/erc8183/policy.py` — `PolicyClient` (low-level OptimisticPolicy).
+- `bnbagent/erc20/client.py` — `MinimalERC20Client` — payment-token helpers (decimals/balance/approve).
+- `bnbagent/erc8183/server/` — FastAPI factory and async job ops with funded-job poll loop.
 
 ### Wallet Providers
 
-`EVMWalletProvider` is the production implementation: Keystore V3 (scrypt + AES-128-CTR) with in-place encryption. Custom providers implement the `WalletProvider` ABC (`address`, `sign_transaction`, `sign_message`).
+Transaction signing is abstracted behind the `WalletProvider` ABC (`address`, `sign_transaction`, `sign_message`). All SDK clients and configs accept any `WalletProvider` instance — backends are pluggable without touching protocol code.
+
+**Built-in: `EVMWalletProvider`**
+- Keystore V3 encryption (scrypt + AES-128-CTR), interoperable with MetaMask / Geth.
+- Persistent mode (`persist=True`, default) — keystore at `~/.bnbagent/wallets/`, auto-loads on subsequent runs; generates a new wallet if no key is supplied.
+- In-memory mode (`persist=False`) — no disk I/O; used internally when configs auto-wrap a `private_key` + `wallet_password` pair.
+- Auto-wrap — `BNBAgentConfig`/`ERC8183Config` accept `private_key=` directly and wrap it into `EVMWalletProvider(persist=False)` in `__post_init__`, immediately zeroing the plaintext field.
+- Keystores written with `0o600` permissions; legacy plaintext state migrated to Keystore V3 on first load.
+
+**Extensibility** — subclass `WalletProvider` for HSMs, hardware wallets, multisig, MPC, or remote KMS backends. Inject via `wallet_provider=` on any config or client. `MPCWalletProvider` ships as a stub placeholder.
 
 ### Storage Providers
 
-Deliverables are stored off-chain; only the keccak256 hash goes on-chain. `LocalStorageProvider` for dev; `IPFSStorageProvider` (Pinata-compatible) for production.
+Deliverables live off-chain; only the `keccak256` hash is anchored on-chain. The `StorageProvider` ABC (`upload`, `download`, `exists`) is async and pluggable.
+
+**Built-in providers** (default: `LocalStorageProvider`):
+- `LocalStorageProvider` — JSON written to `STORAGE_LOCAL_PATH` (default `.agent-data/`); returns `file://` URLs that the SDK rewrites to `{ERC8183_AGENT_URL}/job/{id}/response` and serves via the agent's own ERC-8183 endpoint. Requires `ERC8183_AGENT_URL`.
+- `IPFSStorageProvider` — JSON pinned via an HTTP pinning service (Pinata-compatible); returns `ipfs://CID` URLs resolved through the configured gateway. Requires `STORAGE_API_KEY`.
+
+The choice is made in code (e.g. `examples/agent-server/src/service.py`); there is no `STORAGE_PROVIDER` env var.
+
+**Extensibility** — subclass `StorageProvider` for S3, Arweave, database, or proprietary backends. Inject via `storage=` on `ERC8183Config`.
 
 ---
 
@@ -412,9 +430,9 @@ Network is pre-configured in the SDK; protocol contracts are not yet deployed.
 
 | Example | Role | Description |
 |---------|------|-------------|
-| [`examples/client/`](examples/client/) | Client | Five stand-alone scripts for the canonical APEX flows: happy / dispute-reject / stalemate-expire / never-submit / cancel-open. |
+| [`examples/client/`](examples/client/) | Client | Five stand-alone scripts for the canonical ERC-8183 flows: happy / dispute-reject / stalemate-expire / never-submit / cancel-open. |
 | [`examples/voter/`](examples/voter/) | Voter | `voteReject` script + `Disputed` event watcher for whitelisted voters. |
-| [`examples/agent-server/`](examples/agent-server/) | Provider | FastAPI agent that searches blockchain news via DuckDuckGo. Demonstrates `create_apex_app()`, the funded-job poll loop, and ERC-8004 registration. |
+| [`examples/agent-server/`](examples/agent-server/) | Provider | FastAPI agent that searches blockchain news via DuckDuckGo. Demonstrates `create_erc8183_app()`, the funded-job poll loop, and ERC-8004 registration. |
 
 ---
 
@@ -439,7 +457,7 @@ Network is pre-configured in the SDK; protocol contracts are not yet deployed.
 | `403 Provider mismatch` | Not assigned to this job | Check `job.provider`. |
 | `409 Not FUNDED` | Wrong job status | Job may already be submitted / settled. |
 | `408 Job expired` | Past `expiredAt` | Create a new job; client can `claimRefund` the old one. |
-| `402 Budget below service price` | `budget < APEX_SERVICE_PRICE` | Client must create a job with a higher budget (visible at `GET /apex/status`). |
+| `402 Budget below service price` | `budget < ERC8183_SERVICE_PRICE` | Client must create a job with a higher budget (visible at `GET /erc8183/status`). |
 | `router.settle` reverts with `policy pending` | Dispute window hasn't elapsed and no dispute was raised | Wait until `policy.check(jobId)` returns a non-PENDING verdict, then retry. |
 | `voteReject` reverts with `not voter` / `not disputed` | Caller not whitelisted, or no dispute exists | Use [`examples/voter/vote_reject.py`](examples/voter/vote_reject.py) — it validates before sending. |
 

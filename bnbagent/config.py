@@ -6,7 +6,7 @@ Exports:
   addresses for every module that uses on-chain state).
 - :func:`resolve_network` — looks up a preset by name, with an optional
   ``RPC_URL`` env override. **Module-specific contract overrides live in
-  their own module configs** (e.g. ``APEXConfig``, ``get_erc8004_config``),
+  their own module configs** (e.g. ``ERC8183Config``, ``get_erc8004_config``),
   not here.
 - :class:`BNBAgentConfig` — top-level SDK facade; composes modules via
   :class:`ModuleRegistry`. Inherits wallet + network plumbing from
@@ -15,7 +15,7 @@ Exports:
 Env var surface
 ---------------
 ``resolve_network`` is intentionally narrow: it only reads ``RPC_URL``.
-Module-scoped env vars (``APEX_COMMERCE_ADDRESS``, ``ERC8004_REGISTRY_ADDRESS``,
+Module-scoped env vars (``ERC8183_COMMERCE_ADDRESS``, ``ERC8004_REGISTRY_ADDRESS``,
 ``STORAGE_*``, ...) are owned by the corresponding module config. The
 project-root ``.env.example`` is the authoritative reference.
 """
@@ -35,10 +35,10 @@ logger = logging.getLogger(__name__)
 class NetworkConfig:
     """Per-network configuration with ALL protocol addresses.
 
-    APEX v1 is a three-contract stack: AgenticCommerce kernel (escrow),
+    ERC-8183 is a three-contract stack: AgenticCommerce kernel (escrow),
     EvaluatorRouter (routing + hook), and OptimisticPolicy (silence-approves,
     vote-rejects). Payment token is NOT configured here — it is immutable
-    on the Commerce kernel and read at runtime via ``APEXClient.payment_token``.
+    on the Commerce kernel and read at runtime via ``ERC8183Client.payment_token``.
     """
 
     name: str
@@ -48,7 +48,7 @@ class NetworkConfig:
     use_paymaster: bool = False
     # ERC-8004 Identity Registry
     registry_contract: str = ""
-    # APEX v1 stack
+    # ERC-8183 stack
     commerce_contract: str = ""
     router_contract: str = ""
     policy_contract: str = ""
@@ -85,7 +85,7 @@ def resolve_network(network: str | NetworkConfig = "bsc-testnet") -> NetworkConf
     concrete ``NetworkConfig`` instance:
 
     - **String** → look up the preset; apply ``RPC_URL`` env override if set.
-      Module-scoped contract-address envs (``APEX_*``, ``ERC8004_*``) are
+      Module-scoped contract-address envs (``ERC8183_*``, ``ERC8004_*``) are
       NOT read here — they belong to each module's own config loader.
     - **NetworkConfig** → returned as-is; env vars are never applied (fully
       explicit control is the point of passing an object).
@@ -146,7 +146,7 @@ class BNBAgentConfig(AgentConfig):
         )
 
     def get(self, key: str, default: Any = None) -> Any:
-        """Get a config value. Supports dotted keys: ``'apex.service_price'``."""
+        """Get a config value. Supports dotted keys: ``'erc8183.service_price'``."""
         if "." in key:
             module_name, sub_key = key.split(".", 1)
             return self.modules.get(module_name, {}).get(sub_key, default)

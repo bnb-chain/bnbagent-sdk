@@ -12,7 +12,7 @@ _ABI_DIR = Path(__file__).parent / "abis"
 
 def load_erc20_abi() -> list:
     """Load minimal ERC20 ABI (approve, balanceOf, allowance, transfer, allocateTo, decimals)."""
-    with open(_ABI_DIR / "ERC20.json") as f:
+    with open(Path(__file__).parent.parent / "erc20" / "abis" / "ERC20.json") as f:
         return json.load(f)
 
 

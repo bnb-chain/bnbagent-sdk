@@ -118,4 +118,4 @@ Override with env vars when needed:
 
 - [`wallets`](../wallets/README.md) -- wallet providers used for signing.
 - [`core`](../core/README.md) -- paymaster, nonce manager, module system.
-- [`apex`](../apex/README.md) -- APEX commerce protocol built on top of agent identities.
+- [`erc8183`](../erc8183/README.md) -- ERC-8183 protocol built on top of agent identities.

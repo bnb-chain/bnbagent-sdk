@@ -1,6 +1,6 @@
-"""Shared types and constants for the APEX SDK.
+"""Shared types and constants for the ERC-8183 SDK.
 
-Mirrors the enums and reason codes defined by the APEX v1 contract stack:
+Mirrors the enums and reason codes defined by the ERC-8183 contract stack:
 
 - ``JobStatus`` — order-dependent with ``IACP.JobStatus`` in the Solidity kernel.
 - ``Verdict`` — order-dependent with ``VERDICT_*`` constants in
@@ -9,7 +9,7 @@ Mirrors the enums and reason codes defined by the APEX v1 contract stack:
   by ``OptimisticPolicy``; also re-exported as hex strings for logging.
 
 Any change to the on-chain enum / constant layout MUST be reflected here,
-otherwise ``APEXClient.get_job(...).status`` and verdict comparisons will
+otherwise ``ERC8183Client.get_job(...).status`` and verdict comparisons will
 silently drift.
 """
 

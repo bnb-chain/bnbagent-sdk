@@ -24,7 +24,7 @@ re-exported from `bnbagent.core` for convenience.
   logic with automatic nonce management and exponential-backoff retry on
   rate-limit and nonce errors. Prefers `WalletProvider.sign_transaction()`
   when available, falls back to raw `private_key` signing. Used by
-  `APEXClient`, `CommerceClient`, `RouterClient`, and `PolicyClient`.
+  `ERC8183Client`, `CommerceClient`, `RouterClient`, and `PolicyClient`.
 - **ModuleRegistry** -- discovers, validates dependencies, and initializes
   `BNBAgentModule` plugins. Supports built-in modules, explicit
   registration, and `pyproject.toml` entry points.
@@ -114,6 +114,6 @@ my_module = "my_package:create_module"
 ## Related
 
 - [`erc8004`](../erc8004/README.md) -- ERC-8004 module, uses `Paymaster` and `ModuleRegistry`.
-- [`apex`](../apex/README.md) -- APEX module, uses `ContractClientMixin` and `NonceManager`.
+- [`erc8183`](../erc8183/README.md) -- ERC-8183 module, uses `ContractClientMixin` and `NonceManager`.
 - [`wallets`](../wallets/README.md) -- `ContractClientMixin` delegates signing to `WalletProvider`.
 - [`storage`](../storage/README.md) -- off-chain storage used alongside core infra.

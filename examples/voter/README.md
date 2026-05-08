@@ -1,6 +1,6 @@
 # Voter example
 
-A whitelisted voter participates in APEX's optimistic policy by casting
+A whitelisted voter participates in ERC-8183's optimistic policy by casting
 `voteReject` on jobs the client has disputed. Voters **cannot approve** —
 silence past the dispute window is implicit approval.
 

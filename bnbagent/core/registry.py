@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # Built-in modules that are always available
 _BUILTIN_MODULES: dict[str, str] = {
     "erc8004": "bnbagent.erc8004",
-    "apex": "bnbagent.apex",
+    "erc8183": "bnbagent.erc8183",
 }
 
 

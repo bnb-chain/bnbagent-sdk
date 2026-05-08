@@ -14,7 +14,7 @@ unified async API.
 | `LocalStorageProvider` | `bnbagent.storage` | Development / local testing |
 | `IPFSStorageProvider` | `bnbagent.storage` | Production (Pinata-compatible IPFS) |
 
-Custom backends: subclass `StorageProvider` and inject via `APEXConfig(storage=...)`.
+Custom backends: subclass `StorageProvider` and inject via `ERC8183Config(storage=...)`.
 
 ## Quick Start
 
@@ -51,7 +51,7 @@ happens in the caller (e.g. the startup script), not in the SDK:
 ```python
 import os
 from bnbagent.storage import LocalStorageProvider, IPFSStorageProvider
-from bnbagent.apex.config import APEXConfig
+from bnbagent.erc8183.config import ERC8183Config
 
 storage_type = (os.getenv("STORAGE_PROVIDER") or "local").lower()
 if storage_type == "ipfs":
@@ -61,7 +61,7 @@ elif storage_type == "local":
 else:
     raise SystemExit(f"Unknown STORAGE_PROVIDER={storage_type!r}")
 
-config = APEXConfig.from_env(storage=storage)
+config = ERC8183Config.from_env(storage=storage)
 ```
 
 ### `LocalStorageProvider` env vars
@@ -110,9 +110,9 @@ to inject any `WalletProvider` subclass, storage has `LocalStorageProvider` /
 `IPFSStorageProvider` plus arbitrary custom backends.
 
 Subclass `StorageProvider`, implement the three async methods, and inject via
-`APEXConfig(storage=MyStorage(...))`. The SDK doesn't care about the implementation —
+`ERC8183Config(storage=MyStorage(...))`. The SDK doesn't care about the implementation —
 only that `upload()` returns a URL the client/voter can fetch (or that
-`APEX_AGENT_URL` is set to let the agent serve it via its own HTTP endpoint).
+`ERC8183_AGENT_URL` is set to let the agent serve it via its own HTTP endpoint).
 
 **Example — SQLite backend (30 lines):**
 
@@ -167,7 +167,7 @@ Inject it:
 
 ```python
 storage = SQLiteStorageProvider("agent.db", "https://my-agent.example.com/deliverables")
-config = APEXConfig.from_env(storage=storage)
+config = ERC8183Config.from_env(storage=storage)
 ```
 
 ## Content Hashing
@@ -184,5 +184,5 @@ to ensure deterministic output regardless of dict ordering.
 
 ## Related
 
-- [`apex`](../apex/README.md) — uses `StorageProvider` for deliverable persistence.
+- [`erc8183`](../erc8183/README.md) — uses `StorageProvider` for deliverable persistence.
 - [`core`](../core/README.md) — module system and shared infrastructure.

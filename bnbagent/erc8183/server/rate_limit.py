@@ -1,4 +1,4 @@
-"""In-memory sliding-window rate limiter used by public APEX endpoints.
+"""In-memory sliding-window rate limiter used by public ERC-8183 endpoints.
 
 The agent server's `/negotiate` endpoint signs negotiation hashes with the
 provider's wallet on every accepted request. Without throttling, any caller
