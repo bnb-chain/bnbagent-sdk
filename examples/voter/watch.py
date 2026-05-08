@@ -111,11 +111,7 @@ def handle_disputed_job(
         print(f"  hash ok  : {'✓' if hash_ok else '✗ MISMATCH'}")
         print(f"\n--- Deliverable content (job_id={manifest.job_id}) ---")
         content = manifest.response.get("content", "")
-        if len(content) > 2000:
-            print(content[:2000])
-            print(f"\n  ... [{len(content) - 2000} more chars]")
-        else:
-            print(content)
+        print(content)
         print("---")
     else:
         print("  (no manifest available for review)")
