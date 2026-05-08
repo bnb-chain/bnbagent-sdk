@@ -54,7 +54,23 @@ logger = logging.getLogger("blockchain_news")
 # Configuration
 # ---------------------------------------------------------------------------
 
-config = APEXConfig.from_env()
+# Resolve storage backend from STORAGE_PROVIDER env before building config.
+# The SDK default is LocalStorageProvider; override here to select IPFS or
+# any custom StorageProvider subclass without modifying the SDK itself.
+_storage_type = (os.getenv("STORAGE_PROVIDER") or "local").lower()
+if _storage_type == "ipfs":
+    from bnbagent.storage_providers import IPFSStorageProvider
+    _storage = IPFSStorageProvider.from_env()
+elif _storage_type == "local":
+    from bnbagent.storage_providers import LocalStorageProvider
+    _storage = LocalStorageProvider.from_env()
+else:
+    raise SystemExit(
+        f"Unknown STORAGE_PROVIDER={_storage_type!r}; expected 'local' or 'ipfs'. "
+        "For custom backends, instantiate your StorageProvider subclass and pass to APEXConfig(storage=...)."
+    )
+
+config = APEXConfig.from_env(storage=_storage)
 PORT = int(os.getenv("PORT", "8003"))
 
 # ---------------------------------------------------------------------------
@@ -143,13 +159,7 @@ app = create_apex_app(config=config, on_job=process_task)
 # Startup banner — printed at import time so it shows regardless of how
 # the server is launched (run_agent.py, uvicorn CLI, __main__, etc.)
 # ---------------------------------------------------------------------------
-from bnbagent.storage_providers.ipfs_provider import IPFSStorageProvider as _IPFS
-
-_storage_info = "local (default)"
-if isinstance(config.storage, _IPFS):
-    _storage_info = f"IPFS via Pinata  (gateway: {config.storage._gateway})"
-elif config.storage:
-    _storage_info = type(config.storage).__name__
+_storage_info = type(_storage).__name__
 
 print(f"""
 {'='*55}

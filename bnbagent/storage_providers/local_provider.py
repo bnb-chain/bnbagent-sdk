@@ -23,34 +23,25 @@ class LocalStorageProvider(StorageProvider):
         self._base = Path(base_dir)
         try:
             self._base.mkdir(parents=True, exist_ok=True)
-            # Restrict directory permissions to owner only (rwx------)
             os.chmod(self._base, stat.S_IRWXU)
         except OSError as e:
             raise StorageError(f"Failed to create storage directory '{base_dir}': {e}") from e
 
-    async def upload(self, data: dict, filename: str | None = None) -> str:
-        return self.save_sync(data, filename)
+    @classmethod
+    def from_env(cls) -> LocalStorageProvider:
+        return cls(base_dir=os.getenv("STORAGE_LOCAL_PATH") or ".agent-data")
 
-    def save_sync(self, data: dict, filename: str | None = None) -> str:
-        """Synchronous save — usable from non-async contexts."""
+    async def upload(self, data: dict, filename: str | None = None) -> str:
         try:
             content = json.dumps(data, sort_keys=True, separators=(",", ":"))
-
-            # Use provided filename or generate from job.id or hash
             if filename:
                 fname = filename if filename.endswith(".json") else f"{filename}.json"
             else:
                 job_data = data.get("job", {})
                 job_id = job_data.get("id") if isinstance(job_data, dict) else None
-                if job_id:
-                    fname = f"job-{job_id}.json"
-                else:
-                    hash_hex = self.compute_hash(data).hex()
-                    fname = f"{hash_hex}.json"
-
+                fname = f"job-{job_id}.json" if job_id else f"{self.compute_hash(data).hex()}.json"
             filepath = self._base / fname
             filepath.write_text(content, encoding="utf-8")
-            # Restrict file permissions to owner only (rw-------)
             os.chmod(filepath, stat.S_IRUSR | stat.S_IWUSR)
             logger.info(f"[LocalStorageProvider] Saved to {filepath}")
             return f"file://{filepath.resolve()}"

@@ -7,8 +7,8 @@ Requires `httpx` (optional dependency).
 
 from __future__ import annotations
 
-import asyncio
 import logging
+import os
 import re
 
 import httpx
@@ -39,23 +39,16 @@ class IPFSStorageProvider(StorageProvider):
         self._api_key = pinning_api_key
         self._gateway = gateway_url.rstrip("/")
 
-    def save_sync(self, data: dict, filename: str | None = None) -> str:
-        """
-        Synchronous upload for callers that are NOT in an async context.
-
-        Runs ``upload()`` in a new event loop on a background thread via
-        ``concurrent.futures.ThreadPoolExecutor``.  This is safe to call from
-        any synchronous code path regardless of whether an event loop exists
-        on the current thread.
-
-        **Async callers should use ``await upload()`` directly** — this method
-        exists only for purely synchronous call sites.
-        """
-        import concurrent.futures
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(asyncio.run, self.upload(data, filename))
-            return future.result()
+    @classmethod
+    def from_env(cls) -> IPFSStorageProvider:
+        api_key = os.getenv("STORAGE_API_KEY")
+        if not api_key:
+            raise ValueError("STORAGE_API_KEY required for IPFSStorageProvider")
+        return cls(
+            pinning_api_url=os.getenv("STORAGE_API_URL") or "https://api.pinata.cloud/pinning/pinJSONToIPFS",
+            pinning_api_key=api_key,
+            gateway_url=os.getenv("STORAGE_GATEWAY_URL") or "https://gateway.pinata.cloud/ipfs/",
+        )
 
     async def upload(self, data: dict, filename: str | None = None) -> str:
         headers = {

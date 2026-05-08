@@ -21,6 +21,14 @@ Env var surface (module-scoped, ``APEX_`` prefix)
     APEX_ROUTER_ADDRESS   — override router_contract
     APEX_POLICY_ADDRESS   — override policy_contract
     APEX_SERVICE_PRICE    — minimum budget floor (raw token units)
+    APEX_AGENT_URL        — public base URL of this agent, e.g. "http://host:8003/apex"
+                            (required when storage returns file:// scheme)
+
+Storage env vars (read by each provider's own ``from_env()``):
+    STORAGE_LOCAL_PATH  — base directory for LocalStorageProvider (default: .agent-data)
+    STORAGE_API_KEY     — API key / JWT for IPFSStorageProvider
+    STORAGE_API_URL     — pin service URL for IPFSStorageProvider
+    STORAGE_GATEWAY_URL — IPFS gateway URL for IPFSStorageProvider
 
 Global env vars consumed via :class:`AgentConfig`:
     NETWORK / RPC_URL / PRIVATE_KEY / WALLET_PASSWORD / WALLET_ADDRESS
@@ -122,13 +130,22 @@ class APEXConfig(AgentConfig):
     # ---------------------------------------------------------------- loaders
 
     @classmethod
-    def from_env(cls) -> APEXConfig:
+    def from_env(
+        cls,
+        storage: "StorageProvider | None" = None,
+    ) -> APEXConfig:
         """Load APEX configuration from the environment.
 
         Global env vars (``NETWORK``, wallet keys) are read via
         :class:`AgentConfig`. APEX-specific fields use the ``APEX_`` prefix
         and are resolved lazily by :meth:`effective_network` so the env is
         always the single source of truth.
+
+        Args:
+            storage: Optional pre-built ``StorageProvider`` instance.  When
+                ``None`` (the default) ``LocalStorageProvider.from_env()`` is
+                used.  Pass an explicit instance to use IPFS, a custom DB
+                backend, or any other ``StorageProvider`` subclass.
         """
         wallet_password = get_env("WALLET_PASSWORD") or ""
         if not wallet_password:
@@ -155,10 +172,9 @@ class APEXConfig(AgentConfig):
                     "a new wallet will be auto-generated"
                 )
 
-        from ..storage_providers.factory import create_storage_provider
-        from ..storage_providers.config import StorageConfig
-
-        storage = create_storage_provider(StorageConfig.from_env())
+        if storage is None:
+            from ..storage_providers import LocalStorageProvider
+            storage = LocalStorageProvider.from_env()
 
         return cls(
             network=get_env("NETWORK", "bsc-testnet"),
