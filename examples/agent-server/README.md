@@ -36,8 +36,9 @@ cp .env.example .env
 |----------|-------------|
 | `WALLET_PASSWORD` | Keystore encryption password |
 | `PRIVATE_KEY` | Agent wallet private key (first run only; encrypted to `~/.bnbagent/wallets/`) |
-| `STORAGE_PROVIDER` | `ipfs` to use Pinata |
-| `STORAGE_API_KEY` | Pinata JWT token |
+| `STORAGE_PROVIDER` | `local` (default) or `ipfs` — read by the startup script; see below |
+| `STORAGE_API_KEY` | Pinata JWT token (required when `STORAGE_PROVIDER=ipfs`) |
+| `APEX_AGENT_URL` | Agent's public base URL including `/apex` (required when `STORAGE_PROVIDER=local`, e.g. `http://localhost:8003/apex`) |
 | `APEX_SERVICE_PRICE` | Minimum acceptable budget in raw units (e.g. `1000000000000000000` = 1 U) |
 
 ### Optional overrides
@@ -55,6 +56,20 @@ APEX_NEGOTIATE_RATE_WINDOW=60   rate-limit window (seconds)
 APEX_MAX_RESPONSE_BYTES=5242880 response_content cap (5 MB)
 APEX_MAX_METADATA_BYTES=262144  metadata cap (256 KB)
 ```
+
+### Storage backends
+
+`STORAGE_PROVIDER` is read by `service.py` / `service_mount.py` at startup and
+determines which `StorageProvider` is injected into the SDK:
+
+| `STORAGE_PROVIDER` | Provider used | On-chain `deliverable_url` |
+|-|-|-|
+| `local` (default) | `LocalStorageProvider` — writes JSON to disk | `{APEX_AGENT_URL}/job/{id}/response` (agent serves via HTTP) |
+| `ipfs` | `IPFSStorageProvider` — pins to Pinata | `ipfs://CID` |
+
+For a custom storage backend (MySQL, S3, your own CDN, etc.), instantiate your
+`StorageProvider` subclass in `service.py` and pass it to `APEXConfig.from_env(storage=...)`
+directly — `STORAGE_PROVIDER` is not required.
 
 ## Usage
 
@@ -120,12 +135,18 @@ longer `PENDING` before sending the transaction. If the loaded wallet is
 not `job.provider` it prints a warning but still proceeds, since settle
 is permissionless. (A future `bnbagent` CLI will subsume this script.)
 
-## IPFS Storage
+## Deliverable Storage
 
-Deliverables are pinned to IPFS via Pinata as JSON files named `apex-job-{id}`.
-Each pin contains the full `DeliverableManifest` (job metadata + response
-content). The `ipfs://CID` URL is stored on-chain in `optParams` so voters
-and clients can download and verify the manifest independently.
+The agent builds a `DeliverableManifest` (job metadata + response content) for
+each job, uploads it via the configured `StorageProvider`, and stores the URL
+on-chain in `optParams.deliverable_url` so voters and clients can download and
+verify the manifest independently.
+
+- **`local`** — JSON written to `.agent-data/` (default). The SDK rewrites the
+  `file://` URL to `{APEX_AGENT_URL}/job/{id}/response` before submitting;
+  the agent serves the file via `GET /apex/job/{id}/response`.
+- **`ipfs`** — JSON pinned to IPFS via Pinata as `apex-job-{id}`. The `ipfs://CID`
+  URL is stored on-chain and resolved via the configured gateway.
 
 ## Testing Without APEX
 

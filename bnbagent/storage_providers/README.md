@@ -3,88 +3,172 @@
 ## Overview
 
 The `storage_providers` module provides a pluggable off-chain storage interface for the
-bnbagent SDK. On-chain contracts store only content hashes; full data (service
-records, deliverables, metadata) lives off-chain. Implementations handle
-upload, download, and existence checks through a unified async API.
+bnbagent SDK. On-chain contracts store only content hashes; full deliverable data lives
+off-chain. Implementations handle upload, download, and existence checks through a
+unified async API.
 
-## Key Concepts
+## Built-in providers
 
-- **StorageProvider interface** -- an async abstract base class with three
-  methods: `upload()`, `download()`, and `exists()`. A static
-  `compute_hash()` helper produces `keccak256` digests for on-chain
-  verification.
-- **StorageConfig** -- a dataclass that centralizes storage settings. Use
-  `StorageConfig.from_env()` to load from environment variables, then pass
-  the config to `create_storage_provider()` to get the right provider.
-- **Local vs IPFS** -- `LocalStorageProvider` writes JSON files to disk
-  (`file://` URLs) for development. `IPFSStorageProvider` pins JSON via an
-  HTTP API (Pinata-compatible) and returns `ipfs://` URLs for production.
-- **Sync bridge** -- both providers offer a `save_sync()` convenience method
-  for callers that are not in an async context.
+| Provider | Import | When to use |
+|---|---|---|
+| `LocalStorageProvider` | `bnbagent.storage_providers` | Development / local testing |
+| `IPFSStorageProvider` | `bnbagent.storage_providers` | Production (Pinata-compatible IPFS) |
+
+Custom backends: subclass `StorageProvider` and inject via `APEXConfig(storage=...)`.
 
 ## Quick Start
 
 ```python
-from bnbagent.storage import StorageConfig, create_storage_provider
+# LocalStorageProvider — dev / local
+from bnbagent.storage_providers import LocalStorageProvider
 
-# From environment variables
-config = StorageConfig.from_env()
-storage = create_storage_provider(config)
-
-# Manual -- local storage
-from bnbagent.storage import LocalStorageProvider
 storage = LocalStorageProvider("./my-data")
+url = await storage.upload({"key": "value"})          # returns "file://..."
+url = await storage.upload({"key": "value"}, "job-1.json")
 
-# Manual -- IPFS storage
-config = StorageConfig(type="ipfs", api_key="your-pinata-jwt")
-storage = create_storage_provider(config)
+# LocalStorageProvider from env (reads STORAGE_LOCAL_PATH, default ".agent-data")
+storage = LocalStorageProvider.from_env()
+
+# IPFSStorageProvider — production (Pinata)
+from bnbagent.storage_providers import IPFSStorageProvider
+
+storage = IPFSStorageProvider(
+    pinning_api_url="https://api.pinata.cloud/pinning/pinJSONToIPFS",
+    pinning_api_key="your-pinata-jwt",
+    gateway_url="https://gateway.pinata.cloud/ipfs/",
+)
+url = await storage.upload({"key": "value"})          # returns "ipfs://Qm..."
+
+# IPFSStorageProvider from env (reads STORAGE_API_KEY / STORAGE_API_URL / STORAGE_GATEWAY_URL)
+storage = IPFSStorageProvider.from_env()
 ```
+
+## Loading from env
+
+Each provider reads its own env vars via `from_env()`. The dispatch between providers
+happens in the caller (e.g. the startup script), not in the SDK:
+
+```python
+import os
+from bnbagent.storage_providers import LocalStorageProvider, IPFSStorageProvider
+from bnbagent.apex.config import APEXConfig
+
+storage_type = (os.getenv("STORAGE_PROVIDER") or "local").lower()
+if storage_type == "ipfs":
+    storage = IPFSStorageProvider.from_env()
+elif storage_type == "local":
+    storage = LocalStorageProvider.from_env()
+else:
+    raise SystemExit(f"Unknown STORAGE_PROVIDER={storage_type!r}")
+
+config = APEXConfig.from_env(storage=storage)
+```
+
+### `LocalStorageProvider` env vars
+
+| Variable | Default | Description |
+|---|---|---|
+| `STORAGE_LOCAL_PATH` | `.agent-data` | Base directory for stored JSON files |
+
+### `IPFSStorageProvider` env vars
+
+| Variable | Default | Description |
+|---|---|---|
+| `STORAGE_API_KEY` | — (required) | Pinata JWT or compatible pinning service API key |
+| `STORAGE_API_URL` | `https://api.pinata.cloud/pinning/pinJSONToIPFS` | Pinning endpoint |
+| `STORAGE_GATEWAY_URL` | `https://gateway.pinata.cloud/ipfs/` | IPFS HTTP gateway |
 
 ## API Reference
 
 ### `StorageProvider` (ABC)
 
-Async abstract base class for all storage backends.
+Async abstract base class. Subclass this to build a custom backend.
 
 | Method | Description |
 |---|---|
-| `async upload(data, filename=None)` | Upload JSON dict. Returns a URL (`file://`, `ipfs://`). |
+| `async upload(data, filename=None)` | Upload JSON dict. Returns a URL (`file://`, `ipfs://`, `https://`…). |
 | `async download(url)` | Download and parse JSON from a URL. |
 | `async exists(url)` | Check whether data at the URL exists. |
 | `compute_hash(data)` (static) | `keccak256` of canonical JSON for on-chain verification. |
 | `compute_content_hash(content)` (static) | `keccak256` of a raw string. |
 
-### `StorageConfig`
+### `upload_sync(provider, data, filename=None)`
 
-Dataclass for storage configuration.
+Synchronous bridge for non-async callers. Runs `provider.upload()` via a new event loop.
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `type` | `str` | `"local"` | Provider type: `"local"` or `"ipfs"`. |
-| `base_dir` | `str` | `".agent-data"` | Local storage directory. |
-| `api_key` | `str \| None` | `None` | Pinning service API key / JWT. |
-| `api_url` | `str \| None` | `None` | Pinning API URL. |
-| `gateway_url` | `str \| None` | `None` | IPFS gateway URL. |
+```python
+from bnbagent.storage_providers import upload_sync, LocalStorageProvider
 
-### `create_storage_provider(config: StorageConfig)`
+storage = LocalStorageProvider("./data")
+url = upload_sync(storage, {"job": {"id": 1}}, "job-1.json")
+```
 
-Factory function. Accepts a `StorageConfig` (required) and returns the
-appropriate `StorageProvider` implementation.
+## Custom storage providers
 
-### `LocalStorageProvider`
+Just like the wallet module has `EVMWalletProvider` / `MPCWalletProvider` plus the option
+to inject any `WalletProvider` subclass, storage has `LocalStorageProvider` /
+`IPFSStorageProvider` plus arbitrary custom backends.
 
-File-system storage for development and testing. Writes canonical JSON to
-`base_dir` with restricted permissions (`0o600`). Path traversal is blocked.
+Subclass `StorageProvider`, implement the three async methods, and inject via
+`APEXConfig(storage=MyStorage(...))`. The SDK doesn't care about the implementation —
+only that `upload()` returns a URL the client/voter can fetch (or that
+`APEX_AGENT_URL` is set to let the agent serve it via its own HTTP endpoint).
 
-### `IPFSStorageProvider`
+**Example — SQLite backend (30 lines):**
 
-IPFS pinning via HTTP API (Pinata, Infura, Web3.Storage). Requires `httpx`.
+```python
+import json
+import aiosqlite
+from bnbagent.storage_providers import StorageProvider
+from bnbagent.exceptions import StorageError
 
-| Method | Description |
-|---|---|
-| `__init__(pinning_api_url, pinning_api_key, gateway_url)` | Create an IPFS provider. |
-| `get_gateway_url(ipfs_url)` | Convert an `ipfs://` URL to an HTTP gateway URL. |
-| `save_sync(data, filename)` | Synchronous upload for non-async callers. |
+class SQLiteStorageProvider(StorageProvider):
+    def __init__(self, db_path: str, public_base_url: str):
+        self._db = db_path
+        self._base = public_base_url  # e.g. "https://my-agent.example.com/deliverables"
+
+    async def _ensure_table(self, conn):
+        await conn.execute(
+            "CREATE TABLE IF NOT EXISTS deliverables (key TEXT PRIMARY KEY, data TEXT)"
+        )
+
+    async def upload(self, data: dict, filename: str | None = None) -> str:
+        key = filename or self.compute_hash(data).hex() + ".json"
+        async with aiosqlite.connect(self._db) as db:
+            await self._ensure_table(db)
+            await db.execute(
+                "INSERT OR REPLACE INTO deliverables VALUES (?, ?)",
+                (key, json.dumps(data)),
+            )
+            await db.commit()
+        return f"{self._base}/{key}"
+
+    async def download(self, url: str) -> dict:
+        key = url.rsplit("/", 1)[-1]
+        async with aiosqlite.connect(self._db) as db:
+            async with db.execute(
+                "SELECT data FROM deliverables WHERE key=?", (key,)
+            ) as cur:
+                row = await cur.fetchone()
+        if not row:
+            raise StorageError(f"Key not found: {key}")
+        return json.loads(row[0])
+
+    async def exists(self, url: str) -> bool:
+        key = url.rsplit("/", 1)[-1]
+        async with aiosqlite.connect(self._db) as db:
+            async with db.execute(
+                "SELECT 1 FROM deliverables WHERE key=?", (key,)
+            ) as cur:
+                return await cur.fetchone() is not None
+```
+
+Inject it:
+
+```python
+storage = SQLiteStorageProvider("agent.db", "https://my-agent.example.com/deliverables")
+config = APEXConfig.from_env(storage=storage)
+```
 
 ## Content Hashing
 
@@ -95,23 +179,10 @@ data = {"job": {"id": 42}, "result": "done"}
 content_hash = StorageProvider.compute_hash(data)   # bytes32
 ```
 
-The hash is computed over canonical JSON (`sort_keys=True`,
-`separators=(",",":")`) to ensure deterministic output regardless of dict
-ordering.
-
-## Configuration
-
-`StorageConfig.from_env()` reads the following environment variables:
-
-| Variable | Description | Default |
-|---|---|---|
-| `STORAGE_PROVIDER` | `"local"` or `"ipfs"` | `"local"` |
-| `STORAGE_LOCAL_PATH` | Directory for local storage | `".agent-data"` |
-| `STORAGE_API_KEY` | Pinning API key (e.g. Pinata JWT) | -- |
-| `STORAGE_API_URL` | Storage API URL | -- |
-| `STORAGE_GATEWAY_URL` | IPFS gateway URL | -- |
+The hash is computed over canonical JSON (`sort_keys=True`, `separators=(",",":")`)
+to ensure deterministic output regardless of dict ordering.
 
 ## Related
 
-- [`apex`](../apex/README.md) -- uses `StorageProvider` for service record persistence.
-- [`core`](../core/README.md) -- module system and shared infrastructure.
+- [`apex`](../apex/README.md) — uses `StorageProvider` for deliverable persistence.
+- [`core`](../core/README.md) — module system and shared infrastructure.
