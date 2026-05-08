@@ -8,7 +8,7 @@ End-to-end examples for APEX v1 (AgenticCommerce + EvaluatorRouter + OptimisticP
 |---------|------|-------------|
 | [client/](client/) | Client | Stand-alone scripts that walk a job through each of the five canonical flows (happy path, dispute-reject, stalemate-expire, never-submit, cancel-open) |
 | [voter/](voter/) | Voter | Whitelisted voter casting `voteReject` on disputed jobs |
-| [agent-server/](agent-server/) | Provider | FastAPI agent with funded-job poll loop |
+| [agent-server/](agent-server/) | Provider | FastAPI agent with funded-job poll loop. Shows three storage backends (local / IPFS / SQLite) inline in `src/service.py` |
 
 ## Recommended path
 

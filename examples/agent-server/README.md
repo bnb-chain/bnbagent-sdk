@@ -20,7 +20,7 @@ reach a whitelisted-voter quorum to flip the verdict to REJECT.
 ## Prerequisites
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/)
-- A [Pinata](https://pinata.cloud) account with a JWT API key (for IPFS storage)
+- A [Pinata](https://pinata.cloud) account with a JWT API key (only needed when using IPFS storage)
 
 ## Setup
 
@@ -36,9 +36,7 @@ cp .env.example .env
 |----------|-------------|
 | `WALLET_PASSWORD` | Keystore encryption password |
 | `PRIVATE_KEY` | Agent wallet private key (first run only; encrypted to `~/.bnbagent/wallets/`) |
-| `STORAGE_PROVIDER` | `local` (default) or `ipfs` — read by the startup script; see below |
-| `STORAGE_API_KEY` | Pinata JWT token (required when `STORAGE_PROVIDER=ipfs`) |
-| `APEX_AGENT_URL` | Agent's public base URL including `/apex` (required when `STORAGE_PROVIDER=local`, e.g. `http://localhost:8003/apex`) |
+| `APEX_AGENT_URL` | Agent's public base URL including `/apex` (required for local storage, e.g. `http://localhost:8003/apex`) |
 | `APEX_SERVICE_PRICE` | Minimum acceptable budget in raw units (e.g. `1000000000000000000` = 1 U) |
 
 ### Optional overrides
@@ -59,17 +57,15 @@ APEX_MAX_METADATA_BYTES=262144  metadata cap (256 KB)
 
 ### Storage backends
 
-`STORAGE_PROVIDER` is read by `service.py` / `service_mount.py` at startup and
-determines which `StorageProvider` is injected into the SDK:
+`src/service.py` (and `src/service_mount.py`) shows three backend options as
+a "pick ONE" comment block. The default is `LocalStorageProvider`; uncomment
+another block to switch.
 
-| `STORAGE_PROVIDER` | Provider used | On-chain `deliverable_url` |
+| Provider | On-chain `deliverable_url` | Extra env vars |
 |-|-|-|
-| `local` (default) | `LocalStorageProvider` — writes JSON to disk | `{APEX_AGENT_URL}/job/{id}/response` (agent serves via HTTP) |
-| `ipfs` | `IPFSStorageProvider` — pins to Pinata | `ipfs://CID` |
-
-For a custom storage backend (MySQL, S3, your own CDN, etc.), instantiate your
-`StorageProvider` subclass in `service.py` and pass it to `APEXConfig.from_env(storage=...)`
-directly — `STORAGE_PROVIDER` is not required.
+| `LocalStorageProvider` (default) | `{APEX_AGENT_URL}/job/{id}/response` | `APEX_AGENT_URL` required |
+| `IPFSStorageProvider` | `ipfs://CID` | `STORAGE_API_KEY` (Pinata JWT) |
+| `SQLiteStorageProvider` (custom, see `src/sqlite_provider.py`) | `{public_url}/{key}` — needs a custom HTTP route | `STORAGE_SQLITE_DB_PATH`, `STORAGE_SQLITE_PUBLIC_URL` |
 
 ## Usage
 
@@ -106,6 +102,7 @@ scripts/
 src/
   service.py             # create_apex_app() — APEX owns the app
   service_mount.py       # create_apex_app() + app.mount() — mount onto existing app
+  sqlite_provider.py     # Example custom StorageProvider backed by SQLite
 ```
 
 ## APEX endpoints
@@ -142,11 +139,13 @@ each job, uploads it via the configured `StorageProvider`, and stores the URL
 on-chain in `optParams.deliverable_url` so voters and clients can download and
 verify the manifest independently.
 
-- **`local`** — JSON written to `.agent-data/` (default). The SDK rewrites the
+- **Local** — JSON written to `.agent-data/` (default). The SDK rewrites the
   `file://` URL to `{APEX_AGENT_URL}/job/{id}/response` before submitting;
   the agent serves the file via `GET /apex/job/{id}/response`.
-- **`ipfs`** — JSON pinned to IPFS via Pinata as `apex-job-{id}`. The `ipfs://CID`
+- **IPFS** — JSON pinned to IPFS via Pinata as `apex-job-{id}`. The `ipfs://CID`
   URL is stored on-chain and resolved via the configured gateway.
+- **Custom** — any `StorageProvider` subclass; see `src/sqlite_provider.py` for
+  an example and `examples/storage-demos/` for runnable demos.
 
 ## Testing Without APEX
 

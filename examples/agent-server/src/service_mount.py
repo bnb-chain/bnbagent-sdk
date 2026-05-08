@@ -15,7 +15,7 @@ Environment (agent-server/.env):
     PRIVATE_KEY                                — Recommended (imported on first run)
     WALLET_PASSWORD                            — Required (keystore password)
     APEX_COMMERCE_ADDRESS, APEX_ROUTER_ADDRESS, APEX_POLICY_ADDRESS — Optional overrides
-    STORAGE_PROVIDER=ipfs, STORAGE_API_KEY      — Required for IPFS upload
+    STORAGE_API_KEY      — Required for IPFS upload (when swapping to IPFSStorageProvider)
     APEX_SERVICE_PRICE=1000000000000000000      — Negotiation price (1 U)
     PORT=8003                                   — Server port
     APEX_FUNDED_POLL_INTERVAL=30                — Funded-job poll interval (seconds)
@@ -53,19 +53,20 @@ logger = logging.getLogger("blockchain_news")
 # Configuration
 # ---------------------------------------------------------------------------
 
-# Resolve storage backend from STORAGE_PROVIDER env before building config.
-_storage_type = (os.getenv("STORAGE_PROVIDER") or "local").lower()
-if _storage_type == "ipfs":
-    from bnbagent.storage import IPFSStorageProvider
-    _storage = IPFSStorageProvider.from_env()
-elif _storage_type == "local":
-    from bnbagent.storage import LocalStorageProvider
-    _storage = LocalStorageProvider.from_env()
-else:
-    raise SystemExit(
-        f"Unknown STORAGE_PROVIDER={_storage_type!r}; expected 'local' or 'ipfs'. "
-        "For custom backends, instantiate your StorageProvider subclass and pass to APEXConfig(storage=...)."
-    )
+# Storage backend — pick ONE of the three options below by uncommenting it.
+
+# (a) Local filesystem (default)
+from bnbagent.storage import LocalStorageProvider
+_storage = LocalStorageProvider.from_env()
+
+# (b) IPFS via Pinata — set STORAGE_API_KEY (Pinata JWT) in .env first.
+# from bnbagent.storage import IPFSStorageProvider
+# _storage = IPFSStorageProvider.from_env()
+
+# (c) SQLite custom backend — see src/sqlite_provider.py.
+#     Live APEX deliverables also need a GET /storage/{key} HTTP route.
+# from sqlite_provider import SQLiteStorageProvider
+# _storage = SQLiteStorageProvider.from_env()
 
 config = APEXConfig.from_env(storage=_storage)
 PORT = int(os.getenv("PORT", "8003"))
