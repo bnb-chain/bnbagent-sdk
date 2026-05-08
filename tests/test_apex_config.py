@@ -167,6 +167,20 @@ class TestFromEnv:
         assert config.wallet_provider is not None
         assert config.private_key == ""
 
+    def test_agent_url_from_env(self, monkeypatch):
+        monkeypatch.setenv("PRIVATE_KEY", VALID_PK)
+        monkeypatch.setenv("WALLET_PASSWORD", VALID_PASSWORD)
+        monkeypatch.setenv("APEX_AGENT_URL", "http://localhost:8003/apex")
+        config = APEXConfig.from_env()
+        assert config.agent_url == "http://localhost:8003/apex"
+
+    def test_agent_url_defaults_to_none(self, monkeypatch):
+        monkeypatch.setenv("PRIVATE_KEY", VALID_PK)
+        monkeypatch.setenv("WALLET_PASSWORD", VALID_PASSWORD)
+        monkeypatch.delenv("APEX_AGENT_URL", raising=False)
+        config = APEXConfig.from_env()
+        assert config.agent_url is None
+
 
 class TestFromEnvOptional:
     def test_returns_none_when_missing(self, monkeypatch):

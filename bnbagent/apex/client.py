@@ -239,8 +239,11 @@ class APEXClient:
 
             {"deliverable_url": "ipfs://Qm..."}
         """
-        if "deliverable_url" not in opt_params:
-            raise ValueError("opt_params must contain 'deliverable_url'")
+        if not opt_params.get("deliverable_url"):
+            raise ValueError(
+                "opt_params['deliverable_url'] must be a non-empty URL "
+                "(storage URL or agent HTTP endpoint)"
+            )
         encoded = json.dumps(opt_params, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return self.commerce.submit(job_id, deliverable, encoded)
 

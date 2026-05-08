@@ -86,6 +86,7 @@ class APEXJobOps:
         *,
         storage_provider: StorageProvider | None = None,
         service_price: int = 0,
+        agent_url: str | None = None,
     ) -> None:
         if wallet_provider is None:
             raise ValueError("wallet_provider is required for APEXJobOps")
@@ -94,12 +95,34 @@ class APEXJobOps:
         self._network = network
         self._storage = storage_provider
         self._service_price = service_price
+        self._agent_url = agent_url
 
         self._client: APEXClient | None = None
         self._deliverable_urls: dict[int, str] = {}
         self._last_known_counter: int = 0
         self._startup_scan_done: bool = False
         self._pending_open_ids: set[int] = set()
+
+    # -------------------------------------------------------- URL resolution
+
+    def _public_deliverable_url(self, job_id: int, storage_url: str) -> str:
+        """Return a URL that is reachable by client/voter.
+
+        Non-file:// URLs (ipfs://, https://, etc.) are passed through unchanged.
+        file:// (or empty) URLs fall back to the agent's own HTTP endpoint
+        ``{agent_url}/job/{job_id}/response``.  Raises RuntimeError when the
+        fallback is needed but APEX_AGENT_URL was not configured.
+        """
+        if storage_url and not storage_url.startswith("file://"):
+            return storage_url
+        if not self._agent_url:
+            raise RuntimeError(
+                "Cannot publish deliverable: storage returned a non-public URL "
+                "and APEX_AGENT_URL is not set. "
+                "Set APEX_AGENT_URL to the agent's public base URL including /apex "
+                "(e.g. http://localhost:8003/apex)."
+            )
+        return f"{self._agent_url.rstrip('/')}/job/{job_id}/response"
 
     # ----------------------------------------------------------- construction
 
@@ -187,20 +210,21 @@ class APEXJobOps:
             data = manifest.to_dict()
             deliverable = manifest.manifest_hash()
 
-            deliverable_url = ""
+            storage_url = ""
             if self._storage:
-                deliverable_url = await self._storage.upload(data, f"apex-job-{job_id}.json")
-                logger.info(f"[APEXJobOps] Deliverable uploaded: {deliverable_url}")
-                self._deliverable_urls[job_id] = deliverable_url
+                storage_url = await self._storage.upload(data, f"apex-job-{job_id}.json")
+                logger.info(f"[APEXJobOps] Deliverable uploaded: {storage_url}")
+                self._deliverable_urls[job_id] = storage_url
 
+            public_url = self._public_deliverable_url(job_id, storage_url)
             result = await asyncio.to_thread(
-                apex.submit, job_id, deliverable, {"deliverable_url": deliverable_url}
+                apex.submit, job_id, deliverable, {"deliverable_url": public_url}
             )
             logger.info(f"[APEXJobOps] submit({job_id}) tx: {result['transactionHash']}")
             return {
                 "success": True,
                 "txHash": result["transactionHash"],
-                "deliverableUrl": deliverable_url,
+                "deliverableUrl": public_url,
                 "deliverable": Web3.to_hex(deliverable),
             }
         except Exception as exc:

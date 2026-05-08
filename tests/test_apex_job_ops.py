@@ -24,11 +24,12 @@ def _make_wallet(address=ME):
     return wp
 
 
-def _make_ops(storage=None, service_price=0, wallet=None):
+def _make_ops(storage=None, service_price=0, wallet=None, agent_url=None):
     ops = APEXJobOps(
         wallet or _make_wallet(),
         storage_provider=storage,
         service_price=service_price,
+        agent_url=agent_url,
     )
     return ops
 
@@ -175,7 +176,7 @@ class TestSubmitResult:
         from bnbagent.storage_providers.local_provider import LocalStorageProvider
 
         storage = LocalStorageProvider(str(tmp_path))
-        ops = _make_ops(storage=storage)
+        ops = _make_ops(storage=storage, agent_url="http://agent.example/apex")
         client = _inject_client(ops)
         client.get_job.return_value = _job(status=JobStatus.FUNDED)
         client.submit.return_value = {"transactionHash": "0xaa"}
@@ -227,7 +228,7 @@ class TestSubmitResult:
         from bnbagent.storage_providers.local_provider import LocalStorageProvider
 
         storage = LocalStorageProvider(str(tmp_path))
-        ops = _make_ops(storage=storage)
+        ops = _make_ops(storage=storage, agent_url="http://agent.example/apex")
         client = _inject_client(ops)
         client.get_job.return_value = _job(status=JobStatus.FUNDED)
         client.submit.return_value = {"transactionHash": "0xaa"}
@@ -238,6 +239,66 @@ class TestSubmitResult:
 
         result = await ops.submit_result(1, "ok", metadata={"small": "value"})
         assert result["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_file_url_rewritten_to_agent_endpoint(self, tmp_path):
+        from bnbagent.storage_providers.local_provider import LocalStorageProvider
+
+        storage = LocalStorageProvider(str(tmp_path))
+        ops = _make_ops(storage=storage, agent_url="http://myagent.example/apex")
+        client = _inject_client(ops)
+        client.get_job.return_value = _job(status=JobStatus.FUNDED)
+        client.submit.return_value = {"transactionHash": "0xab"}
+        client.commerce.address = "0x" + "11" * 20
+        client.router.address = "0x" + "22" * 20
+        client.policy.address = "0x" + "33" * 20
+        client.commerce.w3.eth.chain_id = 97
+
+        result = await ops.submit_result(1, "payload")
+        assert result["success"] is True
+        assert result["deliverableUrl"] == "http://myagent.example/apex/job/1/response"
+        # chain submit received the agent endpoint URL, not the file:// URL
+        call_kwargs = client.submit.call_args
+        opt_params = call_kwargs[0][2]
+        assert opt_params["deliverable_url"] == "http://myagent.example/apex/job/1/response"
+        # internal cache still holds the raw file:// URL
+        assert ops._deliverable_urls[1].startswith("file://")
+
+    @pytest.mark.asyncio
+    async def test_ipfs_url_passed_through_unchanged(self, tmp_path):
+        from unittest.mock import AsyncMock
+
+        mock_storage = MagicMock()
+        mock_storage.upload = AsyncMock(return_value="ipfs://QmFakeHash1234")
+        ops = _make_ops(storage=mock_storage)  # no agent_url needed for ipfs
+        client = _inject_client(ops)
+        client.get_job.return_value = _job(status=JobStatus.FUNDED)
+        client.submit.return_value = {"transactionHash": "0xac"}
+        client.commerce.address = "0x" + "11" * 20
+        client.router.address = "0x" + "22" * 20
+        client.policy.address = "0x" + "33" * 20
+        client.commerce.w3.eth.chain_id = 97
+
+        result = await ops.submit_result(1, "payload")
+        assert result["success"] is True
+        assert result["deliverableUrl"] == "ipfs://QmFakeHash1234"
+
+    @pytest.mark.asyncio
+    async def test_file_url_without_agent_url_raises(self, tmp_path):
+        from bnbagent.storage_providers.local_provider import LocalStorageProvider
+
+        storage = LocalStorageProvider(str(tmp_path))
+        ops = _make_ops(storage=storage, agent_url=None)
+        client = _inject_client(ops)
+        client.get_job.return_value = _job(status=JobStatus.FUNDED)
+        client.commerce.address = "0x" + "11" * 20
+        client.router.address = "0x" + "22" * 20
+        client.policy.address = "0x" + "33" * 20
+        client.commerce.w3.eth.chain_id = 97
+
+        result = await ops.submit_result(1, "payload")
+        assert result["success"] is False
+        assert "APEX_AGENT_URL" in result["error"]
 
 
 class TestGetPendingJobs:

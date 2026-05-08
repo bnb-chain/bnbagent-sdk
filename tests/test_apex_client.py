@@ -218,6 +218,10 @@ class TestWriteDelegation:
         with pytest.raises(ValueError, match="deliverable_url"):
             facade.submit(7, b"\x00" * 32, {})
 
+    def test_submit_raises_on_empty_deliverable_url(self, facade):
+        with pytest.raises(ValueError, match="non-empty URL"):
+            facade.submit(7, b"\x00" * 32, {"deliverable_url": ""})
+
 
 class TestReads:
     def test_get_job_status(self, facade):

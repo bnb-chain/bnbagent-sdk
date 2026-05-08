@@ -53,7 +53,7 @@ def main() -> None:
     )
     # In production: upload manifest.to_dict() to IPFS/storage first, then pass the URL.
     # deliverable_url = storage.upload(manifest.to_dict(), f"job-{job_id}.json")
-    deliverable_url = ""  # no storage in this example
+    deliverable_url = "https://example.invalid/manifest.json"  # placeholder — these scripts test on-chain flow only
     provider.submit(job_id, manifest.manifest_hash(), {"deliverable_url": deliverable_url})
     print("[provider] submit OK")
 

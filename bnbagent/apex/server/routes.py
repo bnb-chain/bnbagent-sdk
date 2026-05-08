@@ -63,11 +63,19 @@ def create_apex_state(config: APEXConfig | None = None) -> APEXState:
 
     storage = config.storage or LocalStorageProvider()
 
+    if isinstance(storage, LocalStorageProvider) and not config.agent_url:
+        raise ValueError(
+            "APEX_AGENT_URL must be set when using LocalStorageProvider. "
+            "Set it to the agent's public base URL including /apex "
+            "(e.g. http://localhost:8003/apex)."
+        )
+
     job_ops = APEXJobOps(
         config.wallet_provider,
         network=config.effective_network,
         storage_provider=storage,
         service_price=int(config.service_price),
+        agent_url=config.agent_url,
     )
 
     # Fetch payment token + decimals once at startup so /status responses
