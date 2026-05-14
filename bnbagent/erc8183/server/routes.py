@@ -124,7 +124,19 @@ def _build_negotiate_limiter() -> SlidingWindowLimiter:
             f"[ERC-8183] ERC8183_NEGOTIATE_RATE_WINDOW={raw_window!r} invalid, using 60.0"
         )
         window_seconds = 60.0
-    return SlidingWindowLimiter(max_requests=max_requests, window_seconds=window_seconds)
+    raw_max_keys = (
+        get_env("RATE_LIMIT_MAX_KEYS", "10000", prefix=ERC8183_ENV_PREFIX) or "10000"
+    )
+    try:
+        max_keys = int(raw_max_keys)
+    except ValueError:
+        logger.warning(
+            f"[ERC-8183] ERC8183_RATE_LIMIT_MAX_KEYS={raw_max_keys!r} invalid, using 10000"
+        )
+        max_keys = 10_000
+    return SlidingWindowLimiter(
+        max_requests=max_requests, window_seconds=window_seconds, max_keys=max_keys
+    )
 
 
 def _create_erc8183_routes(state: ERC8183State) -> APIRouter:

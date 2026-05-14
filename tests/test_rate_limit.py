@@ -48,3 +48,43 @@ class TestSlidingWindowLimiter:
             SlidingWindowLimiter(max_requests=0, window_seconds=60.0)
         with pytest.raises(ValueError):
             SlidingWindowLimiter(max_requests=10, window_seconds=0)
+
+    # ── LRU max_keys tests ──
+
+    def test_max_keys_validation(self):
+        with pytest.raises(ValueError):
+            SlidingWindowLimiter(max_requests=10, window_seconds=60.0, max_keys=0)
+        with pytest.raises(ValueError):
+            SlidingWindowLimiter(max_requests=10, window_seconds=60.0, max_keys=-1)
+
+    def test_unique_keys_bounded_by_max_keys(self):
+        limiter = SlidingWindowLimiter(max_requests=100, window_seconds=60.0, max_keys=5)
+        for i in range(20):
+            limiter.check(f"ip-{i}")
+        assert len(limiter._buckets) == 5
+
+    def test_lru_evicts_oldest_when_max_keys_exceeded(self):
+        limiter = SlidingWindowLimiter(max_requests=100, window_seconds=60.0, max_keys=3)
+        limiter.check("a")
+        limiter.check("b")
+        limiter.check("c")
+        assert "a" in limiter._buckets
+        # Insert 4th key — "a" (LRU) should be evicted
+        limiter.check("d")
+        assert "a" not in limiter._buckets
+        assert len(limiter._buckets) == 3
+        # "a" having been evicted, it can accept a new hit (budget reset)
+        limiter.check("a")
+
+    def test_recent_access_resets_lru_position(self):
+        limiter = SlidingWindowLimiter(max_requests=100, window_seconds=60.0, max_keys=3)
+        limiter.check("a")
+        limiter.check("b")
+        # Re-access "a" — it moves to most-recently-used, so "b" is now LRU
+        limiter.check("a")
+        limiter.check("c")
+        # Insert 4th key — "b" (LRU) should be evicted, not "a"
+        limiter.check("d")
+        assert "b" not in limiter._buckets
+        assert "a" in limiter._buckets
+        assert len(limiter._buckets) == 3
