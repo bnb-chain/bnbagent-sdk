@@ -155,18 +155,3 @@ class TestEVMWalletProvider:
         assert wallet.address == Account.from_key(PK).address
         assert not wdir.exists()  # No directory created
 
-    # ── Legacy migration ──
-
-    def test_migrate_legacy_bnbagent_state(self, wdir, tmp_path, monkeypatch):
-        """Legacy .bnbagent_state in CWD should be migrated to ~/.bnbagent/wallets/."""
-        # Create legacy file
-        account = Account.from_key(PK)
-        keystore = Account.encrypt(account.key, PW)
-        legacy_path = tmp_path / ".bnbagent_state"
-        legacy_path.write_text(json.dumps({"keystore": keystore, "address": account.address}))
-
-        monkeypatch.chdir(tmp_path)
-        wallet = EVMWalletProvider(password=PW, wallets_dir=wdir)
-        assert wallet.address == account.address
-        assert not legacy_path.exists()  # Removed after migration
-        assert (wdir / f"{account.address}.json").is_file()

@@ -1,10 +1,10 @@
 """
 Blockchain News Agent — Mount on an existing FastAPI app.
 
-Demonstrates mounting the APEX sub-app onto an existing FastAPI application
+Demonstrates mounting the ERC-8183 sub-app onto an existing FastAPI application
 that already has its own endpoints and lifespan.
 
-Compare with service.py which also uses create_apex_app() mounted on /apex.
+Compare with service.py which also uses create_erc8183_app() mounted on /erc8183.
 
 Usage:
     cd examples/agent-server
@@ -14,11 +14,15 @@ Environment (agent-server/.env):
     RPC_URL, NETWORK                           — Required (RPC + network key)
     PRIVATE_KEY                                — Recommended (imported on first run)
     WALLET_PASSWORD                            — Required (keystore password)
-    APEX_COMMERCE_ADDRESS, APEX_ROUTER_ADDRESS, APEX_POLICY_ADDRESS — Optional overrides
-    STORAGE_PROVIDER=ipfs, STORAGE_API_KEY      — Required for IPFS upload
-    APEX_SERVICE_PRICE=1000000000000000000      — Negotiation price (1 U)
+    ERC8183_COMMERCE_ADDRESS, ERC8183_ROUTER_ADDRESS, ERC8183_POLICY_ADDRESS — Optional overrides
+    STORAGE_API_KEY      — Required for IPFS upload (when swapping to IPFSStorageProvider)
+    ERC8183_SERVICE_PRICE=1000000000000000000      — Negotiation price (1 U)
     PORT=8003                                   — Server port
-    APEX_EXEC_TIMEOUT=120                       — /job/execute callback timeout (seconds)
+    ERC8183_FUNDED_POLL_INTERVAL=30                — Funded-job poll interval (seconds)
+    ERC8183_NEGOTIATE_RATE_LIMIT=120               — /negotiate per-IP rate limit (requests)
+    ERC8183_NEGOTIATE_RATE_WINDOW=60               — /negotiate rate-limit window (seconds)
+    ERC8183_MAX_RESPONSE_BYTES=5242880             — submit_result response_content cap (5 MB)
+    ERC8183_MAX_METADATA_BYTES=262144              — submit_result metadata cap (256 KB)
 """
 
 import logging
@@ -36,8 +40,8 @@ env_file = os.path.basename(os.environ.get("ENV_FILE", ".env"))
 load_dotenv(Path(__file__).resolve().parent.parent / env_file)
 
 # SDK imports
-from bnbagent.apex.config import APEXConfig
-from bnbagent.apex.server import create_apex_app
+from bnbagent.erc8183.config import ERC8183Config
+from bnbagent.erc8183.server import create_erc8183_app
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,7 +53,22 @@ logger = logging.getLogger("blockchain_news")
 # Configuration
 # ---------------------------------------------------------------------------
 
-config = APEXConfig.from_env()
+# Storage backend — pick ONE of the three options below by uncommenting it.
+
+# (a) Local filesystem (default)
+from bnbagent.storage import LocalStorageProvider
+_storage = LocalStorageProvider.from_env()
+
+# (b) IPFS via Pinata — set STORAGE_API_KEY (Pinata JWT) in .env first.
+# from bnbagent.storage import IPFSStorageProvider
+# _storage = IPFSStorageProvider.from_env()
+
+# (c) SQLite custom backend — see src/custom_provider.py.
+#     Live ERC-8183 deliverables also need a GET /storage/{key} HTTP route.
+# from custom_provider import SQLiteStorageProvider
+# _storage = SQLiteStorageProvider.from_env()
+
+config = ERC8183Config.from_env(storage=_storage)
 PORT = int(os.getenv("PORT", "8003"))
 
 # ---------------------------------------------------------------------------
@@ -100,13 +119,13 @@ def format_news_results(query: str, raw_results: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# APEX task handler — the ONLY function you need to write
+# ERC-8183 task handler — the ONLY function you need to write
 # ---------------------------------------------------------------------------
 
 
 def process_task(job: dict) -> tuple[str, dict]:
     """
-    Process a funded APEX job and return the result.
+    Process a funded ERC-8183 job and return the result.
 
     The SDK calls this for each funded job automatically.
     Receives the full job dict, returns (result_string, metadata).
@@ -122,18 +141,19 @@ def process_task(job: dict) -> tuple[str, dict]:
 
 
 # ---------------------------------------------------------------------------
-# Mount APEX sub-app onto the existing app
+# Mount ERC-8183 sub-app onto the existing app
 # ---------------------------------------------------------------------------
 # Starlette does not propagate lifespan events to mounted sub-apps, so
-# we call apex_app.state.startup() explicitly in the parent's lifespan.
+# we call erc8183_app.state.startup() explicitly in the parent's lifespan.
 
-apex_app = create_apex_app(config=config, on_job=process_task, prefix="")
+erc8183_app = create_erc8183_app(config=config, on_job=process_task, prefix="")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Trigger the one-time startup scan for pending jobs
-    await apex_app.state.startup()
+    # Launch the funded-job poll loop (Starlette doesn't propagate lifespan to
+    # mounted sub-apps, so we drive the erc8183 sub-app's startup ourselves).
+    await erc8183_app.state.startup()
     yield
 
 
@@ -143,15 +163,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Blockchain News Agent",
-    description="News search agent with APEX payment protocol",
+    description="News search agent with ERC-8183 payment protocol",
     lifespan=lifespan,
 )
 
-app.mount("/apex", apex_app)
+app.mount("/erc8183", erc8183_app)
 
 
 # ---------------------------------------------------------------------------
-# Your own endpoints (independent of APEX)
+# Your own endpoints (independent of ERC-8183)
 # ---------------------------------------------------------------------------
 
 
@@ -179,11 +199,11 @@ class SearchResponse(BaseModel):
 async def root():
     return {
         "service": "Blockchain News Agent",
-        "agent_address": apex_app.state.apex.job_ops.agent_address,
+        "agent_address": erc8183_app.state.erc8183.job_ops.agent_address,
         "endpoints": {
             "search": "/search",
-            "apex_status": "/apex/status",
-            "apex_health": "/apex/health",
+            "erc8183_status": "/erc8183/status",
+            "erc8183_health": "/erc8183/health",
         },
     }
 
@@ -192,7 +212,7 @@ async def root():
 async def search_endpoint(request: SearchRequest):
     """
     Direct HTTP search endpoint (for testing).
-    For production, use APEX protocol via /apex/* endpoints.
+    For production, use ERC-8183 protocol via /erc8183/* endpoints.
     """
     try:
         raw_results = search_news(request.query, request.max_results)
@@ -229,7 +249,7 @@ if __name__ == "__main__":
 
     print(f"""
 {'='*55}
-  Blockchain News Agent (APEX — Mount Mode)
+  Blockchain News Agent (ERC-8183 — Mount Mode)
 {'='*55}
   Port:           {PORT}
   Commerce:       {config.effective_commerce_address}
@@ -238,17 +258,15 @@ if __name__ == "__main__":
   Storage:        {type(config.storage).__name__ if config.storage else "local (default)"}
   Price:          {int(config.service_price) / 10**18} U tokens
 
-  APEX endpoints (mounted at /apex):
-    POST /apex/negotiate          — Negotiation
-    POST /apex/submit             — Submit result
-    GET  /apex/job/{{id}}           — Job details
-    POST /apex/job/{{id}}/settle    — Manual settle
-    GET  /apex/status             — Agent status
+  ERC-8183 endpoints (mounted at /erc8183):
+    POST /erc8183/negotiate          — Negotiation
+    GET  /erc8183/job/{{id}}           — Job details
+    GET  /erc8183/status             — Agent status
 
   App endpoints:
     GET  /              — Service info
     POST /search          — Direct news search
-    GET  /apex/health     — Health check
+    GET  /erc8183/health     — Health check
 {'='*55}
 """)
 

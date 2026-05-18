@@ -1,4 +1,4 @@
-"""Cast ``voteReject`` on a disputed APEX job.
+"""Cast ``voteReject`` on a disputed ERC-8183 job.
 
 Usage:
     python vote_reject.py <jobId>
@@ -11,14 +11,17 @@ Performs three pre-flight checks before sending any transaction:
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import sys
+import time
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values
 
-from bnbagent.apex import APEXClient
+from bnbagent.erc8183 import ERC8183Client
 from bnbagent.wallets import EVMWalletProvider
+from bnbagent.config import resolve_network
 
 ROOT = Path(__file__).resolve().parent
 
@@ -41,29 +44,41 @@ def main() -> int:
         return 2
 
     network = os.environ.get("NETWORK", "bsc-testnet")
-    wallet = EVMWalletProvider(password="example", private_key=pk, persist=False)
-    apex = APEXClient(wallet, network=network)
-    voter = apex.address
+    rpc_url = dotenv_values(ROOT / ".env").get("RPC_URL")
+    wallet  = EVMWalletProvider(password="example", private_key=pk, persist=False)
+    if rpc_url:
+        nc = dataclasses.replace(resolve_network(network), rpc_url=rpc_url)
+        erc8183 = ERC8183Client(wallet, network=nc)
+    else:
+        erc8183 = ERC8183Client(wallet, network=network)
+    voter = erc8183.address
     assert voter is not None
 
-    if not apex.policy.is_voter(voter):
-        print(f"{voter} is NOT a whitelisted voter on {apex.policy.address}", file=sys.stderr)
+    if not erc8183.policy.is_voter(voter):
+        print(f"{voter} is NOT a whitelisted voter on {erc8183.policy.address}", file=sys.stderr)
         return 1
-    if not apex.policy.disputed(job_id):
+    if not erc8183.policy.disputed(job_id):
         print(f"jobId={job_id} has not been disputed yet; voteReject would revert", file=sys.stderr)
         return 1
-    if apex.policy.has_voted(job_id, voter):
+    if erc8183.policy.has_voted(job_id, voter):
         print(f"{voter} already voted on jobId={job_id}", file=sys.stderr)
         return 0
 
-    quorum = apex.policy.vote_quorum()
-    current = apex.policy.reject_votes(job_id)
+    quorum = erc8183.policy.vote_quorum()
+    current = erc8183.policy.reject_votes(job_id)
     print(f"[voter] casting voteReject on jobId={job_id} ({current}/{quorum} votes)")
 
-    res = apex.vote_reject(job_id)
-    print(f"[voter] tx: {res.get('tx_hash')}")
+    res = erc8183.vote_reject(job_id)
+    print(f"[voter] tx: {res.get('transactionHash')}")
 
-    new_total = apex.policy.reject_votes(job_id)
+    # RPC 节点可能短暂返回旧块，重试直到读到最新值
+    new_total = current
+    for _ in range(8):
+        new_total = erc8183.policy.reject_votes(job_id)
+        if new_total > current:
+            break
+        time.sleep(2)
+
     if new_total >= quorum:
         print(f"[voter] quorum reached ({new_total}/{quorum}); any settler can now call router.settle({job_id})")
     else:

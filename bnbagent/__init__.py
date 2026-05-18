@@ -5,21 +5,21 @@ Tier 1 (public API — available via ``from bnbagent import ...``):
     BNBAgent, BNBAgentConfig, NetworkConfig, BNBAgentError
     ERC8004Agent, AgentEndpoint
     WalletProvider, EVMWalletProvider
-    APEXClient, JobStatus, Verdict
-    StorageConfig
+    ERC8183Client, JobStatus, Verdict
 
 Tier 2 (import from subpackage):
-    from bnbagent.apex import CommerceClient, RouterClient, PolicyClient, NegotiationHandler
-    from bnbagent.apex.server import create_apex_app, APEXJobOps
-    from bnbagent.apex.config import APEXConfig
-    from bnbagent.core import create_web3, load_erc20_abi
+    from bnbagent.erc8183 import CommerceClient, RouterClient, PolicyClient, NegotiationHandler
+    from bnbagent.erc8183.server import create_erc8183_app, ERC8183JobOps
+    from bnbagent.erc8183.config import ERC8183Config
+    from bnbagent.core import create_web3
+    from bnbagent.erc20 import MinimalERC20Client, load_erc20_abi
     from bnbagent.storage import LocalStorageProvider, IPFSStorageProvider
 """
 
 from __future__ import annotations
 
-# APEX — only essential public API
-from .apex import APEXClient, JobStatus, Verdict
+# ERC-8183 — only essential public API
+from .erc8183 import ERC8183Client, JobStatus, Verdict
 
 # Configuration
 from .config import BNBAgentConfig, NetworkConfig
@@ -32,9 +32,6 @@ from .exceptions import BNBAgentError
 
 # High-level facade
 from .main import BNBAgent
-
-# Storage
-from .storage import StorageConfig
 
 # Wallets
 from .wallets import EVMWalletProvider, WalletProvider
@@ -52,10 +49,8 @@ __all__ = [
     # Wallets
     "WalletProvider",
     "EVMWalletProvider",
-    # APEX
-    "APEXClient",
+    # ERC-8183
+    "ERC8183Client",
     "JobStatus",
     "Verdict",
-    # Storage
-    "StorageConfig",
 ]

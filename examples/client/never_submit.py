@@ -2,15 +2,19 @@
 
 createJob → register → setBudget → fund → (provider silent) → wait past
 ``expiredAt`` → ``claimRefund`` → EXPIRED.
+
+Wall-clock wait scales with the contract's ``disputeWindow`` because
+``expiredAt`` must be at least ``disputeWindow`` in the future for
+Commerce to accept the job.
 """
 
 from __future__ import annotations
 
 import time
 
-from _helpers import banner, load_settings, make_client, minutes_from_now
+from _helpers import banner, expiry_for, load_settings, make_client
 
-from bnbagent.apex import JobStatus
+from bnbagent.erc8183 import JobStatus
 
 
 def main() -> None:
@@ -21,12 +25,12 @@ def main() -> None:
 
     decimals = client.token_decimals()
     budget = 1 * (10 ** decimals)
-    expired_at = minutes_from_now(6)
+    expired_at = expiry_for(client, slack_minutes=1)
 
     res = client.create_job(
         provider=s.provider_address,
         expired_at=expired_at,
-        description="APEX demo: never-submit",
+        description="ERC-8183 demo: never-submit",
     )
     job_id = res["jobId"]
     print(f"[client] createJob jobId={job_id} expiredAt={expired_at}")

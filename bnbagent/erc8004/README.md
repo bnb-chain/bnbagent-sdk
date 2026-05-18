@@ -112,10 +112,10 @@ Override with env vars when needed:
 | Network | Status | Chain ID | Registry Contract |
 |---------|--------|----------|-------------------|
 | BSC Testnet | **Active** | 97 | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
-| BSC Mainnet | Pending — contracts not yet deployed | 56 | -- |
+| BSC Mainnet | **Active** | 56 | `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` |
 
 ## Related
 
 - [`wallets`](../wallets/README.md) -- wallet providers used for signing.
 - [`core`](../core/README.md) -- paymaster, nonce manager, module system.
-- [`apex`](../apex/README.md) -- APEX commerce protocol built on top of agent identities.
+- [`erc8183`](../erc8183/README.md) -- ERC-8183 protocol built on top of agent identities.

@@ -17,6 +17,9 @@ def mock_web3():
     w3.provider.endpoint_uri = "https://fake-rpc.example.com"
     w3.eth.get_transaction_count.return_value = 0
     w3.eth.block_number = 1000
+    # Matches chain_id in _fake_network() helpers across the test suite.
+    # Tests that need a mismatch should override this on the fixture instance.
+    w3.eth.chain_id = 12345
 
     account_mock = MagicMock()
     account_mock.address = FAKE_ADDRESS

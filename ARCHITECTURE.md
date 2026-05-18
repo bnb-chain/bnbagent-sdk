@@ -12,7 +12,7 @@ storage abstraction, and built-in support for the following protocols:
 
 - **ERC-8004** — On-chain identity registry for AI agents (register, discover,
   resolve endpoints).
-- **APEX Protocol v1** — a three-layer agentic commerce stack:
+- **ERC-8183 Protocol** — a three-layer agentic commerce stack:
   - **AgenticCommerce** (ERC-8183 kernel) — job lifecycle + escrow
     (create / setBudget / fund / submit / complete / reject / claimRefund).
   - **EvaluatorRouter** — routing layer that doubles as `job.evaluator`
@@ -37,20 +37,20 @@ making the SDK backend-agnostic.
               ┌────────────┼────────────┐
               │            │            │
         ┌─────▼─────┐ ┌───▼────┐ ┌────▼─────┐
-        │  erc8004  │ │  apex  │ │ wallets  │
+        │  erc8004  │ │  erc8183  │ │ wallets  │
         │  Identity │ │  v1    │ │ Signing  │
         └─────┬─────┘ └───┬────┘ └────┬─────┘
               │           │           │
               └────┬──────┘           │
                    │                  │
             ┌──────▼──────┐    ┌──────▼──────┐
-            │    core     │    │   storage   │
-            │ (infra)     │    │ (off-chain) │
+            │    core     │    │ storage_    │
+            │ (infra)     │    │ providers   │
             └─────────────┘    └─────────────┘
 ```
 
 Arrows point **downward** — upper layers depend on lower layers, never the
-reverse. `apex` depends on `erc8004` (for agent discovery). Both protocol
+reverse. `erc8183` depends on `erc8004` (for agent discovery). Both protocol
 modules depend on `core` for transaction management.
 
 ## Code Map
@@ -89,30 +89,30 @@ Not part of the public API. Provides shared plumbing for protocol modules.
 | `constants.py` | `get_erc8004_config()` — per-network contract addresses |
 | `module.py` | `ERC8004Module` plugin |
 
-### `bnbagent/apex/` — APEX Protocol v1
+### `bnbagent/erc8183/` — ERC-8183 Protocol
 
-High-level facade over three contracts. Most callers only touch `APEXClient`.
+High-level facade over three contracts. Most callers only touch `ERC8183Client`.
 
 | File | Purpose |
 |------|---------|
-| `client.py` | `APEXClient` — facade over Commerce / Router / Policy; floor-based `fund` approval; cached `payment_token` / `token_decimals` / `token_symbol`; high-level wrappers for `create_job`, `register_job`, `set_budget`, `fund`, `submit`, `settle`, `dispute`, `vote_reject`, `claim_refund` |
+| `client.py` | `ERC8183Client` — facade over Commerce / Router / Policy; floor-based `fund` approval; cached `payment_token` / `token_decimals` / `token_symbol`; high-level wrappers for `create_job`, `register_job`, `set_budget`, `fund`, `submit`, `settle`, `dispute`, `vote_reject`, `claim_refund` |
 | `commerce.py` | `CommerceClient` — low-level wrapper for `AgenticCommerceUpgradeable` |
 | `router.py` | `RouterClient` — low-level wrapper for `EvaluatorRouterUpgradeable` |
 | `policy.py` | `PolicyClient` — low-level wrapper for `OptimisticPolicy` (dispute / voteReject / check / voter admin) |
-| `_erc20.py` | `MinimalERC20Client` — internal-only, used by `APEXClient` for the payment token (decimals/symbol/balanceOf/allowance/approve) |
+| `../erc20/client.py` | `MinimalERC20Client` — used by `ERC8183Client` for the payment token (decimals/symbol/balanceOf/allowance/approve) |
 | `types.py` | `JobStatus`, `Verdict`, `REASON_APPROVED`, `REASON_REJECTED`, `Job` dataclass |
-| `config.py` | `APEXConfig` — unified config (wallet_provider + storage + contract overrides) |
+| `config.py` | `ERC8183Config` — unified config (wallet_provider + storage + contract overrides) |
 | `negotiation.py` | `NegotiationHandler`, structured description schema, quote expiry |
-| `service_record.py` | `ServiceRecord`, `RequestData`, `ResponseData` — deliverable structure |
-| `constants.py` | `get_apex_config()` — per-network defaults |
-| `module.py` | `APEXModule` plugin |
+| `schema.py` | `DeliverableManifest`, `JobDescription`, `SCHEMA_VERSION` — on-chain description and off-chain deliverable JSON |
+| `constants.py` | `get_erc8183_config()` — per-network defaults |
+| `module.py` | `ERC8183Module` plugin |
 
-### `bnbagent/apex/server/` — FastAPI Integration
+### `bnbagent/erc8183/server/` — FastAPI Integration
 
 | File | Purpose |
 |------|---------|
-| `routes.py` | `create_apex_app()` FastAPI factory; `APEXState`; `/apex/submit`, `/apex/job/{id}`, `/apex/job/{id}/settle`, `/apex/negotiate`, `/apex/status`, `/apex/health`, optional `/apex/job/execute` |
-| `job_ops.py` | `APEXJobOps` — async wrapper over `APEXClient`; startup scan; `auto_settle_once` + `run_auto_settle_loop` for permissionless `router.settle` on this provider's submitted jobs |
+| `routes.py` | `create_erc8183_app()` FastAPI factory; `ERC8183State`; `/erc8183/job/{id}`, `/erc8183/negotiate`, `/erc8183/status`, `/erc8183/health`; funded-job background poll loop when `on_job` is provided |
+| `job_ops.py` | `ERC8183JobOps` — async wrapper over `ERC8183Client`; incremental scan for newly funded jobs; `submit_result` for deliverable submission |
 
 ### `bnbagent/wallets/` — Wallet Providers
 
@@ -126,11 +126,9 @@ High-level facade over three contracts. Most callers only touch `APEXClient`.
 
 | File | Purpose |
 |------|---------|
-| `interface.py` | `StorageProvider` ABC — async `upload()`, `download()`, `exists()`, `compute_hash()` |
-| `config.py` | `StorageConfig` dataclass |
-| `factory.py` | `create_storage_provider(config)` factory |
-| `local_provider.py` | `LocalStorageProvider` — filesystem (`file://` URLs) |
-| `ipfs_provider.py` | `IPFSStorageProvider` — IPFS pinning via HTTP API (Pinata-compatible) |
+| `storage_provider.py` | `StorageProvider` ABC — async `upload()`, `download()`, `exists()`, `compute_hash()` |
+| `local_storage_provider.py` | `LocalStorageProvider` — filesystem (`file://` URLs); owns its own `from_env()` |
+| `ipfs_storage_provider.py` | `IPFSStorageProvider` — IPFS pinning via HTTP API (Pinata-compatible); owns its own `from_env()` |
 | `sync_utils.py` | `upload_sync()` — synchronous bridge |
 
 ### `examples/`
@@ -139,7 +137,7 @@ High-level facade over three contracts. Most callers only touch `APEXClient`.
 |-----------|------|----------------------|
 | `client/` | Client | 5 stand-alone scripts — happy / dispute-reject / stalemate-expire / never-submit / cancel-open |
 | `voter/` | Voter | `voteReject` script + `Disputed` event watcher |
-| `agent-server/` | Provider | FastAPI agent with startup scan, direct negotiate/submit endpoints, and auto-settle background loop |
+| `agent-server/` | Provider | FastAPI agent with funded-job poll loop and a public `/negotiate` quote endpoint |
 
 ### `tests/` — Test Suite
 
@@ -155,20 +153,19 @@ from bnbagent import (
     BNBAgent, BNBAgentConfig, NetworkConfig, BNBAgentError,
     ERC8004Agent, AgentEndpoint,
     WalletProvider, EVMWalletProvider,
-    APEXClient, JobStatus, Verdict,
-    StorageConfig,
+    ERC8183Client, JobStatus, Verdict,
 )
 ```
 
 **Tier 2** — import from subpackages:
 
 ```python
-from bnbagent.apex import (
-    APEXClient, CommerceClient, RouterClient, PolicyClient,
+from bnbagent.erc8183 import (
+    ERC8183Client, CommerceClient, RouterClient, PolicyClient,
     JobStatus, Verdict, Job,
 )
-from bnbagent.apex.server import create_apex_app, APEXJobOps, run_auto_settle_loop
-from bnbagent.apex.config import APEXConfig
+from bnbagent.erc8183.server import create_erc8183_app, ERC8183JobOps
+from bnbagent.erc8183.config import ERC8183Config
 from bnbagent.storage import LocalStorageProvider, IPFSStorageProvider
 ```
 
@@ -179,7 +176,7 @@ subclass discovered and managed by `ModuleRegistry`.
 
 **Lifecycle:**
 
-1. `discover()` — imports built-in modules (`erc8004`, `apex`) + scans
+1. `discover()` — imports built-in modules (`erc8004`, `erc8183`) + scans
    `bnbagent.modules` entry-point group for third-party plugins
 2. `validate_dependencies()` — ensures all declared dependencies are present
 3. `_topological_sort()` — orders modules so dependencies initialize first
@@ -198,15 +195,15 @@ my_module = "my_package:create_module"
 
 ```
 NetworkConfig (NETWORKS dict in config.py)
-  ├── bsc-testnet  (chain_id=97)  — active, APEX v1 + ERC-8004 deployed
-  └── bsc-mainnet  (chain_id=56)  — placeholder, contracts pending
+  ├── bsc-testnet  (chain_id=97)  — active, ERC-8183 + ERC-8004 deployed
+  └── bsc-mainnet  (chain_id=56)  — active, ERC-8183 + ERC-8004 deployed
 
 resolve_network(name) + env var overrides
-  ↓
+  ↓ (clients assert w3.eth.chain_id == nc.chain_id at init — wrong RPC → ValueError)
 BNBAgentConfig
   ├── wallet_provider  (explicit or auto-wrapped from private_key)
   ├── settings         (general key-value)
-  └── modules          (namespaced: {"apex": {"commerce_address": "0x..."}})
+  └── modules          (namespaced: {"erc8183": {"commerce_address": "0x..."}})
 ```
 
 **Environment variable overrides** (module-scoped):
@@ -214,9 +211,9 @@ BNBAgentConfig
 | Variable | Scope | Overrides |
 |----------|-------|-----------|
 | `RPC_URL` | global (`resolve_network`) | `rpc_url` |
-| `APEX_COMMERCE_ADDRESS` | `APEXConfig.effective_network` | `commerce_contract` |
-| `APEX_ROUTER_ADDRESS` | `APEXConfig.effective_network` | `router_contract` |
-| `APEX_POLICY_ADDRESS` | `APEXConfig.effective_network` | `policy_contract` |
+| `ERC8183_COMMERCE_ADDRESS` | `ERC8183Config.effective_network` | `commerce_contract` |
+| `ERC8183_ROUTER_ADDRESS` | `ERC8183Config.effective_network` | `router_contract` |
+| `ERC8183_POLICY_ADDRESS` | `ERC8183Config.effective_network` | `policy_contract` |
 | `ERC8004_REGISTRY_ADDRESS` | `get_erc8004_config` | `registry_contract` |
 
 `resolve_network()` itself only honours `RPC_URL`. Contract-address overrides
@@ -227,9 +224,9 @@ When `network=NetworkConfig(...)` is passed directly (instead of a preset
 name), env overrides are **not** applied — the object is used as-is.
 
 Payment token address is NOT configurable — it is immutable on the Commerce
-kernel and fetched at runtime via `APEXClient.payment_token`.
+kernel and fetched at runtime via `ERC8183Client.payment_token`.
 
-Both `BNBAgentConfig` and `APEXConfig` support the convenience pattern:
+Both `BNBAgentConfig` and `ERC8183Config` support the convenience pattern:
 pass `private_key` + `wallet_password` and the config auto-wraps them into
 an `EVMWalletProvider`, then **clears the plaintext key**.
 
@@ -250,7 +247,7 @@ These properties hold across the codebase and should be preserved:
 - **Retry with backoff on rate limits (429) and nonce conflicts.** Up to 5
   retries with exponential backoff. Nonce errors trigger chain re-sync.
 - **Payment token is dynamically fetched.** It is never part of `NetworkConfig`
-  or `APEXConfig` because it is an immutable property of the deployed
+  or `ERC8183Config` because it is an immutable property of the deployed
   Commerce kernel.
 
 ## Data Flows
@@ -266,32 +263,32 @@ ERC8004Agent.register_agent(name, endpoint, ...)
   → On-chain: IdentityRegistry stores agent metadata
 ```
 
-### APEX v1 Job Lifecycle
+### ERC-8183 Job Lifecycle
 
 Happy path (silence approve):
 
 ```
 1. Discover provider             →  ERC8004Agent.get_all_agents()
 2. Negotiate price (off-chain)   →  NegotiationHandler (HTTP)
-3. createJob(provider, router)   →  APEXClient.create_job(...)       Open
-4. registerJob(jobId, policy)    →  APEXClient.register_job(...)     Open
-5. setBudget(jobId, amount)      →  APEXClient.set_budget(...)       Open
+3. createJob(provider, router)   →  ERC8183Client.create_job(...)       Open
+4. registerJob(jobId, policy)    →  ERC8183Client.register_job(...)     Open
+5. setBudget(jobId, amount)      →  ERC8183Client.set_budget(...)       Open
 6. approve(commerce, amount) +
-   fund(jobId, amount)           →  APEXClient.fund(...)             Funded
+   fund(jobId, amount)           →  ERC8183Client.fund(...)             Funded
                                     (floor-based auto-approval)
-7. Provider submit(deliverable)  →  APEXClient.submit(...)           Submitted
+7. Provider submit(deliverable)  →  ERC8183Client.submit(...)           Submitted
 8. Wait dispute window           →  time passes
-9. router.settle(jobId, "")      →  APEXClient.settle(...)           Completed
-   (permissionless; the provider agent's auto-settle loop handles it)
+9. router.settle(jobId, "")      →  ERC8183Client.settle(...)           Completed
+   (permissionless; any party can call from their own wallet)
 ```
 
 Dispute branches:
 
-- Client calls `APEXClient.dispute(jobId)` during the window → voters cast
-  `APEXClient.vote_reject(jobId)` → once `rejectVotes >= quorum`, `settle`
+- Client calls `ERC8183Client.dispute(jobId)` during the window → voters cast
+  `ERC8183Client.vote_reject(jobId)` → once `rejectVotes >= quorum`, `settle`
   moves the job to **REJECTED** and refunds the client.
 - No quorum ever reached → `settle` stays blocked; once `expiredAt` passes,
-  anyone calls `APEXClient.claim_refund(jobId)` → **EXPIRED**.
+  anyone calls `ERC8183Client.claim_refund(jobId)` → **EXPIRED**.
 
 `claimRefund` is non-pausable and non-hookable by design — the universal
 escape hatch at expiry.
@@ -301,13 +298,14 @@ escape hatch at expiry.
 ```
 HTTP request
   → Route handler (routes.py)
-  → APEXJobOps (async) → asyncio.to_thread() → APEXClient (sync/web3)
+  → ERC8183JobOps (async) → asyncio.to_thread() → ERC8183Client (sync/web3)
   → Response
 
-Background tasks
-  - Startup scan: scan jobCounter, auto-process FUNDED jobs for this provider.
-  - Auto-settle loop: poll policy.check for our Submitted jobs, call
-    router.settle once verdict flips away from PENDING.
+Background tasks (when on_job is provided)
+  - Funded-job poll loop: scan Commerce for newly FUNDED jobs assigned to
+    this provider, dispatch each through on_job → submit_result. The SDK
+    does NOT auto-settle: settle is permissionless and runs as a separate
+    operator script (see examples/agent-server/scripts/settle.py).
 ```
 
 ## Exception Hierarchy

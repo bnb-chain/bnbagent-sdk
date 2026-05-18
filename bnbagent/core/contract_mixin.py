@@ -13,6 +13,12 @@ logger = logging.getLogger(__name__)
 MAX_RETRIES = 5
 RETRY_BASE_DELAY = 1.0
 
+# Floor for transaction gas price. ``eth_gasPrice`` on BSC testnet (and other
+# low-traffic EVM RPCs) sometimes returns values below what miners actually
+# require to include the tx, leaving the broadcast stuck in mempool. 3 Gwei is
+# a safe minimum across BSC mainnet/testnet at the time of writing.
+MIN_GAS_PRICE_WEI = 3_000_000_000
+
 
 class ContractClientMixin:
     """Shared transaction sending and retry logic for web3 contract clients.
@@ -39,11 +45,16 @@ class ContractClientMixin:
         for attempt in range(MAX_RETRIES):
             nonce = nonce_mgr.get_nonce()
             try:
-                # Fetch current gas price and add 20% buffer to avoid mempool stuck
+                # Fetch current gas price and add 20% buffer; floor at
+                # MIN_GAS_PRICE_WEI so a low ``eth_gasPrice`` reading on quiet
+                # networks (BSC testnet returns 0.1 Gwei when idle) doesn't
+                # leave the tx stranded in mempool below the miner cutoff.
                 try:
-                    gas_price = int(self.w3.eth.gas_price * 1.2)
+                    gas_price = max(
+                        int(self.w3.eth.gas_price * 1.2), MIN_GAS_PRICE_WEI
+                    )
                 except Exception:
-                    gas_price = 3_000_000_000  # 3 Gwei fallback
+                    gas_price = MIN_GAS_PRICE_WEI
                 tx = fn.build_transaction(
                     {
                         "from": self._account,
@@ -113,6 +124,13 @@ class ContractClientMixin:
                     time.sleep(delay)
                     continue
 
+                # Any other error path (preflight revert, receipt timeout,
+                # transient RPC failure): the cached nonce was already
+                # incremented in get_nonce() but the tx may not have been
+                # mined or even broadcast. Invalidate the cache so the next
+                # caller re-seeds from chain instead of leaving a permanent
+                # nonce gap that strands every subsequent tx in mempool.
+                nonce_mgr.reset()
                 raise
 
         raise last_error  # type: ignore

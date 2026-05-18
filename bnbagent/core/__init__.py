@@ -13,7 +13,7 @@ from ..exceptions import (
     NetworkError,
     StorageError,
 )
-from .abi_loader import create_web3, load_erc20_abi
+from .abi_loader import create_web3
 from .module import BNBAgentModule, ModuleInfo
 from .nonce_manager import NonceManager
 from .paymaster import Paymaster
@@ -31,7 +31,6 @@ __all__ = [
     "create_web3",
     "NonceManager",
     "Paymaster",
-    "load_erc20_abi",
     "SCAN_API_URL",
     "BNBAgentModule",
     "ModuleInfo",

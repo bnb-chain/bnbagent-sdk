@@ -1,6 +1,6 @@
 # Voter example
 
-A whitelisted voter participates in APEX's optimistic policy by casting
+A whitelisted voter participates in ERC-8183's optimistic policy by casting
 `voteReject` on jobs the client has disputed. Voters **cannot approve** —
 silence past the dispute window is implicit approval.
 
@@ -18,7 +18,7 @@ silence past the dispute window is implicit approval.
 
 | File | Purpose |
 |------|---------|
-| `watch.py` | Event-driven loop: watches `Disputed` + `VoteCast`, reviews IPFS manifests, prompts to vote, auto-settles on quorum |
+| `watch.py` | Event-driven loop: watches `Disputed` + `VoteCast`, reviews IPFS manifests, prompts to vote, settles automatically once `rejectVotes >= voteQuorum` |
 | `vote_reject.py` | One-shot `voteReject` on a specific jobId (manual fallback) |
 
 ## Setup

@@ -5,18 +5,19 @@ because the policy stays PENDING. Once the job passes its ``expiredAt``
 deadline, the client (or anyone) calls ``claimRefund`` — the universal
 escape hatch on the kernel.
 
-NOTE: ``expiredAt`` must be > jobExpiry; the demo uses a very small
-``jobExpirySeconds`` so it completes during a run. For live networks set
-``expired_at`` to something reasonable (hours / days).
+NOTE: ``expiredAt`` must accommodate the policy's dispute window because
+the provider has to submit before ``expiredAt - disputeWindow``. The
+script's wall-clock wait scales with that window, so on a network
+configured with a multi-hour window this demo is slow by design.
 """
 
 from __future__ import annotations
 
 import time
 
-from _helpers import banner, load_settings, make_client, minutes_from_now
+from _helpers import banner, expiry_for, load_settings, make_client
 
-from bnbagent.apex import DeliverableManifest, JobStatus, SCHEMA_VERSION
+from bnbagent.erc8183 import DeliverableManifest, JobStatus, SCHEMA_VERSION
 
 
 def main() -> None:
@@ -28,14 +29,13 @@ def main() -> None:
     decimals = client.token_decimals()
     budget = 1 * (10 ** decimals)
 
-    # Short expiry so the demo finishes in-session. Still >= the 5-minute
-    # on-chain minimum; bump higher for mainnet.
-    expired_at = minutes_from_now(6)
+    # Smallest expiry that still admits a valid submit: disputeWindow + 1 min.
+    expired_at = expiry_for(client, slack_minutes=1)
 
     res = client.create_job(
         provider=s.provider_address,
         expired_at=expired_at,
-        description="APEX demo: stalemate",
+        description="ERC-8183 demo: stalemate",
     )
     job_id = res["jobId"]
     print(f"[client] createJob jobId={job_id} expiredAt={expired_at}")
@@ -60,7 +60,7 @@ def main() -> None:
     )
     # In production: upload manifest.to_dict() to IPFS/storage first, then pass the URL.
     # deliverable_url = storage.upload(manifest.to_dict(), f"job-{job_id}.json")
-    deliverable_url = ""  # no storage in this example
+    deliverable_url = "https://example.invalid/manifest.json"  # placeholder — these scripts test on-chain flow only
     provider.submit(job_id, manifest.manifest_hash(), {"deliverable_url": deliverable_url})
     print("[provider] submit OK")
 

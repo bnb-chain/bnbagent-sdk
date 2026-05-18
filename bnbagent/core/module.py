@@ -1,7 +1,7 @@
 """
 Base module interface for bnbagent protocol modules.
 
-Every protocol module (ERC-8004, APEX, Escrow, x402, etc.) implements
+Every protocol module (ERC-8004, ERC-8183, Escrow, x402, etc.) implements
 this interface. The ModuleRegistry discovers and initializes modules.
 """
 

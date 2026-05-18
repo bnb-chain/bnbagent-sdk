@@ -7,7 +7,7 @@ Two pieces:
   prefix conventions stay consistent.
 - :class:`AgentConfig` — dataclass base that captures the configuration
   concepts common to **every** agent the SDK ships (network + wallet).
-  Module-specific configs (``APEXConfig``, ``BNBAgentConfig``, ...) inherit
+  Module-specific configs (``ERC8183Config``, ``BNBAgentConfig``, ...) inherit
   from this and add only their own fields.
 
 Env var convention
@@ -15,7 +15,7 @@ Env var convention
 - **Global** (no prefix): keys that describe the SDK process as a whole
   (``NETWORK``, ``RPC_URL``, ``PRIVATE_KEY``, ``WALLET_PASSWORD``,
   ``WALLET_ADDRESS``, ``DEBUG``).
-- **Module-scoped**: ``<MODULE>_<KEY>`` (e.g. ``APEX_COMMERCE_ADDRESS``,
+- **Module-scoped**: ``<MODULE>_<KEY>`` (e.g. ``ERC8183_COMMERCE_ADDRESS``,
   ``ERC8004_REGISTRY_ADDRESS``, ``STORAGE_PROVIDER``).
 
 See the project-root ``.env.example`` for the full surface.
@@ -100,6 +100,16 @@ class AgentConfig:
                 private_key=self.private_key,
             )
             self.private_key = ""
+
+            if os.getenv("PRIVATE_KEY"):
+                logger.warning(
+                    "PRIVATE_KEY is still set in the environment after the "
+                    "keystore import succeeded. The encrypted keystore at "
+                    "~/.bnbagent/wallets/<address>.json is now the source of "
+                    "truth — remove PRIVATE_KEY from your .env / shell to "
+                    "avoid leaking the plaintext key via commits, backups, "
+                    "or container images."
+                )
 
         # Password-only path: load an existing keystore if one is on disk,
         # otherwise let EVMWalletProvider auto-generate a fresh wallet.

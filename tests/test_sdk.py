@@ -66,7 +66,9 @@ class TestERC8004Agent:
             # Mock Web3 connection check
             mock_web3 = Mock()
             mock_web3.is_connected.return_value = True
-            mock_web3.eth.chain_id = 1337  # Local network chain ID
+            # Match the chain_id of DEFAULT_NETWORK so the init-time chain_id
+            # assertion in ERC8004Agent passes.
+            mock_web3.eth.chain_id = 97  # bsc-testnet
             mock_web3_class.return_value = mock_web3
 
             # Mock ContractInterface
@@ -481,4 +483,18 @@ class TestERC8004AgentInitialization:
             mock_web3_class.return_value = mock_web3
 
             with pytest.raises(ConnectionError, match="Failed to connect to RPC"):
+                ERC8004Agent(wallet_provider=mock_wallet, network="bsc-testnet")
+
+    def test_chain_id_mismatch_raises(self):
+        """RPC reporting a different chain_id must hard-fail at init (audit L06)."""
+        mock_wallet = Mock()
+        mock_wallet.address = "0x" + "0" * 40
+
+        with patch("bnbagent.erc8004.agent.Web3") as mock_web3_class:
+            mock_web3 = Mock()
+            mock_web3.is_connected.return_value = True
+            mock_web3.eth.chain_id = 1  # ethereum mainnet, not 97 (bsc-testnet)
+            mock_web3_class.return_value = mock_web3
+
+            with pytest.raises(ValueError, match="chain_id mismatch"):
                 ERC8004Agent(wallet_provider=mock_wallet, network="bsc-testnet")

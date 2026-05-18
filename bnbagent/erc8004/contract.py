@@ -7,8 +7,10 @@ Provides methods for registering agents and querying agent information.
 
 from __future__ import annotations
 
+import concurrent.futures as _cf
 import json
 import logging
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -16,6 +18,8 @@ from web3 import Web3
 from web3.contract.contract import ContractFunction
 from web3.types import TxReceipt
 
+from ..core.contract_mixin import MAX_RETRIES, MIN_GAS_PRICE_WEI, RETRY_BASE_DELAY
+from ..core.nonce_manager import NonceManager
 from ..core.paymaster import Paymaster
 
 if TYPE_CHECKING:
@@ -93,6 +97,45 @@ class ContractInterface:
         except Exception as e:
             raise ValueError(f"Failed to load ABI from file {abi_file_path}: {str(e)}") from e
 
+    def _run_preflight(self, transaction: dict, description: str) -> None:
+        """Simulate the transaction via eth_call before broadcasting.
+
+        Surfaces revert reasons early without spending gas. Mirrors the same
+        pre-flight logic in core/contract_mixin.py:_send_tx().
+        """
+        call_params = {
+            "from": transaction.get("from"),
+            "to": transaction.get("to"),
+            "data": transaction.get("data", "0x"),
+            "value": transaction.get("value", 0),
+            "gas": transaction.get("gas", 2_000_000),
+        }
+        with _cf.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(self.web3.eth.call, call_params)
+            try:
+                future.result(timeout=10)
+            except _cf.TimeoutError:
+                logger.warning(
+                    "[ContractInterface] Pre-flight eth_call timed out for %s, proceeding",
+                    description,
+                )
+            except Exception as preflight_err:
+                err_str = str(preflight_err)
+                if "'0x'" in err_str or err_str.strip().endswith(", '0x')"):
+                    logger.warning(
+                        "[ContractInterface] Pre-flight returned opaque 0x revert for %s, proceeding",
+                        description,
+                    )
+                else:
+                    logger.error(
+                        "[ContractInterface] Pre-flight revert for %s: %s",
+                        description,
+                        preflight_err,
+                    )
+                    raise RuntimeError(
+                        f"Transaction would revert: {preflight_err}"
+                    ) from preflight_err
+
     def _execute_transaction(
         self,
         function: ContractFunction,
@@ -131,11 +174,14 @@ class ContractInterface:
                         "chainId": self.web3.eth.chain_id,
                         "nonce": nonce,
                         "gas": gas_limit,
-                        "gasPrice": self.web3.eth.gas_price,
+                        "gasPrice": max(self.web3.eth.gas_price, MIN_GAS_PRICE_WEI),
                     }
                 )
 
                 logger.debug(f"Building {description} transaction: {transaction}")
+
+                # Pre-flight simulation to surface revert reason before spending gas
+                self._run_preflight(transaction, description)
 
                 # Check if transaction is sponsorable
                 is_sponsorable = self.paymaster.isSponsorable(transaction)
@@ -160,42 +206,94 @@ class ContractInterface:
                 tx_hash = bytes.fromhex(tx_hash_hex[2:])  # Remove 0x prefix
                 logger.debug(f"Transaction sent via paymaster: {tx_hash_hex}")
             else:
-                # Use standard Web3 transaction flow (no paymaster)
-                # Get nonce from Web3
-                nonce = self.web3.eth.get_transaction_count(wallet_address, "pending")
-                logger.debug(f"Got nonce from Web3: {nonce}")
+                # Standard Web3 path with NonceManager + retry on transient
+                # errors. Mirrors core/contract_mixin.py:_send_tx() — keep both
+                # in sync.
+                nonce_mgr = NonceManager.for_account(self.web3, wallet_address)
+                last_error: Exception | None = None
+                tx_hash = None
+                tx_hash_hex = ""
 
-                # Get gas price from network
-                gas_price = self.web3.eth.gas_price
-                logger.debug(f"Gas price: {gas_price}")
+                for attempt in range(MAX_RETRIES):
+                    nonce = nonce_mgr.get_nonce()
+                    try:
+                        # Floor at MIN_GAS_PRICE_WEI and add 20% headroom so a
+                        # low eth_gasPrice on quiet networks doesn't leave the
+                        # tx stranded in mempool below the miner cutoff.
+                        try:
+                            gas_price = max(
+                                int(self.web3.eth.gas_price * 1.2),
+                                MIN_GAS_PRICE_WEI,
+                            )
+                        except Exception:
+                            gas_price = MIN_GAS_PRICE_WEI
 
-                # Build transaction
-                transaction = function.build_transaction(
-                    {
-                        "from": wallet_address,
-                        "chainId": self.web3.eth.chain_id,
-                        "nonce": nonce,
-                        "gasPrice": gas_price,
-                        "gas": gas_limit,
-                    }
-                )
+                        transaction = function.build_transaction(
+                            {
+                                "from": wallet_address,
+                                "chainId": self.web3.eth.chain_id,
+                                "nonce": nonce,
+                                "gasPrice": gas_price,
+                                "gas": gas_limit,
+                            }
+                        )
+                        logger.debug(f"Building {description} transaction: {transaction}")
 
-                logger.debug(f"Building {description} transaction: {transaction}")
+                        self._run_preflight(transaction, description)
 
-                # Sign transaction via wallet provider
-                signed_txn = self.wallet_provider.sign_transaction(transaction)
-                signed_tx_hex = signed_txn["rawTransaction"].hex()
+                        signed_txn = self.wallet_provider.sign_transaction(transaction)
+                        tx_hash = self.web3.eth.send_raw_transaction(
+                            signed_txn["rawTransaction"]
+                        )
+                        tx_hash_hex = tx_hash.hex()
+                        if not tx_hash_hex.startswith("0x"):
+                            tx_hash_hex = "0x" + tx_hash_hex
+                        logger.debug(f"Transaction sent via Web3: {tx_hash_hex}")
+                        break
+                    except Exception as send_err:
+                        last_error = send_err
+                        error_str = str(send_err).lower()
 
-                # Send transaction via Web3
-                tx_hash = self.web3.eth.send_raw_transaction(signed_tx_hex)
-                tx_hash_hex = tx_hash.hex()
-                # Ensure 0x prefix (defensive programming, though Web3 usually includes it)
-                if not tx_hash_hex.startswith("0x"):
-                    tx_hash_hex = "0x" + tx_hash_hex
-                logger.debug(f"Transaction sent via Web3: {tx_hash_hex}")
+                        if nonce_mgr.handle_error(send_err, nonce) and attempt < MAX_RETRIES - 1:
+                            logger.warning(
+                                f"[ContractInterface] Nonce error, retry "
+                                f"{attempt + 1}/{MAX_RETRIES}"
+                            )
+                            continue
+
+                        is_rate_limit = (
+                            "429" in error_str or "too many requests" in error_str
+                        )
+                        if is_rate_limit and attempt < MAX_RETRIES - 1:
+                            delay = RETRY_BASE_DELAY * (2**attempt)
+                            logger.warning(
+                                f"[ContractInterface] Rate limited, retry "
+                                f"{attempt + 1}/{MAX_RETRIES} in {delay:.1f}s"
+                            )
+                            time.sleep(delay)
+                            continue
+
+                        # Non-retryable: invalidate cached nonce so the next
+                        # caller re-seeds from chain rather than leaving a gap.
+                        nonce_mgr.reset()
+                        raise
+
+                if tx_hash is None:
+                    # All retries exhausted with retryable errors.
+                    raise last_error  # type: ignore[misc]
 
             # Wait for receipt (always use Web3 for receipt waiting)
             receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash)
+
+            if receipt["status"] == 0:
+                logger.error(
+                    "[ContractInterface] %s reverted on-chain: tx=%s block=%s gasUsed=%s",
+                    description,
+                    tx_hash_hex,
+                    receipt["blockNumber"],
+                    receipt["gasUsed"],
+                )
+                raise RuntimeError(f"Transaction reverted on-chain: {tx_hash_hex}")
 
             logger.debug(f"Transaction confirmed: {receipt}")
 

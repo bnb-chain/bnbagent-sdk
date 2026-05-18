@@ -1,19 +1,8 @@
-"""Shared ABI loaders and Web3 utilities."""
+"""Web3 utilities — BSC-aware Web3 factory."""
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 from web3 import Web3
-
-_ABI_DIR = Path(__file__).parent / "abis"
-
-
-def load_erc20_abi() -> list:
-    """Load minimal ERC20 ABI (approve, balanceOf, allowance, transfer, allocateTo, decimals)."""
-    with open(_ABI_DIR / "ERC20.json") as f:
-        return json.load(f)
 
 
 def create_web3(rpc_url: str = "") -> Web3:

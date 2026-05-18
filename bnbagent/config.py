@@ -6,7 +6,7 @@ Exports:
   addresses for every module that uses on-chain state).
 - :func:`resolve_network` — looks up a preset by name, with an optional
   ``RPC_URL`` env override. **Module-specific contract overrides live in
-  their own module configs** (e.g. ``APEXConfig``, ``get_erc8004_config``),
+  their own module configs** (e.g. ``ERC8183Config``, ``get_erc8004_config``),
   not here.
 - :class:`BNBAgentConfig` — top-level SDK facade; composes modules via
   :class:`ModuleRegistry`. Inherits wallet + network plumbing from
@@ -15,7 +15,7 @@ Exports:
 Env var surface
 ---------------
 ``resolve_network`` is intentionally narrow: it only reads ``RPC_URL``.
-Module-scoped env vars (``APEX_COMMERCE_ADDRESS``, ``ERC8004_REGISTRY_ADDRESS``,
+Module-scoped env vars (``ERC8183_COMMERCE_ADDRESS``, ``ERC8004_REGISTRY_ADDRESS``,
 ``STORAGE_*``, ...) are owned by the corresponding module config. The
 project-root ``.env.example`` is the authoritative reference.
 """
@@ -35,10 +35,10 @@ logger = logging.getLogger(__name__)
 class NetworkConfig:
     """Per-network configuration with ALL protocol addresses.
 
-    APEX v1 is a three-contract stack: AgenticCommerce kernel (escrow),
+    ERC-8183 is a three-contract stack: AgenticCommerce kernel (escrow),
     EvaluatorRouter (routing + hook), and OptimisticPolicy (silence-approves,
     vote-rejects). Payment token is NOT configured here — it is immutable
-    on the Commerce kernel and read at runtime via ``APEXClient.payment_token``.
+    on the Commerce kernel and read at runtime via ``ERC8183Client.payment_token``.
     """
 
     name: str
@@ -48,7 +48,7 @@ class NetworkConfig:
     use_paymaster: bool = False
     # ERC-8004 Identity Registry
     registry_contract: str = ""
-    # APEX v1 stack
+    # ERC-8183 stack
     commerce_contract: str = ""
     router_contract: str = ""
     policy_contract: str = ""
@@ -62,18 +62,20 @@ NETWORKS: dict[str, NetworkConfig] = {
         paymaster_url="https://bsc-megafuel-testnet.nodereal.io",
         use_paymaster=True,
         registry_contract="0x8004A818BFB912233c491871b3d84c89A494BD9e",
-        commerce_contract="0x1e677fc06ff772e81051484c8c3845fbef13986d",
-        router_contract="0x0c729baa3cdac6cc3fdef6a816f6bcb85ae92ed7",
-        policy_contract="0x459c3b7a46aa9dde45fbfc3b3d37bd062dbe6fb8",
+        commerce_contract="0xa206c0517b6371c6638cd9e4a42cc9f02a33b0de",
+        router_contract="0xd7d36d66d2f1b608a0f943f722d27e3744f66f25",
+        policy_contract="0x4f4678d4439fec812ac7674bb3efb4c8f5fb78a6",
     ),
     "bsc-mainnet": NetworkConfig(
         name="bsc-mainnet",
         chain_id=56,
         rpc_url="https://bsc-dataseed.binance.org",
-        registry_contract="",  # TBD
-        commerce_contract="",  # TBD
-        router_contract="",  # TBD
-        policy_contract="",  # TBD
+        paymaster_url="https://bsc-megafuel.nodereal.io/",
+        use_paymaster=True,
+        registry_contract="0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
+        commerce_contract="0xea4daa3100a767e86fded867729ae7446476eba6",
+        router_contract="0x51895229e12f9876011789b04f8698af06ccd6da",
+        policy_contract="0x9c01845705b3078aa2e8cff7520a6376fd766de5",
     ),
 }
 
@@ -85,7 +87,7 @@ def resolve_network(network: str | NetworkConfig = "bsc-testnet") -> NetworkConf
     concrete ``NetworkConfig`` instance:
 
     - **String** → look up the preset; apply ``RPC_URL`` env override if set.
-      Module-scoped contract-address envs (``APEX_*``, ``ERC8004_*``) are
+      Module-scoped contract-address envs (``ERC8183_*``, ``ERC8004_*``) are
       NOT read here — they belong to each module's own config loader.
     - **NetworkConfig** → returned as-is; env vars are never applied (fully
       explicit control is the point of passing an object).
@@ -146,7 +148,7 @@ class BNBAgentConfig(AgentConfig):
         )
 
     def get(self, key: str, default: Any = None) -> Any:
-        """Get a config value. Supports dotted keys: ``'apex.service_price'``."""
+        """Get a config value. Supports dotted keys: ``'erc8183.service_price'``."""
         if "." in key:
             module_name, sub_key = key.split(".", 1)
             return self.modules.get(module_name, {}).get(sub_key, default)
