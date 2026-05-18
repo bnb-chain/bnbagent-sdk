@@ -48,7 +48,10 @@ class LocalStorageProvider(StorageProvider):
                     hash_hex = self.compute_hash(data).hex()
                     fname = f"{hash_hex}.json"
 
-            filepath = self._base / fname
+            filepath = (self._base / fname).resolve()
+            base_resolved = self._base.resolve()
+            if not filepath.is_relative_to(base_resolved):
+                raise StorageError("Path traversal blocked: path is outside storage directory")
             filepath.write_text(content, encoding="utf-8")
             # Restrict file permissions to owner only (rw-------)
             os.chmod(filepath, stat.S_IRUSR | stat.S_IWUSR)

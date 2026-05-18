@@ -59,6 +59,11 @@ class TestLocalStorageProvider:
         assert url.startswith("file://")
         assert "sync-test.json" in url
 
+    def test_save_sync_path_traversal_blocked(self, tmp_path):
+        provider = LocalStorageProvider(str(tmp_path / "data"))
+        with pytest.raises(StorageError, match="Path traversal blocked"):
+            provider.save_sync({"sync": True}, "../escape.json")
+
     @pytest.mark.asyncio
     async def test_download_success(self, tmp_path):
         provider = LocalStorageProvider(str(tmp_path / "data"))
