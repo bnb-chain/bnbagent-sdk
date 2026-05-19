@@ -1,0 +1,82 @@
+"""Flow C — stalemate → expiry refund.
+
+Client disputes but quorum is never reached. Settlement is impossible
+because the policy stays PENDING. Once the job passes its ``expiredAt``
+deadline, the client (or anyone) calls ``claimRefund`` — the universal
+escape hatch on the kernel.
+
+NOTE: ``expiredAt`` must accommodate the policy's dispute window because
+the provider has to submit before ``expiredAt - disputeWindow``. The
+script's wall-clock wait scales with that window, so on a network
+configured with a multi-hour window this demo is slow by design.
+"""
+
+from __future__ import annotations
+
+import time
+
+from _helpers import banner, expiry_for, load_settings, make_client
+
+from bnbagent.erc8183 import DeliverableManifest, JobStatus, SCHEMA_VERSION
+
+
+def main() -> None:
+    s = load_settings()
+    client = make_client(s.client_pk, s.network)
+
+    banner("STALEMATE — dispute without quorum, refund at expiry")
+
+    decimals = client.token_decimals()
+    budget = 1 * (10 ** decimals)
+
+    # Smallest expiry that still admits a valid submit: disputeWindow + 1 min.
+    expired_at = expiry_for(client, slack_minutes=1)
+
+    res = client.create_job(
+        provider=s.provider_address,
+        expired_at=expired_at,
+        description="ERC-8183 demo: stalemate",
+    )
+    job_id = res["jobId"]
+    print(f"[client] createJob jobId={job_id} expiredAt={expired_at}")
+    client.register_job(job_id)
+    client.set_budget(job_id, budget)
+    client.fund(job_id, budget)
+
+    if not s.provider_pk:
+        print(f"\nProvider must submit jobId={job_id} before continuing.\n")
+        return
+    provider = make_client(s.provider_pk, s.network)
+    manifest = DeliverableManifest(
+        version=SCHEMA_VERSION,
+        job_id=job_id,
+        chain_id=provider.network.chain_id,
+        contracts={
+            "commerce": provider.commerce.address,
+            "router": provider.router.address,
+            "policy": provider.policy.address,
+        },
+        response={"content": f"stalemate test result for job {job_id}", "content_type": "text/plain"},
+    )
+    # In production: upload manifest.to_dict() to IPFS/storage first, then pass the URL.
+    # deliverable_url = storage.upload(manifest.to_dict(), f"job-{job_id}.json")
+    deliverable_url = "https://example.invalid/manifest.json"  # placeholder — these scripts test on-chain flow only
+    provider.submit(job_id, manifest.manifest_hash(), {"deliverable_url": deliverable_url})
+    print("[provider] submit OK")
+
+    client.dispute(job_id)
+    print("[client] dispute raised (no voter will act)")
+
+    wait = expired_at - int(time.time()) + 3
+    if wait > 0:
+        print(f"[client] waiting {wait}s for expiry...")
+        time.sleep(wait)
+
+    client.claim_refund(job_id)
+    job = client.get_job(job_id)
+    assert job.status == JobStatus.EXPIRED, f"expected EXPIRED, got {job.status.name}"
+    print(f"[client] claimRefund OK -> {job.status.name}")
+
+
+if __name__ == "__main__":
+    main()

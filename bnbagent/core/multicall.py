@@ -10,7 +10,7 @@ Example::
 
     results = multicall_read(
         w3=web3_instance,
-        contract=erc8183_contract,
+        contract=commerce_contract,
         function_name="getJob",
         call_args_list=[(0,), (1,), (2,)],
     )

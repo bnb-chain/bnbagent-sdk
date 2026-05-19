@@ -12,10 +12,15 @@ storage abstraction, and built-in support for the following protocols:
 
 - **ERC-8004** — On-chain identity registry for AI agents (register, discover,
   resolve endpoints).
-- **APEX Protocol** — Agentic commerce protocol comprising multiple contracts:
-  - **ERC-8183** — core job lifecycle contract (create, fund, complete, reject, refund).
-  - **APEX Evaluator** — pluggable settlement contract; current implementation
-    uses UMA Optimistic Oracle v3 (OOv3) for dispute resolution.
+- **ERC-8183 Protocol** — a three-layer agentic commerce stack:
+  - **AgenticCommerce** (ERC-8183 kernel) — job lifecycle + escrow
+    (create / setBudget / fund / submit / complete / reject / claimRefund).
+  - **EvaluatorRouter** — routing layer that doubles as `job.evaluator`
+    and `job.hook`. Binds `jobId → policy` on `registerJob`, pulls verdicts
+    on the permissionless `settle`.
+  - **OptimisticPolicy** — reference UMA-style policy. Silence past the
+    dispute window is implicit approval; a client can raise a dispute
+    that the whitelisted voters resolve by `voteReject` reaching quorum.
 
 The SDK is organized as a **plugin system**: each protocol is a self-contained
 module that can be used independently or composed via the `BNBAgent` facade.
@@ -32,20 +37,20 @@ making the SDK backend-agnostic.
               ┌────────────┼────────────┐
               │            │            │
         ┌─────▼─────┐ ┌───▼────┐ ┌────▼─────┐
-        │  erc8004   │ │  apex  │ │ wallets  │
-        │  Identity  │ │Commerce│ │ Signing  │
-        └─────┬──────┘ └───┬────┘ └────┬─────┘
-              │            │            │
-              └──────┬─────┘            │
-                     │                  │
-              ┌──────▼──────┐    ┌──────▼──────┐
-              │    core     │    │   storage   │
-              │ (infra)     │    │ (off-chain) │
-              └─────────────┘    └─────────────┘
+        │  erc8004  │ │  erc8183  │ │ wallets  │
+        │  Identity │ │  v1    │ │ Signing  │
+        └─────┬─────┘ └───┬────┘ └────┬─────┘
+              │           │           │
+              └────┬──────┘           │
+                   │                  │
+            ┌──────▼──────┐    ┌──────▼──────┐
+            │    core     │    │ storage_    │
+            │ (infra)     │    │ providers   │
+            └─────────────┘    └─────────────┘
 ```
 
 Arrows point **downward** — upper layers depend on lower layers, never the
-reverse. `apex` depends on `erc8004` (for agent discovery). Both protocol
+reverse. `erc8183` depends on `erc8004` (for agent discovery). Both protocol
 modules depend on `core` for transaction management.
 
 ## Code Map
@@ -58,7 +63,7 @@ modules depend on `core` for transaction management.
 | `main.py` | `BNBAgent` — optional high-level facade over the module system |
 | `config.py` | `BNBAgentConfig`, `NetworkConfig`, `NETWORKS` registry, `resolve_network()` |
 | `constants.py` | Global constants (`SCAN_API_URL`) |
-| `exceptions.py` | `BNBAgentError` hierarchy (7 domain-specific exception types) |
+| `exceptions.py` | `BNBAgentError` hierarchy |
 
 ### `bnbagent/core/` — Internal Infrastructure
 
@@ -66,10 +71,11 @@ Not part of the public API. Provides shared plumbing for protocol modules.
 
 | File | Purpose |
 |------|---------|
-| `module.py` | `BNBAgentModule` ABC and `ModuleInfo` dataclass — the plugin contract |
+| `module.py` | `BNBAgentModule` ABC and `ModuleInfo` dataclass |
 | `registry.py` | `ModuleRegistry` — discovery (built-in + entry points), dependency validation, topological initialization |
-| `contract_mixin.py` | `ContractClientMixin` — shared transaction signing, nonce management, and retry with exponential backoff |
-| `nonce_manager.py` | `NonceManager` — thread-safe per-account nonce tracking with chain re-sync on conflict |
+| `contract_mixin.py` | `ContractClientMixin` — shared base for `CommerceClient`, `RouterClient`, `PolicyClient`, `MinimalERC20Client` (tx signing, nonce management, retry with backoff) |
+| `nonce_manager.py` | `NonceManager` — per-account thread-safe nonce tracking with chain re-sync |
+| `multicall.py` | `multicall_read()` — Multicall3 batch view helper |
 | `paymaster.py` | `Paymaster` — ERC-4337 gas sponsorship client |
 | `abi_loader.py` | ABI file loading from bundled JSON |
 
@@ -79,71 +85,66 @@ Not part of the public API. Provides shared plumbing for protocol modules.
 |------|---------|
 | `agent.py` | `ERC8004Agent` — high-level SDK: `register_agent()`, `get_agent_info()`, `get_all_agents()` |
 | `contract.py` | `ContractInterface` — low-level web3 contract calls |
-| `models.py` | `AgentEndpoint` dataclass (name, endpoint URL, version, capabilities) |
-| `constants.py` | `get_erc8004_config()` — lazy per-network contract addresses |
-| `module.py` | `ERC8004Module` plugin + `create_module()` factory |
+| `models.py` | `AgentEndpoint` dataclass |
+| `constants.py` | `get_erc8004_config()` — per-network contract addresses |
+| `module.py` | `ERC8004Module` plugin |
 
-### `bnbagent/apex/` — APEX Protocol
+### `bnbagent/erc8183/` — ERC-8183 Protocol
 
-| File | Purpose |
-|------|---------|
-| `client.py` | `APEXClient` — ERC-8183 contract interaction (create/fund/complete/reject jobs, `fund_with_permit()`, fee management via `platform_fee_bp()`/`set_platform_fee()`/`set_evaluator_fee()`, `get_default_expiry()` with 72h DVM buffer); `APEXStatus` enum |
-| `evaluator_client.py` | `APEXEvaluatorClient` — UMA OOv3 evaluator with provider-pays-bond model (`initiate_assertion()`, `check_bond_readiness()`, `approve_bond_token()`); deprecated pool methods (`deposit_bond`, `withdraw_bond`) |
-| `config.py` | `APEXConfig` — unified config (wallet_provider + storage + contract addresses) |
-| `negotiation.py` | `NegotiationHandler`, structured description Schema v1 (`build_job_description()` with `negotiation_hash` + `provider_sig`), `_sanitize_for_claim()`, request/response models, `TermSpecification`, `ReasonCode` |
-| `service_record.py` | `ServiceRecord`, `RequestData`, `ResponseData` — dispute evidence structure |
-| `constants.py` | `get_apex_config()` — lazy per-network contract addresses |
-| `module.py` | `APEXModule` plugin (declares dependency on `erc8004`) |
-
-### `bnbagent/apex/server/` — FastAPI Integration
+High-level facade over three contracts. Most callers only touch `ERC8183Client`.
 
 | File | Purpose |
 |------|---------|
-| `routes.py` | `create_apex_app()` — FastAPI app factory; `APEXState` |
-| `job_ops.py` | `APEXJobOps` — async wrapper over synchronous `APEXClient` via `asyncio.to_thread()`; includes `get_response()` for retrieving stored deliverables, `initiate_assertion()` for bond approval + UMA assertion, and quote expiry validation (410 on expired) |
+| `client.py` | `ERC8183Client` — facade over Commerce / Router / Policy; floor-based `fund` approval; cached `payment_token` / `token_decimals` / `token_symbol`; high-level wrappers for `create_job`, `register_job`, `set_budget`, `fund`, `submit`, `settle`, `dispute`, `vote_reject`, `claim_refund` |
+| `commerce.py` | `CommerceClient` — low-level wrapper for `AgenticCommerceUpgradeable` |
+| `router.py` | `RouterClient` — low-level wrapper for `EvaluatorRouterUpgradeable` |
+| `policy.py` | `PolicyClient` — low-level wrapper for `OptimisticPolicy` (dispute / voteReject / check / voter admin) |
+| `../erc20/client.py` | `MinimalERC20Client` — used by `ERC8183Client` for the payment token (decimals/symbol/balanceOf/allowance/approve) |
+| `types.py` | `JobStatus`, `Verdict`, `REASON_APPROVED`, `REASON_REJECTED`, `Job` dataclass |
+| `config.py` | `ERC8183Config` — unified config (wallet_provider + storage + contract overrides) |
+| `negotiation.py` | `NegotiationHandler`, structured description schema, quote expiry |
+| `schema.py` | `DeliverableManifest`, `JobDescription`, `SCHEMA_VERSION` — on-chain description and off-chain deliverable JSON |
+| `constants.py` | `get_erc8183_config()` — per-network defaults |
+| `module.py` | `ERC8183Module` plugin |
+
+### `bnbagent/erc8183/server/` — FastAPI Integration
+
+| File | Purpose |
+|------|---------|
+| `routes.py` | `create_erc8183_app()` FastAPI factory; `ERC8183State`; `/erc8183/job/{id}`, `/erc8183/negotiate`, `/erc8183/status`, `/erc8183/health`; funded-job background poll loop when `on_job` is provided |
+| `job_ops.py` | `ERC8183JobOps` — async wrapper over `ERC8183Client`; incremental scan for newly funded jobs; `submit_result` for deliverable submission |
 
 ### `bnbagent/wallets/` — Wallet Providers
 
 | File | Purpose |
 |------|---------|
 | `wallet_provider.py` | `WalletProvider` ABC — `address`, `sign_transaction()`, `sign_message()` |
-| `evm_wallet_provider.py` | `EVMWalletProvider` — Keystore V3 encryption (scrypt + AES-128-CTR), `persist=True/False` |
+| `evm_wallet_provider.py` | `EVMWalletProvider` — Keystore V3 encryption (scrypt + AES-128-CTR) |
 | `mpc_wallet_provider.py` | `MPCWalletProvider` — stub for future MPC signer support |
 
 ### `bnbagent/storage/` — Storage Providers
 
 | File | Purpose |
 |------|---------|
-| `interface.py` | `StorageProvider` ABC — async `upload()`, `download()`, `exists()`, `compute_hash()` |
-| `config.py` | `StorageConfig` dataclass |
-| `factory.py` | `create_storage_provider(config)` — factory function |
-| `local_provider.py` | `LocalStorageProvider` — file-system storage (`file://` URLs) |
-| `ipfs_provider.py` | `IPFSStorageProvider` — IPFS pinning via HTTP API (Pinata-compatible) |
-| `sync_utils.py` | `upload_sync()` — synchronous bridge for calling async providers from non-async code |
+| `storage_provider.py` | `StorageProvider` ABC — async `upload()`, `download()`, `exists()`, `compute_hash()` |
+| `local_storage_provider.py` | `LocalStorageProvider` — filesystem (`file://` URLs); owns its own `from_env()` |
+| `ipfs_storage_provider.py` | `IPFSStorageProvider` — IPFS pinning via HTTP API (Pinata-compatible); owns its own `from_env()` |
+| `sync_utils.py` | `upload_sync()` — synchronous bridge |
 
-### `bnbagent/utils/` — Utilities
+### `examples/`
 
-| File | Purpose |
-|------|---------|
-| `agent_uri.py` | `AgentURIGenerator` — agent URI generation for discovery |
-| `state_file.py` | `StateFileManager` — atomic JSON state persistence |
-
-### `examples/` — Usage Examples
-
-| Directory | What it demonstrates |
-|-----------|---------------------|
-| `getting-started/` | Step-by-step: wallet setup → agent registration → server → job creation → settlement |
-| `client-workflow/` | Client-side job creation workflow |
-| `agent-server/` | Full agent server with startup scan and client-driven job execution |
-| `evaluator/` | Evaluator/keeper scripts (Node.js) |
+| Directory | Role | What it demonstrates |
+|-----------|------|----------------------|
+| `client/` | Client | 5 stand-alone scripts — happy / dispute-reject / stalemate-expire / never-submit / cancel-open |
+| `voter/` | Voter | `voteReject` script + `Disputed` event watcher |
+| `agent-server/` | Provider | FastAPI agent with funded-job poll loop and a public `/negotiate` quote endpoint |
 
 ### `tests/` — Test Suite
 
-20+ test files covering all packages. Uses `pytest` + `pytest-mock` +
-`pytest-asyncio`. Tests mock web3 and external services; no live chain calls
-in CI.
+`pytest` + `pytest-mock` + `pytest-asyncio`. Tests mock web3 and external
+services; no live chain calls in CI.
 
-## Public API Tiers
+## Public API
 
 **Tier 1** — importable directly from `bnbagent`:
 
@@ -152,17 +153,19 @@ from bnbagent import (
     BNBAgent, BNBAgentConfig, NetworkConfig, BNBAgentError,
     ERC8004Agent, AgentEndpoint,
     WalletProvider, EVMWalletProvider,
-    APEXClient, APEXStatus,
-    StorageConfig,
+    ERC8183Client, JobStatus, Verdict,
 )
 ```
 
 **Tier 2** — import from subpackages:
 
 ```python
-from bnbagent.apex import NegotiationHandler, APEXEvaluatorClient
-from bnbagent.apex.server import create_apex_app, APEXJobOps
-from bnbagent.apex.config import APEXConfig
+from bnbagent.erc8183 import (
+    ERC8183Client, CommerceClient, RouterClient, PolicyClient,
+    JobStatus, Verdict, Job,
+)
+from bnbagent.erc8183.server import create_erc8183_app, ERC8183JobOps
+from bnbagent.erc8183.config import ERC8183Config
 from bnbagent.storage import LocalStorageProvider, IPFSStorageProvider
 ```
 
@@ -173,7 +176,7 @@ subclass discovered and managed by `ModuleRegistry`.
 
 **Lifecycle:**
 
-1. `discover()` — imports built-in modules (`erc8004`, `apex`) + scans
+1. `discover()` — imports built-in modules (`erc8004`, `erc8183`) + scans
    `bnbagent.modules` entry-point group for third-party plugins
 2. `validate_dependencies()` — ensures all declared dependencies are present
 3. `_topological_sort()` — orders modules so dependencies initialize first
@@ -192,30 +195,40 @@ my_module = "my_package:create_module"
 
 ```
 NetworkConfig (NETWORKS dict in config.py)
-  ├── bsc-testnet  (chain_id=97)  — active, all contracts deployed
-  └── bsc-mainnet  (chain_id=56)  — placeholder, contracts pending
+  ├── bsc-testnet  (chain_id=97)  — active, ERC-8183 + ERC-8004 deployed
+  └── bsc-mainnet  (chain_id=56)  — active, ERC-8183 + ERC-8004 deployed
 
 resolve_network(name) + env var overrides
-  ↓
+  ↓ (clients assert w3.eth.chain_id == nc.chain_id at init — wrong RPC → ValueError)
 BNBAgentConfig
   ├── wallet_provider  (explicit or auto-wrapped from private_key)
   ├── settings         (general key-value)
-  └── modules          (namespaced: {"apex": {"evaluator_address": "0x..."}})
+  └── modules          (namespaced: {"erc8183": {"commerce_address": "0x..."}})
 ```
 
-**Environment variable overrides** (applied by `resolve_network()`):
+**Environment variable overrides** (module-scoped):
 
-| Variable | Overrides |
-|----------|-----------|
-| `RPC_URL` | `rpc_url` |
-| `IDENTITY_REGISTRY_ADDRESS` | `registry_contract` |
-| `ERC8183_ADDRESS` | `erc8183_contract` |
-| `APEX_EVALUATOR_ADDRESS` | `apex_evaluator` |
-| `PAYMENT_TOKEN_ADDRESS` | `payment_token` |
+| Variable | Scope | Overrides |
+|----------|-------|-----------|
+| `RPC_URL` | global (`resolve_network`) | `rpc_url` |
+| `ERC8183_COMMERCE_ADDRESS` | `ERC8183Config.effective_network` | `commerce_contract` |
+| `ERC8183_ROUTER_ADDRESS` | `ERC8183Config.effective_network` | `router_contract` |
+| `ERC8183_POLICY_ADDRESS` | `ERC8183Config.effective_network` | `policy_contract` |
+| `ERC8004_REGISTRY_ADDRESS` | `get_erc8004_config` | `registry_contract` |
 
-Both `BNBAgentConfig` and `APEXConfig` support a convenience pattern:
+`resolve_network()` itself only honours `RPC_URL`. Contract-address overrides
+are applied by each module's own config loader — keeps each module's env
+surface self-contained and obvious from the prefix.
+
+When `network=NetworkConfig(...)` is passed directly (instead of a preset
+name), env overrides are **not** applied — the object is used as-is.
+
+Payment token address is NOT configurable — it is immutable on the Commerce
+kernel and fetched at runtime via `ERC8183Client.payment_token`.
+
+Both `BNBAgentConfig` and `ERC8183Config` support the convenience pattern:
 pass `private_key` + `wallet_password` and the config auto-wraps them into
-an `EVMWalletProvider(persist=False)`, then **clears the plaintext key**.
+an `EVMWalletProvider`, then **clears the plaintext key**.
 
 ## Invariants
 
@@ -227,13 +240,15 @@ These properties hold across the codebase and should be preserved:
   goes through the registry or shared config. Module dependencies are declared
   in `ModuleInfo.dependencies` and enforced at initialization.
 - **`ContractClientMixin` prefers `wallet_provider` over raw `private_key`.**
-  The raw-key path exists only for backward compatibility in low-level clients.
 - **Storage providers are async.** Synchronous callers use `upload_sync()`
-  (runs `asyncio.run()` in a thread pool) to avoid blocking the event loop.
+  to avoid blocking the event loop.
 - **Nonce management is per-account singleton.** `NonceManager.for_account()`
-  ensures one manager per address to prevent nonce collisions in concurrent code.
+  ensures one manager per address to prevent collisions in concurrent code.
 - **Retry with backoff on rate limits (429) and nonce conflicts.** Up to 5
   retries with exponential backoff. Nonce errors trigger chain re-sync.
+- **Payment token is dynamically fetched.** It is never part of `NetworkConfig`
+  or `ERC8183Config` because it is an immutable property of the deployed
+  Commerce kernel.
 
 ## Data Flows
 
@@ -248,31 +263,49 @@ ERC8004Agent.register_agent(name, endpoint, ...)
   → On-chain: IdentityRegistry stores agent metadata
 ```
 
-Other agents discover via `get_all_agents()` / `get_agent_info()`.
+### ERC-8183 Job Lifecycle
 
-### Job Lifecycle (APEX)
+Happy path (silence approve):
 
 ```
-1. Client discovers provider    →  ERC8004Agent.get_all_agents()
-2. Price negotiation            →  NegotiationHandler (off-chain HTTP)
-   └─ structured description    →  build_job_description() → negotiation_hash + provider_sig
-3. Client creates job           →  APEXClient.create_job(description=structured_json)
-   └─ or fund with permit       →  APEXClient.fund_with_permit() (approve + fund in 1 tx)
-4. Provider executes task       →  APEXJobOps (async server)
-5. Provider uploads evidence    →  StorageProvider.upload()  →  ServiceRecord
-6. Provider submits deliverable →  APEXClient.submit()  →  afterAction hook stores dataUrl
-7. Provider stakes bond         →  APEXEvaluatorClient.approve_bond_token() + initiate_assertion()
-8. Liveness period (30 min)     →  anyone can dispute by posting counter-bond
-9. Settlement                   →  APEXEvaluatorClient.settle_job()  →  payment release (minus fees)
+1. Discover provider             →  ERC8004Agent.get_all_agents()
+2. Negotiate price (off-chain)   →  NegotiationHandler (HTTP)
+3. createJob(provider, router)   →  ERC8183Client.create_job(...)       Open
+4. registerJob(jobId, policy)    →  ERC8183Client.register_job(...)     Open
+5. setBudget(jobId, amount)      →  ERC8183Client.set_budget(...)       Open
+6. approve(commerce, amount) +
+   fund(jobId, amount)           →  ERC8183Client.fund(...)             Funded
+                                    (floor-based auto-approval)
+7. Provider submit(deliverable)  →  ERC8183Client.submit(...)           Submitted
+8. Wait dispute window           →  time passes
+9. router.settle(jobId, "")      →  ERC8183Client.settle(...)           Completed
+   (permissionless; any party can call from their own wallet)
 ```
+
+Dispute branches:
+
+- Client calls `ERC8183Client.dispute(jobId)` during the window → voters cast
+  `ERC8183Client.vote_reject(jobId)` → once `rejectVotes >= quorum`, `settle`
+  moves the job to **REJECTED** and refunds the client.
+- No quorum ever reached → `settle` stays blocked; once `expiredAt` passes,
+  anyone calls `ERC8183Client.claim_refund(jobId)` → **EXPIRED**.
+
+`claimRefund` is non-pausable and non-hookable by design — the universal
+escape hatch at expiry.
 
 ### Server Request Flow (FastAPI)
 
 ```
 HTTP request
   → Route handler (routes.py)
-  → APEXJobOps (async) → asyncio.to_thread() → APEXClient (sync/web3)
+  → ERC8183JobOps (async) → asyncio.to_thread() → ERC8183Client (sync/web3)
   → Response
+
+Background tasks (when on_job is provided)
+  - Funded-job poll loop: scan Commerce for newly FUNDED jobs assigned to
+    this provider, dispatch each through on_job → submit_result. The SDK
+    does NOT auto-settle: settle is permissionless and runs as a separate
+    operator script (see examples/agent-server/scripts/settle.py).
 ```
 
 ## Exception Hierarchy
@@ -291,12 +324,9 @@ BNBAgentError
 ## Extension Points
 
 - **Custom WalletProvider** — subclass `WalletProvider` to support HSMs,
-  multisig, or MPC signers. The SDK calls `sign_transaction()` and `address`
-  without assuming a key-management backend.
-
+  multisig, or MPC signers.
 - **Custom StorageProvider** — implement the `StorageProvider` ABC for
   alternative backends (S3, Arweave, etc.).
-
 - **Custom Module** — extend `BNBAgentModule` and register via entry points
   to add new protocol support without modifying the SDK.
 

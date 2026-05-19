@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from bnbagent.apex.negotiation import (
+from bnbagent.erc8183.negotiation import (
     NegotiationHandler,
     NegotiationRequest,
     NegotiationResponse,
@@ -21,7 +21,6 @@ from bnbagent.apex.negotiation import (
 
 def _make_terms(**overrides):
     defaults = {
-        "service_type": "blockchain-news",
         "deliverables": "news summary",
         "quality_standards": "accurate, sourced",
     }
@@ -51,10 +50,8 @@ def _make_accepted_result(
         "request": {
             "task_description": task,
             "terms": {
-                "service_type": "blockchain-news",
                 "deliverables": "news summary",
                 "quality_standards": "accurate, sourced",
-                "deadline_seconds": None,
                 "evaluation_required": True,
                 "evaluator_type": "uma_oov3",
             },
@@ -63,10 +60,8 @@ def _make_accepted_result(
         "response": {
             "accepted": True,
             "terms": {
-                "service_type": "blockchain-news",
                 "deliverables": "news summary",
                 "quality_standards": "accurate, sourced",
-                "deadline_seconds": None,
                 "evaluation_required": True,
                 "evaluator_type": "uma_oov3",
                 "price": price,
@@ -85,10 +80,8 @@ class TestTermSpecification:
     def test_to_dict_required(self):
         t = _make_terms()
         d = t.to_dict()
-        assert d["service_type"] == "blockchain-news"
         assert d["deliverables"] == "news summary"
         assert d["quality_standards"] == "accurate, sourced"
-        assert "deadline_seconds" in d  # Always included (None)
 
     def test_to_dict_optional(self):
         t = _make_terms(
@@ -105,7 +98,7 @@ class TestTermSpecification:
         t = _make_terms(price="50", currency="0xABC")
         d = t.to_dict()
         t2 = TermSpecification.from_dict(d)
-        assert t2.service_type == t.service_type
+        assert t2.deliverables == t.deliverables
         assert t2.price == t.price
 
     def test_defaults(self):
@@ -147,14 +140,13 @@ class TestNegotiationRequest:
         d = {
             "task_description": "Do something",
             "terms": {
-                "service_type": "test",
                 "deliverables": "output",
                 "quality_standards": "high",
             },
         }
         req = NegotiationRequest.from_dict(d)
         assert req.task_description == "Do something"
-        assert req.terms.service_type == "test"
+        assert req.terms.deliverables == "output"
 
     def test_compute_hash_0x_prefix(self):
         req = _make_request()
@@ -299,11 +291,14 @@ class TestSanitizeForClaim:
 
 
 class TestBuildJobDescription:
+    # Note: build_job_description() returns a JSON *string*, so tests here use
+    # json.loads(desc) which produces a plain dict — not a JobDescription object.
+    # For parse_job_description() (which returns JobDescription), see TestParseJobDescription.
     def test_basic_structure(self):
         result = _make_accepted_result()
         desc = build_job_description(result)
         parsed = json.loads(desc)
-        assert parsed["v"] == 1
+        assert parsed["version"] == 1
         assert parsed["task"] == "Get latest news"
         assert "terms" in parsed
         assert parsed["price"] == "20000000000000000000"
@@ -316,10 +311,10 @@ class TestBuildJobDescription:
         desc = build_job_description(result)
         parsed = json.loads(desc)
         terms = parsed["terms"]
-        assert terms["service_type"] == "blockchain-news"
         assert terms["deliverables"] == "news summary"
         assert terms["quality_standards"] == "accurate, sourced"
-        # price and currency should NOT be in terms
+        assert "service_type" not in terms
+        assert "deadline_seconds" not in terms
         assert "price" not in terms
         assert "currency" not in terms
 
@@ -394,8 +389,8 @@ class TestParseJobDescription:
         desc = build_job_description(result)
         parsed = parse_job_description(desc)
         assert parsed is not None
-        assert parsed["v"] == 1
-        assert "task" in parsed
+        assert parsed.version == 1
+        assert parsed.task
 
     def test_returns_none_for_plain_text(self):
         assert parse_job_description("Search for BNB Chain news") is None
@@ -406,15 +401,15 @@ class TestParseJobDescription:
     def test_returns_none_for_invalid_json(self):
         assert parse_job_description("{not valid json}") is None
 
-    def test_returns_none_for_json_without_v(self):
+    def test_returns_none_for_json_without_version(self):
         assert parse_job_description('{"task": "something"}') is None
 
     def test_roundtrip(self):
         result = _make_accepted_result()
         desc = build_job_description(result)
         parsed = parse_job_description(desc)
-        assert parsed["task"] == "Get latest news"
-        assert parsed["price"] == "20000000000000000000"
+        assert parsed.task == "Get latest news"
+        assert parsed.price == "20000000000000000000"
 
 
 class TestNegotiationHandler:
@@ -431,7 +426,6 @@ class TestNegotiationHandler:
         request_data = {
             "task_description": "Get news",
             "terms": {
-                "service_type": "blockchain-news",
                 "deliverables": "summary",
                 "quality_standards": "accurate",
             },
@@ -443,11 +437,10 @@ class TestNegotiationHandler:
         assert result.response_hash.startswith("0x")
 
     def test_quote_expires_at_in_response(self):
-        handler = self._make_handler(quote_ttl_seconds=1800)
+        handler = self._make_handler(quote_ttl_seconds=180)
         request_data = {
             "task_description": "Get news",
             "terms": {
-                "service_type": "blockchain-news",
                 "deliverables": "summary",
                 "quality_standards": "accurate",
             },
@@ -457,7 +450,23 @@ class TestNegotiationHandler:
         quote_exp = result.response.get("quote_expires_at")
         assert quote_exp is not None
         assert quote_exp > int(time.time())
-        assert quote_exp <= int(time.time()) + 1800 + 5  # small tolerance
+        assert quote_exp <= int(time.time()) + 180 + 5  # small tolerance
+
+    def test_quote_ttl_cap_enforced(self):
+        with pytest.raises(ValueError, match="quote_ttl_seconds"):
+            self._make_handler(quote_ttl_seconds=301)
+        with pytest.raises(ValueError, match="quote_ttl_seconds"):
+            self._make_handler(quote_ttl_seconds=0)
+        with pytest.raises(ValueError, match="quote_ttl_seconds"):
+            self._make_handler(quote_ttl_seconds=-1)
+        # Boundary: 300 is the max and must succeed.
+        self._make_handler(quote_ttl_seconds=300)
+
+    def test_quote_ttl_must_be_int(self):
+        with pytest.raises(ValueError, match="quote_ttl_seconds"):
+            self._make_handler(quote_ttl_seconds="120")  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match="quote_ttl_seconds"):
+            self._make_handler(quote_ttl_seconds=True)  # type: ignore[arg-type]
 
     def test_signs_with_wallet_provider(self):
         mock_wallet = MagicMock()
@@ -467,7 +476,6 @@ class TestNegotiationHandler:
         request_data = {
             "task_description": "Get news",
             "terms": {
-                "service_type": "blockchain-news",
                 "deliverables": "summary",
                 "quality_standards": "accurate",
             },
@@ -483,7 +491,6 @@ class TestNegotiationHandler:
         request_data = {
             "task_description": "Get news",
             "terms": {
-                "service_type": "blockchain-news",
                 "deliverables": "summary",
                 "quality_standards": "accurate",
             },
@@ -494,7 +501,7 @@ class TestNegotiationHandler:
 
     def test_negotiation_hash_is_keccak256_of_content(self):
         from web3 import Web3
-        from bnbagent.apex.negotiation import _build_description_content
+        from bnbagent.erc8183.negotiation import _build_description_content
 
         mock_wallet = MagicMock()
         mock_wallet.sign_message.return_value = {"signature": b"\xab" * 65}
@@ -503,7 +510,6 @@ class TestNegotiationHandler:
         request_data = {
             "task_description": "Get news",
             "terms": {
-                "service_type": "blockchain-news",
                 "deliverables": "summary",
                 "quality_standards": "accurate",
             },
@@ -525,26 +531,11 @@ class TestNegotiationHandler:
         assert result.accepted is False
         assert result.response.get("reason_code") == ReasonCode.AMBIGUOUS_TERMS
 
-    def test_unsupported_service_type(self):
-        handler = self._make_handler(supported_service_types=["translation"])
-        request_data = {
-            "task_description": "Get news",
-            "terms": {
-                "service_type": "blockchain-news",
-                "deliverables": "summary",
-                "quality_standards": "accurate",
-            },
-        }
-        result = handler.negotiate(request_data)
-        assert result.accepted is False
-        assert result.response.get("reason_code") == ReasonCode.UNSUPPORTED
-
     def test_missing_quality_standards(self):
         handler = self._make_handler(require_quality_standards=True)
         request_data = {
             "task_description": "Do something",
             "terms": {
-                "service_type": "test",
                 "deliverables": "output",
                 "quality_standards": "",
             },
@@ -553,22 +544,220 @@ class TestNegotiationHandler:
         assert result.accepted is False
         assert result.response.get("reason_code") == ReasonCode.AMBIGUOUS_TERMS
 
-    def test_from_apex_client(self):
+    def test_from_erc8183_client(self):
         mock_client = MagicMock()
-        mock_client.payment_token.return_value = "0xTokenAddr"
-        handler = NegotiationHandler.from_apex_client(
-            apex_client=mock_client,
+        mock_client.payment_token = "0xTokenAddr"
+        handler = NegotiationHandler.from_erc8183_client(
+            erc8183_client=mock_client,
             service_price="20000000000000000000",
         )
         assert handler._currency == "0xTokenAddr"
 
-    def test_from_apex_client_passes_wallet(self):
+    def test_from_erc8183_client_passes_wallet(self):
         mock_client = MagicMock()
-        mock_client.payment_token.return_value = "0xTokenAddr"
+        mock_client.payment_token = "0xTokenAddr"
         mock_wallet = MagicMock()
-        handler = NegotiationHandler.from_apex_client(
-            apex_client=mock_client,
+        handler = NegotiationHandler.from_erc8183_client(
+            erc8183_client=mock_client,
             service_price="20000000000000000000",
             wallet_provider=mock_wallet,
         )
         assert handler._wallet_provider is mock_wallet
+
+
+class TestNegotiationSignatureBinding:
+    """Verify chain_id + verifying_contract are embedded in the signed content
+    so provider_sig cannot be replayed across EVM chains (audit I01)."""
+
+    def _make_handler(self, **kwargs):
+        defaults = dict(
+            service_price="20000000000000000000",
+            currency="0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
+        )
+        defaults.update(kwargs)
+        return NegotiationHandler(**defaults)
+
+    def _request(self):
+        return {
+            "task_description": "Get news",
+            "terms": {"deliverables": "summary", "quality_standards": "accurate"},
+        }
+
+    def test_content_includes_chain_id_when_set(self):
+        from bnbagent.erc8183.negotiation import _build_description_content
+
+        mock_wallet = MagicMock()
+        mock_wallet.sign_message.return_value = {"signature": b"\xab" * 65}
+        handler = self._make_handler(wallet_provider=mock_wallet, chain_id=56)
+        result = handler.negotiate(self._request())
+
+        content = _build_description_content(result.to_dict(), chain_id=56)
+        assert content["chain_id"] == 56
+        # And the negotiation_hash must be derived from the chain-bound content.
+        from web3 import Web3
+        canonical = json.dumps(content, sort_keys=True, separators=(",", ":"))
+        expected = "0x" + Web3.keccak(text=canonical).hex().lstrip("0x")
+        assert result.negotiation_hash.lstrip("0x") == expected.lstrip("0x")
+
+    def test_content_includes_verifying_contract_when_set(self):
+        from web3 import Web3
+        from bnbagent.erc8183.negotiation import _build_description_content
+
+        commerce_addr = Web3.to_checksum_address("0xa206c0517b6371c6638cd9e4a42cc9f02a33b0de")
+        mock_wallet = MagicMock()
+        mock_wallet.sign_message.return_value = {"signature": b"\xab" * 65}
+        handler = self._make_handler(
+            wallet_provider=mock_wallet,
+            chain_id=97,
+            verifying_contract=commerce_addr,
+        )
+        result = handler.negotiate(self._request())
+
+        content = _build_description_content(
+            result.to_dict(), chain_id=97, verifying_contract=commerce_addr,
+        )
+        assert content["verifying_contract"] == commerce_addr  # checksummed
+        # Hash binds the contract too.
+        canonical = json.dumps(content, sort_keys=True, separators=(",", ":"))
+        expected = "0x" + Web3.keccak(text=canonical).hex().lstrip("0x")
+        assert result.negotiation_hash.lstrip("0x") == expected.lstrip("0x")
+
+    def test_content_omits_fields_when_not_set(self):
+        from bnbagent.erc8183.negotiation import _build_description_content
+
+        mock_wallet = MagicMock()
+        mock_wallet.sign_message.return_value = {"signature": b"\xab" * 65}
+        handler = self._make_handler(wallet_provider=mock_wallet)
+        result = handler.negotiate(self._request())
+
+        content = _build_description_content(result.to_dict())
+        assert "chain_id" not in content
+        assert "verifying_contract" not in content
+
+    def test_different_chain_id_produces_different_signature(self):
+        """Same negotiation on different chains must yield different hashes."""
+        mock_wallet = MagicMock()
+        mock_wallet.sign_message.return_value = {"signature": b"\xab" * 65}
+
+        h_testnet = self._make_handler(
+            wallet_provider=mock_wallet, chain_id=97,
+        ).negotiate(self._request()).negotiation_hash
+        h_mainnet = self._make_handler(
+            wallet_provider=mock_wallet, chain_id=56,
+        ).negotiate(self._request()).negotiation_hash
+
+        assert h_testnet != h_mainnet
+
+    def test_from_erc8183_client_populates_chain_id_and_contract(self):
+        mock_client = MagicMock()
+        mock_client.payment_token = "0xTokenAddr"
+        mock_client.network.chain_id = 97
+        mock_client.commerce.address = "0xa206c0517B6371c6638cD9E4A42cC9F02A33B0de"
+
+        handler = NegotiationHandler.from_erc8183_client(
+            erc8183_client=mock_client,
+            service_price="20000000000000000000",
+        )
+        assert handler._chain_id == 97
+        assert handler._verifying_contract == "0xa206c0517B6371c6638cD9E4A42cC9F02A33B0de"
+
+    def test_wallet_without_chain_id_logs_warning(self, caplog):
+        with caplog.at_level("WARNING"):
+            self._make_handler(wallet_provider=MagicMock())
+        assert "chain_id is None" in caplog.text
+
+
+class TestChainBindingRoundtrip:
+    """End-to-end: signed negotiation_hash MUST be reproducible from the
+    on-chain job.description string, otherwise provider_sig is unverifiable."""
+
+    def _make_handler(self, **kwargs):
+        defaults = dict(
+            service_price="20000000000000000000",
+            currency="0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
+        )
+        defaults.update(kwargs)
+        return NegotiationHandler(**defaults)
+
+    def test_build_job_description_includes_chain_id_when_present(self):
+        from web3 import Web3
+        commerce_addr = Web3.to_checksum_address(
+            "0xa206c0517b6371c6638cd9e4a42cc9f02a33b0de"
+        )
+        mock_wallet = MagicMock()
+        mock_wallet.sign_message.return_value = {"signature": b"\xab" * 65}
+        handler = self._make_handler(
+            wallet_provider=mock_wallet, chain_id=56, verifying_contract=commerce_addr,
+        )
+        result = handler.negotiate({
+            "task_description": "Get news",
+            "terms": {"deliverables": "summary", "quality_standards": "accurate"},
+        })
+
+        description_json = build_job_description(result.to_dict())
+        parsed = json.loads(description_json)
+        assert parsed["chain_id"] == 56
+        assert parsed["verifying_contract"] == commerce_addr
+
+    def test_signature_roundtrip_with_chain_binding(self):
+        """The hash signed by negotiate() must match the hash a verifier would
+        compute by stripping negotiation_hash/provider_sig from the on-chain
+        JSON and re-running keccak. Without this, provider_sig is useless."""
+        from web3 import Web3
+        commerce_addr = Web3.to_checksum_address(
+            "0xa206c0517b6371c6638cd9e4a42cc9f02a33b0de"
+        )
+        mock_wallet = MagicMock()
+        mock_wallet.sign_message.return_value = {"signature": b"\xab" * 65}
+        handler = self._make_handler(
+            wallet_provider=mock_wallet, chain_id=97, verifying_contract=commerce_addr,
+        )
+        result = handler.negotiate({
+            "task_description": "Get news",
+            "terms": {"deliverables": "summary", "quality_standards": "accurate"},
+        })
+
+        # Simulate downstream verifier:
+        description_json = build_job_description(result.to_dict())
+        parsed = json.loads(description_json)
+        # Strip non-content fields, exactly as a verifier would.
+        parsed.pop("negotiation_hash", None)
+        parsed.pop("provider_sig", None)
+        canonical = json.dumps(parsed, sort_keys=True, separators=(",", ":"))
+        recomputed = "0x" + Web3.keccak(text=canonical).hex().lstrip("0x")
+
+        assert recomputed.lstrip("0x") == result.negotiation_hash.lstrip("0x"), (
+            "On-chain description must hash to the same value that provider_sig "
+            "signed; otherwise ecrecover-based verification will fail."
+        )
+
+
+class TestSigningFailureLogging:
+    """Audit I03: signing failures must produce a log entry."""
+
+    def _make_handler(self, **kwargs):
+        defaults = dict(
+            service_price="20000000000000000000",
+            currency="0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
+        )
+        defaults.update(kwargs)
+        return NegotiationHandler(**defaults)
+
+    def test_signing_failure_is_logged(self, caplog):
+        mock_wallet = MagicMock()
+        mock_wallet.sign_message.side_effect = RuntimeError("hardware key offline")
+        handler = self._make_handler(wallet_provider=mock_wallet, chain_id=97)
+
+        with caplog.at_level("WARNING"):
+            result = handler.negotiate({
+                "task_description": "Get news",
+                "terms": {"deliverables": "summary", "quality_standards": "accurate"},
+            })
+
+        # Quote still returned but without sig.
+        assert result.accepted is True
+        assert result.negotiation_hash == ""
+        assert result.provider_sig == ""
+        # The failure must be visible to operators.
+        assert "sign_message failed" in caplog.text
+        assert "hardware key offline" in caplog.text

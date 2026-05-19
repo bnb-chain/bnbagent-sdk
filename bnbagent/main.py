@@ -24,7 +24,7 @@ class BNBAgent:
         sdk = BNBAgent.from_env()
 
         # Access modules
-        apex = sdk.module("apex")
+        erc8183 = sdk.module("erc8183")
 
         # Get all AI actions (reserved)
         actions = sdk.actions()

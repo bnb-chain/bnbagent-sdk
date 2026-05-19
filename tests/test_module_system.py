@@ -50,9 +50,9 @@ class TestModuleInfo:
 
     def test_module_info_with_dependencies(self):
         info = ModuleInfo(
-            name="apex",
+            name="erc8183",
             version="0.1.0",
-            description="APEX",
+            description="ERC-8183",
             dependencies=("erc8004",),
         )
         assert info.dependencies == ("erc8004",)
@@ -155,7 +155,7 @@ class TestModuleRegistry:
         registry.discover(include_entry_points=False)
         names = registry.module_names
         assert "erc8004" in names
-        assert "apex" in names
+        assert "erc8183" in names
 
     def test_topological_sort_order(self):
         registry = ModuleRegistry()
@@ -189,9 +189,9 @@ class TestBNBAgentConfig:
         assert config.get("missing", "default") == "default"
 
     def test_get_dotted_key(self):
-        config = BNBAgentConfig(modules={"apex": {"erc8183": "0x123"}})
-        assert config.get("apex.erc8183") == "0x123"
-        assert config.get("apex.missing", "default") == "default"
+        config = BNBAgentConfig(modules={"erc8183": {"commerce_address": "0x123"}})
+        assert config.get("erc8183.commerce_address") == "0x123"
+        assert config.get("erc8183.missing", "default") == "default"
 
     def test_to_flat_dict(self):
         from unittest.mock import MagicMock
@@ -201,13 +201,13 @@ class TestBNBAgentConfig:
             network="bsc-testnet",
             wallet_provider=mock_wallet,
             settings={"debug": True},
-            modules={"apex": {"evaluator": "0x456"}},
+            modules={"erc8183": {"evaluator": "0x456"}},
         )
         flat = config.to_flat_dict()
         assert flat["network"] == "bsc-testnet"
         assert flat["wallet_provider"] is mock_wallet
         assert flat["debug"] is True
-        assert flat["apex.evaluator"] == "0x456"
+        assert flat["erc8183.evaluator"] == "0x456"
 
     def test_to_flat_dict_no_plaintext_key(self):
         config = BNBAgentConfig(
@@ -268,13 +268,14 @@ class TestBuiltinModules:
         assert info.dependencies == ()
         assert "registry_contract" in mod.default_config()
 
-    def test_apex_module(self):
-        from bnbagent.apex import create_module
+    def test_erc8183_module(self):
+        from bnbagent.erc8183 import create_module
 
         mod = create_module()
         info = mod.info()
-        assert info.name == "apex"
+        assert info.name == "erc8183"
         assert "erc8004" in info.dependencies
         config = mod.default_config()
-        assert "erc8183_contract" in config
-        assert "apex_evaluator" in config
+        assert "commerce_contract" in config
+        assert "router_contract" in config
+        assert "policy_contract" in config

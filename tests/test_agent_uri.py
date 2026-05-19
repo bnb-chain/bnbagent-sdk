@@ -8,7 +8,7 @@ import json
 import pytest
 
 from bnbagent import AgentEndpoint
-from bnbagent.utils.agent_uri import AgentURIGenerator
+from bnbagent.erc8004.agent_uri import AgentURIGenerator
 
 
 class TestAgentURIGenerator:

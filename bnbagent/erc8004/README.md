@@ -105,17 +105,17 @@ Override with env vars when needed:
 | Variable | Description | Default |
 |---|---|---|
 | `RPC_URL` | JSON-RPC endpoint | Network default |
-| `IDENTITY_REGISTRY_ADDRESS` | Registry contract address | Network default |
+| `ERC8004_REGISTRY_ADDRESS` | Registry contract address | Network default |
 
 ## Network Support
 
 | Network | Status | Chain ID | Registry Contract |
 |---------|--------|----------|-------------------|
 | BSC Testnet | **Active** | 97 | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
-| BSC Mainnet | Pending — contracts not yet deployed | 56 | -- |
+| BSC Mainnet | **Active** | 56 | `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` |
 
 ## Related
 
 - [`wallets`](../wallets/README.md) -- wallet providers used for signing.
 - [`core`](../core/README.md) -- paymaster, nonce manager, module system.
-- [`apex`](../apex/README.md) -- APEX commerce protocol built on top of agent identities.
+- [`erc8183`](../erc8183/README.md) -- ERC-8183 protocol built on top of agent identities.

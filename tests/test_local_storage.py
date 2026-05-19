@@ -6,7 +6,7 @@ import stat
 import pytest
 
 from bnbagent.exceptions import StorageError
-from bnbagent.storage.local_provider import LocalStorageProvider
+from bnbagent.storage.local_storage_provider import LocalStorageProvider
 
 
 class TestLocalStorageProvider:
@@ -45,19 +45,31 @@ class TestLocalStorageProvider:
         url = await provider.upload({"random": "data"})
         assert url.endswith(".json")
 
-    def test_file_permissions(self, tmp_path):
+    @pytest.mark.asyncio
+    async def test_file_permissions(self, tmp_path):
         provider = LocalStorageProvider(str(tmp_path / "data"))
-        provider.save_sync({"key": "val"}, "test.json")
+        url = await provider.upload({"key": "val"}, "test.json")
         filepath = tmp_path / "data" / "test.json"
         mode = os.stat(filepath).st_mode
-        assert mode & stat.S_IRUSR  # Owner can read
-        assert mode & stat.S_IWUSR  # Owner can write
+        assert mode & stat.S_IRUSR
+        assert mode & stat.S_IWUSR
 
-    def test_save_sync(self, tmp_path):
+    def test_upload_sync(self, tmp_path):
+        from bnbagent.storage import upload_sync
         provider = LocalStorageProvider(str(tmp_path / "data"))
-        url = provider.save_sync({"sync": True}, "sync-test.json")
+        url = upload_sync(provider, {"sync": True}, "sync-test.json")
         assert url.startswith("file://")
         assert "sync-test.json" in url
+
+    def test_from_env_default(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("STORAGE_LOCAL_PATH", raising=False)
+        provider = LocalStorageProvider.from_env()
+        assert str(provider._base) == ".agent-data"
+
+    def test_from_env_custom_path(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("STORAGE_LOCAL_PATH", str(tmp_path / "custom"))
+        provider = LocalStorageProvider.from_env()
+        assert str(provider._base) == str(tmp_path / "custom")
 
     @pytest.mark.asyncio
     async def test_download_success(self, tmp_path):

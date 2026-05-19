@@ -1,22 +1,19 @@
-"""Pluggable off-chain storage for ServiceRecord persistence."""
+"""Pluggable off-chain storage for deliverable persistence."""
 
 from __future__ import annotations
 
-from .config import StorageConfig
-from .factory import create_storage_provider, storage_provider_from_env
-from .interface import StorageProvider
-from .local_provider import LocalStorageProvider
+from .storage_provider import StorageProvider
+from .local_storage_provider import LocalStorageProvider
+from .sync_utils import upload_sync
 
 __all__ = [
-    "StorageConfig",
     "StorageProvider",
     "LocalStorageProvider",
-    "create_storage_provider",
-    "storage_provider_from_env",
+    "upload_sync",
 ]
 
 try:
-    from .ipfs_provider import IPFSStorageProvider  # noqa: F401
+    from .ipfs_storage_provider import IPFSStorageProvider  # noqa: F401
 
     __all__.append("IPFSStorageProvider")
 except ImportError:
