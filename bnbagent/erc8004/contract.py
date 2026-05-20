@@ -306,6 +306,16 @@ class ContractInterface:
             logger.error(f"Failed to execute {description}: {str(e)}")
             raise
 
+    def _inject_build_with(
+        self, metadata: list[dict[str, str]] | None
+    ) -> list[dict[str, str]]:
+        from .constants import BUILD_WITH_KEY, get_build_with_value
+
+        items = list(metadata) if metadata else []
+        if not any(e.get("key") == BUILD_WITH_KEY for e in items):
+            items.append({"key": BUILD_WITH_KEY, "value": get_build_with_value()})
+        return items
+
     def register_agent(
         self,
         agent_uri: str,
@@ -322,26 +332,20 @@ class ContractInterface:
             dict: Transaction receipt with agentId in the events
         """
         try:
-            # Build transaction based on parameters
-            if metadata:
-                # Convert metadata values from string to bytes for on-chain storage
-                # Note: ABI uses "metadataKey" and "metadataValue" as field names
-                metadata_bytes = [
-                    {
-                        "metadataKey": entry["key"],
-                        "metadataValue": entry["value"].encode("utf-8"),
-                    }
-                    for entry in metadata
-                ]
-                logger.debug(
-                    f"Registering with agentURI and {len(metadata_bytes)} metadata entries"
-                )
-                # Register with agentURI and metadata
-                function = self.contract.functions.register(agent_uri, metadata_bytes)
-            else:
-                logger.debug(f"Registering with agentURI only: {agent_uri[:50]}...")
-                # Register with agentURI only
-                function = self.contract.functions.register(agent_uri)
+            metadata = self._inject_build_with(metadata)
+            # Convert metadata values from string to bytes for on-chain storage
+            # Note: ABI uses "metadataKey" and "metadataValue" as field names
+            metadata_bytes = [
+                {
+                    "metadataKey": entry["key"],
+                    "metadataValue": entry["value"].encode("utf-8"),
+                }
+                for entry in metadata
+            ]
+            logger.debug(
+                f"Registering with agentURI and {len(metadata_bytes)} metadata entries"
+            )
+            function = self.contract.functions.register(agent_uri, metadata_bytes)
 
             # Log function selector for debugging
             logger.debug(f"Function selector: {function.abi.get('name', 'unknown')}")

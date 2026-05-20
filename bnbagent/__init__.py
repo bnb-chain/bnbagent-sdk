@@ -36,7 +36,7 @@ from .main import BNBAgent
 # Wallets
 from .wallets import EVMWalletProvider, WalletProvider
 
-__version__ = "0.2.0"
+from ._version import __version__
 __all__ = [
     # Core
     "BNBAgent",
