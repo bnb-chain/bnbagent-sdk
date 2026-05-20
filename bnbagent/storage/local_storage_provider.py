@@ -42,7 +42,7 @@ class LocalStorageProvider(StorageProvider):
                 job_data = data.get("job", {})
                 job_id = job_data.get("id") if isinstance(job_data, dict) else None
                 fname = f"job-{job_id}.json" if job_id else f"{self.compute_hash(data).hex()}.json"
-            filepath = self._base / fname
+            filepath = self._safe_join(fname)
             filepath.write_text(content, encoding="utf-8")
             os.chmod(filepath, stat.S_IRUSR | stat.S_IWUSR)
             logger.info(f"[LocalStorageProvider] Saved to {filepath}")
@@ -74,8 +74,11 @@ class LocalStorageProvider(StorageProvider):
 
     def _url_to_path(self, url: str) -> str:
         raw = url[7:] if url.startswith("file://") else url
-        resolved = Path(raw).resolve()
+        return str(self._safe_join(raw))
+
+    def _safe_join(self, fname: str) -> Path:
+        candidate = (self._base / fname).resolve()
         base_resolved = self._base.resolve()
-        if not resolved.is_relative_to(base_resolved):
+        if not candidate.is_relative_to(base_resolved):
             raise StorageError("Path traversal blocked: path is outside storage directory")
-        return str(resolved)
+        return candidate

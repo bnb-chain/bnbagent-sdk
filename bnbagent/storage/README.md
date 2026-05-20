@@ -86,7 +86,7 @@ Async abstract base class. Subclass this to build a custom backend.
 
 | Method | Description |
 |---|---|
-| `async upload(data, filename=None)` | Upload JSON dict. Returns a URL (`file://`, `ipfs://`, `https://`…). |
+| `async upload(data, filename=None)` | Upload JSON dict. Returns a URL (`file://`, `ipfs://`, `https://`…). Implementations must reject `filename` values that resolve outside the storage scope by raising `StorageError`. |
 | `async download(url)` | Download and parse JSON from a URL. |
 | `async exists(url)` | Check whether data at the URL exists. |
 | `compute_hash(data)` (static) | `keccak256` of canonical JSON for on-chain verification. |

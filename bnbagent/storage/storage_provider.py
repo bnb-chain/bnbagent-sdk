@@ -41,6 +41,9 @@ class StorageProvider(ABC):
         Args:
             data: JSON-serializable dict to upload
             filename: Optional filename hint (e.g., "job-123.json")
+
+        Implementations MUST reject ``filename`` values that resolve outside
+        their storage scope and raise ``StorageError``.
         """
         ...
 

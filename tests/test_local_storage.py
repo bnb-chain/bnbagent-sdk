@@ -102,6 +102,46 @@ class TestLocalStorageProvider:
         assert await provider.exists(f"file://{missing}") is False
 
     @pytest.mark.asyncio
+    async def test_upload_path_traversal_relative(self, tmp_path):
+        provider = LocalStorageProvider(str(tmp_path / "data"))
+        with pytest.raises(StorageError, match="Path traversal blocked"):
+            await provider.upload({"k": "v"}, "../escape.json")
+        assert not (tmp_path / "escape.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_upload_path_traversal_absolute(self, tmp_path):
+        provider = LocalStorageProvider(str(tmp_path / "data"))
+        outside = tmp_path / "outside.json"
+        with pytest.raises(StorageError, match="Path traversal blocked"):
+            await provider.upload({"k": "v"}, str(outside))
+        assert not outside.exists()
+
+    @pytest.mark.asyncio
+    async def test_upload_path_traversal_nested(self, tmp_path):
+        provider = LocalStorageProvider(str(tmp_path / "data"))
+        with pytest.raises(StorageError, match="Path traversal blocked"):
+            await provider.upload({"k": "v"}, "a/../../escape.json")
+        assert not (tmp_path / "escape.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_upload_path_traversal_via_symlink(self, tmp_path):
+        base = tmp_path / "data"
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        provider = LocalStorageProvider(str(base))
+        (base / "link").symlink_to(outside, target_is_directory=True)
+        with pytest.raises(StorageError, match="Path traversal blocked"):
+            await provider.upload({"k": "v"}, "link/escape.json")
+        assert not (outside / "escape.json").exists()
+
+    def test_upload_sync_path_traversal_blocked(self, tmp_path):
+        from bnbagent.storage import upload_sync
+        provider = LocalStorageProvider(str(tmp_path / "data"))
+        with pytest.raises(StorageError, match="Path traversal blocked"):
+            upload_sync(provider, {"k": "v"}, "../escape.json")
+        assert not (tmp_path / "escape.json").exists()
+
+    @pytest.mark.asyncio
     async def test_download_path_traversal_blocked(self, tmp_path):
         provider = LocalStorageProvider(str(tmp_path / "data"))
         with pytest.raises(StorageError, match="Path traversal blocked"):
