@@ -31,3 +31,13 @@ def get_erc8004_config(network: str = "bsc-testnet") -> dict[str, Any]:
         "paymaster": nc.use_paymaster,
         "registry_contract": registry_override or nc.registry_contract,
     }
+
+
+from .._version import __version__ as _sdk_version
+
+BUILD_WITH_KEY = "build_with"
+_BUILD_WITH_URL = "https://github.com/bnb-chain/bnbagent-sdk"
+
+
+def get_build_with_value() -> str:
+    return f"{_BUILD_WITH_URL}#v{_sdk_version}"

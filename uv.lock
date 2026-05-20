@@ -300,7 +300,6 @@ wheels = [
 
 [[package]]
 name = "bnbagent"
-version = "0.2.1"
 source = { editable = "." }
 dependencies = [
     { name = "eth-account" },
@@ -354,7 +353,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.24.0" },
     { name = "web3", specifier = ">=6.15.0" },
 ]
-provides-extras = ["server", "ipfs", "dev", "examples"]
+provides-extras = ["dev", "examples", "ipfs", "server"]
 
 [[package]]
 name = "certifi"
