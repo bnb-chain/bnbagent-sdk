@@ -306,14 +306,14 @@ class ContractInterface:
             logger.error(f"Failed to execute {description}: {str(e)}")
             raise
 
-    def _inject_build_with(
+    def _inject_built_with(
         self, metadata: list[dict[str, str]] | None
     ) -> list[dict[str, str]]:
-        from .constants import BUILD_WITH_KEY, get_build_with_value
+        from .constants import BUILT_WITH_KEY, get_built_with_value
 
         items = list(metadata) if metadata else []
-        if not any(e.get("key") == BUILD_WITH_KEY for e in items):
-            items.append({"key": BUILD_WITH_KEY, "value": get_build_with_value()})
+        if not any(e.get("key") == BUILT_WITH_KEY for e in items):
+            items.append({"key": BUILT_WITH_KEY, "value": get_built_with_value()})
         return items
 
     def register_agent(
@@ -332,7 +332,7 @@ class ContractInterface:
             dict: Transaction receipt with agentId in the events
         """
         try:
-            metadata = self._inject_build_with(metadata)
+            metadata = self._inject_built_with(metadata)
             # Convert metadata values from string to bytes for on-chain storage
             # Note: ABI uses "metadataKey" and "metadataValue" as field names
             metadata_bytes = [

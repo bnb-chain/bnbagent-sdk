@@ -352,35 +352,35 @@ class TestRetryAndNonceManagement:
 
 
 class TestInjectBuildWith:
-    """_inject_build_with must auto-tag every registration with the SDK identifier."""
+    """_inject_built_with must auto-tag every registration with the SDK identifier."""
 
     def _make_ci(self):
         ci, _, _ = _make_contract()
         return ci
 
     def test_default_injection(self):
-        """No metadata → build_with entry is appended automatically."""
+        """No metadata → built_with entry is appended automatically."""
         ci = self._make_ci()
-        result = ci._inject_build_with(None)
+        result = ci._inject_built_with(None)
         keys = [e["key"] for e in result]
-        assert "build_with" in keys
-        bw = next(e for e in result if e["key"] == "build_with")
+        assert "built_with" in keys
+        bw = next(e for e in result if e["key"] == "built_with")
         assert bw["value"].startswith("https://github.com/bnb-chain/bnbagent-sdk#v")
 
     def test_skip_if_user_set(self):
-        """User-supplied build_with must be respected; SDK must not overwrite it."""
+        """User-supplied built_with must be respected; SDK must not overwrite it."""
         ci = self._make_ci()
-        user_meta = [{"key": "build_with", "value": "https://my-fork.com"}]
-        result = ci._inject_build_with(user_meta)
-        bw_entries = [e for e in result if e["key"] == "build_with"]
+        user_meta = [{"key": "built_with", "value": "https://my-fork.com"}]
+        result = ci._inject_built_with(user_meta)
+        bw_entries = [e for e in result if e["key"] == "built_with"]
         assert len(bw_entries) == 1
         assert bw_entries[0]["value"] == "https://my-fork.com"
 
     def test_coexists_with_other_metadata(self):
-        """Other user metadata must be preserved alongside the injected build_with."""
+        """Other user metadata must be preserved alongside the injected built_with."""
         ci = self._make_ci()
         user_meta = [{"key": "foo", "value": "bar"}]
-        result = ci._inject_build_with(user_meta)
+        result = ci._inject_built_with(user_meta)
         assert any(e["key"] == "foo" and e["value"] == "bar" for e in result)
-        assert any(e["key"] == "build_with" for e in result)
+        assert any(e["key"] == "built_with" for e in result)
         assert len(result) == 2
