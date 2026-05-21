@@ -1,14 +1,28 @@
-"""Thin wrapper around ``OptimisticPolicy`` (ERC-8183 reference policy).
+"""Policy clients for ERC-8183.
 
-Surface:
+A *policy* is any contract whitelisted on the ``EvaluatorRouter``. The Router
+finalises a job in ``settle(jobId)`` by calling ``policy.check(jobId, evidence)``
+and applying the returned verdict to the kernel. ``check`` is therefore the
+*only* method the protocol requires of a policy — how the verdict is reached
+(optimistic dispute, agent-committee vote, …) is policy-specific.
 
-- ``dispute(jobId)``      — client-only, within dispute window.
-- ``vote_reject(jobId)``  — whitelisted voter, post-dispute.
-- Read helpers for window state, quorum, voter status, etc.
+This module provides:
 
-Note: the contract's "silence approves" design means voters can ONLY reject.
-There is no ``voteApprove`` on-chain; jobs without dispute auto-approve when
-``submittedAt + disputeWindow`` elapses.
+- ``BasePolicyClient`` — the policy-agnostic seam (constructor plumbing +
+  ``check``). Subclass it to wrap any whitelisted policy.
+- ``PolicyClient``     — wrapper for the reference ``OptimisticPolicy``:
+
+    - ``dispute(jobId)``      — client-only, within dispute window.
+    - ``vote_reject(jobId)``  — whitelisted voter, post-dispute.
+    - Read helpers for window state, quorum, voter status, etc.
+
+  Note: the contract's "silence approves" design means voters can ONLY reject.
+  There is no ``voteApprove`` on-chain; jobs without dispute auto-approve when
+  ``submittedAt + disputeWindow`` elapses.
+
+For a worked example of a second policy (a staked multi-agent verification
+oracle) that plugs into this same seam without touching the kernel or Router,
+see ``docs/proposals/agent-consensus-policy.md``.
 """
 
 from __future__ import annotations
@@ -33,8 +47,44 @@ def _load_abi() -> list:
     return json.loads(abi_path.read_text())
 
 
-class PolicyClient(ContractClientMixin):
-    """Low-level client for ``OptimisticPolicy``."""
+class BasePolicyClient(ContractClientMixin):
+    """Policy-agnostic seam shared by every ERC-8183 policy client.
+
+    Holds the constructor plumbing and ``check`` — the single method the Router
+    calls in ``settle`` to obtain a verdict. Subclass this to wrap any policy
+    whitelisted on the Router; the kernel and Router need no changes to accept
+    a new policy (a job is bound to it via ``register_job(jobId, policyAddr)``).
+
+    ``abi`` is required: the base is policy-agnostic and has no default ABI.
+    """
+
+    def __init__(
+        self,
+        web3: Web3,
+        contract_address: str,
+        wallet_provider: WalletProvider | None = None,
+        *,
+        abi: list,
+    ) -> None:
+        self.w3 = web3
+        self.address = Web3.to_checksum_address(contract_address)
+        self.contract: Contract = self.w3.eth.contract(address=self.address, abi=abi)
+        self._wallet_provider = wallet_provider
+        self._account = wallet_provider.address if wallet_provider is not None else None
+
+    def check(self, job_id: int, evidence: bytes = b"") -> tuple[Verdict, bytes]:
+        """Simulate the verdict the Router would see right now.
+
+        Universal across policies: ``settle(jobId)`` applies exactly this
+        verdict to the kernel."""
+        verdict_int, reason = self._call_with_retry(
+            self.contract.functions.check(job_id, evidence)
+        )
+        return Verdict(verdict_int), reason
+
+
+class PolicyClient(BasePolicyClient):
+    """Low-level client for the reference ``OptimisticPolicy``."""
 
     def __init__(
         self,
@@ -44,13 +94,9 @@ class PolicyClient(ContractClientMixin):
         *,
         abi: list | None = None,
     ) -> None:
-        self.w3 = web3
-        self.address = Web3.to_checksum_address(contract_address)
-        self.contract: Contract = self.w3.eth.contract(
-            address=self.address, abi=abi or _load_abi()
+        super().__init__(
+            web3, contract_address, wallet_provider, abi=abi or _load_abi()
         )
-        self._wallet_provider = wallet_provider
-        self._account = wallet_provider.address if wallet_provider is not None else None
 
     # ----------------------------------------------------------------- writes
 
@@ -65,13 +111,6 @@ class PolicyClient(ContractClientMixin):
         return self._send_tx(fn)
 
     # ------------------------------------------------------------------ views
-
-    def check(self, job_id: int, evidence: bytes = b"") -> tuple[Verdict, bytes]:
-        """Simulate the verdict the Router would see right now."""
-        verdict_int, reason = self._call_with_retry(
-            self.contract.functions.check(job_id, evidence)
-        )
-        return Verdict(verdict_int), reason
 
     def submitted_at(self, job_id: int) -> int:
         return self._call_with_retry(self.contract.functions.submittedAt(job_id))
