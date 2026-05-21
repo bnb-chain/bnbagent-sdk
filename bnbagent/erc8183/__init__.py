@@ -25,7 +25,7 @@ from .negotiation import (
     ReasonCode,
     TermSpecification,
 )
-from .policy import PolicyClient
+from .policy import BasePolicyClient, PolicyClient
 from .router import RouterClient
 from .schema import SCHEMA_VERSION, DeliverableManifest, JobDescription
 from .types import (
@@ -43,6 +43,7 @@ __all__ = [
     "ERC8183Client",
     "CommerceClient",
     "RouterClient",
+    "BasePolicyClient",
     "PolicyClient",
     "DEFAULT_APPROVE_FLOOR_UNITS",
     # Types
