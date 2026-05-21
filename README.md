@@ -28,8 +28,11 @@ pip install "bnbagent[server]"
 # IPFS storage (HTTP pinning service backend, e.g. Pinata)
 pip install "bnbagent[ipfs]"
 
+# Karma verifiable evaluator (signed receipts + evidence bundles)
+pip install "bnbagent[karma]"
+
 # All extras
-pip install "bnbagent[server,ipfs]"
+pip install "bnbagent[server,ipfs,karma]"
 ```
 
 ## Table of Contents
@@ -42,6 +45,7 @@ pip install "bnbagent[server,ipfs]"
 - [Configuration Reference](#configuration-reference)
 - [Architecture & Components](#architecture--components)
 - [Network & Contracts](#network--contracts)
+- [Karma Verifiable Evaluator](#karma-verifiable-evaluator)
 - [Examples](#examples)
 - [Security](#security)
 - [Troubleshooting](#troubleshooting)
@@ -428,6 +432,70 @@ Payment token address is read from `commerce.paymentToken()` at runtime.
 | AgenticCommerce (APEX) | `0xea4daa3100a767e86fded867729ae7446476eba6` |
 | EvaluatorRouter | `0x51895229e12f9876011789b04f8698af06ccd6da` |
 | OptimisticPolicy | `0x9c01845705b3078aa2e8cff7520a6376fd766de5` |
+
+---
+
+## Karma Verifiable Evaluator
+
+> 🛡️ **Prequisite:** Install with `pip install "bnbagent[karma]"`
+
+The `bnbagent.extras.karma` package brings [Karma Trust Protocol](https://github.com/AtoB101/Karma)'s **verifiable execution** into the ERC-8183 settlement lifecycle. Instead of relying solely on the optimistic silence-approves policy, operators can run a Karma evaluator that independently verifies every tool-call receipt before settling.
+
+### What you get
+
+- **KarmaEvaluator** — Off-chain verifier that validates Karma evidence bundles and signed receipts against the Karma Runtime.
+- **KarmaBNBVerifier** — Top-level bridge that composes `KarmaEvaluator` with `ERC8183Client`. Call `verify_and_settle(job_id)` to run the full pipeline: fetch deliverable → verify → settle on-chain.
+- **KarmaEvidenceStore** — Lightweight in-memory receipt cache.
+- **Evidence encoding** — Karma verification results are embedded as `evidence` bytes in `router.settle()`, creating a permanent on-chain audit trail.
+
+### How it works
+
+```
+ERC-8183 Job (Submitted)
+       │
+       ▼
+KarmaBNBVerifier.verify_and_settle(job_id)
+       │
+       ├─ 1. Fetch deliverable URL from on-chain events
+       ├─ 2. Download Karma evidence bundle + signed receipts
+       ├─ 3. POST /v1/verify → Karma Runtime
+       ├─ 4. If APPROVE → router.settle(job_id, evidence)
+       └─ 5. On-chain evidence bytes link back to Karma verification
+```
+
+### Quick example
+
+```python
+from bnbagent import ERC8183Client, EVMWalletProvider
+from bnbagent.extras.karma import KarmaEvaluator, KarmaBNBVerifier
+
+wallet = EVMWalletProvider(password="...", private_key="0x...")
+erc8183 = ERC8183Client(wallet, network="bsc-testnet")
+
+evaluator = KarmaEvaluator(
+    runtime_url="https://api.karma.xyz",
+    api_key="karma_secret",
+)
+
+verifier = KarmaBNBVerifier(erc8183, evaluator, min_confidence=0.5)
+
+# After provider calls submit()
+result = await verifier.verify_and_settle(job_id)
+print(result["verdict"])   # APPROVE | REJECT
+print(result["tx_hash"])   # settlement tx hash (if settled)
+```
+
+Full end-to-end example: [`examples/karma_integration.py`](examples/karma_integration.py)
+
+### Architecture
+
+Karma evaluators are **pluggable** — they don't require changes to the on-chain policy contracts. They work alongside the existing `OptimisticPolicy`, acting as a pre-settlement verification oracle:
+
+- **No new contracts.** The `evidence` bytes from Karma are written to the existing `router.settle(evidence)` field.
+- **Off-chain verification.** Karma Runtime does the heavy lifting; only the result hash touches the chain.
+- **Auditable.** Anyone can decrypt the `evidence` bytes and follow the link to the Karma verification run.
+
+For more details, see [`ARCHITECTURE.md` § Karma Verifiable Evaluator](ARCHITECTURE.md#karma-verifiable-evaluator).
 
 ---
 
