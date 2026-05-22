@@ -57,8 +57,11 @@ policy stack. See ADR #30 in the
 - `EVMWalletProvider._DANGEROUS_sign_typed_data_no_policy()` — explicit
   escape hatch for tests / trusted SDK code; logs a WARNING with the
   caller's filename:lineno on every invocation.
-- `MPCWalletProvider.sign_typed_data` raises `NotImplementedError` (real
-  implementation deferred).
+- `MPCWalletProvider.sign_typed_data` raises `NotImplementedError`. The
+  SDK does not ship an in-process MPC implementation by design —
+  production high-value flows should integrate an external MPC provider
+  (Coinbase CDP, Fireblocks, Web3Auth, etc.) through a custom
+  `WalletProvider` subclass.
 
 ### Added — x402 helper
 

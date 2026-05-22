@@ -108,7 +108,9 @@ class WalletProvider(ABC):
             bnbagent.signing.PolicyViolation: If the configured SigningPolicy
                 refuses the request (unknown domain, denylisted primary
                 type, validity window too wide, etc.).
-            NotImplementedError: For wallet kinds that cannot produce EIP-712
-                signatures (e.g. MPC stubs).
+            NotImplementedError: For wallet kinds that do not implement
+                EIP-712 signing in this SDK (e.g. ``MPCWalletProvider``, an
+                interface stub meant to be subclassed against an external
+                MPC provider).
         """
         pass

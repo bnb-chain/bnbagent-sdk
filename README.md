@@ -572,7 +572,8 @@ What are you signing?
 ├── Permit2 PermitTransferFrom / PermitBatchTransferFrom
 │   (single-use signature transfer — safer subset)
 │   → 🟡 opt in by extending primary_type_allowlist;
-│      witness validation is your responsibility until SDK v0.5+
+│      witness validation stays caller-side unless / until the x402
+│      ecosystem standardises around Permit2
 │
 └── A longer validity window (e.g. 30-minute authorizations)
     → 🟡 extend max_validity_window_seconds=1800
