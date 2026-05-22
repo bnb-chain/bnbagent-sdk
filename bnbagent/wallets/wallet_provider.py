@@ -68,11 +68,21 @@ class WalletProvider(ABC):
         message: dict[str, Any],
     ) -> dict[str, Any]:
         """
-        Sign typed structured data per EIP-712.
+        Sign typed structured data per EIP-712, gated by a SigningPolicy.
 
         Used for protocols requiring signed structured payloads — EIP-3009
         transferWithAuthorization (x402 micropay), ERC-8183 negotiate quotes,
         permit2, etc. The signing key never leaves the wallet implementation.
+
+        Implementations MUST invoke their configured ``SigningPolicy.check()``
+        on ``(domain, types, message)`` *before* producing a signature, and
+        propagate :class:`bnbagent.signing.PolicyViolation` on rejection. This
+        is the SDK's first-line defense against blind-sign attacks via a
+        malicious EIP-712 payload (unknown verifyingContract, unbounded
+        Permit, open-ended validBefore, etc.). To intentionally bypass the
+        policy (tests / migrations only), call the implementation-private
+        ``_DANGEROUS_sign_typed_data_no_policy`` method, which logs a WARN
+        with the caller module for auditability.
 
         Args:
             domain: EIP-712 domain separator, e.g.
@@ -95,6 +105,9 @@ class WalletProvider(ABC):
                   ``ecrecover`` will use against this signature.
 
         Raises:
+            bnbagent.signing.PolicyViolation: If the configured SigningPolicy
+                refuses the request (unknown domain, denylisted primary
+                type, validity window too wide, etc.).
             NotImplementedError: For wallet kinds that cannot produce EIP-712
                 signatures (e.g. MPC stubs).
         """

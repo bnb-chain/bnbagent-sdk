@@ -127,10 +127,21 @@ class TestEVMWalletProvider:
         assert "signature" in signed
 
     def test_sign_typed_data_eip3009_round_trip(self, wdir):
-        """EIP-712 round-trip: sign → recover address matches wallet."""
+        """EIP-712 round-trip: sign → recover address matches wallet.
+
+        Uses ``SigningPolicy.permissive()`` to keep this test focused on
+        the cryptographic round-trip (validBefore here is far past the
+        default 900s future cap). Strict-policy behaviour is covered in
+        ``test_wallet_policy_gating.py``.
+        """
         from eth_account.messages import encode_typed_data
 
-        wallet = EVMWalletProvider(password=PW, private_key=PK, wallets_dir=wdir)
+        from bnbagent.signing import SigningPolicy
+
+        wallet = EVMWalletProvider(
+            password=PW, private_key=PK, wallets_dir=wdir,
+            signing_policy=SigningPolicy.permissive(),
+        )
         domain = {
             "name": "United Stables",
             "version": "1",
@@ -175,7 +186,11 @@ class TestEVMWalletProvider:
 
     def test_sign_typed_data_strips_domain_type_if_supplied(self, wdir):
         """Caller may pass EIP712Domain entry in types; should produce same sig."""
-        wallet = EVMWalletProvider(password=PW, private_key=PK, wallets_dir=wdir)
+        from bnbagent.signing import SigningPolicy
+        wallet = EVMWalletProvider(
+            password=PW, private_key=PK, wallets_dir=wdir,
+            signing_policy=SigningPolicy.permissive(),
+        )
         domain = {"name": "Test", "version": "1", "chainId": 56,
                   "verifyingContract": "0x" + "1" * 40}
         types_with_domain = {

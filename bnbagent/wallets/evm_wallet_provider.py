@@ -20,10 +20,13 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+import inspect
+
 from eth_account import Account
 from eth_account.messages import encode_defunct
 from eth_account.signers.local import LocalAccount
 
+from ..signing import SigningPolicy, check as _policy_check
 from .wallet_provider import WalletProvider
 
 logger = logging.getLogger(__name__)
@@ -58,6 +61,7 @@ class EVMWalletProvider(WalletProvider):
         address: str | None = None,
         persist: bool = True,
         wallets_dir: str | Path | None = None,
+        signing_policy: SigningPolicy | None = None,
     ):
         """
         Initialize the EVM wallet provider.
@@ -72,6 +76,13 @@ class EVMWalletProvider(WalletProvider):
             persist: Save encrypted keystore to disk (default: True).
                     Set False for in-memory-only (e.g. tests).
             wallets_dir: Override wallet directory (default: ~/.bnbagent/wallets/).
+            signing_policy: Policy applied to every :meth:`sign_typed_data`
+                call. Defaults to :meth:`SigningPolicy.strict_default`, which
+                only accepts EIP-3009 ``TransferWithAuthorization`` /
+                ``ReceiveWithAuthorization`` against the registered U-token
+                payment-token deployments and refuses every unbounded Permit
+                variant. Pass :meth:`SigningPolicy.permissive` to disable the
+                gate (intended for tests; logs a warning on construction).
 
         Raises:
             ValueError: If password is empty, private_key is invalid, or
@@ -87,6 +98,7 @@ class EVMWalletProvider(WalletProvider):
         self._wallets_dir = Path(wallets_dir) if wallets_dir else _WALLETS_DIR
         self._account: LocalAccount | None = None
         self._source: str = ""  # "imported", "loaded_keystore", "created_new"
+        self._signing_policy = signing_policy or SigningPolicy.strict_default()
 
         if private_key:
             self._import_private_key(private_key)
@@ -266,19 +278,58 @@ class EVMWalletProvider(WalletProvider):
             "signature": signed_message.signature,
         }
 
+    @property
+    def signing_policy(self) -> SigningPolicy:
+        """The SigningPolicy currently enforcing sign_typed_data calls."""
+        return self._signing_policy
+
     def sign_typed_data(
         self,
         domain: dict[str, Any],
         types: dict[str, list[dict[str, str]]],
         message: dict[str, Any],
     ) -> dict[str, Any]:
-        """Sign EIP-712 typed structured data.
+        """Sign EIP-712 typed data after passing the configured SigningPolicy.
 
-        Returned ``messageHash`` is the EIP-712 digest (``\\x19\\x01 ‖
-        domainSeparator ‖ hashStruct(message)``), distinct from the EIP-191
-        digest produced by :meth:`sign_message`. See
-        :meth:`WalletProvider.sign_typed_data` for parameter semantics.
+        See :meth:`WalletProvider.sign_typed_data` for full semantics. The
+        policy check runs first and may raise
+        :class:`bnbagent.signing.PolicyViolation`.
         """
+        _policy_check(self._signing_policy, domain, types, message)
+        return self._raw_sign_typed_data(domain, types, message)
+
+    def _DANGEROUS_sign_typed_data_no_policy(
+        self,
+        domain: dict[str, Any],
+        types: dict[str, list[dict[str, str]]],
+        message: dict[str, Any],
+    ) -> dict[str, Any]:
+        """⚠️ BYPASSES SigningPolicy. Tests + trusted SDK code only.
+
+        Calls the raw EIP-712 signer without policy enforcement. Every call
+        emits a WARNING log with the calling module so audit grep can find
+        bypasses. Production / agent-reachable code MUST NOT call this; CI
+        lint will reject occurrences in @tool-decorated closures.
+        """
+        caller = "<unknown>"
+        try:
+            frame = inspect.stack()[1]
+            caller = f"{frame.filename}:{frame.lineno}"
+        except Exception:
+            pass
+        logger.warning(
+            "_DANGEROUS_sign_typed_data_no_policy invoked from %s — POLICY BYPASS",
+            caller,
+        )
+        return self._raw_sign_typed_data(domain, types, message)
+
+    def _raw_sign_typed_data(
+        self,
+        domain: dict[str, Any],
+        types: dict[str, list[dict[str, str]]],
+        message: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Underlying eth_account call. Does not consult SigningPolicy."""
         # eth_account expects ``types`` without the EIP712Domain entry — it adds
         # its own. Drop it if the caller included it (a common convention).
         message_types = {k: v for k, v in types.items() if k != "EIP712Domain"}
