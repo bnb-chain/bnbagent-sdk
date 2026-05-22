@@ -126,6 +126,73 @@ class TestEVMWalletProvider:
         assert "messageHash" in signed
         assert "signature" in signed
 
+    def test_sign_typed_data_eip3009_round_trip(self, wdir):
+        """EIP-712 round-trip: sign → recover address matches wallet."""
+        from eth_account.messages import encode_typed_data
+
+        wallet = EVMWalletProvider(password=PW, private_key=PK, wallets_dir=wdir)
+        domain = {
+            "name": "United Stables",
+            "version": "1",
+            "chainId": 56,
+            "verifyingContract": "0xcE24439F2D9C6a2289F741120FE202248B666666",
+        }
+        types = {
+            "EIP712Domain": [
+                {"name": "name", "type": "string"},
+                {"name": "version", "type": "string"},
+                {"name": "chainId", "type": "uint256"},
+                {"name": "verifyingContract", "type": "address"},
+            ],
+            "TransferWithAuthorization": [
+                {"name": "from", "type": "address"},
+                {"name": "to", "type": "address"},
+                {"name": "value", "type": "uint256"},
+                {"name": "validAfter", "type": "uint256"},
+                {"name": "validBefore", "type": "uint256"},
+                {"name": "nonce", "type": "bytes32"},
+            ],
+        }
+        message = {
+            "from": wallet.address,
+            "to": "0x" + "b" * 40,
+            "value": 1_000_000,
+            "validAfter": 0,
+            "validBefore": 2_000_000_000,
+            "nonce": "0x" + "c" * 64,
+        }
+        signed = wallet.sign_typed_data(domain, types, message)
+
+        assert "messageHash" in signed
+        assert "signature" in signed
+        # Recover signer address and verify it matches the wallet.
+        message_types = {k: v for k, v in types.items() if k != "EIP712Domain"}
+        signable = encode_typed_data(
+            domain_data=domain, message_types=message_types, message_data=message
+        )
+        recovered = Account.recover_message(signable, signature=signed["signature"])
+        assert recovered == wallet.address
+
+    def test_sign_typed_data_strips_domain_type_if_supplied(self, wdir):
+        """Caller may pass EIP712Domain entry in types; should produce same sig."""
+        wallet = EVMWalletProvider(password=PW, private_key=PK, wallets_dir=wdir)
+        domain = {"name": "Test", "version": "1", "chainId": 56,
+                  "verifyingContract": "0x" + "1" * 40}
+        types_with_domain = {
+            "EIP712Domain": [
+                {"name": "name", "type": "string"},
+                {"name": "version", "type": "string"},
+                {"name": "chainId", "type": "uint256"},
+                {"name": "verifyingContract", "type": "address"},
+            ],
+            "Mail": [{"name": "contents", "type": "string"}],
+        }
+        types_without_domain = {"Mail": [{"name": "contents", "type": "string"}]}
+        msg = {"contents": "hello"}
+        sig1 = wallet.sign_typed_data(domain, types_with_domain, msg)
+        sig2 = wallet.sign_typed_data(domain, types_without_domain, msg)
+        assert sig1["signature"] == sig2["signature"]
+
     # ── Export ──
 
     def test_export_private_key(self, wdir):

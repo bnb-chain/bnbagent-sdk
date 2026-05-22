@@ -27,6 +27,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Default seconds to wait for a transaction receipt. web3.py's own default
+# (120s) is too short on congested BNB Chain / paymaster-relayed paths.
+DEFAULT_RECEIPT_TIMEOUT = 300
+
 
 class ContractInterface:
     """
@@ -45,6 +49,7 @@ class ContractInterface:
         wallet_provider: WalletProvider,
         paymaster: Paymaster | None = None,
         debug: bool = False,
+        receipt_timeout: int = DEFAULT_RECEIPT_TIMEOUT,
     ):
         """
         Initialize the contract interface.
@@ -57,12 +62,15 @@ class ContractInterface:
                       If provided, used for nonce retrieval and transaction sending.
                       If None, uses standard Web3 transaction flow.
             debug: Enable debug logging
+            receipt_timeout: Seconds to wait for a transaction receipt
+                            (default: ``DEFAULT_RECEIPT_TIMEOUT`` = 300).
         """
         self.web3 = web3
         self.contract_address = Web3.to_checksum_address(contract_address)
         self.wallet_provider = wallet_provider
         self.paymaster = paymaster
         self.debug = debug
+        self.receipt_timeout = receipt_timeout
 
         # Create contract instance
         self.contract = self.web3.eth.contract(
@@ -283,7 +291,9 @@ class ContractInterface:
                     raise last_error  # type: ignore[misc]
 
             # Wait for receipt (always use Web3 for receipt waiting)
-            receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash)
+            receipt = self.web3.eth.wait_for_transaction_receipt(
+                tx_hash, timeout=self.receipt_timeout
+            )
 
             if receipt["status"] == 0:
                 logger.error(

@@ -266,6 +266,35 @@ class EVMWalletProvider(WalletProvider):
             "signature": signed_message.signature,
         }
 
+    def sign_typed_data(
+        self,
+        domain: dict[str, Any],
+        types: dict[str, list[dict[str, str]]],
+        message: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Sign EIP-712 typed structured data.
+
+        Returned ``messageHash`` is the EIP-712 digest (``\\x19\\x01 ‖
+        domainSeparator ‖ hashStruct(message)``), distinct from the EIP-191
+        digest produced by :meth:`sign_message`. See
+        :meth:`WalletProvider.sign_typed_data` for parameter semantics.
+        """
+        # eth_account expects ``types`` without the EIP712Domain entry — it adds
+        # its own. Drop it if the caller included it (a common convention).
+        message_types = {k: v for k, v in types.items() if k != "EIP712Domain"}
+        signed = self._account.sign_typed_data(
+            domain_data=domain,
+            message_types=message_types,
+            message_data=message,
+        )
+        return {
+            "messageHash": signed.message_hash,
+            "r": signed.r,
+            "s": signed.s,
+            "v": signed.v,
+            "signature": signed.signature,
+        }
+
     def export_private_key(self) -> str:
         """Export the private key in hex format. Handle with extreme care."""
         logger.warning("Exporting private key — never share or expose it!")

@@ -55,3 +55,12 @@ class MPCWalletProvider(WalletProvider):
     def sign_message(self, message: str) -> dict[str, Any]:
         """Sign a message."""
         raise NotImplementedError("MPC wallet not implemented")
+
+    def sign_typed_data(
+        self,
+        domain: dict[str, Any],
+        types: dict[str, list[dict[str, str]]],
+        message: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Sign EIP-712 typed data."""
+        raise NotImplementedError("MPC wallet not implemented")
