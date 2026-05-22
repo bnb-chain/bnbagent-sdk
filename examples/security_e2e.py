@@ -52,13 +52,9 @@ log = logging.getLogger("security_e2e")
 # ── Fixtures ───────────────────────────────────────────────────────────────
 
 PW = "e2e-secure-pw"
-# Use the voter example's testnet PK (no real funds expected on this script's
-# path — we never broadcast). If you want to use a different key, set
-# E2E_PRIVATE_KEY in the env.
-PK = os.environ.get(
-    "E2E_PRIVATE_KEY",
-    "0x54a23d1ebd841a1ee646059aba772d27712907b6adc59cf7b4fec26c82be1208",
-)
+# Ephemeral key — this script never broadcasts. Override via E2E_PRIVATE_KEY
+# if you need a deterministic key for a specific repro.
+PK = os.environ.get("E2E_PRIVATE_KEY") or Account.create().key.hex()
 U_TESTNET = get_address(BSC_TESTNET_CHAIN_ID).payment_token
 log.info("U testnet address: %s (name=%r version=%r)",
          U_TESTNET, PAYMENT_TOKEN_EIP712_NAME, PAYMENT_TOKEN_EIP712_VERSION)

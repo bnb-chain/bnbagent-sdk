@@ -40,6 +40,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from typing import Any
 
+from eth_account import Account
+
 from bnbagent import EVMWalletProvider, X402Signer
 from bnbagent.networks import (
     BSC_TESTNET_CHAIN_ID,
@@ -54,9 +56,9 @@ logging.basicConfig(
 log = logging.getLogger("x402_buyer_demo")
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
-# Deterministic test key so the demo is reproducible. The wallet is
-# in-memory only (persist=False) — nothing is ever written to disk.
-DEMO_PK = "0x54a23d1ebd841a1ee646059aba772d27712907b6adc59cf7b4fec26c82be1208"
+# Ephemeral, in-memory wallet (persist=False) — fresh key per run, never
+# written to disk and never broadcast.
+DEMO_PK = Account.create().key.hex()
 DEMO_PW = "x402-buyer-demo-pw"
 
 U_TESTNET = get_address(BSC_TESTNET_CHAIN_ID).payment_token
