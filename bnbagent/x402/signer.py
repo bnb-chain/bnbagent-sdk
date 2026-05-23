@@ -135,23 +135,29 @@ class X402Signer:
                 f"value {value} exceeds max_value_per_call={cap} for token {verifying}"
             )
 
-        # ── L2 session budget (pre-check; commit only on success) ──
-        if self._budget.would_exceed(verifying, value):
-            raise X402BudgetExhaustedError(
-                f"value {value} would exceed session budget for {verifying} "
-                f"(spent {self._budget.spent(verifying)} / cap {self._budget.cap_for(verifying)})"
-            )
+        # ── L2 session budget (atomic reserve; rollback on any failure) ──
+        # reserve() does the check+increment under a single lock so two
+        # concurrent sign_payment calls cannot both pass the budget check
+        # and overspend. The reservation is released by rollback() if the
+        # downstream sign fails — preserving "rejected signs never consume
+        # budget" under concurrency.
+        self._budget.reserve(verifying, value)
 
         # ── L3 wallet sign (SigningPolicy enforces here) ───────────
         try:
             signed = self._wallet.sign_typed_data(domain, types, message)
         except PolicyViolation as e:
+            self._budget.rollback(verifying, value)
             # Re-raise as X402-layer error for caller convenience while
             # preserving full context via __cause__.
             raise X402PolicyError(str(e)) from e
+        except BaseException:
+            # Any other failure (incl. KeyboardInterrupt) must release the
+            # reservation; bare except is intentional so the budget never
+            # silently locks up.
+            self._budget.rollback(verifying, value)
+            raise
 
-        # ── Commit only after underlying sign succeeded ───────────
-        self._budget.commit(verifying, value)
         logger.info(
             "x402 payment signed: token=%s value=%s to=%s expected_to=%s",
             verifying, value, msg_to, expected_to,

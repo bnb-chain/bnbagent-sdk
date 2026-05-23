@@ -202,3 +202,93 @@ def test_wraps_wallet_policy_violation_as_x402_policy_error(wallet, tmp_path):
     from bnbagent.signing import PolicyViolation
     assert isinstance(exc.value.__cause__, PolicyViolation)
     assert exc.value.__cause__.primary_type == "Permit"
+
+
+# ── Concurrency regression (v0.4.1 / PR #34 review) ──────────────────────
+
+
+def test_budget_atomic_under_concurrent_signs(wallet):
+    """Two threads racing sign_payment with value==full-cap must result in
+    exactly one signed payment, not two. Without atomic reserve/rollback,
+    both threads pass would_exceed (spent=0), both sign, both commit →
+    spent=2*cap. This test asserts the v0.4.1 fix.
+    """
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from bnbagent.x402 import X402BudgetExhaustedError, X402Signer
+
+    # Slow the wallet sign so any non-atomic check would lose the race —
+    # without this the OS may serialise the two threads naturally.
+    real_sign = wallet.sign_typed_data
+    sign_calls: list[int] = []
+    sign_lock = threading.Lock()
+
+    def slow_sign(domain, types, message):
+        time.sleep(0.05)  # widen the race window
+        result = real_sign(domain, types, message)
+        with sign_lock:
+            sign_calls.append(1)
+        return result
+
+    wallet.sign_typed_data = slow_sign  # type: ignore[method-assign]
+
+    cap = 1_000_000
+    signer = X402Signer(
+        wallet,
+        max_value_per_call={U_MAINNET: cap},
+        session_budget={U_MAINNET: cap},  # one call fits exactly
+    )
+
+    # Start barrier syncs both threads so they enter sign_payment together
+    # (and therefore both contend on reserve()).
+    start_barrier = threading.Barrier(2)
+
+    def attempt() -> tuple[str, object]:
+        start_barrier.wait()
+        p = _payload(value=cap)
+        try:
+            res = signer.sign_payment(**p, expected_to=p["message"]["to"])
+            return ("signed", res)
+        except X402BudgetExhaustedError as e:
+            return ("rejected", e)
+
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        futures = [ex.submit(attempt) for _ in range(2)]
+        outcomes = [f.result() for f in as_completed(futures)]
+
+    signed = [o for o in outcomes if o[0] == "signed"]
+    rejected = [o for o in outcomes if o[0] == "rejected"]
+    assert len(signed) == 1, f"exactly one sign expected; got {[o[0] for o in outcomes]}"
+    assert len(rejected) == 1
+    # Spent counter never exceeds cap
+    assert signer.budget.spent(U_MAINNET) == cap
+    # The underlying wallet was invoked exactly once — the rejected thread
+    # short-circuited at reserve() and never reached sign_typed_data.
+    assert len(sign_calls) == 1
+
+
+def test_budget_rolls_back_when_wallet_raises_nonpolicy_exception(wallet):
+    """Failures other than PolicyViolation must also release the reservation
+    (caller could see RuntimeError / network error / KeyboardInterrupt)."""
+    from bnbagent.x402 import X402Signer
+
+    class Boom(RuntimeError):
+        pass
+
+    def explode(domain, types, message):
+        raise Boom("transport failed")
+
+    wallet.sign_typed_data = explode  # type: ignore[method-assign]
+
+    signer = X402Signer(
+        wallet,
+        max_value_per_call={U_MAINNET: 1_000_000},
+        session_budget={U_MAINNET: 1_000_000},
+    )
+    p = _payload(value=500_000)
+    with pytest.raises(Boom):
+        signer.sign_payment(**p, expected_to=p["message"]["to"])
+    # Reservation was released
+    assert signer.budget.spent(U_MAINNET) == 0
