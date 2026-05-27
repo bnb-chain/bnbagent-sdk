@@ -495,7 +495,11 @@ def pay_for_resource(challenge: dict, expected_to: str) -> dict:
 ```
 
 `X402Signer` enforces (a) byte-equal `expected_to == message['to']`
-(case-insensitive), (b) per-call `max_value`, (c) cumulative session budget.
+(case-insensitive), (b) `message['from'] == wallet.address` (so a tampered
+challenge cannot authorize a payment "from" another account or burn the
+session budget on a doomed sign), (c) per-call `max_value`, (d) cumulative
+session budget. `expected_to` MUST come from a source independent of the 402
+response (config / on-chain registry) — never from the challenge body itself.
 The underlying `SigningPolicy` simultaneously enforces (chain_id,
 verifyingContract) allowlist, primary-type allowlist/denylist, and
 validity-window bounds (default ≤ 600s window / ≤ 900s future).

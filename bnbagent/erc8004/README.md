@@ -60,7 +60,7 @@ Main entry point. Requires a `WalletProvider` (no raw private key accepted).
 | `set_metadata(agent_id, key, value)` | Write a metadata value (owner only). |
 | `set_agent_uri(agent_id, agent_uri)` | Update the agent URI on-chain. |
 | `get_local_agent_info(name)` | Check local state file for a previously registered agent. |
-| `parse_agent_uri(agent_uri)` | Decode a base64 data URI or fetch an HTTP URI (with SSRF protection). |
+| `parse_agent_uri(agent_uri)` | Decode a base64 data URI or fetch an HTTP URI (with SSRF protection and a 1 MB response-size cap). |
 | `wallet_address` | Property -- the connected wallet address. |
 | `contract_address` | Property -- the registry contract address. |
 

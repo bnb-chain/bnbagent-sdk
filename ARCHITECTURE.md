@@ -228,14 +228,16 @@ kernel and fetched at runtime via `ERC8183Client.payment_token`.
 
 Both `BNBAgentConfig` and `ERC8183Config` support the convenience pattern:
 pass `private_key` + `wallet_password` and the config auto-wraps them into
-an `EVMWalletProvider`, then **clears the plaintext key**.
+an `EVMWalletProvider`, then **clears both the plaintext key and password**
+from the config object (the provider keeps its own password copy).
 
 ## Invariants
 
 These properties hold across the codebase and should be preserved:
 
-- **No plaintext keys in config after construction.** `__post_init__()` wraps
-  `private_key` into a `WalletProvider` and zeros the string field.
+- **No plaintext secrets in config after construction.** `__post_init__()` wraps
+  `private_key` into a `WalletProvider` and zeros both the `private_key` and
+  `wallet_password` string fields (the provider retains its own password copy).
 - **Modules never import each other directly.** Inter-module communication
   goes through the registry or shared config. Module dependencies are declared
   in `ModuleInfo.dependencies` and enforced at initialization.
