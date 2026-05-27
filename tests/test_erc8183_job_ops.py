@@ -301,6 +301,36 @@ class TestSubmitResult:
         assert "ERC8183_AGENT_URL" in result["error"]
 
 
+class TestErrorSanitization:
+    """Audit M02: raw RPC exceptions embed the API-keyed URL on transport
+    errors; they must never reach the HTTP response body."""
+
+    SECRET = "https://bsc-mainnet.nodereal.io/v1/SECRET_KEY"
+
+    @pytest.mark.asyncio
+    async def test_get_job_does_not_leak_rpc_url(self):
+        ops = _make_ops()
+        client = _inject_client(ops)
+        client.get_job.side_effect = Exception(
+            f"429 Too Many Requests for url: {self.SECRET}"
+        )
+        result = await ops.get_job(1)
+        assert result["success"] is False
+        assert "SECRET_KEY" not in result["error"]
+        assert "nodereal" not in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_verify_job_does_not_leak_rpc_url(self):
+        ops = _make_ops()
+        client = _inject_client(ops)
+        client.get_job.side_effect = Exception(
+            f"Max retries exceeded with url: {self.SECRET}"
+        )
+        result = await ops.verify_job(1)
+        assert result["valid"] is False
+        assert "SECRET_KEY" not in result["error"]
+
+
 class TestGetPendingJobs:
     @pytest.mark.asyncio
     async def test_startup_scan_zero_counter(self):

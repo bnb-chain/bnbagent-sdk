@@ -251,7 +251,15 @@ class ERC8183JobOps:
             }
         except Exception as exc:
             logger.error(f"[ERC8183JobOps] get_job({job_id}) failed: {exc}")
-            return {"success": False, "error": str(exc)}
+            # Return a generic message — the raw exception can embed the RPC
+            # URL (and its API key) on transport errors. Classify here so
+            # callers still get the right status without parsing the message.
+            is_net = any(k in str(exc).lower() for k in ("timeout", "connection", "network", "rpc"))
+            return {
+                "success": False,
+                "error": "Temporary chain/RPC error" if is_net else "Failed to fetch job from chain",
+                "error_code": 503 if is_net else 500,
+            }
 
     async def get_job_status(self, job_id: int) -> dict[str, Any]:
         result = await self.get_job(job_id)
@@ -302,12 +310,11 @@ class ERC8183JobOps:
         try:
             job_result = await self.get_job(job_id)
             if not job_result.get("success"):
-                msg = job_result.get("error", "Unknown error")
-                is_net = any(k in msg.lower() for k in ["timeout", "connection", "network", "rpc"])
+                # get_job already returns a sanitized message + error_code.
                 return {
                     "valid": False,
-                    "error": f"Failed to fetch job: {msg}",
-                    "error_code": 503 if is_net else 500,
+                    "error": job_result.get("error", "Failed to fetch job from chain"),
+                    "error_code": job_result.get("error_code", 500),
                 }
 
             me = self.agent_address.lower()
@@ -412,11 +419,11 @@ class ERC8183JobOps:
                 "warnings": warnings if warnings else None,
             }
         except Exception as exc:
-            msg = str(exc)
-            is_net = any(k in msg.lower() for k in ["timeout", "connection", "network", "rpc"])
+            logger.error(f"[ERC8183JobOps] verify_job({job_id}) failed: {exc}")
+            is_net = any(k in str(exc).lower() for k in ("timeout", "connection", "network", "rpc"))
             return {
                 "valid": False,
-                "error": f"Failed to verify job: {msg}",
+                "error": "Temporary chain/RPC error" if is_net else "Failed to verify job",
                 "error_code": 503 if is_net else 500,
             }
 
