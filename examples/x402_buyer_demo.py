@@ -267,15 +267,18 @@ def main() -> int:
         }
         message = _build_twa_message(wallet.address, accept)
 
-        # 5. Sign through X402Signer. ``expected_to`` is the buyer's
-        #    independent record of who the payee should be — if the
-        #    upstream 402 body were tampered with mid-flight, this guard
-        #    would raise rather than silently signing to the wrong payee.
+        # 5. Sign through X402Signer. ``expected_to`` is PAY_TO — the buyer's
+        #    OWN record of the payee, fixed before the 402 round-trip and
+        #    independent of the server response. If a tampered / MITM 402 body
+        #    altered ``message['to']`` (built from accept["payTo"]), this guard
+        #    raises instead of silently signing to the attacker. Sourcing
+        #    ``expected_to`` from accept["payTo"] would compare the response
+        #    against itself and provide no protection.
         signed = signer.sign_payment(
             domain=domain,
             types=types,
             message=message,
-            expected_to=accept["payTo"],
+            expected_to=PAY_TO,
         )
         # ``signature`` may come back as HexBytes; normalize to a 0x-hex
         # string for the JSON envelope.
