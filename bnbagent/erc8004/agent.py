@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import ipaddress
+import json
 import logging
 import socket
 from typing import Any
@@ -32,6 +33,11 @@ logger = logging.getLogger(__name__)
 # Cloud ECS metadata endpoint at 100.100.100.200, which Python's ipaddress
 # does not classify as private / reserved / link-local.
 _CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+
+# Upper bound on the agent-URI HTTP body we will buffer + JSON-parse. The
+# remote endpoint is attacker-influenced (agentURI is on-chain metadata), so
+# an unbounded response could exhaust memory.
+_MAX_AGENT_URI_BYTES = 1 * 1024 * 1024  # 1 MB
 
 
 class ERC8004Agent:
@@ -684,9 +690,20 @@ class ERC8004Agent:
                     timeout=10,
                     allow_redirects=False,
                     headers={"Host": hostname},
+                    stream=True,
                 )
                 response.raise_for_status()
-                return response.json()
+                cl = response.headers.get("Content-Length")
+                if cl and int(cl) > _MAX_AGENT_URI_BYTES:
+                    return None
+                data = bytearray()
+                for chunk in response.iter_content(chunk_size=8192):
+                    if not chunk:
+                        continue
+                    data.extend(chunk)
+                    if len(data) > _MAX_AGENT_URI_BYTES:
+                        return None
+                return json.loads(data.decode("utf-8"))
             except Exception:
                 return None
 
