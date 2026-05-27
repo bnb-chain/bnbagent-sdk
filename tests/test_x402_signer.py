@@ -53,7 +53,7 @@ def signer(wallet):
     )
 
 
-def _payload(*, to=None, value=500_000):
+def _payload(*, to=None, value=500_000, from_addr=None):
     now = int(time.time())
     return {
         "domain": {
@@ -62,7 +62,7 @@ def _payload(*, to=None, value=500_000):
         },
         "types": {"EIP712Domain": EIP712DOMAIN_FIELDS, "TransferWithAuthorization": TWA_FIELDS},
         "message": {
-            "from": "0x" + "a" * 40,
+            "from": from_addr or ("0x" + "a" * 40),
             "to": to or ("0x" + "b" * 40),
             "value": value,
             "validAfter": now - 60,
@@ -76,7 +76,7 @@ def _payload(*, to=None, value=500_000):
 
 
 def test_sign_payment_succeeds_for_u_token_within_budget(signer):
-    p = _payload()
+    p = _payload(from_addr=signer.wallet_address)
     signed = signer.sign_payment(**p, expected_to=p["message"]["to"])
     assert "signature" in signed
     assert signer.budget.spent(U_MAINNET) == p["message"]["value"]
@@ -95,7 +95,10 @@ def test_rejects_when_expected_to_differs(signer):
 
 def test_recipient_check_is_case_insensitive(signer):
     """0xAB... and 0xab... must compare equal — checksum casing varies in the wild."""
-    p = _payload(to="0xaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaA")
+    p = _payload(
+        to="0xaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaA",
+        from_addr=signer.wallet_address,
+    )
     signed = signer.sign_payment(
         **p, expected_to="0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     )
@@ -107,6 +110,25 @@ def test_rejects_when_message_to_missing(signer):
     del p["message"]["to"]
     with pytest.raises(X402RecipientMismatchError, match="missing or not an address"):
         signer.sign_payment(**p, expected_to="0x" + "b" * 40)
+
+
+# ── Signer binding (message['from']) ─────────────────────────────────────
+
+
+def test_rejects_forged_from(signer):
+    """message['from'] != wallet address must be refused before budget reserve."""
+    p = _payload(from_addr="0x" + "d" * 40)  # not the wallet
+    with pytest.raises(X402RecipientMismatchError, match="does not match wallet"):
+        signer.sign_payment(**p, expected_to=p["message"]["to"])
+    assert signer.budget.spent(U_MAINNET) == 0
+
+
+def test_rejects_when_message_from_missing(signer):
+    p = _payload(from_addr=signer.wallet_address)
+    del p["message"]["from"]
+    with pytest.raises(X402RecipientMismatchError, match="missing or not an address"):
+        signer.sign_payment(**p, expected_to=p["message"]["to"])
+    assert signer.budget.spent(U_MAINNET) == 0
 
 
 # ── Per-call value cap ───────────────────────────────────────────────────
@@ -125,7 +147,7 @@ def test_rejects_when_value_exceeds_max_per_call(signer):
 def test_session_budget_accumulates_across_calls(signer):
     """Five calls of 500k each = 2.5M; budget is 5M, all should succeed."""
     for _ in range(5):
-        p = _payload(value=500_000)
+        p = _payload(value=500_000, from_addr=signer.wallet_address)
         signer.sign_payment(**p, expected_to=p["message"]["to"])
     assert signer.budget.spent(U_MAINNET) == 2_500_000
 
@@ -135,11 +157,11 @@ def test_session_budget_blocks_next_call_when_would_exceed(signer):
     fail but budget should trigger first only if budget < per-call)."""
     # First spend 5M cumulative (within both caps)
     for _ in range(5):
-        p = _payload(value=1_000_000)
+        p = _payload(value=1_000_000, from_addr=signer.wallet_address)
         signer.sign_payment(**p, expected_to=p["message"]["to"])
     assert signer.budget.spent(U_MAINNET) == 5_000_000
     # Sixth call: even 1 wei exceeds budget
-    p = _payload(value=1)
+    p = _payload(value=1, from_addr=signer.wallet_address)
     with pytest.raises(X402BudgetExhaustedError, match="session budget"):
         signer.sign_payment(**p, expected_to=p["message"]["to"])
 
@@ -152,7 +174,7 @@ def test_budget_not_consumed_when_underlying_wallet_rejects(wallet, tmp_path):
         max_value_per_call={"0x" + "1" * 40: 1_000_000},
         session_budget={"0x" + "1" * 40: 5_000_000},
     )
-    p = _payload(value=500_000)
+    p = _payload(value=500_000, from_addr=signer.wallet_address)
     p["domain"]["verifyingContract"] = "0x" + "1" * 40  # not in wallet allowlist
     with pytest.raises(X402PolicyError):
         signer.sign_payment(**p, expected_to=p["message"]["to"])
@@ -188,10 +210,12 @@ def test_wraps_wallet_policy_violation_as_x402_policy_error(wallet, tmp_path):
         "message": {
             "owner": "0x" + "a" * 40,
             "spender": "0x" + "b" * 40,
-            # X402Signer needs message['to'] to pass recipient check; for this
-            # propagation test we route a "to" field even though Permit struct
-            # has none — caller must supply expected_to that matches.
+            # X402Signer needs message['to'] and ['from'] to pass the recipient
+            # and signer-binding checks; for this propagation test we route them
+            # even though the Permit struct has neither — caller must supply an
+            # expected_to that matches and a from equal to the wallet.
             "to": "0x" + "b" * 40,
+            "from": signer.wallet_address,
             "value": 500_000,
             "nonce": 0, "deadline": 2_000_000_000,
         },
@@ -247,7 +271,7 @@ def test_budget_atomic_under_concurrent_signs(wallet):
 
     def attempt() -> tuple[str, object]:
         start_barrier.wait()
-        p = _payload(value=cap)
+        p = _payload(value=cap, from_addr=signer.wallet_address)
         try:
             res = signer.sign_payment(**p, expected_to=p["message"]["to"])
             return ("signed", res)
@@ -287,7 +311,7 @@ def test_budget_rolls_back_when_wallet_raises_nonpolicy_exception(wallet):
         max_value_per_call={U_MAINNET: 1_000_000},
         session_budget={U_MAINNET: 1_000_000},
     )
-    p = _payload(value=500_000)
+    p = _payload(value=500_000, from_addr=signer.wallet_address)
     with pytest.raises(Boom):
         signer.sign_payment(**p, expected_to=p["message"]["to"])
     # Reservation was released

@@ -135,6 +135,29 @@ class X402Signer:
                 f"value {value} exceeds max_value_per_call={cap} for token {verifying}"
             )
 
+        # ── L1.5 signer binding: message['from'] must be this wallet ──
+        # A forged 'from' (with policy-compliant to/value) would otherwise
+        # reserve budget and sign. On-chain EIP-3009 rejects the mismatched
+        # signer, but the session budget is already spent — a DoS on payment
+        # capability. Check before reserve() so rejected calls cost nothing.
+        msg_from = message.get("from")
+        if not isinstance(msg_from, str):
+            raise X402RecipientMismatchError(
+                f"message['from'] is missing or not an address: {msg_from!r}"
+            )
+        try:
+            wallet_cs = Web3.to_checksum_address(self._wallet.address)
+            msg_from_cs = Web3.to_checksum_address(msg_from)
+        except (ValueError, TypeError) as e:
+            raise X402RecipientMismatchError(
+                f"message['from'] is not a valid address: {msg_from!r}"
+            ) from e
+        if msg_from_cs != wallet_cs:
+            raise X402RecipientMismatchError(
+                f"message['from']={msg_from_cs} does not match wallet "
+                f"{wallet_cs} — refusing to sign"
+            )
+
         # ── L2 session budget (atomic reserve; rollback on any failure) ──
         # reserve() does the check+increment under a single lock so two
         # concurrent sign_payment calls cannot both pass the budget check
