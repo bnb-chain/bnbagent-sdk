@@ -185,6 +185,12 @@ class TestERC8004Agent:
             assert "name" in agent_data
             assert "description" in agent_data
 
+    def test_parse_agent_uri_blocks_cgnat_metadata(self, sdk):
+        """SSRF guard must block RFC 6598 CGNAT (Alibaba Cloud ECS metadata at
+        100.100.100.200), which ipaddress does not flag as private/reserved."""
+        url = "http://100.100.100.200/latest/meta-data/ram/security-credentials/role"
+        assert sdk.parse_agent_uri(url) is None
+
     def test_register_agent_with_metadata(self, sdk):
         """Test Example 2: Register agent with metadata"""
         # First generate a valid agent URI

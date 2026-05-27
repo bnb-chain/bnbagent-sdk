@@ -28,6 +28,11 @@ from .models import AgentEndpoint
 
 logger = logging.getLogger(__name__)
 
+# RFC 6598 Carrier-Grade NAT range (100.64.0.0/10). Includes the Alibaba
+# Cloud ECS metadata endpoint at 100.100.100.200, which Python's ipaddress
+# does not classify as private / reserved / link-local.
+_CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+
 
 class ERC8004Agent:
     """
@@ -652,6 +657,9 @@ class ERC8004Agent:
                         return None
                     # Block cloud metadata IP
                     if str(ip) == "169.254.169.254":
+                        return None
+                    # Block RFC 6598 CGNAT (covers Alibaba Cloud ECS metadata)
+                    if ip in _CGNAT_NETWORK:
                         return None
 
                     if safe_ip_str is None:
