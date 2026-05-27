@@ -34,8 +34,8 @@ def _decode_job(raw: Any) -> Job:
 
     Tuple layout (post-audit ABI): ``(id, client, provider, evaluator,
     description, budget, expiredAt, status, hook, submittedAt, deliverable)``.
-    ``submittedAt`` (index 9) is intentionally not surfaced on ``Job`` —
-    callers that need it should read ``submittedAt(jobId)`` on the policy.
+    ``submittedAt`` (index 9) is surfaced as ``Job.submitted_at`` (0 until the
+    job is submitted) so callers can check the dispute window directly.
     """
     return Job(
         id=raw[0],
@@ -47,6 +47,7 @@ def _decode_job(raw: Any) -> Job:
         expired_at=raw[6],
         status=JobStatus(raw[7]),
         hook=Web3.to_checksum_address(raw[8]),
+        submitted_at=raw[9],
         deliverable=bytes(raw[10]),
     )
 

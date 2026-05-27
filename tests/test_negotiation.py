@@ -436,6 +436,35 @@ class TestNegotiationHandler:
         assert result.request_hash.startswith("0x")
         assert result.response_hash.startswith("0x")
 
+    def _basic_request(self):
+        return {
+            "task_description": "Get news",
+            "terms": {"deliverables": "summary", "quality_standards": "accurate"},
+        }
+
+    def test_price_override_per_request(self):
+        handler = self._make_handler()
+        result = handler.negotiate(self._basic_request(), price="123")
+        assert result.accepted is True
+        assert result.response["terms"]["price"] == "123"  # not the constructed default
+
+    def test_no_override_uses_service_price(self):
+        handler = self._make_handler()
+        result = handler.negotiate(self._basic_request())
+        assert result.response["terms"]["price"] == "20000000000000000000"
+
+    def test_eta_override_per_request(self):
+        handler = self._make_handler()
+        result = handler.negotiate(self._basic_request(), estimated_completion_seconds=999)
+        assert result.response["estimated_completion_seconds"] == 999
+
+    def test_rejects_malformed_price_override(self):
+        handler = self._make_handler()
+        for bad in ("-5", "abc", ""):
+            result = handler.negotiate(self._basic_request(), price=bad)
+            assert result.accepted is False, bad
+            assert result.response.get("reason_code") == ReasonCode.AMBIGUOUS_TERMS
+
     def test_quote_expires_at_in_response(self):
         handler = self._make_handler(quote_ttl_seconds=180)
         request_data = {

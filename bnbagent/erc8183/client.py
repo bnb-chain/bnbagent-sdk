@@ -57,9 +57,9 @@ class ERC8183Client:
     Parameters
     ----------
     wallet_provider:
-        Required ``WalletProvider`` that performs all signing. Raw private
-        keys never cross this boundary — wrap them in ``EVMWalletProvider``
-        first.
+        ``WalletProvider`` that performs all signing. Raw private keys never
+        cross this boundary — wrap them in ``EVMWalletProvider`` first. Pass
+        ``None`` for a read-only client (reads work; writes raise).
     network:
         Either a preset name (``"bsc-testnet"`` / ``"bsc-mainnet"``) or a
         ``NetworkConfig`` instance. Use a ``NetworkConfig`` (e.g. via
@@ -71,17 +71,13 @@ class ERC8183Client:
 
     def __init__(
         self,
-        wallet_provider: WalletProvider,
+        wallet_provider: WalletProvider | None = None,
         network: str | NetworkConfig = "bsc-testnet",
         *,
         debug: bool = False,
     ) -> None:
-        if wallet_provider is None:
-            raise ValueError(
-                "wallet_provider is required. Wrap your key in EVMWalletProvider "
-                "(e.g. EVMWalletProvider(password='...', private_key='0x...'))."
-            )
-
+        # wallet_provider is optional: a read-only client (None) serves all
+        # reads; write operations raise via _send_tx ("client is read-only").
         nc = resolve_network(network)
         for field_name in ("commerce_contract", "router_contract", "policy_contract"):
             if not getattr(nc, field_name):
@@ -106,7 +102,9 @@ class ERC8183Client:
             )
 
         self._wallet_provider = wallet_provider
-        self.address: str = wallet_provider.address
+        self.address: str | None = (
+            wallet_provider.address if wallet_provider is not None else None
+        )
 
         self.commerce = CommerceClient(self.w3, nc.commerce_contract, wallet_provider)
         self.router = RouterClient(self.w3, nc.router_contract, wallet_provider)

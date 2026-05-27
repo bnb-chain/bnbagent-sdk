@@ -14,9 +14,11 @@ Responsibilities
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import time
+from collections.abc import Callable
 from typing import Any
 
 from web3 import Web3
@@ -81,17 +83,26 @@ class ERC8183JobOps:
 
     def __init__(
         self,
-        wallet_provider: WalletProvider,
+        wallet_provider: WalletProvider | None = None,
         network: str | NetworkConfig = "bsc-testnet",
         *,
+        provider_address: str | None = None,
         storage_provider: StorageProvider | None = None,
         service_price: int = 0,
         agent_url: str | None = None,
     ) -> None:
-        if wallet_provider is None:
-            raise ValueError("wallet_provider is required for ERC8183JobOps")
+        if wallet_provider is None and provider_address is None:
+            raise ValueError(
+                "ERC8183JobOps needs a wallet_provider (to sign) or a "
+                "provider_address (read/poll-only)"
+            )
 
         self._wallet_provider = wallet_provider
+        self._agent_address = (
+            wallet_provider.address
+            if wallet_provider is not None
+            else Web3.to_checksum_address(provider_address)
+        )
         self._network = network
         self._storage = storage_provider
         self._service_price = service_price
@@ -133,7 +144,7 @@ class ERC8183JobOps:
 
     @property
     def agent_address(self) -> str:
-        return self._wallet_provider.address
+        return self._agent_address
 
     @property
     def erc8183_client(self) -> ERC8183Client:
@@ -154,6 +165,8 @@ class ERC8183JobOps:
         The full manifest JSON is uploaded to storage and its URL is passed as
         ``optParams`` so verifiers can fetch, re-hash, and confirm integrity.
         """
+        if self._wallet_provider is None:
+            raise ValueError("submit_result requires a signing wallet_provider")
         try:
             verification = await self.verify_job(job_id)
             if not verification.get("valid"):
@@ -245,6 +258,7 @@ class ERC8183JobOps:
                 "description": job.description,
                 "budget": job.budget,
                 "expiredAt": job.expired_at,
+                "submittedAt": job.submitted_at,
                 "status": job.status,
                 "hook": job.hook,
                 "deliverable": Web3.to_hex(job.deliverable),
@@ -516,4 +530,99 @@ class ERC8183JobOps:
         except Exception as exc:
             logger.error(f"[ERC8183JobOps] get_pending_jobs failed: {exc}")
             return {"success": False, "error": str(exc), "jobs": []}
+
+    async def get_submitted_jobs(self) -> dict[str, Any]:
+        """Return SUBMITTED jobs assigned to this provider (opt-in auto-settle).
+
+        Unlike :meth:`get_pending_jobs` (FUNDED, incremental cursor), this does a
+        full scan each call — SUBMITTED jobs sit awaiting the dispute window, so
+        there is no monotonic cursor. Each dict includes ``submittedAt`` so the
+        caller can check the window exactly instead of approximating it with
+        ``expiredAt``.
+        """
+        try:
+            erc8183 = self._get_client()
+            me = self._agent_address.lower()
+            counter = await asyncio.to_thread(erc8183.commerce.job_counter)
+            if counter == 0:
+                return {"success": True, "jobs": []}
+            jobs = await asyncio.to_thread(
+                erc8183.commerce.get_jobs_batch, list(range(1, counter + 1))
+            )
+            submitted = [
+                {
+                    "jobId": job.id,
+                    "client": job.client,
+                    "provider": job.provider,
+                    "evaluator": job.evaluator,
+                    "description": job.description,
+                    "budget": job.budget,
+                    "expiredAt": job.expired_at,
+                    "submittedAt": job.submitted_at,
+                    "status": job.status,
+                    "hook": job.hook,
+                    "deliverable": Web3.to_hex(job.deliverable),
+                }
+                for job in jobs
+                if job is not None
+                and job.provider.lower() == me
+                and job.status == JobStatus.SUBMITTED
+            ]
+            return {"success": True, "jobs": submitted}
+        except Exception as exc:
+            logger.error(f"[ERC8183JobOps] get_submitted_jobs failed: {exc}")
+            return {"success": False, "error": "Failed to scan submitted jobs", "jobs": []}
+
+
+async def funded_job_watcher(
+    job_ops: ERC8183JobOps,
+    on_funded: Callable[[dict[str, Any]], Any],
+    *,
+    interval: float = 30.0,
+    stop: asyncio.Event | None = None,
+) -> None:
+    """Poll ``job_ops.get_pending_jobs()`` and fire ``on_funded(job)`` per FUNDED job.
+
+    Signer-free detection loop for keyless services: it NEVER submits or settles
+    — the caller decides what to do (e.g. delegate signing to a separate Agent).
+    ``on_funded`` may be sync or async. Each job id fires at most once (a keyless
+    service does not transition the job out of FUNDED, so dedup prevents repeat
+    triggers). Pass an ``asyncio.Event`` as ``stop`` to end the loop; otherwise
+    it runs until cancelled.
+    """
+    seen: set[int] = set()
+    is_async = inspect.iscoroutinefunction(on_funded)
+    while True:
+        try:
+            result = await job_ops.get_pending_jobs()
+            if result.get("success"):
+                for job in result.get("jobs", []):
+                    job_id = job["jobId"]
+                    if job_id in seen:
+                        continue
+                    seen.add(job_id)
+                    try:
+                        if is_async:
+                            await on_funded(job)
+                        else:
+                            await asyncio.to_thread(on_funded, job)
+                    except Exception as exc:
+                        logger.error(
+                            "[funded_job_watcher] on_funded(%s) failed: %s", job_id, exc
+                        )
+            else:
+                logger.warning(
+                    "[funded_job_watcher] poll error: %s", result.get("error")
+                )
+        except Exception as exc:
+            logger.error("[funded_job_watcher] iteration failed: %s", exc)
+
+        if stop is not None:
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=interval)
+                return
+            except asyncio.TimeoutError:
+                continue
+        else:
+            await asyncio.sleep(interval)
 

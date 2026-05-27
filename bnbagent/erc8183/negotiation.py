@@ -628,7 +628,13 @@ class NegotiationHandler:
         """Ensure hash has 0x prefix."""
         return h if h.startswith("0x") else "0x" + h
 
-    def negotiate(self, request_data: dict) -> NegotiationResult:
+    def negotiate(
+        self,
+        request_data: dict,
+        *,
+        price: str | None = None,
+        estimated_completion_seconds: int | None = None,
+    ) -> NegotiationResult:
         """
         Process a negotiation request and return the result.
 
@@ -638,6 +644,11 @@ class NegotiationHandler:
 
         Args:
             request_data: The incoming request dict (task_description, terms, ...)
+            price: Optional per-request price (token smallest-unit uint256
+                string) overriding the construction-time ``service_price`` for
+                this call only. Must be seller-controlled (e.g. an effort
+                estimate), NOT echoed from untrusted client input.
+            estimated_completion_seconds: Optional per-request ETA override.
 
         Returns:
             NegotiationResult with request, request_hash, response, response_hash,
@@ -662,6 +673,25 @@ class NegotiationHandler:
                 reason="quality_standards is required in terms.",
             )
 
+        # Per-request overrides fall back to the construction-time defaults.
+        if price is not None:
+            try:
+                if int(price) < 0:
+                    raise ValueError
+            except (TypeError, ValueError):
+                return self._reject(
+                    request_data=req.to_dict(),
+                    request_hash=request_hash,
+                    reason_code=ReasonCode.AMBIGUOUS_TERMS,
+                    reason=f"price must be a non-negative integer string, got {price!r}",
+                )
+        effective_price = price if price is not None else self._service_price
+        effective_eta = (
+            estimated_completion_seconds
+            if estimated_completion_seconds is not None
+            else self._estimated_completion
+        )
+
         now = int(time.time())
         quote_expires_at = now + self._quote_ttl_seconds
 
@@ -669,14 +699,14 @@ class NegotiationHandler:
             deliverables=req.terms.deliverables,
             quality_standards=req.terms.quality_standards,
             success_criteria=req.terms.success_criteria,
-            price=self._service_price,
+            price=effective_price,
             currency=self._currency,
         )
 
         response = NegotiationResponse(
             accepted=True,
             terms=response_terms,
-            estimated_completion_seconds=self._estimated_completion,
+            estimated_completion_seconds=effective_eta,
             quote_expires_at=quote_expires_at,
         )
 
