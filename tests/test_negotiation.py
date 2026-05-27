@@ -353,13 +353,13 @@ class TestBuildJobDescription:
         with pytest.raises(ValueError, match="currency"):
             build_job_description(result)
 
-    def test_max_length_truncates_task(self):
+    def test_raises_when_over_max_length(self):
+        """Over-length descriptions must raise, not truncate — truncating
+        would change the signed content and break provider_sig verification."""
         long_task = "A" * 1000
         result = _make_accepted_result(task=long_task)
-        desc = build_job_description(result, max_length=500)
-        assert len(desc) <= 500
-        parsed = json.loads(desc)
-        assert parsed["task"].endswith("...")
+        with pytest.raises(ValueError, match="exceeds max_length"):
+            build_job_description(result, max_length=500)
 
     def test_quote_expires_at_included(self):
         result = _make_accepted_result()
@@ -530,6 +530,17 @@ class TestNegotiationHandler:
         result = handler.negotiate({"bad": "data"})
         assert result.accepted is False
         assert result.response.get("reason_code") == ReasonCode.AMBIGUOUS_TERMS
+
+    def test_rejects_when_description_too_long(self):
+        """A task that would overflow the on-chain description cap is rejected
+        at negotiation time with TASK_TOO_LONG, before any quote is signed."""
+        handler = self._make_handler()
+        result = handler.negotiate({
+            "task_description": "x" * 10_000,
+            "terms": {"deliverables": "summary", "quality_standards": "accurate"},
+        })
+        assert result.accepted is False
+        assert result.response.get("reason_code") == ReasonCode.TASK_TOO_LONG
 
     def test_missing_quality_standards(self):
         handler = self._make_handler(require_quality_standards=True)
