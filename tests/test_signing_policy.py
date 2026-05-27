@@ -181,6 +181,15 @@ def test_rejects_validBefore_le_validAfter():
         _twa_call(p, message_overrides={"validAfter": NOW + 100, "validBefore": NOW + 100})
 
 
+def test_rejects_already_expired_validBefore():
+    """validBefore in the past must be refused — otherwise budget is reserved
+    for an authorization the chain will reject (or a non-standard token may
+    settle), and the temporal guard is void."""
+    p = SigningPolicy.strict_default()
+    with pytest.raises(PolicyViolation, match="already expired"):
+        _twa_call(p, message_overrides={"validAfter": NOW - 600, "validBefore": NOW - 300})
+
+
 def test_rejects_missing_validity_fields_when_required():
     """TransferWithAuthorization without validBefore/validAfter must fail."""
     p = SigningPolicy.strict_default()

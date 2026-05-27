@@ -193,6 +193,13 @@ def _check_validity(
         )
 
     current = int(now if now is not None else time.time())
+    if valid_before <= current:
+        raise PolicyViolation(
+            f"validBefore ({valid_before}) is already expired (current={current})",
+            primary_type=primary_type,
+            chain_id=chain_id,
+            verifying_contract=verifying,
+        )
     future = valid_before - current
     if future > policy.max_future_validity_seconds:
         raise PolicyViolation(
