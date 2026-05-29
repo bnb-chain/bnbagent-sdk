@@ -138,6 +138,8 @@ All endpoints are mounted under a configurable prefix (default `/erc8183`).
 
 Single-round price negotiation. Request body: `{"terms": {...}, "task_description": "..."}`. Returns either an accepted quote (with signed `negotiation_hash`) or a rejection with a reason code.
 
+The combined `task_description` + `terms` must fit the on-chain `job.description` cap (`MAX_DESCRIPTION_BYTES = 4096`). Over-length requests are rejected at negotiation time with reason code `TASK_TOO_LONG` (`0x07`) — the description is **not** silently truncated, because truncating after signing would invalidate `negotiation_hash` / `provider_sig`.
+
 The endpoint is rate-limited per client IP (defaults: 120 requests / 60 seconds, configurable via `ERC8183_NEGOTIATE_RATE_LIMIT` and `ERC8183_NEGOTIATE_RATE_WINDOW`); over-budget callers receive `429 Too Many Requests`. Quote TTL is bounded by `NegotiationHandler.MAX_QUOTE_TTL_SECONDS = 300` so leaked or replayed `provider_sig` values cannot accumulate value over time.
 
 When deployed behind a reverse proxy (nginx, AWS ALB, k8s ingress), run uvicorn with `--forwarded-allow-ips='<proxy_cidr>'` so `request.client.host` resolves to the real client IP. Without this flag every request appears to originate from the proxy, defeating per-client throttling.

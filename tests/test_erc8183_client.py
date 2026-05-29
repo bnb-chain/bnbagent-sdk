@@ -62,9 +62,16 @@ def facade(mock_web3):
 
 
 class TestInit:
-    def test_requires_wallet_provider(self):
-        with pytest.raises(ValueError, match="wallet_provider is required"):
-            ERC8183Client(None, network=_fake_network())  # type: ignore[arg-type]
+    def test_allows_read_only_without_wallet(self, mock_web3):
+        """wallet_provider=None builds a read-only client (writes raise later
+        via _send_tx); address is None."""
+        with patch("bnbagent.erc8183.client.create_web3", return_value=mock_web3), \
+             patch("bnbagent.erc8183.client.CommerceClient"), \
+             patch("bnbagent.erc8183.client.RouterClient"), \
+             patch("bnbagent.erc8183.client.PolicyClient"):
+            client = ERC8183Client(None, network=_fake_network())
+            assert client.address is None
+            assert client._wallet_provider is None
 
     def test_rejects_network_missing_addresses(self, mock_web3):
         incomplete = NetworkConfig(

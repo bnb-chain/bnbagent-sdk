@@ -152,7 +152,7 @@ def _create_erc8183_routes(state: ERC8183State) -> APIRouter:
     async def get_job(job_id: int):
         result = await state.job_ops.get_job(job_id)
         if not result.get("success"):
-            return JSONResponse(result, status_code=500)
+            return JSONResponse(result, status_code=result.get("error_code", 500))
         if "status" in result and hasattr(result["status"], "value"):
             result["status"] = result["status"].value
         return JSONResponse(result)
@@ -167,7 +167,10 @@ def _create_erc8183_routes(state: ERC8183State) -> APIRouter:
     @router.get("/job/{job_id}/verify")
     async def verify_job(job_id: int):
         result = await state.job_ops.verify_job(job_id)
-        return JSONResponse(result, status_code=200 if result.get("valid") else 400)
+        return JSONResponse(
+            result,
+            status_code=200 if result.get("valid") else result.get("error_code", 400),
+        )
 
     @router.post("/negotiate")
     async def negotiate(request: Request):

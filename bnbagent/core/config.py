@@ -64,8 +64,9 @@ class AgentConfig:
     ---------------
     private_key + wallet_password
         Auto-wrapped into ``EVMWalletProvider`` in ``__post_init__``.
-        ``private_key`` is cleared after wrapping so it never survives
-        in memory on the config object.
+        Both ``private_key`` and ``wallet_password`` are cleared after
+        wrapping so neither survives in memory on the config object (the
+        provider keeps its own copy of the password).
 
     Network
     -------
@@ -100,6 +101,7 @@ class AgentConfig:
                 private_key=self.private_key,
             )
             self.private_key = ""
+            self.wallet_password = ""
 
             if os.getenv("PRIVATE_KEY"):
                 logger.warning(
@@ -120,6 +122,7 @@ class AgentConfig:
                 password=self.wallet_password,
                 address=self.wallet_address or None,
             )
+            self.wallet_password = ""
 
     def _wallet_info_repr(self) -> str:
         if not self.wallet_provider:

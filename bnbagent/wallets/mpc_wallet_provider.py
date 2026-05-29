@@ -1,9 +1,19 @@
 """
 MPC Wallet Provider Implementation
 
-Placeholder for future MPC (Multi-Party Computation) wallet integration.
-MPC wallets use distributed key generation and signing, providing
-enhanced security without storing a single private key.
+Stub-by-design slot for an MPC (Multi-Party Computation) signing path.
+
+The SDK intentionally does **not** ship an in-process MPC implementation:
+high-value production agent flows should integrate an external MPC
+provider (Coinbase CDP, Fireblocks, Web3Auth, etc.) which already
+manages threshold-key custody, audit trails, and policy enforcement at
+the enclave level. The stub here exists so the abstract
+``WalletProvider`` interface stays satisfiable by ``isinstance`` checks
+and so a project that selects ``wallet.kind = 'mpc'`` in configuration
+gets a clear NotImplementedError rather than a silent fall-through.
+
+If you need MPC, build a thin ``WalletProvider`` subclass in your own
+project that adapts your provider's signing API to this interface.
 """
 
 from __future__ import annotations
@@ -54,4 +64,13 @@ class MPCWalletProvider(WalletProvider):
 
     def sign_message(self, message: str) -> dict[str, Any]:
         """Sign a message."""
+        raise NotImplementedError("MPC wallet not implemented")
+
+    def sign_typed_data(
+        self,
+        domain: dict[str, Any],
+        types: dict[str, list[dict[str, str]]],
+        message: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Sign EIP-712 typed data."""
         raise NotImplementedError("MPC wallet not implemented")

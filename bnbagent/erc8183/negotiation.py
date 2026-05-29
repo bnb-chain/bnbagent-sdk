@@ -43,6 +43,20 @@ from typing import TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
 
+# Maximum byte length of the on-chain job.description string. It is stored as
+# a Solidity `string` (unbounded by type), so this is a self-imposed cap to
+# bound createJob gas and keep the UMA assertion claim readable. ~536 bytes
+# are fixed overhead (negotiation_hash, provider_sig, addresses, JSON keys);
+# the remainder is user text shared across task + terms.
+MAX_DESCRIPTION_BYTES = 4096
+
+
+class DescriptionTooLongError(ValueError):
+    """Raised by :func:`build_job_description` when the assembled on-chain
+    description exceeds ``max_length``. Truncating would invalidate
+    negotiation_hash / provider_sig, so the description is rejected instead."""
+
+
 if TYPE_CHECKING:
     from .client import ERC8183Client
     from ..wallets.wallet_provider import WalletProvider
@@ -57,6 +71,7 @@ class ReasonCode:
     AMBIGUOUS_TERMS = "0x04"
     BUSY = "0x05"
     UNSUPPORTED = "0x06"
+    TASK_TOO_LONG = "0x07"  # task + terms exceed the on-chain description cap
 
 
 @dataclass
@@ -398,7 +413,9 @@ def _build_description_content(
     return content
 
 
-def build_job_description(negotiation_result: dict, max_length: int = 2000) -> str:
+def build_job_description(
+    negotiation_result: dict, max_length: int = MAX_DESCRIPTION_BYTES
+) -> str:
     """
     Build a compact JSON description string for createJob() from a negotiation result.
 
@@ -411,14 +428,17 @@ def build_job_description(negotiation_result: dict, max_length: int = 2000) -> s
     Args:
         negotiation_result: Dict from NegotiationResult.to_dict() or the HTTP
                             /negotiate endpoint response.
-        max_length: Maximum byte length of the output string (default 2000).
-                    If exceeded, the task field is truncated.
+        max_length: Maximum byte length of the output string (default
+                    MAX_DESCRIPTION_BYTES). If exceeded, raises
+                    DescriptionTooLongError — truncating here would change the
+                    signed content and break provider_sig verification.
 
     Returns:
         Compact JSON string suitable for createJob(description=...).
 
     Raises:
         ValueError: If the negotiation was not accepted or required fields are missing.
+        DescriptionTooLongError: If the assembled description exceeds max_length.
     """
     # Propagate chain_id / verifying_contract from the result so the on-chain
     # description string contains the SAME fields that were keccak'd to produce
@@ -441,13 +461,12 @@ def build_job_description(negotiation_result: dict, max_length: int = 2000) -> s
 
     description = json.dumps(content, sort_keys=True, separators=(",", ":"))
 
-    # Truncate task field if over max_length
     if len(description) > max_length:
-        overage = len(description) - max_length
-        task = content.get("task", "")
-        if len(task) > overage + 3:
-            content["task"] = task[: len(task) - overage - 3] + "..."
-            description = json.dumps(content, sort_keys=True, separators=(",", ":"))
+        raise DescriptionTooLongError(
+            f"on-chain description is {len(description)} bytes, exceeds "
+            f"max_length={max_length}; shorten task_description / terms. "
+            f"Truncating would invalidate negotiation_hash / provider_sig."
+        )
 
     return description
 
@@ -609,7 +628,13 @@ class NegotiationHandler:
         """Ensure hash has 0x prefix."""
         return h if h.startswith("0x") else "0x" + h
 
-    def negotiate(self, request_data: dict) -> NegotiationResult:
+    def negotiate(
+        self,
+        request_data: dict,
+        *,
+        price: str | None = None,
+        estimated_completion_seconds: int | None = None,
+    ) -> NegotiationResult:
         """
         Process a negotiation request and return the result.
 
@@ -619,6 +644,11 @@ class NegotiationHandler:
 
         Args:
             request_data: The incoming request dict (task_description, terms, ...)
+            price: Optional per-request price (token smallest-unit uint256
+                string) overriding the construction-time ``service_price`` for
+                this call only. Must be seller-controlled (e.g. an effort
+                estimate), NOT echoed from untrusted client input.
+            estimated_completion_seconds: Optional per-request ETA override.
 
         Returns:
             NegotiationResult with request, request_hash, response, response_hash,
@@ -643,6 +673,25 @@ class NegotiationHandler:
                 reason="quality_standards is required in terms.",
             )
 
+        # Per-request overrides fall back to the construction-time defaults.
+        if price is not None:
+            try:
+                if int(price) < 0:
+                    raise ValueError
+            except (TypeError, ValueError):
+                return self._reject(
+                    request_data=req.to_dict(),
+                    request_hash=request_hash,
+                    reason_code=ReasonCode.AMBIGUOUS_TERMS,
+                    reason=f"price must be a non-negative integer string, got {price!r}",
+                )
+        effective_price = price if price is not None else self._service_price
+        effective_eta = (
+            estimated_completion_seconds
+            if estimated_completion_seconds is not None
+            else self._estimated_completion
+        )
+
         now = int(time.time())
         quote_expires_at = now + self._quote_ttl_seconds
 
@@ -650,14 +699,14 @@ class NegotiationHandler:
             deliverables=req.terms.deliverables,
             quality_standards=req.terms.quality_standards,
             success_criteria=req.terms.success_criteria,
-            price=self._service_price,
+            price=effective_price,
             currency=self._currency,
         )
 
         response = NegotiationResponse(
             accepted=True,
             terms=response_terms,
-            estimated_completion_seconds=self._estimated_completion,
+            estimated_completion_seconds=effective_eta,
             quote_expires_at=quote_expires_at,
         )
 
@@ -720,7 +769,7 @@ class NegotiationHandler:
         bound_chain_id = self._chain_id if negotiation_hash else None
         bound_contract = self._verifying_contract if negotiation_hash else None
 
-        return NegotiationResult(
+        result = NegotiationResult(
             request=req.to_dict(),
             request_hash=request_hash,
             response=response_dict,
@@ -730,6 +779,25 @@ class NegotiationHandler:
             chain_id=bound_chain_id,
             verifying_contract=bound_contract,
         )
+
+        # Reject up front if the on-chain description would exceed the cap.
+        # Measuring the fully-assembled string (incl. negotiation_hash +
+        # provider_sig) means we never hand back a quote the client cannot
+        # turn into a job, and never silently truncate a signed record.
+        try:
+            build_job_description(result.to_dict())
+        except DescriptionTooLongError:
+            return self._reject(
+                request_data=req.to_dict(),
+                request_hash=request_hash,
+                reason_code=ReasonCode.TASK_TOO_LONG,
+                reason=(
+                    "task_description + terms exceed the on-chain description "
+                    f"size limit ({MAX_DESCRIPTION_BYTES} bytes)"
+                ),
+            )
+
+        return result
 
     def _reject(
         self,
