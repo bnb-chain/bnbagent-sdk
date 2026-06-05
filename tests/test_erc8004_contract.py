@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 from bnbagent.erc8004.contract import ContractInterface
+from bnbagent.wallets.local_executor import LocalExecutor
 from tests.conftest import FAKE_ADDRESS, FAKE_CONTRACT_ADDRESS
 
 
@@ -20,6 +21,15 @@ def _make_contract(web3=None, paymaster=None):
     web3.provider.endpoint_uri = "https://fake-rpc.example.com"
     wallet_provider = MagicMock()
     wallet_provider.address = FAKE_ADDRESS
+    # A bare mock is a pure signer: make_executor must yield a real
+    # LocalExecutor wrapping it (matching the production default), so the
+    # build/sign/broadcast logic under test actually runs.
+    wallet_provider.make_executor.side_effect = lambda ctx: LocalExecutor(
+        web3=ctx.web3,
+        wallet_provider=wallet_provider,
+        paymaster=ctx.paymaster,
+        receipt_timeout=ctx.receipt_timeout,
+    )
 
     with patch.object(ContractInterface, "_get_default_abi", return_value=[]):
         with patch("bnbagent.erc8004.contract.Web3.to_checksum_address", side_effect=lambda x: x):
@@ -96,7 +106,7 @@ class TestExecuteTransactionReceiptRevert:
             with pytest.raises(RuntimeError, match="Transaction reverted on-chain"):
                 ci._execute_transaction(fn, description="test-op")
 
-        assert "[ContractInterface]" in caplog.text
+        assert "[LocalExecutor]" in caplog.text
         assert "test-op" in caplog.text
 
     def test_success_receipt_returns_normally(self):
@@ -216,7 +226,7 @@ class TestPreflightEthCall:
                 f.set_exception(concurrent.futures.TimeoutError())
                 return f
 
-        with patch("bnbagent.erc8004.contract._cf.ThreadPoolExecutor", ImmediateTimeoutExecutor):
+        with patch("bnbagent.wallets.local_executor._cf.ThreadPoolExecutor", ImmediateTimeoutExecutor):
             result = ci._execute_transaction(fn, description="timeout-test")
 
         web3.eth.send_raw_transaction.assert_called_once()
@@ -318,7 +328,7 @@ class TestRetryAndNonceManagement:
             Exception("HTTP 429: too many requests"),
             sent_hash,
         ]
-        with patch("bnbagent.erc8004.contract.time.sleep") as mock_sleep:
+        with patch("bnbagent.wallets.local_executor.time.sleep") as mock_sleep:
             result = ci._execute_transaction(fn, description="retry-429")
         assert web3.eth.send_raw_transaction.call_count == 2
         mock_sleep.assert_called_once()  # one backoff between the two attempts

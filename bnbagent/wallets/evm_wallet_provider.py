@@ -54,6 +54,8 @@ class EVMWalletProvider(WalletProvider):
         wallet = EVMWalletProvider(password="pw")
     """
 
+    kind = "evm"
+
     def __init__(
         self,
         password: str,
@@ -358,3 +360,22 @@ class EVMWalletProvider(WalletProvider):
     def get_wallet_info(self) -> dict[str, str]:
         """Get wallet information (address only, no sensitive data)."""
         return {"address": self.address}
+
+    @property
+    def key_location(self) -> str | None:
+        """Path of the encrypted Keystore V3 file, or an in-memory marker."""
+        if not self._persist:
+            return "in-memory (not persisted)"
+        if self._account is None:
+            return str(self._wallets_dir)
+        return str(self._wallets_dir / f"{self._account.address}.json")
+
+    def exists(self) -> bool:
+        """True if an encrypted keystore for this address is on disk.
+
+        In-memory-only wallets (``persist=False``) have no durable key
+        material and always report ``False``.
+        """
+        if not self._persist or self._account is None:
+            return False
+        return self.keystore_exists(self._account.address, self._wallets_dir)

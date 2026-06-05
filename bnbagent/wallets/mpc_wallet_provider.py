@@ -37,6 +37,8 @@ class MPCWalletProvider(WalletProvider):
     Note: This is a stub implementation. Full MPC support will be added in the future.
     """
 
+    kind = "mpc"
+
     def __init__(self, mpc_config: dict[str, Any] | None = None):
         """
         Initialize the MPC wallet provider.

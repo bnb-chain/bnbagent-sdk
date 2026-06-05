@@ -83,10 +83,25 @@ class AgentConfig:
     private_key: str = field(default="", repr=False)
     wallet_password: str = field(default="", repr=False)
     wallet_address: str = ""  # select specific wallet from ~/.bnbagent/wallets/
+    # Select a non-EVM provider via the wallet factory (e.g. "twak", "mpc").
+    # "evm" / "" keep the private_key + wallet_password convenience path below.
+    wallet_kind: str = ""
 
     def __post_init__(self):
         if self.private_key and not self.private_key.startswith("0x"):
             self.private_key = f"0x{self.private_key}"
+
+        # Explicit non-EVM wallet kind: build it through the factory and skip
+        # the private_key / password EVM convenience path entirely.
+        if (
+            self.wallet_kind
+            and self.wallet_kind.strip().lower() != "evm"
+            and not self.wallet_provider
+        ):
+            from ..wallets import create_wallet_provider
+
+            self.wallet_provider = create_wallet_provider(self.wallet_kind)
+            return
 
         if self.private_key and not self.wallet_provider:
             if not self.wallet_password:

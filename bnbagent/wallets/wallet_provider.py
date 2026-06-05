@@ -7,7 +7,10 @@ Defines the interface that all wallet providers must implement.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any, ClassVar
+
+if TYPE_CHECKING:
+    from .intents import ExecutionContext, IntentExecutor
 
 
 class WalletProvider(ABC):
@@ -17,6 +20,74 @@ class WalletProvider(ABC):
     This interface defines the contract that all wallet providers must implement,
     allowing for easy swapping between different wallet implementations (EVM, MPC, etc.).
     """
+
+    #: Stable, lowercase identifier for this provider kind (``"evm"``,
+    #: ``"twak"``, ``"mpc"``, ...). Used by
+    #: :func:`~bnbagent.wallets.create_wallet_provider` to select an
+    #: implementation and by :meth:`describe` for uniform introspection.
+    #: Concrete providers override it; third-party subclasses keep the default.
+    kind: ClassVar[str] = "custom"
+
+    @property
+    def key_location(self) -> str | None:
+        """Human-readable description of *where this wallet's key lives*.
+
+        There is no single shared key store across providers — each owns its
+        own custody (the SDK keystore directory, an external CLI's keychain, a
+        remote MPC enclave, ...). This property gives a uniform way to answer
+        "where is my key?" without unifying the underlying storage. Returns
+        ``None`` when the location is unknown or not applicable.
+        """
+        return None
+
+    def exists(self) -> bool:
+        """Whether durable key material already backs this provider.
+
+        Defaults to ``True`` (a constructed provider is assumed usable).
+        Providers with an on-disk or external store override this to report
+        whether the wallet has actually been created and persisted, so callers
+        can implement a uniform "get-or-create" flow. Implementations MUST NOT
+        raise — they return ``False`` when existence cannot be confirmed.
+        """
+        return True
+
+    def describe(self) -> dict[str, Any]:
+        """Return a uniform, non-sensitive summary of this wallet.
+
+        Keys: ``kind``, ``address`` (``None`` if unavailable),
+        ``key_location`` and ``exists``. Never includes private key material.
+        """
+        try:
+            address: str | None = self.address
+        except Exception:
+            address = None
+        return {
+            "kind": self.kind,
+            "address": address,
+            "key_location": self.key_location,
+            "exists": self.exists(),
+        }
+
+    def make_executor(self, context: ExecutionContext) -> IntentExecutor:
+        """Return the :class:`IntentExecutor` that runs operations for this wallet.
+
+        This makes execution polymorphic, so callers never special-case wallet
+        kinds. The default wraps this signer in a
+        :class:`~bnbagent.wallets.local_executor.LocalExecutor` that builds,
+        signs and broadcasts via the provided web3/paymaster ``context`` — the
+        path every pure-signing wallet (EVM, hardware, ...) shares.
+
+        A self-broadcasting wallet (one that owns the broadcast step, e.g. a
+        CLI-backed backend) overrides this to return ``self``.
+        """
+        from .local_executor import LocalExecutor
+
+        return LocalExecutor(
+            web3=context.web3,
+            wallet_provider=self,
+            paymaster=context.paymaster,
+            receipt_timeout=context.receipt_timeout,
+        )
 
     @property
     @abstractmethod
