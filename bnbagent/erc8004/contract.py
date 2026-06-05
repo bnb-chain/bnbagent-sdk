@@ -7,29 +7,28 @@ Provides methods for registering agents and querying agent information.
 
 from __future__ import annotations
 
-import concurrent.futures as _cf
 import json
 import logging
-import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from web3 import Web3
 from web3.contract.contract import ContractFunction
-from web3.types import TxReceipt
 
-from ..core.contract_mixin import MAX_RETRIES, MIN_GAS_PRICE_WEI, RETRY_BASE_DELAY
-from ..core.nonce_manager import NonceManager
 from ..core.paymaster import Paymaster
+from ..wallets.intents import (
+    ERC8004_REGISTER,
+    ERC8004_SET_AGENT_URI,
+    ERC8004_SET_METADATA,
+    ExecutionContext,
+    Intent,
+)
+from ..wallets.local_executor import DEFAULT_RECEIPT_TIMEOUT
 
 if TYPE_CHECKING:
     from ..wallets import WalletProvider
 
 logger = logging.getLogger(__name__)
-
-# Default seconds to wait for a transaction receipt. web3.py's own default
-# (120s) is too short on congested BNB Chain / paymaster-relayed paths.
-DEFAULT_RECEIPT_TIMEOUT = 300
 
 
 class ContractInterface:
@@ -77,6 +76,18 @@ class ContractInterface:
             address=self.contract_address, abi=self._get_default_abi()
         )
 
+        # Execution backend. Each wallet decides how it executes intents:
+        # a pure signer wraps itself in a LocalExecutor (build + sign +
+        # broadcast via this web3/paymaster context); a self-broadcasting
+        # wallet returns itself. No wallet-kind branching needed here.
+        self._executor = self.wallet_provider.make_executor(
+            ExecutionContext(
+                web3=self.web3,
+                paymaster=self.paymaster,
+                receipt_timeout=self.receipt_timeout,
+            )
+        )
+
         if self.paymaster:
             logger.debug(
                 "Initialized contract interface at %s with paymaster: %s",
@@ -105,45 +116,6 @@ class ContractInterface:
         except Exception as e:
             raise ValueError(f"Failed to load ABI from file {abi_file_path}: {str(e)}") from e
 
-    def _run_preflight(self, transaction: dict, description: str) -> None:
-        """Simulate the transaction via eth_call before broadcasting.
-
-        Surfaces revert reasons early without spending gas. Mirrors the same
-        pre-flight logic in core/contract_mixin.py:_send_tx().
-        """
-        call_params = {
-            "from": transaction.get("from"),
-            "to": transaction.get("to"),
-            "data": transaction.get("data", "0x"),
-            "value": transaction.get("value", 0),
-            "gas": transaction.get("gas", 2_000_000),
-        }
-        with _cf.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(self.web3.eth.call, call_params)
-            try:
-                future.result(timeout=10)
-            except _cf.TimeoutError:
-                logger.warning(
-                    "[ContractInterface] Pre-flight eth_call timed out for %s, proceeding",
-                    description,
-                )
-            except Exception as preflight_err:
-                err_str = str(preflight_err)
-                if "'0x'" in err_str or err_str.strip().endswith(", '0x')"):
-                    logger.warning(
-                        "[ContractInterface] Pre-flight returned opaque 0x revert for %s, proceeding",
-                        description,
-                    )
-                else:
-                    logger.error(
-                        "[ContractInterface] Pre-flight revert for %s: %s",
-                        description,
-                        preflight_err,
-                    )
-                    raise RuntimeError(
-                        f"Transaction would revert: {preflight_err}"
-                    ) from preflight_err
-
     def _execute_transaction(
         self,
         function: ContractFunction,
@@ -152,7 +124,11 @@ class ContractInterface:
         """
         Execute a contract transaction: build, sign, send, and wait for receipt.
 
-        Automatically uses paymaster if available, otherwise uses standard Web3 transaction flow.
+        Delegates to the configured :class:`IntentExecutor` (by default a
+        :class:`~bnbagent.wallets.local_executor.LocalExecutor`, which uses the
+        paymaster when available and otherwise the standard Web3 flow with
+        nonce management and retry). Retained as the internal seam so the
+        higher-level ``register_agent`` / ``set_*`` methods stay unchanged.
 
         Args:
             function: The contract function to execute
@@ -163,158 +139,7 @@ class ContractInterface:
                 - transactionHash: str - The transaction hash
                 - receipt: TransactionReceipt - The transaction receipt
         """
-        try:
-            wallet_address = self.wallet_provider.address
-            gas_estimate = function.estimate_gas({"from": wallet_address})
-            logger.debug(f"Gas estimate: {gas_estimate}")
-            gas_limit = int(gas_estimate * 1.2)  # Add 20% buffer
-
-            # Use paymaster if available, otherwise use standard Web3
-            if self.paymaster:
-                # Get nonce from paymaster
-                nonce = self.paymaster.eth_getTransactionCount(wallet_address, "pending")
-                logger.debug(f"Got nonce from paymaster: {nonce}")
-
-                # Build transaction
-                transaction = function.build_transaction(
-                    {
-                        "from": wallet_address,
-                        "chainId": self.web3.eth.chain_id,
-                        "nonce": nonce,
-                        "gas": gas_limit,
-                        "gasPrice": max(self.web3.eth.gas_price, MIN_GAS_PRICE_WEI),
-                    }
-                )
-
-                logger.debug(f"Building {description} transaction: {transaction}")
-
-                # Pre-flight simulation to surface revert reason before spending gas
-                self._run_preflight(transaction, description)
-
-                # Check if transaction is sponsorable
-                is_sponsorable = self.paymaster.isSponsorable(transaction)
-                if not is_sponsorable:
-                    logger.error("Transaction is not sponsorable")
-                    raise ValueError("Transaction is not sponsorable")
-                else:
-                    logger.debug("Transaction is sponsorable")
-                    transaction["gasPrice"] = 0
-
-                # Sign transaction via wallet provider
-                signed_txn = self.wallet_provider.sign_transaction(transaction)
-                signed_tx_hex = signed_txn["rawTransaction"].hex()
-
-                # Send transaction via paymaster
-                tx_hash_hex = self.paymaster.eth_sendRawTransaction(
-                    signed_tx_hex, tx_options={"UserAgent": "bnbagent/v1.0.0"}
-                )
-                # Convert hex string to bytes for receipt waiting
-                if not tx_hash_hex.startswith("0x"):
-                    tx_hash_hex = "0x" + tx_hash_hex
-                tx_hash = bytes.fromhex(tx_hash_hex[2:])  # Remove 0x prefix
-                logger.debug(f"Transaction sent via paymaster: {tx_hash_hex}")
-            else:
-                # Standard Web3 path with NonceManager + retry on transient
-                # errors. Mirrors core/contract_mixin.py:_send_tx() — keep both
-                # in sync.
-                nonce_mgr = NonceManager.for_account(self.web3, wallet_address)
-                last_error: Exception | None = None
-                tx_hash = None
-                tx_hash_hex = ""
-
-                for attempt in range(MAX_RETRIES):
-                    nonce = nonce_mgr.get_nonce()
-                    try:
-                        # Floor at MIN_GAS_PRICE_WEI and add 20% headroom so a
-                        # low eth_gasPrice on quiet networks doesn't leave the
-                        # tx stranded in mempool below the miner cutoff.
-                        try:
-                            gas_price = max(
-                                int(self.web3.eth.gas_price * 1.2),
-                                MIN_GAS_PRICE_WEI,
-                            )
-                        except Exception:
-                            gas_price = MIN_GAS_PRICE_WEI
-
-                        transaction = function.build_transaction(
-                            {
-                                "from": wallet_address,
-                                "chainId": self.web3.eth.chain_id,
-                                "nonce": nonce,
-                                "gasPrice": gas_price,
-                                "gas": gas_limit,
-                            }
-                        )
-                        logger.debug(f"Building {description} transaction: {transaction}")
-
-                        self._run_preflight(transaction, description)
-
-                        signed_txn = self.wallet_provider.sign_transaction(transaction)
-                        tx_hash = self.web3.eth.send_raw_transaction(
-                            signed_txn["rawTransaction"]
-                        )
-                        tx_hash_hex = tx_hash.hex()
-                        if not tx_hash_hex.startswith("0x"):
-                            tx_hash_hex = "0x" + tx_hash_hex
-                        logger.debug(f"Transaction sent via Web3: {tx_hash_hex}")
-                        break
-                    except Exception as send_err:
-                        last_error = send_err
-                        error_str = str(send_err).lower()
-
-                        if nonce_mgr.handle_error(send_err, nonce) and attempt < MAX_RETRIES - 1:
-                            logger.warning(
-                                f"[ContractInterface] Nonce error, retry "
-                                f"{attempt + 1}/{MAX_RETRIES}"
-                            )
-                            continue
-
-                        is_rate_limit = (
-                            "429" in error_str or "too many requests" in error_str
-                        )
-                        if is_rate_limit and attempt < MAX_RETRIES - 1:
-                            delay = RETRY_BASE_DELAY * (2**attempt)
-                            logger.warning(
-                                f"[ContractInterface] Rate limited, retry "
-                                f"{attempt + 1}/{MAX_RETRIES} in {delay:.1f}s"
-                            )
-                            time.sleep(delay)
-                            continue
-
-                        # Non-retryable: invalidate cached nonce so the next
-                        # caller re-seeds from chain rather than leaving a gap.
-                        nonce_mgr.reset()
-                        raise
-
-                if tx_hash is None:
-                    # All retries exhausted with retryable errors.
-                    raise last_error  # type: ignore[misc]
-
-            # Wait for receipt (always use Web3 for receipt waiting)
-            receipt = self.web3.eth.wait_for_transaction_receipt(
-                tx_hash, timeout=self.receipt_timeout
-            )
-
-            if receipt["status"] == 0:
-                logger.error(
-                    "[ContractInterface] %s reverted on-chain: tx=%s block=%s gasUsed=%s",
-                    description,
-                    tx_hash_hex,
-                    receipt["blockNumber"],
-                    receipt["gasUsed"],
-                )
-                raise RuntimeError(f"Transaction reverted on-chain: {tx_hash_hex}")
-
-            logger.debug(f"Transaction confirmed: {receipt}")
-
-            return {
-                "transactionHash": tx_hash_hex,
-                "receipt": receipt,
-            }
-
-        except Exception as e:
-            logger.error(f"Failed to execute {description}: {str(e)}")
-            raise
+        return self._executor.execute(Intent(call=function, description=description))
 
     def _inject_built_with(
         self, metadata: list[dict[str, str]] | None
@@ -357,19 +182,27 @@ class ContractInterface:
             )
             function = self.contract.functions.register(agent_uri, metadata_bytes)
 
-            # Log function selector for debugging
-            logger.debug(f"Function selector: {function.abi.get('name', 'unknown')}")
-            logger.debug(f"Contract address: {self.contract_address}")
-
-            # Execute transaction
-            result = self._execute_transaction(function, description="registration")
+            # Execute via the configured backend. ``call`` drives the local
+            # build/sign/broadcast path; ``name``/``kwargs`` let a semantic
+            # backend (e.g. a CLI-backed wallet) rebuild the operation. The
+            # high-level ``metadata`` (key/value strings, including the
+            # injected ``built_with``) is passed so such backends can replay
+            # entries their native ``register`` cannot carry inline.
+            intent = Intent(
+                name=ERC8004_REGISTER,
+                kwargs={"agent_uri": agent_uri, "metadata": metadata},
+                call=function,
+                description="registration",
+            )
+            result = self._executor.execute(intent)
             tx_hash = result["transactionHash"]
-            receipt: TxReceipt = result["receipt"]
+            receipt = result.get("receipt")
 
-            # Extract agentId from events
-            agent_id = None
-            if receipt.logs:
-                # Parse Registered event
+            # Prefer an agentId surfaced directly by the executor (semantic
+            # backends return it from their own output); otherwise parse the
+            # Registered event from the local receipt.
+            agent_id = result.get("agentId")
+            if agent_id is None and getattr(receipt, "logs", None):
                 registered_event = self.contract.events.Registered()
                 for log in receipt.logs:
                     try:
@@ -464,16 +297,19 @@ class ContractInterface:
             # Convert string to bytes for on-chain storage
             value_bytes = value.encode("utf-8")
 
-            # Execute transaction
             function = self.contract.functions.setMetadata(agent_id, key, value_bytes)
-            result = self._execute_transaction(function, description="set metadata")
-            tx_hash = result["transactionHash"]
-            receipt = result["receipt"]
+            intent = Intent(
+                name=ERC8004_SET_METADATA,
+                kwargs={"agent_id": agent_id, "key": key, "value": value},
+                call=function,
+                description="set metadata",
+            )
+            result = self._executor.execute(intent)
 
             return {
                 "success": True,
-                "transactionHash": tx_hash,
-                "receipt": receipt,
+                "transactionHash": result["transactionHash"],
+                "receipt": result.get("receipt"),
             }
 
         except Exception as e:
@@ -498,18 +334,22 @@ class ContractInterface:
         try:
             logger.debug(f"Setting agent URI for agentId={agent_id}: {agent_uri[:50]}...")
 
-            # Execute transaction
             function = self.contract.functions.setAgentURI(agent_id, agent_uri)
-            result = self._execute_transaction(function, description="set agent URI")
+            intent = Intent(
+                name=ERC8004_SET_AGENT_URI,
+                kwargs={"agent_id": agent_id, "agent_uri": agent_uri},
+                call=function,
+                description="set agent URI",
+            )
+            result = self._executor.execute(intent)
             tx_hash = result["transactionHash"]
-            receipt = result["receipt"]
 
             logger.debug(f"Agent URI set successfully: {tx_hash}")
 
             return {
                 "success": True,
                 "transactionHash": tx_hash,
-                "receipt": receipt,
+                "receipt": result.get("receipt"),
             }
 
         except Exception as e:
