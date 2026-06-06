@@ -6,6 +6,8 @@ import logging
 import time
 from typing import Any
 
+from web3.exceptions import ContractLogicError
+
 from .nonce_manager import NonceManager
 
 logger = logging.getLogger(__name__)
@@ -19,6 +21,13 @@ RETRY_BASE_DELAY = 1.0
 # a safe minimum across BSC mainnet/testnet at the time of writing.
 MIN_GAS_PRICE_WEI = 3_000_000_000
 
+# Fallback gas limit used only when on-chain estimation is unavailable
+# (transport/RPC error, opaque revert data) or bypassed (skip_preflight).
+# Nodes require ``balance >= gas_limit * gasPrice`` upfront, so a blanket
+# 2M limit would demand ~0.007 BNB per tx while typical writes burn
+# 50-150k gas — estimation keeps the entry cost proportional to real usage.
+DEFAULT_GAS_FALLBACK = 2_000_000
+
 
 class ContractClientMixin:
     """Shared transaction sending and retry logic for web3 contract clients.
@@ -30,13 +39,21 @@ class ContractClientMixin:
     """
 
     def _send_tx(
-        self, fn, value: int = 0, gas: int = 2_000_000, skip_preflight: bool = False
+        self, fn, value: int = 0, gas: int | None = None, skip_preflight: bool = False
     ) -> dict[str, Any]:
-        """Build, sign, and send a transaction with nonce management and retry."""
+        """Build, sign, and send a transaction with nonce management and retry.
+
+        ``gas=None`` (default) estimates the limit on-chain with a 20% buffer
+        (mirroring erc8004's ``_execute_transaction``); pass an explicit ``gas``
+        to skip estimation.
+        """
         if not self._wallet_provider:
             raise RuntimeError(
                 "wallet_provider is required for write operations (client is read-only)"
             )
+
+        if gas is None:
+            gas = self._estimate_gas_limit(fn, value, skip_preflight)
 
         nonce_mgr = NonceManager.for_account(self.w3, self._account)
         last_error = None
@@ -134,6 +151,34 @@ class ContractClientMixin:
                 raise
 
         raise last_error  # type: ignore
+
+    def _estimate_gas_limit(self, fn, value: int, skip_preflight: bool) -> int:
+        """Estimate gas for ``fn`` with a 20% buffer.
+
+        Falls back to ``DEFAULT_GAS_FALLBACK`` when estimation is unavailable —
+        transport/RPC errors, or nodes returning opaque ``0x`` revert data (the
+        same escape hatch the pre-flight uses). A genuine revert surfaced by
+        the estimation is raised as ``Transaction would revert`` so the caller
+        sees the reason instead of a masked fallback broadcast.
+        """
+        class_name = type(self).__name__
+        if skip_preflight:
+            # estimate_gas simulates the call exactly like the pre-flight does;
+            # callers that opted out of simulation get the fallback limit.
+            return DEFAULT_GAS_FALLBACK
+        try:
+            estimate = fn.estimate_gas({"from": self._account, "value": value})
+            return int(estimate * 1.2)
+        except Exception as e:
+            err_str = str(e)
+            is_opaque = "'0x'" in err_str or err_str.strip().endswith(", '0x')")
+            if isinstance(e, ContractLogicError) and not is_opaque:
+                raise RuntimeError(f"Transaction would revert: {e}") from e
+            logger.warning(
+                f"[{class_name}] Gas estimation unavailable ({e}); "
+                f"falling back to gas={DEFAULT_GAS_FALLBACK}"
+            )
+            return DEFAULT_GAS_FALLBACK
 
     def _call_with_retry(self, fn):
         """Call a read function with retry on rate limit."""

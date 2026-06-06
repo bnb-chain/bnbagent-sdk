@@ -24,6 +24,7 @@ from web3 import Web3
 from web3.contract import Contract
 
 from ..core.contract_mixin import ContractClientMixin
+from ..exceptions import RpcRangeLimitError
 from ..wallets.wallet_provider import WalletProvider
 from .types import Verdict
 
@@ -98,6 +99,9 @@ class PolicyClient(ContractClientMixin):
         Reads the ``JobInitialised`` event emitted by ``onSubmitted`` and
         parses ``optParams`` (JSON bytes) to extract ``deliverable_url``.
         Returns ``None`` if the event is not found or the field is absent.
+        Raises :class:`~bnbagent.exceptions.RpcRangeLimitError` when the node
+        rejects the log query with a rate/range limit (``-32005``) — that is
+        retryable, not proof of absence.
 
         Prefer calling ``ERC8183Client.get_deliverable_url`` which auto-resolves
         ``hint_block`` via Commerce's ``JobSubmitted`` event.  If called directly
@@ -128,6 +132,15 @@ class PolicyClient(ContractClientMixin):
                 argument_filters={"jobId": job_id},
             )
         except Exception as exc:
+            err = str(exc)
+            if "-32005" in err or "limit exceeded" in err.lower():
+                # Rate/range-limited RPC is NOT "event not found" — surface a
+                # typed retryable error instead of a None the caller would
+                # misread as a genuinely absent deliverable.
+                raise RpcRangeLimitError(
+                    f"JobInitialised scan for job {job_id} hit the RPC "
+                    f"range/rate limit; retry later"
+                ) from exc
             logger.warning("[PolicyClient] get_deliverable_url(%s) event query failed: %s", job_id, exc)
             return None
 

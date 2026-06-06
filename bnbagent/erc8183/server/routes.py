@@ -31,6 +31,11 @@ from .rate_limit import SlidingWindowLimiter
 
 logger = logging.getLogger(__name__)
 
+# Ceiling on transient-failure retries per job in the funded poll loop.
+# Each attempt re-runs the (potentially expensive) on_job handler, so
+# retries are bounded instead of running until the job expires.
+_MAX_JOB_ATTEMPTS = 5
+
 
 @dataclass
 class ERC8183State:
@@ -161,7 +166,9 @@ def _create_erc8183_routes(state: ERC8183State) -> APIRouter:
     async def get_job_response(job_id: int):
         result = await state.job_ops.get_response(job_id)
         if not result.get("success"):
-            return JSONResponse(result, status_code=404)
+            # get_response distinguishes "no response exists" (404) from
+            # "deliverable exists but temporarily unresolvable" (503).
+            return JSONResponse(result, status_code=result.get("error_code") or 404)
         return JSONResponse(result)
 
     @router.get("/job/{job_id}/verify")
@@ -273,7 +280,7 @@ def create_erc8183_app(
                         await asyncio.to_thread(on_job_skipped, target, reason)
                 except Exception as exc:
                     logger.error(f"[ERC-8183] on_job_skipped callback error: {exc}")
-            return {"success": False, "error": reason}
+            return {"success": False, "error": reason, "error_code": error_code}
 
         job = verification["job"]
 
@@ -303,6 +310,47 @@ def create_erc8183_app(
             logger.error(f"[ERC-8183] Job #{job_id} submission failed: {submission.get('error')}")
         return submission
 
+    # Transiently-failed jobs queued for retry: job_id -> failed attempts so
+    # far. get_pending_jobs reports each FUNDED job only once (cursor-based),
+    # so a job that fails here would otherwise be lost until process restart.
+    retry_attempts: dict[int, int] = {}
+
+    async def _attempt_job(job_id: int) -> None:
+        if job_id in processing_jobs:
+            return
+        processing_jobs.add(job_id)
+        try:
+            submission = await _execute_job_internal(job_id)
+            if submission.get("success"):
+                retry_attempts.pop(job_id, None)
+                return
+            code = submission.get("error_code")
+            if isinstance(code, int) and 400 <= code < 500:
+                # Permanent (not provider, expired, under-priced, oversize,
+                # no longer FUNDED, ...) — retrying cannot succeed.
+                retry_attempts.pop(job_id, None)
+                return
+            _schedule_retry(job_id, submission.get("error"))
+        except Exception as exc:
+            logger.error(f"[ERC-8183] Funded-poll job #{job_id} failed: {exc}")
+            _schedule_retry(job_id, exc)
+        finally:
+            processing_jobs.discard(job_id)
+
+    def _schedule_retry(job_id: int, reason) -> None:
+        attempts = retry_attempts.get(job_id, 0) + 1
+        if attempts >= _MAX_JOB_ATTEMPTS:
+            retry_attempts.pop(job_id, None)
+            logger.error(
+                f"[ERC-8183] Job #{job_id} giving up after {attempts} attempts: {reason}"
+            )
+            return
+        retry_attempts[job_id] = attempts
+        logger.warning(
+            f"[ERC-8183] Job #{job_id} attempt {attempts}/{_MAX_JOB_ATTEMPTS} failed; "
+            f"will retry next poll: {reason}"
+        )
+
     async def _funded_poll_loop():
         logger.info(
             f"[ERC-8183] Funded-job poll loop starting (interval={effective_poll_interval:.1f}s)"
@@ -310,6 +358,12 @@ def create_erc8183_app(
         try:
             while True:
                 try:
+                    # Retries first, so a job failing below is not re-attempted
+                    # within the same tick. _execute_job_internal re-verifies,
+                    # dropping jobs that left FUNDED with a permanent 4xx.
+                    for job_id in list(retry_attempts):
+                        await _attempt_job(job_id)
+
                     result = await state.job_ops.get_pending_jobs()
                     if result.get("success"):
                         jobs = result.get("jobs", [])
@@ -318,18 +372,7 @@ def create_erc8183_app(
                                 f"[ERC-8183] Funded-poll picked up {len(jobs)} pending job(s)"
                             )
                         for job in jobs:
-                            job_id = job["jobId"]
-                            if job_id in processing_jobs:
-                                continue
-                            processing_jobs.add(job_id)
-                            try:
-                                await _execute_job_internal(job_id)
-                            except Exception as exc:
-                                logger.error(
-                                    f"[ERC-8183] Funded-poll job #{job_id} failed: {exc}"
-                                )
-                            finally:
-                                processing_jobs.discard(job_id)
+                            await _attempt_job(job["jobId"])
                     else:
                         logger.warning(
                             f"[ERC-8183] Funded-poll error: {result.get('error')}"

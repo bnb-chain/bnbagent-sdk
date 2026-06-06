@@ -260,3 +260,36 @@ class TestReads:
         facade.policy.check.return_value = (Verdict.APPROVE, b"\x00" * 32)
         verdict, _ = facade.get_verdict(1)
         assert verdict == Verdict.APPROVE
+
+
+class TestPolicyRangeLimit:
+    """Rate/range-limited log queries raise typed retryable errors (BUG-06)."""
+
+    def _policy(self):
+        from bnbagent.erc8183.policy import PolicyClient
+
+        w3 = MagicMock()
+        w3.eth.block_number = 5000
+        return PolicyClient(w3, "0x" + "f8" * 20, abi=[])
+
+    def test_rate_limit_raises_typed_error(self):
+        from bnbagent.exceptions import RpcRangeLimitError
+
+        policy = self._policy()
+        policy.contract.events.JobInitialised.return_value.get_logs.side_effect = (
+            Exception("{'code': -32005, 'message': 'limit exceeded'}")
+        )
+        with pytest.raises(RpcRangeLimitError):
+            policy.get_deliverable_url(1)
+
+    def test_other_query_error_still_returns_none(self):
+        policy = self._policy()
+        policy.contract.events.JobInitialised.return_value.get_logs.side_effect = (
+            Exception("some other rpc problem")
+        )
+        assert policy.get_deliverable_url(1) is None
+
+    def test_genuine_empty_returns_none(self):
+        policy = self._policy()
+        policy.contract.events.JobInitialised.return_value.get_logs.return_value = []
+        assert policy.get_deliverable_url(1) is None
