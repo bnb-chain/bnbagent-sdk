@@ -17,9 +17,11 @@ RETRY_BASE_DELAY = 1.0
 
 # Floor for transaction gas price. ``eth_gasPrice`` on BSC testnet (and other
 # low-traffic EVM RPCs) sometimes returns values below what miners actually
-# require to include the tx, leaving the broadcast stuck in mempool. 3 Gwei is
-# a safe minimum across BSC mainnet/testnet at the time of writing.
-MIN_GAS_PRICE_WEI = 3_000_000_000
+# require to include the tx, leaving the broadcast stuck in mempool. 0.1 Gwei
+# is the BSC mainnet floor since the gas-price reform; testnet sits around
+# 1 Gwei. The previous 3 Gwei floor was a 30× overcharge on mainnet — see
+# https://github.com/bnb-chain/bnbagent-sdk/issues/40 for receipts.
+MIN_GAS_PRICE_WEI = 100_000_000  # 0.1 Gwei
 
 # Fallback gas limit used only when on-chain estimation is unavailable
 # (transport/RPC error, opaque revert data) or bypassed (skip_preflight).
