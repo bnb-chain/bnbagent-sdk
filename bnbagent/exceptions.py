@@ -78,6 +78,18 @@ class NetworkError(BNBAgentError):
     pass
 
 
+class RpcRangeLimitError(NetworkError):
+    """
+    An RPC log/range query was rejected by the node's rate or range limit
+    (e.g. JSON-RPC ``-32005 limit exceeded``).
+
+    Retryable: the queried data may exist but could not be fetched right
+    now — callers must NOT treat this as "event not found".
+    """
+
+    pass
+
+
 class JobError(BNBAgentError):
     """
     Job operation failed.
