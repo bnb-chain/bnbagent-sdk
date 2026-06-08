@@ -439,6 +439,18 @@ class TestGetSubmittedJobs:
         assert ids == [1]
         assert result["jobs"][0]["submittedAt"] == 111
 
+    @pytest.mark.asyncio
+    async def test_scan_error_carries_structured_envelope(self):
+        ops = ERC8183JobOps(provider_address=ME)
+        client = _inject_client(ops)
+        client.commerce.job_counter.side_effect = ValueError(
+            {"code": -32005, "message": "limit exceeded"}
+        )
+        result = await ops.get_submitted_jobs()
+        assert result["success"] is False
+        assert result["error_code"] == 503
+        assert result["rpc_error_code"] == -32005
+
 
 class TestDecodeJob:
     """submittedAt (getJob tuple index 9) is surfaced on Job."""
@@ -461,3 +473,224 @@ class TestDecodeJob:
         assert job.submitted_at == 1500
         assert job.expired_at == 2000
         assert job.status == JobStatus.SUBMITTED
+
+
+class TestFundedJobWatcherRetry:
+    """Failed callbacks re-fire after on-chain re-validation (BUG-04).
+
+    ``get_pending_jobs`` reports each FUNDED job only once (cursor-based),
+    so the watcher re-validates retry candidates via ``get_job``.
+    """
+
+    def _ops_with_one_poll(self, job):
+        ops = ERC8183JobOps(provider_address=ME)
+        polls = [{"success": True, "jobs": [job]}]
+
+        async def get_pending_jobs():
+            return polls.pop(0) if polls else {"success": True, "jobs": []}
+
+        ops.get_pending_jobs = get_pending_jobs
+        return ops
+
+    @staticmethod
+    def _fresh(status=JobStatus.FUNDED):
+        return {
+            "success": True,
+            "jobId": 1,
+            "provider": ME,
+            "status": status,
+            "expiredAt": int(time.time()) + 3600,
+        }
+
+    @pytest.mark.asyncio
+    async def test_raising_callback_refires_after_revalidation(self):
+        ops = self._ops_with_one_poll({"jobId": 1, "provider": ME})
+        ops.get_job = AsyncMock(return_value=self._fresh())
+
+        calls: list[int] = []
+        stop = asyncio.Event()
+
+        async def on_funded(job):
+            calls.append(job["jobId"])
+            if len(calls) == 1:
+                raise RuntimeError("transient boom")
+            stop.set()
+
+        await funded_job_watcher(ops, on_funded, interval=0.01, stop=stop)
+        assert calls == [1, 1]
+
+    @pytest.mark.asyncio
+    async def test_false_return_opts_into_retry(self):
+        ops = self._ops_with_one_poll({"jobId": 1, "provider": ME})
+        ops.get_job = AsyncMock(return_value=self._fresh())
+
+        calls: list[int] = []
+        stop = asyncio.Event()
+
+        async def on_funded(job):
+            calls.append(job["jobId"])
+            if len(calls) == 1:
+                return False
+            stop.set()
+
+        await funded_job_watcher(ops, on_funded, interval=0.01, stop=stop)
+        assert calls == [1, 1]
+
+    @pytest.mark.asyncio
+    async def test_none_return_keeps_fire_once_compat(self):
+        ops = ERC8183JobOps(provider_address=ME)
+        stop = asyncio.Event()
+        poll_count = 0
+
+        async def get_pending_jobs():
+            nonlocal poll_count
+            poll_count += 1
+            if poll_count >= 3:
+                stop.set()
+            return {"success": True, "jobs": [{"jobId": 1, "provider": ME}]}
+
+        ops.get_pending_jobs = get_pending_jobs
+        calls: list[int] = []
+
+        async def on_funded(job):
+            calls.append(job["jobId"])
+
+        await funded_job_watcher(ops, on_funded, interval=0.01, stop=stop)
+        assert calls == [1]
+
+    @pytest.mark.asyncio
+    async def test_retry_dropped_when_job_leaves_funded(self):
+        ops = self._ops_with_one_poll({"jobId": 1, "provider": ME})
+        stop = asyncio.Event()
+
+        async def get_job(job_id):
+            stop.set()
+            return self._fresh(status=JobStatus.SUBMITTED)
+
+        ops.get_job = get_job
+        calls: list[int] = []
+
+        async def on_funded(job):
+            calls.append(job["jobId"])
+            raise RuntimeError("boom")
+
+        await funded_job_watcher(ops, on_funded, interval=0.01, stop=stop)
+        assert calls == [1]
+
+
+class TestExcErrorFields:
+    """Error envelopes never embed dict-reprs or RPC URLs (BUG-09)."""
+
+    def test_web3_dict_error_surfaces_inner_message(self):
+        from bnbagent.erc8183.server.job_ops import _exc_error_fields
+
+        exc = ValueError({"code": -32000, "message": "insufficient funds for gas"})
+        fields = _exc_error_fields(exc)
+        assert fields["error"] == "insufficient funds for gas"
+        assert fields["error_code"] == 500
+        assert fields["rpc_error_code"] == -32000
+
+    def test_rate_limited_rpc_is_503(self):
+        from bnbagent.erc8183.server.job_ops import _exc_error_fields
+
+        exc = ValueError({"code": -32005, "message": "limit exceeded"})
+        fields = _exc_error_fields(exc)
+        assert fields["error_code"] == 503
+        assert fields["rpc_error_code"] == -32005
+
+    def test_transport_error_does_not_leak_url(self):
+        from bnbagent.erc8183.server.job_ops import _exc_error_fields
+
+        exc = ConnectionError(
+            "HTTPSConnectionPool(host='rpc.example.com'): Max retries exceeded "
+            "with url: /v1/SECRETKEY"
+        )
+        fields = _exc_error_fields(exc)
+        assert "SECRETKEY" not in fields["error"]
+        assert fields["error_code"] == 503
+
+    def test_revert_reason_passes_through(self):
+        from bnbagent.erc8183.server.job_ops import _exc_error_fields
+
+        exc = RuntimeError("Transaction would revert: NotProvider")
+        fields = _exc_error_fields(exc)
+        assert fields["error"] == "Transaction would revert: NotProvider"
+        assert fields["error_code"] == 500
+
+    def test_non_transient_url_is_redacted_not_replaced(self):
+        from bnbagent.erc8183.server.job_ops import _exc_error_fields
+
+        exc = RuntimeError(
+            "Cannot publish: ERC8183_AGENT_URL is not set "
+            "(e.g. http://localhost:8003/erc8183)"
+        )
+        fields = _exc_error_fields(exc)
+        assert "ERC8183_AGENT_URL" in fields["error"]
+        assert "localhost" not in fields["error"]
+
+    @pytest.mark.asyncio
+    async def test_submit_result_verify_failure_propagates_error_code(self):
+        ops = _make_ops()
+        ops.verify_job = AsyncMock(
+            return_value={
+                "valid": False,
+                "error": "Job status is SUBMITTED, expected FUNDED",
+                "error_code": 409,
+            }
+        )
+        result = await ops.submit_result(1, "content")
+        assert result["success"] is False
+        assert result["error_code"] == 409
+
+
+class TestGetResponseClassification:
+    """Unresolvable deliverable for a submitted job is 503, not 404 (BUG-06)."""
+
+    def _ops(self, status_result):
+        storage = MagicMock(spec=["download", "upload"])
+        ops = _make_ops(storage=storage)
+        client = _inject_client(ops)
+        client.get_deliverable_url.return_value = None
+        ops.get_job = AsyncMock(return_value=status_result)
+        return ops
+
+    @pytest.mark.asyncio
+    async def test_submitted_job_unresolvable_is_503(self):
+        ops = self._ops({"success": True, "status": JobStatus.SUBMITTED})
+        result = await ops.get_response(1)
+        assert result["success"] is False
+        assert result["error_code"] == 503
+
+    @pytest.mark.asyncio
+    async def test_completed_job_unresolvable_is_503(self):
+        ops = self._ops({"success": True, "status": JobStatus.COMPLETED})
+        result = await ops.get_response(1)
+        assert result["error_code"] == 503
+
+    @pytest.mark.asyncio
+    async def test_never_submitted_job_is_genuine_404(self):
+        ops = self._ops({"success": True, "status": JobStatus.FUNDED})
+        result = await ops.get_response(1)
+        assert result["error_code"] == 404
+
+    @pytest.mark.asyncio
+    async def test_unknown_status_is_503(self):
+        ops = self._ops(
+            {"success": False, "error": "Temporary chain/RPC error", "error_code": 503}
+        )
+        result = await ops.get_response(1)
+        assert result["error_code"] == 503
+
+    @pytest.mark.asyncio
+    async def test_rate_limited_resolution_is_503_without_status_lookup(self):
+        from bnbagent.exceptions import RpcRangeLimitError
+
+        storage = MagicMock(spec=["download", "upload"])
+        ops = _make_ops(storage=storage)
+        client = _inject_client(ops)
+        client.get_deliverable_url.side_effect = RpcRangeLimitError("limit exceeded")
+        ops.get_job = AsyncMock()
+        result = await ops.get_response(1)
+        assert result["success"] is False
+        assert result["error_code"] == 503
+        ops.get_job.assert_not_called()

@@ -17,6 +17,7 @@ import asyncio
 import inspect
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from typing import Any
@@ -25,6 +26,7 @@ from web3 import Web3
 
 from ...config import NetworkConfig
 from ...core.config import get_env
+from ...exceptions import RpcRangeLimitError
 from ...storage.storage_provider import StorageProvider
 from ...wallets.wallet_provider import WalletProvider
 from ..client import ERC8183Client
@@ -62,6 +64,43 @@ def _max_response_bytes() -> int:
 
 def _max_metadata_bytes() -> int:
     return _read_int_env("MAX_METADATA_BYTES", _DEFAULT_MAX_METADATA_BYTES)
+
+
+_TRANSIENT_ERROR_KEYWORDS = (
+    "timeout", "connection", "network", "rpc",
+    "429", "too many requests", "rate limit", "limit exceeded",
+)
+
+
+def _exc_error_fields(exc: Exception) -> dict[str, Any]:
+    """Safe ``{"error", "error_code"}`` fields for an exception.
+
+    web3 RPC errors carry ``{'code': ..., 'message': ...}`` whose ``str()``
+    is a Python dict-repr — surface the inner message instead so consumers
+    embedding ``error`` never produce nested, json-rejecting blobs.
+    Transport errors are replaced by a generic message and any URL-shaped
+    token is redacted (RPC endpoints embed API keys in the path); other
+    messages (e.g. revert reasons) pass through. ``error_code`` is
+    HTTP-like: 503 for transient chain/RPC trouble, 500 otherwise. The raw
+    JSON-RPC code (e.g. ``-32005``), when present, rides along separately
+    as ``rpc_error_code`` — never mixed into ``error_code``.
+    """
+    payload = exc.args[0] if exc.args else None
+    rpc_code = None
+    if isinstance(payload, dict) and "message" in payload:
+        message = str(payload["message"])
+        if isinstance(payload.get("code"), int):
+            rpc_code = payload["code"]
+    else:
+        message = str(exc)
+    if any(k in message.lower() for k in _TRANSIENT_ERROR_KEYWORDS):
+        fields = {"error": "Temporary chain/RPC error", "error_code": 503}
+    else:
+        message = re.sub(r"\S+://\S+", "<redacted>", message)
+        fields = {"error": message, "error_code": 500}
+    if rpc_code is not None:
+        fields["rpc_error_code"] = rpc_code
+    return fields
 
 
 class ERC8183JobOps:
@@ -173,6 +212,7 @@ class ERC8183JobOps:
                 return {
                     "success": False,
                     "error": f"Job verification failed: {verification.get('error', 'unknown')}",
+                    "error_code": verification.get("error_code"),
                 }
 
             max_resp = _max_response_bytes()
@@ -242,7 +282,7 @@ class ERC8183JobOps:
             }
         except Exception as exc:
             logger.error(f"[ERC8183JobOps] submit({job_id}) failed: {exc}")
-            return {"success": False, "error": str(exc)}
+            return {"success": False, **_exc_error_fields(exc)}
 
     # ------------------------------------------------------------------ reads
 
@@ -312,10 +352,39 @@ class ERC8183JobOps:
                 self._deliverable_urls[job_id] = deliverable_url
                 data = await self._storage.download(deliverable_url)
                 return {"success": True, **data}
+        except RpcRangeLimitError as exc:
+            logger.warning(f"[ERC8183JobOps] get_response({job_id}) rate-limited: {exc}")
+            return {
+                "success": False,
+                "error": (
+                    f"Deliverable for job {job_id} temporarily unresolvable "
+                    "(RPC rate limit); retry"
+                ),
+                "error_code": 503,
+            }
         except Exception as exc:
             logger.warning(f"[ERC8183JobOps] get_response({job_id}) on-chain fallback failed: {exc}")
 
-        return {"success": False, "error": f"Response not found for job {job_id}"}
+        # A job that has been submitted on-chain MUST have a JobInitialised
+        # event, so failing to resolve its URL above (rate-limited RPC,
+        # submit older than the fallback scan window, storage hiccup) is a
+        # resolution failure — retryable, not proof of absence. Only a job
+        # that never reached SUBMITTED genuinely has no response.
+        status_result = await self.get_job_status(job_id)
+        if not status_result.get("success") or status_result.get("status") in (
+            JobStatus.SUBMITTED,
+            JobStatus.COMPLETED,
+        ):
+            return {
+                "success": False,
+                "error": f"Deliverable for job {job_id} temporarily unresolvable; retry",
+                "error_code": 503,
+            }
+        return {
+            "success": False,
+            "error": f"Response not found for job {job_id}",
+            "error_code": 404,
+        }
 
     # ---------------------------------------------------- verification helper
 
@@ -494,7 +563,7 @@ class ERC8183JobOps:
         except Exception as exc:
             logger.warning(f"[ERC8183JobOps] startup scan counter failed: {exc}")
             self._startup_scan_done = True
-            return {"success": False, "error": str(exc), "jobs": []}
+            return {"success": False, **_exc_error_fields(exc), "jobs": []}
 
         if counter == 0:
             self._startup_scan_done = True
@@ -529,7 +598,7 @@ class ERC8183JobOps:
             return result
         except Exception as exc:
             logger.error(f"[ERC8183JobOps] get_pending_jobs failed: {exc}")
-            return {"success": False, "error": str(exc), "jobs": []}
+            return {"success": False, **_exc_error_fields(exc), "jobs": []}
 
     async def get_submitted_jobs(self) -> dict[str, Any]:
         """Return SUBMITTED jobs assigned to this provider (opt-in auto-settle).
@@ -571,7 +640,7 @@ class ERC8183JobOps:
             return {"success": True, "jobs": submitted}
         except Exception as exc:
             logger.error(f"[ERC8183JobOps] get_submitted_jobs failed: {exc}")
-            return {"success": False, "error": "Failed to scan submitted jobs", "jobs": []}
+            return {"success": False, **_exc_error_fields(exc), "jobs": []}
 
 
 async def funded_job_watcher(
@@ -585,31 +654,63 @@ async def funded_job_watcher(
 
     Signer-free detection loop for keyless services: it NEVER submits or settles
     — the caller decides what to do (e.g. delegate signing to a separate Agent).
-    ``on_funded`` may be sync or async. Each job id fires at most once (a keyless
-    service does not transition the job out of FUNDED, so dedup prevents repeat
-    triggers). Pass an ``asyncio.Event`` as ``stop`` to end the loop; otherwise
-    it runs until cancelled.
+    ``on_funded`` may be sync or async.
+
+    Retry contract: a job fires once on success. ``on_funded`` raising, or
+    returning ``False`` / ``{"retry": True}``, marks the job for retry on the
+    next tick (after re-checking on-chain that it is still FUNDED and
+    unexpired — ``get_pending_jobs`` reports each job only once, so retries
+    are re-validated via ``get_job``). Retries stop naturally when the job
+    leaves FUNDED or expires. Any other return value (incl. ``None``) keeps
+    fire-once behavior. Pass an ``asyncio.Event`` as ``stop`` to end the
+    loop; otherwise it runs until cancelled.
     """
     seen: set[int] = set()
+    retry: set[int] = set()
     is_async = inspect.iscoroutinefunction(on_funded)
+
+    async def _fire(job: dict[str, Any]) -> None:
+        job_id = job["jobId"]
+        try:
+            if is_async:
+                result = await on_funded(job)
+            else:
+                result = await asyncio.to_thread(on_funded, job)
+        except Exception as exc:
+            logger.error(
+                "[funded_job_watcher] on_funded(%s) failed; will retry: %s",
+                job_id, exc,
+            )
+            retry.add(job_id)
+            return
+        if result is False or (isinstance(result, dict) and result.get("retry")):
+            retry.add(job_id)
+        else:
+            retry.discard(job_id)
+            seen.add(job_id)
+
     while True:
         try:
+            # Re-validate + re-fire previously failed jobs first, so a job
+            # failing below is not retried within the same tick.
+            for job_id in list(retry):
+                fresh = await job_ops.get_job(job_id)
+                if not fresh.get("success"):
+                    continue  # transient read error — keep for next tick
+                if (
+                    fresh.get("status") != JobStatus.FUNDED
+                    or fresh.get("expiredAt", 0) <= int(time.time())
+                ):
+                    retry.discard(job_id)  # job moved on — stop retrying
+                    continue
+                await _fire(fresh)
+
             result = await job_ops.get_pending_jobs()
             if result.get("success"):
                 for job in result.get("jobs", []):
-                    job_id = job["jobId"]
-                    if job_id in seen:
+                    if job["jobId"] in seen or job["jobId"] in retry:
                         continue
-                    seen.add(job_id)
-                    try:
-                        if is_async:
-                            await on_funded(job)
-                        else:
-                            await asyncio.to_thread(on_funded, job)
-                    except Exception as exc:
-                        logger.error(
-                            "[funded_job_watcher] on_funded(%s) failed: %s", job_id, exc
-                        )
+                    await _fire(job)
             else:
                 logger.warning(
                     "[funded_job_watcher] poll error: %s", result.get("error")
