@@ -161,13 +161,52 @@ class ERC8183Client:
         expired_at: int,
         description: str = "",
         hook: str | None = None,
+        skip_expiry_check: bool = False,
     ) -> dict[str, Any]:
         """Create a job with the Router set as evaluator + hook.
 
         Parameters mirror ``AgenticCommerceUpgradeable.createJob`` except
         ``evaluator`` / ``hook`` default to the Router address (the
         v1 deployment pattern).
+
+        Pre-flights ``expired_at`` against the bound policy's
+        ``disputeWindow`` to catch the foot-gun where the SDK lets you
+        fund a job that ``submit()`` will always revert with
+        ``SubmissionTooLate()`` — see
+        https://github.com/bnb-chain/bnbagent-sdk/issues/41 for details.
+
+        Pass ``skip_expiry_check=True`` to bypass the validation (e.g. for
+        tests that intentionally exercise the revert path).
         """
+        if not skip_expiry_check:
+            try:
+                import time
+                dispute_window = int(self.policy.dispute_window())
+                now = int(time.time())
+                if expired_at - now <= dispute_window:
+                    raise ValueError(
+                        f"expired_at ({expired_at}) is too close to now ({now}). "
+                        f"OptimisticPolicy on this network has dispute_window="
+                        f"{dispute_window}s ({dispute_window/86400:.1f}d), so the "
+                        f"submit deadline (expired_at - dispute_window = "
+                        f"{expired_at - dispute_window}) is already in the past or "
+                        f"within seconds. provider.submit() would revert with "
+                        f"SubmissionTooLate(). Set expired_at >= now + "
+                        f"dispute_window + a buffer (e.g. now + "
+                        f"{dispute_window + 86400}). Pass skip_expiry_check=True "
+                        f"to bypass this guard."
+                    )
+            except ValueError:
+                raise
+            except Exception as exc:
+                # Don't block job creation if dispute_window can't be read
+                # (custom policies, RPC hiccup, etc.) — just warn.
+                logger.warning(
+                    "[ERC8183Client] dispute_window pre-flight failed; "
+                    "create_job proceeding without expiry check: %s",
+                    exc,
+                )
+
         return self.commerce.create_job(
             provider=provider,
             evaluator=self.router.address,
