@@ -124,7 +124,7 @@ class TestTokenCache:
 class TestCreateJob:
     def test_defaults_to_router_as_evaluator_and_hook(self, facade):
         facade.commerce.create_job.return_value = {"jobId": 1}
-        facade.create_job(expired_at=123, description="d")
+        facade.create_job(expired_at=123, description="d", skip_expiry_check=True)
         facade.commerce.create_job.assert_called_once()
         _, kwargs = facade.commerce.create_job.call_args
         assert kwargs["evaluator"] == FAKE_ROUTER
@@ -133,10 +133,44 @@ class TestCreateJob:
     def test_allows_overriding_hook(self, facade):
         facade.commerce.create_job.return_value = {"jobId": 1}
         custom_hook = "0x" + "11" * 20
-        facade.create_job(expired_at=123, description="d", hook=custom_hook)
+        facade.create_job(expired_at=123, description="d", hook=custom_hook, skip_expiry_check=True)
         _, kwargs = facade.commerce.create_job.call_args
         assert kwargs["evaluator"] == FAKE_ROUTER
         assert kwargs["hook"] == custom_hook
+
+    def test_rejects_expired_at_within_dispute_window(self, facade):
+        """expired_at - now <= dispute_window MUST raise ValueError.
+
+        Mainnet OptimisticPolicy.disputeWindow = 7 days, so a 24h job is DOA:
+        submit() always reverts SubmissionTooLate(). Catch this client-side
+        before the user funds an unsubmittable job.
+        Regression for https://github.com/bnb-chain/bnbagent-sdk/issues/41.
+        """
+        import time
+        facade.policy.dispute_window.return_value = 7 * 86400
+        too_close = int(time.time()) + 86400  # 24h, well inside 7d window
+        with pytest.raises(ValueError, match="dispute_window"):
+            facade.create_job(expired_at=too_close, description="d")
+        facade.commerce.create_job.assert_not_called()
+
+    def test_accepts_expired_at_beyond_dispute_window(self, facade):
+        import time
+        facade.policy.dispute_window.return_value = 7 * 86400
+        far_enough = int(time.time()) + 8 * 86400 + 60  # 8d + 1min
+        facade.commerce.create_job.return_value = {"jobId": 99}
+        facade.create_job(expired_at=far_enough, description="d")
+        facade.commerce.create_job.assert_called_once()
+
+    def test_skip_expiry_check_bypasses_validation(self, facade):
+        import time
+        facade.policy.dispute_window.return_value = 7 * 86400
+        facade.commerce.create_job.return_value = {"jobId": 99}
+        facade.create_job(
+            expired_at=int(time.time()) + 60,
+            description="d",
+            skip_expiry_check=True,
+        )
+        facade.commerce.create_job.assert_called_once()
 
 
 class TestRegisterJob:
