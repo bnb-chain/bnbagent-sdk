@@ -332,6 +332,107 @@ BNBAgentError
 - **Custom Module** — extend `BNBAgentModule` and register via entry points
   to add new protocol support without modifying the SDK.
 
+## Karma Verifiable Evaluator
+
+The `bnbagent.extras.karma` package adds Karma Trust Protocol's **verifiable
+execution** as an off-chain evaluator for ERC-8183 settlement.
+
+### Integration model
+
+```
+┌────────────────────────────────────────────────────────────┐
+│  ERC-8183 On-Chain                                         │
+│                                                            │
+│  createJob → fund → submit(deliverable)                    │
+│                         ↓                                  │
+│  ┌──────────────────────────────────────────────────┐      │
+│  │  KarmaBNBVerifier (off-chain bridge)              │      │
+│  │                                                   │      │
+│  │  1. Fetch deliverable URL from Policy events      │      │
+│  │  2. Download Karma evidence bundle + receipts     │      │
+│  │  3. POST Karma Runtime /v1/verify                │      │
+│  │  4. If APPROVE → router.settle(job_id, evidence) │      │
+│  └──────────────────────────────────────────────────┘      │
+│                         ↓                                  │
+│  settlement → COMPLETED (or REJECTED)                      │
+└────────────────────────────────────────────────────────────┘
+```
+
+### Code Map
+
+| File | Purpose |
+|------|---------|
+| `extras/__init__.py` | Extras namespace package |
+| `extras/karma/__init__.py` | Public API: `KarmaEvaluator`, `KarmaBNBVerifier`, `KarmaEvidenceStore`, `KarmaReceiptSigner` |
+| `extras/karma/evaluator.py` | Core evaluator: verifier client, evidence encoding, receipt helpers |
+
+### Key Components
+
+- **KarmaEvaluator** — Async off-chain verifier. Sends evidence bundles to the
+  Karma Runtime and returns APPROVE/REJECT/PENDING verdicts. Works standalone
+  (no Web3 dependency).
+- **KarmaBNBVerifier** — Bridge that composes `KarmaEvaluator` with an
+  `ERC8183Client`. The single entry point `verify_and_settle(job_id)` runs
+  the full pipeline: state check → deliverable fetch → Karma verify → settle.
+- **KarmaEvidenceStore** — Thread-safe in-memory receipt cache, compatible
+  with Karma's `ReceiptStore` protocol.
+- **KarmaReceiptSigner** — EIP-191 signature wrapper for receipt digests.
+
+### Evidence Encoding
+
+Karma verification results are embedded as `evidence` bytes in
+`router.settle(job_id, evidence)`, creating a permanent on-chain audit trail:
+
+```json
+{
+  "karma": {
+    "verification_id": "vfy-abc123",
+    "verdict": "APPROVE",
+    "score": 0.98,
+    "receipt_count": 5,
+    "bundle_hash": "0x...",
+    "verified_at": "2025-01-01T00:00:00Z"
+  }
+}
+```
+
+### Design decisions
+
+1. **No new on-chain contracts.** The integration uses the existing
+   `OptimisticPolicy` + `EvaluatorRouter`. Karma acts as a pre-settlement
+   verification oracle, not a replacement for on-chain policies.
+2. **Off-chain by design.** Karma Runtime does the cryptographic heavy lifting
+   (receipt verification, Merkle reconstruction, hash consistency checks).
+   The chain only sees the result.
+3. **Pluggable.** `KarmaEvaluator` has no dependency on `ERC8183Client`.
+   Callers can use it standalone, embed it in custom scripts, or compose it
+   via `KarmaBNBVerifier`.
+4. **Auditable evidence.** The `evidence` bytes written on-chain are
+   self-describing JSON that links back to the Karma verification run.
+   Anyone can verify the claim by fetching the deliverable and re-running
+   Karma verification.
+
+### Install
+
+```bash
+pip install "bnbagent[karma]"
+```
+
+Requires `httpx ≥ 0.25` (async HTTP for Karma Runtime API calls).
+
+### Quickstart
+
+```python
+from bnbagent.extras.karma import KarmaEvaluator, KarmaBNBVerifier
+from bnbagent import ERC8183Client
+
+karma = KarmaEvaluator(runtime_url="https://api.karma.xyz", api_key="...")
+verifier = KarmaBNBVerifier(erc8183_client, karma)
+result = await verifier.verify_and_settle(job_id)
+```
+
+Full example: [`examples/karma_integration.py`](../examples/karma_integration.py)
+
 ## Dependencies
 
 | Category | Packages |

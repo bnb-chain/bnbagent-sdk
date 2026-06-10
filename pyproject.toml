@@ -19,6 +19,10 @@ keywords = [
     "binance-smart-chain",
     "sdk",
     "modular",
+    "karma",
+    "verifiable-execution",
+    "signed-receipt",
+    "evidence-bundle",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -50,6 +54,9 @@ server = [
     "uvicorn>=0.24.0",
 ]
 ipfs = [
+    "httpx>=0.25.0",
+]
+karma = [
     "httpx>=0.25.0",
 ]
 dev = [
