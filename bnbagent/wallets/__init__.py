@@ -7,6 +7,7 @@ Supports multiple wallet types (EVM, MPC) through a unified interface.
 
 from __future__ import annotations
 
+from .errors import UnsupportedWalletOperation
 from .evm_wallet_provider import EVMWalletProvider
 from .factory import SUPPORTED_WALLET_KINDS, create_wallet_provider
 from .intents import ExecutionContext, Intent, IntentExecutor
@@ -19,6 +20,7 @@ __all__ = [
     "EVMWalletProvider",
     "MPCWalletProvider",
     "TWAKProvider",
+    "UnsupportedWalletOperation",
     "Intent",
     "IntentExecutor",
     "ExecutionContext",

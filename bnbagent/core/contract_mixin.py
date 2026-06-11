@@ -40,6 +40,30 @@ class ContractClientMixin:
         self._account: str | None
     """
 
+    def _execute_intent(self, intent) -> dict[str, Any]:
+        """Run an :class:`~bnbagent.wallets.intents.Intent` through the
+        wallet's executor.
+
+        This is the write path for clients migrated to the intent seam: the
+        wallet decides how the intent executes (a pure signer wraps itself in
+        a ``LocalExecutor``; a self-broadcasting wallet, e.g. twak, runs the
+        semantic operation itself). The executor is built lazily and cached
+        per client instance.
+        """
+        if not self._wallet_provider:
+            raise RuntimeError(
+                "wallet_provider is required for write operations (client is read-only)"
+            )
+        executor = getattr(self, "_intent_executor", None)
+        if executor is None:
+            from ..wallets.intents import ExecutionContext
+
+            executor = self._wallet_provider.make_executor(
+                ExecutionContext(web3=self.w3)
+            )
+            self._intent_executor = executor
+        return executor.execute(intent)
+
     def _send_tx(
         self, fn, value: int = 0, gas: int | None = None, skip_preflight: bool = False
     ) -> dict[str, Any]:

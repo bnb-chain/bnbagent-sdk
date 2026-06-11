@@ -234,6 +234,27 @@ class TestFund:
         with pytest.raises(ValueError, match="approve_floor must be >= 0"):
             facade.fund(job_id=1, amount=5, approve_floor=-1)
 
+    def test_bundled_approval_wallet_skips_allowance_management(self, facade):
+        """fund_bundles_approval=True (literally) → straight to commerce.fund;
+        the SDK never reads the allowance or sends an approve (the wallet's
+        own fund operation bundles approve+deposit, e.g. twak)."""
+        erc20 = self._prime(facade, current_allowance=0)
+        facade._wallet_provider.fund_bundles_approval = True
+        facade.fund(job_id=1, amount=5_000)
+        erc20.allowance.assert_not_called()
+        erc20.approve.assert_not_called()
+        facade.commerce.fund.assert_called_once_with(1, 5_000)
+
+    def test_magicmock_attribute_does_not_trigger_skip(self, facade):
+        """The guard is ``is True``: a plain MagicMock wallet auto-creates a
+        truthy MagicMock for ``fund_bundles_approval``, which must NOT skip
+        the SDK-side allowance path."""
+        erc20 = self._prime(facade, current_allowance=10_000)
+        assert facade._wallet_provider.fund_bundles_approval is not True
+        facade.fund(job_id=1, amount=5_000)
+        erc20.allowance.assert_called_once()
+        facade.commerce.fund.assert_called_once_with(1, 5_000)
+
 
 class TestWriteDelegation:
     def test_settle_delegates_to_router(self, facade):

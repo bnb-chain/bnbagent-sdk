@@ -1,4 +1,5 @@
-"""Tests for ContractClientMixin._send_tx gas-limit estimation.
+"""Tests for ContractClientMixin._send_tx gas-limit estimation and
+``_execute_intent`` (the intent-seam write path).
 
 A hardcoded 2M gas limit makes nodes demand ``balance >= 2M * gasPrice``
 (~0.007 BNB) upfront while typical writes burn 50-150k gas. ``gas=None``
@@ -13,6 +14,7 @@ from web3.exceptions import ContractLogicError
 
 from bnbagent.core.contract_mixin import DEFAULT_GAS_FALLBACK, ContractClientMixin
 from bnbagent.core.nonce_manager import NonceManager
+from bnbagent.wallets.intents import ExecutionContext, Intent
 from tests.conftest import FAKE_ADDRESS
 
 
@@ -104,3 +106,40 @@ class TestGasEstimation:
         client._send_tx(fn, skip_preflight=True)
         fn.estimate_gas.assert_not_called()
         assert _built_gas(fn) == DEFAULT_GAS_FALLBACK
+
+
+class TestExecuteIntent:
+    """``_execute_intent`` — wallet-chosen executor, built lazily, cached."""
+
+    def test_read_only_client_raises(self, mock_web3):
+        client = _FakeClient(mock_web3, wallet_provider=None)
+        with pytest.raises(RuntimeError, match="read-only"):
+            client._execute_intent(Intent(name="x.y", call=MagicMock()))
+
+    def test_executor_built_via_make_executor_with_execution_context(
+        self, client, mock_web3
+    ):
+        executor = MagicMock()
+        executor.execute.return_value = {"transactionHash": "0xabc", "receipt": None}
+        client._wallet_provider.make_executor.return_value = executor
+
+        intent = Intent(name="x.y", call=MagicMock())
+        result = client._execute_intent(intent)
+
+        assert result == {"transactionHash": "0xabc", "receipt": None}
+        client._wallet_provider.make_executor.assert_called_once()
+        (context,), _ = client._wallet_provider.make_executor.call_args
+        assert isinstance(context, ExecutionContext)
+        assert context.web3 is mock_web3
+        executor.execute.assert_called_once_with(intent)
+
+    def test_executor_cached_across_writes(self, client):
+        executor = MagicMock()
+        executor.execute.return_value = {"transactionHash": "0xabc", "receipt": None}
+        client._wallet_provider.make_executor.return_value = executor
+
+        client._execute_intent(Intent(name="x.y", call=MagicMock()))
+        client._execute_intent(Intent(name="x.z", call=MagicMock()))
+
+        client._wallet_provider.make_executor.assert_called_once()
+        assert executor.execute.call_count == 2

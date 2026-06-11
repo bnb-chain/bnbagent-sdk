@@ -252,6 +252,12 @@ class ERC8183Client:
         ``erc8183.approve_payment_token(spender, cap)``; the allowance check
         above will then detect the existing allowance and skip the approve.
         """
+        # A self-broadcasting backend (e.g. twak) bundles approve+deposit in
+        # its own fund operation — skip the SDK-side allowance management.
+        # ``is True`` guards against MagicMock wallets in tests.
+        if getattr(self._wallet_provider, "fund_bundles_approval", False) is True:
+            return self.commerce.fund(job_id, amount)
+
         current = self.token_allowance(self.address, self.commerce.address)
         if current < amount:
             if approve_floor is None:
