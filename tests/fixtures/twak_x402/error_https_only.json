@@ -1,0 +1,1 @@
+{"success": false, "code": "VALIDATION_ERROR", "message": "x402: only https:// URLs are allowed (got http://)", "error": "x402: only https:// URLs are allowed (got http://)", "errorCode": "VALIDATION_ERROR"}

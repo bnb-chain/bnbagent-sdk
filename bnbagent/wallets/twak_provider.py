@@ -61,7 +61,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from eth_account import Account
@@ -73,7 +75,7 @@ from .capabilities import (
     INTENTS_ERC8183,
     X402_PAY,
 )
-from .errors import UnsupportedWalletOperation
+from .errors import UnsupportedWalletOperation, WalletIdentityMismatch
 from .intents import (
     ERC8004_REGISTER,
     ERC8004_SET_AGENT_URI,
@@ -136,14 +138,38 @@ class TWAKProvider(WalletProvider, IntentExecutor):
             ``bsc-testnet`` spelling is rejected by the real CLI.)
         twak_bin: Path to (or name of) the ``twak`` executable.
         timeout: Per-command timeout in seconds.
+        home: When set, every twak subprocess runs with ``HOME=<home>`` so
+            twak resolves its state under ``<home>/.twak`` instead of the OS
+            user's home (Node's ``os.homedir()`` reads ``$HOME`` —
+            field-verified). This solves three deployments: read-only code
+            mounts (AgentCore — materialize into a writable dir and point
+            ``home`` at it), multi-agent isolation on one OS user (twak is
+            otherwise one-wallet-per-OS-user), and test isolation. Tracked
+            upstream as gaps S-5: when twak ships a native ``TWAK_HOME``,
+            the implementation switches to it with this signature unchanged.
+            ``None`` inherits the environment untouched.
+        expected_address: Pin the wallet's on-chain identity. On the first
+            successful address lookup the reported address is compared
+            case-insensitively; a mismatch raises
+            :class:`~bnbagent.wallets.errors.WalletIdentityMismatch` before
+            any state-changing operation can proceed (INV-4).
+        auto_create: When ``True`` (default, dev-machine parity with
+            ``EVMWalletProvider``) a missing wallet is created lazily on the
+            first operation. Deployments must pass ``False``: the wallet may
+            only come from materialization
+            (:func:`~bnbagent.wallets.twak_custody.materialize_twak_home`,
+            fed from the ``TWAK_WALLET_JSON`` bundle key) and a missing
+            wallet raises instead of silently minting a new on-chain
+            identity (INV-4).
 
     Like ``EVMWalletProvider``, this provider auto-creates a wallet when none
-    exists — see :meth:`_ensure_wallet` / :meth:`create_wallet`. The check (and
-    any creation) happens lazily on the **first** operation rather than at
-    construction, so building the provider stays side-effect-free (constructing
-    it, reading ``kind``, etc. never shell out). Creation needs the API
-    credentials and wallet password already reachable by ``twak`` (``twak
-    init`` / ``TWAK_ACCESS_ID`` + ``TWAK_HMAC_SECRET``; ``TWAK_WALLET_PASSWORD``
+    exists — see :meth:`_ensure_wallet` / :meth:`create_wallet` (disable with
+    ``auto_create=False``). The check (and any creation) happens lazily on the
+    **first** operation rather than at construction, so building the provider
+    stays side-effect-free (constructing it, reading ``kind``, etc. never
+    shell out). Creation needs the API credentials and wallet password already
+    reachable by ``twak`` (``twak init`` / ``TWAK_ACCESS_ID`` +
+    ``TWAK_HMAC_SECRET``; ``TWAK_WALLET_PASSWORD``
     / keychain); when they are missing the operation blocks with a clear error.
 
     Raises:
@@ -156,7 +182,7 @@ class TWAKProvider(WalletProvider, IntentExecutor):
     fund_bundles_approval = True
     # sign.message derives automatically from the override below; twak has
     # no sign_transaction / sign_typed_data, so the base defaults raise.
-    # x402.pay: the delegated TwakX402Payer class arrives in Phase 1c.
+    # x402.pay: served by the delegated TwakX402Payer (make_x402_payer).
     _extra_capabilities = frozenset(
         {BROADCAST_SELF, INTENTS_ERC8004, INTENTS_ERC8183, X402_PAY}
     )
@@ -167,6 +193,9 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         chain: str = _DEFAULT_CHAIN,
         twak_bin: str = DEFAULT_TWAK_BIN,
         timeout: int = DEFAULT_TIMEOUT,
+        home: str | Path | None = None,
+        expected_address: str | None = None,
+        auto_create: bool = True,
     ):
         if chain.lower() not in _ALLOWED_CHAINS:
             raise ValueError(
@@ -178,6 +207,9 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         self._chain = chain.lower()
         self._twak_bin = twak_bin
         self._timeout = timeout
+        self._home = Path(home) if home is not None else None
+        self._expected_address = expected_address
+        self._auto_create = auto_create
         self._address: str | None = None
         self._ensured = False  # guards the one-shot lazy auto-create
 
@@ -191,18 +223,29 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         the real CLI omits the field inconsistently across error envelopes
         (field-verified on v0.18.0).
 
+        When ``home`` was set on the provider, the subprocess runs with
+        ``HOME=<home>`` (full environment otherwise inherited) so twak
+        resolves ``<home>/.twak`` — the single env override point for every
+        invocation. With ``home=None`` the environment is inherited untouched.
+
         Raises:
             RuntimeError: If the binary is missing, the command exits
                 non-zero, the output is not JSON, or the envelope reports
                 an error.
         """
         cmd = [self._twak_bin, *args, "--json"]
+        env = (
+            {**os.environ, "HOME": str(self._home)}
+            if self._home is not None
+            else None
+        )
         try:
             proc = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=self._timeout,
+                env=env,
             )
         except FileNotFoundError as e:
             raise RuntimeError(
@@ -284,24 +327,46 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         """The twak wallet address (cached after first lookup)."""
         self._ensure_wallet()
         if self._address is None:
-            data = self._run(["wallet", "address", "--chain", self._chain])
-            addr = data.get("address") or data.get("wallet")
-            if not addr:
-                raise RuntimeError(
-                    f"twak `wallet address` did not return an address: {data!r}"
-                )
-            self._address = addr
+            self._lookup_address()
         return self._address
+
+    def _lookup_address(self) -> None:
+        """Resolve the wallet address from the CLI and cache it.
+
+        The ``expected_address`` identity check lives here, on the first
+        successful lookup and **before** the cache is populated: on a
+        mismatch nothing is cached, so every subsequent attempt re-checks
+        and re-raises instead of operating under a drifted identity.
+        """
+        data = self._run(["wallet", "address", "--chain", self._chain])
+        addr = data.get("address") or data.get("wallet")
+        if not addr:
+            raise RuntimeError(
+                f"twak `wallet address` did not return an address: {data!r}"
+            )
+        if (
+            self._expected_address is not None
+            and addr.lower() != self._expected_address.lower()
+        ):
+            raise WalletIdentityMismatch(
+                expected=self._expected_address, actual=addr
+            )
+        self._address = addr
 
     @property
     def key_location(self) -> str | None:
         """twak owns custody; the key never lives in the SDK's store.
 
-        The encrypted BIP39 mnemonic lives in ``~/.twak/wallet.json``; the
-        signing password is resolved from ``TWAK_WALLET_PASSWORD`` or the OS
-        keychain (API credentials are separate, in ``~/.twak/credentials.json``).
+        The encrypted BIP39 mnemonic lives in ``<home>/.twak/wallet.json``
+        (``~`` unless a custom ``home`` was set); the signing password is
+        resolved from ``TWAK_WALLET_PASSWORD`` or the OS keychain (API
+        credentials are separate, in ``<home>/.twak/credentials.json``).
         """
-        return "~/.twak/wallet.json (encrypted by the twak CLI) + OS keychain/TWAK_WALLET_PASSWORD"
+        base = str(self._home) if self._home is not None else "~"
+        return (
+            f"{base}/.twak/wallet.json (encrypted by the twak CLI) "
+            "+ OS keychain/TWAK_WALLET_PASSWORD"
+        )
 
     def exists(self) -> bool:
         """True if twak reports a configured wallet (best-effort).
@@ -344,19 +409,39 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         return self.address
 
     def _ensure_wallet(self) -> None:
-        """One-shot lazy auto-create on the first operation.
+        """One-shot lazy auto-create (or existence check) on the first operation.
 
-        Runs at most once per instance: probes for an existing wallet and
-        creates one if absent (EVM-parity). When the wallet already exists this
-        costs a single ``wallet status`` probe; creation, when needed, blocks
-        until twak finishes (or errors clearly if credentials / password are
-        not configured).
+        Runs the probe at most once per instance: checks for an existing
+        wallet and creates one if absent (EVM-parity) — unless
+        ``auto_create=False``, in which case a missing wallet raises instead
+        of silently minting a new on-chain identity (deployment mode, INV-4).
+        When the wallet already exists this costs a single ``wallet status``
+        probe; creation, when needed, blocks until twak finishes (or errors
+        clearly if credentials / password are not configured).
+
+        When ``expected_address`` is pinned, this also forces the first
+        address lookup (which performs the identity check, see
+        :meth:`_lookup_address`) so the check runs before *any*
+        state-changing operation: every twak write path — ``execute()``,
+        ``sign_message()``, ``x402_request()`` — calls ``_ensure_wallet()``
+        before touching the CLI. This re-runs (cheaply once verified) until
+        the check passes, so a mismatch keeps blocking every operation.
         """
-        if self._ensured:
-            return
-        self._ensured = True
-        if not self.exists():
-            self.create_wallet()
+        if not self._ensured:
+            self._ensured = True
+            if not self.exists():
+                if not self._auto_create:
+                    raise RuntimeError(
+                        "twak wallet not found and auto_create=False "
+                        "(deployment mode): refusing to create a new on-chain "
+                        "identity implicitly (INV-4). Materialize the wallet "
+                        "first — materialize_twak_home(wallet_json=..., "
+                        "home=...) with the TWAK_WALLET_JSON secret-bundle "
+                        "value — then retry."
+                    )
+                self.create_wallet()
+        if self._expected_address is not None and self._address is None:
+            self._lookup_address()  # identity check before any operation
 
     def sign_message(self, message: str) -> dict[str, Any]:
         """Sign a message via ``twak wallet sign-message`` (EIP-191).
@@ -409,6 +494,76 @@ class TWAKProvider(WalletProvider, IntentExecutor):
     # The base-class defaults raise a descriptive UnsupportedWalletOperation,
     # and not overriding keeps sign.transaction / sign.typed_data out of
     # capabilities() (overriding only to raise would falsely claim them).
+
+    # ── x402 raw transport (policy lives in TwakX402Payer) ──
+
+    def x402_quote(
+        self, url: str, *, method: str = "GET", body: str | None = None
+    ) -> dict[str, Any]:
+        """Fetch the x402 payment challenge for ``url`` (read-only, no payment).
+
+        Runs ``twak x402 quote <url> [--method M] [--body B] --json`` and
+        returns the parsed JSON challenge verbatim.
+        """
+        # F-3: deliberately NO _ensure_wallet() here. A quote is a read-only
+        # challenge fetch that needs no wallet — calling _ensure_wallet would
+        # let a mere price check silently auto-create a wallet (INV-4).
+        args = ["x402", "quote", url]
+        if method != "GET":
+            args += ["--method", method]
+        if body is not None:
+            args += ["--body", body]
+        return self._run(args)
+
+    def x402_request(
+        self,
+        url: str,
+        *,
+        max_payment: int | str,
+        method: str = "GET",
+        body: str | None = None,
+        prefer_network: str | None = None,
+        prefer_method: str | None = None,
+        prefer_asset: str | None = None,
+        auto_approve: bool = False,
+    ) -> dict[str, Any]:
+        """Make a paid x402 request via ``twak x402 request`` (twak pays).
+
+        ``max_payment`` is required: it is the hard per-payment cap twak
+        itself enforces (the wallet-layer backstop under the payer's policy
+        checks). The ``--prefer-*`` flags narrow which challenge entry twak
+        picks (TOCTOU backstop between a prior quote and this request).
+        """
+        self._ensure_wallet()
+        args = ["x402", "request", url, "--max-payment", str(max_payment), "--yes"]
+        if method != "GET":
+            args += ["--method", method]
+        if body is not None:
+            args += ["--body", body]
+        if prefer_network:
+            args += ["--prefer-network", prefer_network]
+        if prefer_method:
+            args += ["--prefer-method", prefer_method]
+        if prefer_asset:
+            args += ["--prefer-asset", prefer_asset]
+        if auto_approve:
+            args.append("--auto-approve")
+        # stdout is pure JSON; the human-readable "x402: paying ..." banner
+        # goes to stderr (field-verified) — _run parses stdout only, never a
+        # merged stream. On success the JSON is the paid endpoint's response
+        # body verbatim, with NO payment-receipt metadata (gaps S-7).
+        return self._run(args)
+
+    def make_x402_payer(self, **payer_kwargs: Any):
+        """Delegated x402 payer: twak builds/signs/settles the payment.
+
+        ``payer_kwargs`` are forwarded verbatim to ``TwakX402Payer``
+        (same pass-through convention as ``create_wallet_provider``).
+        """
+        # Lazy import: keeps the wallet layer import-independent of x402.
+        from ..x402.twak import TwakX402Payer
+
+        return TwakX402Payer(self, **payer_kwargs)
 
     # ── IntentExecutor ──
 

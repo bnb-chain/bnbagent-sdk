@@ -1,0 +1,1 @@
+{"tx_hash": "0x09b1af61cdf080e4f3fc7dd999626268ed07ccfdb629b0c0c764b175830c22f8", "status": "submitted", "payer": "0x163b433b853eBf21b3e759562e8E1f45eFbf001e", "note": "credit lands after the deposit scanner observes the on-chain transfer at N confirmations; signer wallet must be SIWE-bound for attribution"}

@@ -10,7 +10,9 @@ REQ-3; the alias chain is covered explicitly in the parse-hardening section).
 from __future__ import annotations
 
 import json
+import os
 import types
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,6 +25,7 @@ from bnbagent.wallets import (
     IntentExecutor,
     TWAKProvider,
     UnsupportedWalletOperation,
+    WalletIdentityMismatch,
 )
 from bnbagent.wallets.intents import (
     ERC8004_REGISTER,
@@ -797,3 +800,241 @@ def test_create_wallet_explicit_idempotent():
         addr = twak.create_wallet()
     assert addr == FAKE_ADDRESS
     assert all("create" not in c for c in calls)  # already exists -> no create
+
+
+# ── custody: home relocation (design §4, gaps S-5) ──
+
+
+def test_home_overrides_subprocess_home_inheriting_environ():
+    twak = TWAKProvider(home="/srv/agent-7")
+    with patch("bnbagent.wallets.twak_provider.subprocess.run") as run:
+        run.return_value = _completed([], {"success": True, "accepts": []})
+        # x402_quote is a single CLI call with no wallet probe (F-3) — the
+        # cleanest window onto the env every invocation gets.
+        twak.x402_quote("https://api.example/paid")
+    env = run.call_args.kwargs["env"]
+    assert env["HOME"] == "/srv/agent-7"  # twak resolves /srv/agent-7/.twak
+    # the rest of the environment is inherited (password/credential env vars
+    # must keep flowing through to the twak subprocess)
+    assert env == {**os.environ, "HOME": "/srv/agent-7"}
+
+
+def test_home_accepts_path_object():
+    twak = TWAKProvider(home=Path("/srv/agent-8"))
+    with patch("bnbagent.wallets.twak_provider.subprocess.run") as run:
+        run.return_value = _completed([], {"success": True, "accepts": []})
+        twak.x402_quote("https://api.example/paid")
+    assert run.call_args.kwargs["env"]["HOME"] == "/srv/agent-8"
+
+
+def test_home_none_inherits_environment_untouched():
+    twak = TWAKProvider()  # home=None
+    with patch("bnbagent.wallets.twak_provider.subprocess.run") as run:
+        run.return_value = _completed([], {"success": True, "accepts": []})
+        twak.x402_quote("https://api.example/paid")
+    # env=None == "inherit the parent environment" for subprocess.run
+    assert run.call_args.kwargs["env"] is None
+
+
+# ── custody: expected_address identity pin (INV-4) ──
+
+
+def test_expected_address_match_case_insensitive_and_cached():
+    calls: list[list[str]] = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        if "status" in cmd:
+            return _completed(cmd, {"success": True})
+        if "address" in cmd:
+            return _completed(cmd, _ADDRESS_OUT)
+        raise AssertionError(f"unexpected twak command: {cmd}")
+
+    # pin with different casing: the comparison is case-insensitive
+    twak = TWAKProvider(expected_address=FAKE_ADDRESS.lower())
+    with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
+        a1 = twak.address
+        a2 = twak.address
+    assert a1 == a2 == FAKE_ADDRESS
+    # the verified address is cached: one CLI lookup across two reads
+    assert sum("address" in c for c in calls) == 1
+
+
+def test_expected_address_mismatch_blocks_operation_and_is_not_cached():
+    calls: list[list[str]] = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        if "status" in cmd:
+            return _completed(cmd, {"success": True})
+        if "address" in cmd:
+            return _completed(cmd, _ADDRESS_OUT)
+        raise AssertionError(f"unexpected twak command: {cmd}")
+
+    pinned = "0x" + "99" * 20
+    twak = TWAKProvider(expected_address=pinned)
+    with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
+        # the identity check fires from a state-changing entry point BEFORE
+        # the operation's own CLI command can run
+        with pytest.raises(WalletIdentityMismatch) as exc:
+            twak.sign_message("hello")
+        assert exc.value.expected == pinned
+        assert exc.value.actual == FAKE_ADDRESS
+        # a retry re-checks and re-raises: the bad state was never cached
+        with pytest.raises(WalletIdentityMismatch):
+            twak.sign_message("hello")
+    assert all("sign-message" not in c for c in calls)  # never reached the CLI
+    assert twak._address is None  # nothing cached under a drifted identity
+
+
+# ── custody: auto_create=False (deployment mode, INV-4) ──
+
+
+def test_auto_create_false_missing_wallet_raises_and_never_creates():
+    run, calls, _ = _status_router(wallet_exists=False)
+    twak = TWAKProvider(auto_create=False)
+    with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
+        with pytest.raises(RuntimeError) as exc:
+            twak.address  # noqa: B018 - property access triggers the probe
+    message = str(exc.value)
+    # the error names the deployment fix: materialize from the secret bundle
+    assert "materialize_twak_home" in message
+    assert "TWAK_WALLET_JSON" in message
+    # `wallet create` was never invoked — only the status probe ran
+    assert all("create" not in c for c in calls)
+
+
+def test_auto_create_false_with_existing_wallet_operates_normally():
+    run, calls, _ = _status_router(wallet_exists=True)
+    twak = TWAKProvider(auto_create=False)
+    with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
+        assert twak.address == FAKE_ADDRESS
+    assert all("create" not in c for c in calls)
+
+
+# ── x402 raw transport: exact argv + ensure-wallet discipline ──
+
+_X402_FIXTURES = Path(__file__).parent / "fixtures" / "twak_x402"
+
+
+def _x402_fixture(name):
+    return json.loads((_X402_FIXTURES / name).read_text())
+
+
+def test_x402_quote_argv_minimal_and_no_wallet_probe():
+    calls: list[list[str]] = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        return _completed(cmd, _x402_fixture("quote_base_usdc.json"))
+
+    twak = TWAKProvider()
+    url = "https://skills.onesource.io/api/chain/chain-id"
+    with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
+        data = twak.x402_quote(url)
+
+    # F-3: quote is read-only — exactly ONE call, no wallet status/create ever
+    assert calls == [["twak", "x402", "quote", url, "--json"]]
+    assert data["accepts"][0]["maxTimeoutSeconds"] == 3600  # passthrough verbatim
+
+
+def test_x402_quote_argv_includes_method_and_body_only_when_given():
+    calls: list[list[str]] = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        return _completed(cmd, _x402_fixture("quote_bsc_u.json"))
+
+    twak = TWAKProvider()
+    with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
+        twak.x402_quote("https://pay.example/x402", method="POST", body='{"amountUsd":0.1}')
+
+    assert calls == [[
+        "twak", "x402", "quote", "https://pay.example/x402",
+        "--method", "POST", "--body", '{"amountUsd":0.1}', "--json",
+    ]]
+
+
+def test_x402_quote_https_only_error_surfaces():
+    # field-verified VALIDATION_ERROR envelope: success=false on exit 0
+    def run(cmd, **kwargs):
+        return _completed(cmd, _x402_fixture("error_https_only.json"))
+
+    twak = TWAKProvider()
+    with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
+        with pytest.raises(RuntimeError, match="only https:// URLs are allowed"):
+            twak.x402_quote("http://insecure.example/paid")
+
+
+def _x402_request_router(output):
+    """Wallet probe succeeds; the x402 request gets ``output``."""
+    calls: list[list[str]] = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[1] == "wallet" and cmd[2] == "status":
+            return _completed(cmd, {"success": True})
+        return _completed(cmd, output)
+
+    return run, calls
+
+
+def test_x402_request_argv_minimal_with_wallet_probe_first():
+    run, calls = _x402_request_router(_x402_fixture("request_success_pieverse.json"))
+    twak = TWAKProvider()
+    with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
+        data = twak.x402_request("https://pay.example/x402", max_payment=1000)
+
+    # a paid request IS state-changing: the wallet probe runs first
+    assert calls[0] == _WALLET_STATUS_CMD
+    # minimal argv: --max-payment + --yes, and no --prefer-*/--method/--body
+    assert calls[1] == [
+        "twak", "x402", "request", "https://pay.example/x402",
+        "--max-payment", "1000", "--yes", "--json",
+    ]
+    assert len(calls) == 2
+    # success output = the endpoint body verbatim (no receipt, gaps S-7)
+    assert data["tx_hash"].startswith("0x09b1af61")
+
+
+def test_x402_request_argv_includes_prefer_flags_only_when_set():
+    run, calls = _x402_request_router(_x402_fixture("request_success_pieverse.json"))
+    twak = TWAKProvider()
+    u_asset = "0xce24439f2d9c6a2289f741120fe202248b666666"
+    with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
+        twak.x402_request(
+            "https://pay.example/x402",
+            max_payment=10**17,
+            method="POST",
+            body='{"amountUsd":0.1}',
+            prefer_network="eip155:56",
+            prefer_method="eip3009",
+            prefer_asset=u_asset,
+        )
+
+    assert calls[1] == [
+        "twak", "x402", "request", "https://pay.example/x402",
+        "--max-payment", str(10**17), "--yes",
+        "--method", "POST", "--body", '{"amountUsd":0.1}',
+        "--prefer-network", "eip155:56",
+        "--prefer-method", "eip3009",
+        "--prefer-asset", u_asset,
+        "--json",
+    ]
+
+
+def test_x402_request_settlement_rejected_error_surfaces():
+    # field-verified NETWORK_ERROR envelope: `error` set, no `success` field
+    run, _ = _x402_request_router(_x402_fixture("error_settlement_rejected.json"))
+    twak = TWAKProvider()
+    with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
+        with pytest.raises(RuntimeError, match="invalid_payload"):
+            twak.x402_request("https://pay.example/x402", max_payment=1000)
+
+
+def test_x402_request_min_amount_error_surfaces():
+    run, _ = _x402_request_router(_x402_fixture("error_min_amount.json"))
+    twak = TWAKProvider()
+    with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
+        with pytest.raises(RuntimeError, match="amountUsd must be at least 0.1"):
+            twak.x402_request("https://pay.example/x402", max_payment=1000)
