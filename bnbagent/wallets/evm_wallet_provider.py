@@ -27,6 +27,7 @@ from eth_account.messages import encode_defunct
 from eth_account.signers.local import LocalAccount
 
 from ..signing import SigningPolicy, check as _policy_check
+from .capabilities import CALLS_ARBITRARY, PAYMASTER_SPONSOR
 from .wallet_provider import WalletProvider
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,9 @@ class EVMWalletProvider(WalletProvider):
     """
 
     kind = "evm"
+    # Arbitrary mechanical contract calls via LocalExecutor; sponsored
+    # broadcast via the MegaFuel paymaster. sign.* derive automatically.
+    _extra_capabilities = frozenset({CALLS_ARBITRARY, PAYMASTER_SPONSOR})
 
     def __init__(
         self,

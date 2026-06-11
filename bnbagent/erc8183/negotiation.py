@@ -59,7 +59,7 @@ class DescriptionTooLongError(ValueError):
 
 if TYPE_CHECKING:
     from .client import ERC8183Client
-    from ..wallets.wallet_provider import WalletProvider
+    from ..wallets.protocols import MessageSigner
 
 
 class ReasonCode:
@@ -522,7 +522,7 @@ class NegotiationHandler:
         currency: str,
         estimated_completion_seconds: int = 120,
         require_quality_standards: bool = True,
-        wallet_provider: WalletProvider | None = None,
+        wallet_provider: MessageSigner | None = None,
         quote_ttl_seconds: int = 300,
         chain_id: int | None = None,
         verifying_contract: str | None = None,
@@ -582,7 +582,7 @@ class NegotiationHandler:
         service_price: str,
         estimated_completion_seconds: int = 120,
         require_quality_standards: bool = True,
-        wallet_provider: WalletProvider | None = None,
+        wallet_provider: MessageSigner | None = None,
         quote_ttl_seconds: int = 300,
     ) -> NegotiationHandler:
         """
