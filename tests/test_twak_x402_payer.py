@@ -288,7 +288,7 @@ def test_end_to_end_request_through_twak_provider():
     def run(cmd, **kwargs):
         calls.append(cmd)
         if cmd[1] == "wallet" and cmd[2] == "status":
-            return _completed(cmd, {"success": True})
+            return _completed(cmd, {"agentWallet": "configured"})
         if cmd[1] == "x402" and cmd[2] == "quote":
             return _completed(cmd, _fixture("quote_bsc_u.json"))
         if cmd[1] == "x402" and cmd[2] == "request":

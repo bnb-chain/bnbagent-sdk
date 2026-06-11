@@ -1,6 +1,6 @@
 # TWAK × bnbagent-sdk 集成设计（最终方案）
 
-> 状态：**待 review** ｜ 日期：2026-06-11 ｜ 作者：SDK 团队（基于 robot-ux b2e85eb 架构延伸）
+> 状态：**Phase 1a–1c 已实施**（commits 928e8e1 / 368c55d / 29cb7f5），等待 twak 上游（续作见 [`twak-next-steps.md`](./twak-next-steps.md)）｜ 日期：2026-06-11 ｜ 作者：SDK 团队（基于 robot-ux b2e85eb 架构延伸）
 > 基线：twak CLI **v0.18.0**（命令面唯一事实源：[`docs/twak-cli-gaps-v0.18.0.md`](./twak-cli-gaps-v0.18.0.md)）
 > 关联仓库：`bnbagent-studio`（部署形态与政策层的兼容性约束来源）
 >

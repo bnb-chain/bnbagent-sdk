@@ -25,7 +25,7 @@ from __future__ import annotations
 import argparse
 import time
 
-from _helpers import banner, expiry_for, load_settings, make_client
+from _helpers import banner, expiry_for, load_settings, make_primary_client
 
 POLL_INTERVAL = 5    # seconds between status polls
 POLL_TIMEOUT  = 240  # allow for one full poll cycle + on-chain submission
@@ -41,7 +41,7 @@ def main() -> None:
     args = parser.parse_args()
 
     s = load_settings()
-    client = make_client(s.client_pk, s.network)
+    client = make_primary_client(s)  # EVM or twak, per WALLET_KIND
 
     banner(
         "AGENT + IPFS — fund job, agent submits to IPFS, "

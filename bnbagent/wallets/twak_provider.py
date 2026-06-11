@@ -257,6 +257,17 @@ class TWAKProvider(WalletProvider, IntentExecutor):
             raise RuntimeError(f"twak command timed out after {self._timeout}s: {_redact(cmd)}") from e
 
         if proc.returncode != 0:
+            # Quirk (field-verified v0.18.0): `x402 quote` exits non-zero on an
+            # empty `accepts` list while emitting an explicit success envelope
+            # ({"success": true}, no "error"). When the structured envelope and
+            # the exit code disagree in the *success* direction, trust the
+            # envelope — an error envelope or unparseable output still raises.
+            try:
+                data = json.loads(proc.stdout) if proc.stdout.strip() else {}
+            except json.JSONDecodeError:
+                data = {}
+            if data.get("success") is True and not data.get("error"):
+                return data
             raise RuntimeError(self._format_error(cmd, proc.stdout, proc.stderr))
 
         try:
@@ -371,12 +382,16 @@ class TWAKProvider(WalletProvider, IntentExecutor):
     def exists(self) -> bool:
         """True if twak reports a configured wallet (best-effort).
 
-        Probes ``twak wallet status``; any failure (missing binary, no wallet,
-        non-zero exit) is treated as "does not exist" rather than raising.
+        Probes ``twak wallet status``. The CLI exits 0 even when no wallet is
+        configured (field-verified v0.18.0: ``{"agentWallet": "not
+        configured"}``), so the exit code alone is a false positive — the
+        ``agentWallet`` field is the actual signal. Any failure (missing
+        binary, non-zero exit) is treated as "does not exist" rather than
+        raising.
         """
         try:
-            self._run(["wallet", "status"])
-            return True
+            data = self._run(["wallet", "status"])
+            return data.get("agentWallet") == "configured"
         except Exception:  # noqa: BLE001 - introspection must not raise
             return False
 
@@ -404,7 +419,31 @@ class TWAKProvider(WalletProvider, IntentExecutor):
             args.append("--skip-password-check")
         if no_keychain:
             args.append("--no-keychain")
-        self._run(args)
+        try:
+            self._run(args)
+        except RuntimeError as e:
+            # Field-verified v0.18.0: `wallet create` hard-requires --password
+            # on the command line; TWAK_WALLET_PASSWORD only unlocks existing
+            # wallets. This provider never puts secrets on argv (visible in
+            # `ps`), so creation cannot proceed programmatically until twak
+            # honors the env var at creation time (gaps S-8). Point the caller
+            # at the manual path instead of surfacing a cryptic CLI error.
+            # Match commander's exact failure shape ("required option
+            # '--password ...' not specified") — both fragments must be
+            # present, since the generic _SETUP_HINT also mentions --password.
+            detail = str(e).lower()
+            if "required option" in detail and "--password" in detail:
+                raise RuntimeError(
+                    "twak v0.18.0 requires the wallet password on the command "
+                    "line for `wallet create`, which this SDK refuses to do "
+                    "(secrets on argv are visible to every process). Create "
+                    "the wallet manually once — `twak wallet create "
+                    "--password <pw>` in an interactive shell — or "
+                    "materialize an existing wallet.json via "
+                    "materialize_twak_home(). Tracked upstream as S-8 in "
+                    "docs/twak-cli-gaps-v0.18.0.md."
+                ) from e
+            raise
         self._address = None  # invalidate cache so the new address is re-read
         return self.address
 

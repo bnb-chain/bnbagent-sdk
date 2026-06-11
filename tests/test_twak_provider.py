@@ -80,7 +80,7 @@ def _router():
     def run(cmd, **kwargs):
         calls.append(cmd)
         if "status" in cmd:  # lazy auto-create probe: model a configured wallet
-            return _completed(cmd, {"success": True})
+            return _completed(cmd, {"agentWallet": "configured"})
         if "register" in cmd:
             return _completed(cmd, _REGISTER_OUT)
         if "set-metadata" in cmd:
@@ -103,7 +103,7 @@ def _intent_router(output, *, status_output=None):
     def run(cmd, **kwargs):
         calls.append(cmd)
         if cmd[1] == "wallet" and cmd[2] == "status":
-            return _completed(cmd, {"success": True})
+            return _completed(cmd, {"agentWallet": "configured"})
         if cmd[1] == "erc8183" and cmd[2] == "status":
             return _completed(cmd, status_output)
         return _completed(cmd, output)
@@ -583,7 +583,7 @@ def test_success_false_with_zero_exit_is_failure():
 def test_unknown_command_in_stderr_hints_upgrade():
     def run(cmd, **kwargs):
         if cmd[1] == "wallet" and cmd[2] == "status":
-            return _completed(cmd, {"success": True})
+            return _completed(cmd, {"agentWallet": "configured"})
         return types.SimpleNamespace(
             args=cmd,
             returncode=1,
@@ -749,8 +749,11 @@ def _status_router(wallet_exists: bool):
     def run(cmd, **kwargs):
         calls.append(cmd)
         if "status" in cmd:
-            ok = state["exists"]
-            return _completed(cmd, {"success": ok}, returncode=0 if ok else 1)
+            # Field-verified v0.18.0: `wallet status` exits 0 either way; the
+            # agentWallet field is the real signal (the exit code is a false
+            # positive for a missing wallet).
+            agent = "configured" if state["exists"] else "not configured"
+            return _completed(cmd, {"agentWallet": agent})
         if "create" in cmd:
             state["exists"] = True  # creation flips existence
             return _completed(cmd, {"success": True})
@@ -845,7 +848,7 @@ def test_expected_address_match_case_insensitive_and_cached():
     def run(cmd, **kwargs):
         calls.append(cmd)
         if "status" in cmd:
-            return _completed(cmd, {"success": True})
+            return _completed(cmd, {"agentWallet": "configured"})
         if "address" in cmd:
             return _completed(cmd, _ADDRESS_OUT)
         raise AssertionError(f"unexpected twak command: {cmd}")
@@ -866,7 +869,7 @@ def test_expected_address_mismatch_blocks_operation_and_is_not_cached():
     def run(cmd, **kwargs):
         calls.append(cmd)
         if "status" in cmd:
-            return _completed(cmd, {"success": True})
+            return _completed(cmd, {"agentWallet": "configured"})
         if "address" in cmd:
             return _completed(cmd, _ADDRESS_OUT)
         raise AssertionError(f"unexpected twak command: {cmd}")
@@ -973,7 +976,7 @@ def _x402_request_router(output):
     def run(cmd, **kwargs):
         calls.append(cmd)
         if cmd[1] == "wallet" and cmd[2] == "status":
-            return _completed(cmd, {"success": True})
+            return _completed(cmd, {"agentWallet": "configured"})
         return _completed(cmd, output)
 
     return run, calls
@@ -1038,3 +1041,67 @@ def test_x402_request_min_amount_error_surfaces():
     with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
         with pytest.raises(RuntimeError, match="amountUsd must be at least 0.1"):
             twak.x402_request("https://pay.example/x402", max_payment=1000)
+
+
+# ── live-CLI quirks surfaced by examples/twak (field-verified v0.18.0) ──
+
+def test_exists_false_when_status_reports_not_configured():
+    # `wallet status` exits 0 even with no wallet; only the agentWallet field
+    # tells the truth. exists() must not be fooled by the zero exit code.
+    twak = TWAKProvider()
+    with patch("bnbagent.wallets.twak_provider.subprocess.run") as run:
+        run.return_value = _completed(
+            ["twak"], {"agentWallet": "not configured", "keychainPassword": "not stored"}
+        )
+        assert twak.exists() is False
+        run.return_value = _completed(["twak"], {"agentWallet": "configured"})
+        assert twak.exists() is True
+
+
+def test_auto_create_false_reachable_on_zero_exit_unconfigured_status():
+    # Regression: before the exists() fix, a zero-exit "not configured" status
+    # made the wallet look present, so the INV-4 deployment-mode error was
+    # unreachable and callers got a raw CLI failure later instead.
+    twak = TWAKProvider(auto_create=False)
+    with patch("bnbagent.wallets.twak_provider.subprocess.run") as run:
+        run.return_value = _completed(["twak"], {"agentWallet": "not configured"})
+        with pytest.raises(RuntimeError, match="materialize_twak_home"):
+            twak.sign_message("hello")
+
+
+def test_run_trusts_success_envelope_over_nonzero_exit():
+    # `x402 quote` exits non-zero on empty accepts while emitting an explicit
+    # success envelope (gaps S-9). The envelope wins in the success direction.
+    twak = TWAKProvider()
+    no_route = _x402_fixture("quote_no_supported_route.json")
+    with patch("bnbagent.wallets.twak_provider.subprocess.run") as run:
+        run.return_value = _completed(["twak"], no_route, returncode=1)
+        data = twak.x402_quote("https://www.x402.org/protected")
+    assert data["accepts"] == []
+    # an error envelope with a non-zero exit still raises
+    with patch("bnbagent.wallets.twak_provider.subprocess.run") as run:
+        run.return_value = _completed(
+            ["twak"], {"error": "boom", "errorCode": "X"}, returncode=1
+        )
+        with pytest.raises(RuntimeError, match="boom"):
+            twak.x402_quote("https://www.x402.org/protected")
+
+
+def test_create_wallet_password_requirement_maps_to_descriptive_error():
+    # v0.18.0 hard-requires --password on argv for creation; the SDK refuses
+    # to pass secrets there (INV-1) and must explain instead (gaps S-8).
+    twak = TWAKProvider()
+
+    def run(cmd, **kwargs):
+        if "status" in cmd:
+            return _completed(cmd, {"agentWallet": "not configured"})
+        if "create" in cmd:
+            return _completed(
+                cmd, {}, returncode=1,
+                stderr="error: required option '--password <password>' not specified",
+            )
+        raise AssertionError(f"unexpected twak command: {cmd}")
+
+    with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
+        with pytest.raises(RuntimeError, match="S-8"):
+            twak.create_wallet()

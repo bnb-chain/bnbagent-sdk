@@ -6,14 +6,14 @@ No escrow ever moved, no provider action needed.
 
 from __future__ import annotations
 
-from _helpers import banner, expiry_for, load_settings, make_client
+from _helpers import banner, expiry_for, load_settings, make_primary_client
 
 from bnbagent.erc8183 import JobStatus
 
 
 def main() -> None:
     s = load_settings()
-    client = make_client(s.client_pk, s.network)
+    client = make_primary_client(s)  # EVM or twak, per WALLET_KIND
 
     banner("CANCEL OPEN — client cancels before funding")
 
