@@ -67,6 +67,12 @@ from typing import Any
 from eth_account import Account
 from eth_account.messages import defunct_hash_message, encode_defunct
 
+from .capabilities import (
+    BROADCAST_SELF,
+    INTENTS_ERC8004,
+    INTENTS_ERC8183,
+    X402_PAY,
+)
 from .errors import UnsupportedWalletOperation
 from .intents import (
     ERC8004_REGISTER,
@@ -148,6 +154,12 @@ class TWAKProvider(WalletProvider, IntentExecutor):
     # twak's `fund` does approve + deposit itself, so the SDK facade skips
     # its own allowance top-up for this wallet.
     fund_bundles_approval = True
+    # sign.message derives automatically from the override below; twak has
+    # no sign_transaction / sign_typed_data, so the base defaults raise.
+    # x402.pay: the delegated TwakX402Payer class arrives in Phase 1c.
+    _extra_capabilities = frozenset(
+        {BROADCAST_SELF, INTENTS_ERC8004, INTENTS_ERC8183, X402_PAY}
+    )
 
     def __init__(
         self,
@@ -391,43 +403,12 @@ class TWAKProvider(WalletProvider, IntentExecutor):
             **self._split_signature(signature),
         }
 
-    def sign_transaction(self, transaction: dict[str, Any]) -> dict[str, Any]:
-        """Not supported: twak exposes no raw-transaction signing primitive.
-
-        twak owns build + broadcast for its high-level commands and offers no
-        way to sign an arbitrary transaction and hand back the raw bytes.
-        Use the intent path (:meth:`execute`) instead.
-        """
-        raise NotImplementedError(
-            "TWAKProvider cannot sign arbitrary transactions: the twak CLI has "
-            "no raw-tx signing primitive. Route high-level operations through "
-            "execute(Intent(...)) instead."
-        )
-
-    def sign_typed_data(
-        self,
-        domain: dict[str, Any],
-        types: dict[str, list[dict[str, str]]],
-        message: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Not supported: twak has no generic EIP-712 signing primitive.
-
-        twak signs its ERC-8004/8183/x402 payloads internally via dedicated
-        commands; a standalone ``sign-typed-data`` does not exist on v0.18.0
-        (field-verified) and, per the twak team's assessment, likely never
-        will. No CLI call is attempted (design decision P0).
-        """
-        raise UnsupportedWalletOperation(
-            "sign_typed_data (EIP-712)",
-            reason=(
-                "twak signs ERC-8004/8183/x402 payloads internally via its "
-                "dedicated commands and provides no generic EIP-712 primitive"
-            ),
-            alternative=(
-                "for x402 payments use the delegated payer path (twak's x402 "
-                "client); for anything else use an EVM wallet"
-            ),
-        )
+    # sign_transaction / sign_typed_data are deliberately NOT overridden:
+    # twak exposes no raw-tx or generic EIP-712 primitive (v0.18.0,
+    # field-verified — design decision P0: no CLI call is ever attempted).
+    # The base-class defaults raise a descriptive UnsupportedWalletOperation,
+    # and not overriding keeps sign.transaction / sign.typed_data out of
+    # capabilities() (overriding only to raise would falsely claim them).
 
     # ── IntentExecutor ──
 

@@ -34,7 +34,12 @@ class MPCWalletProvider(WalletProvider):
     MPC wallets use distributed key generation and signing, providing
     enhanced security without storing a single private key.
 
-    Note: This is a stub implementation. Full MPC support will be added in the future.
+    Note: This is an interface stub — subclass it and implement the
+    ``sign_*`` methods your MPC backend supports; ``capabilities()`` derives
+    the matching ``sign.*`` entries from those overrides automatically.
+    Unimplemented sign methods keep the base-class default, which raises a
+    descriptive ``UnsupportedWalletOperation`` (never override one just to
+    raise).
     """
 
     kind = "mpc"
@@ -58,21 +63,4 @@ class MPCWalletProvider(WalletProvider):
     @property
     def address(self) -> str:
         """Get the wallet address."""
-        raise NotImplementedError("MPC wallet not implemented")
-
-    def sign_transaction(self, transaction: dict[str, Any]) -> dict[str, Any]:
-        """Sign a transaction."""
-        raise NotImplementedError("MPC wallet not implemented")
-
-    def sign_message(self, message: str) -> dict[str, Any]:
-        """Sign a message."""
-        raise NotImplementedError("MPC wallet not implemented")
-
-    def sign_typed_data(
-        self,
-        domain: dict[str, Any],
-        types: dict[str, list[dict[str, str]]],
-        message: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Sign EIP-712 typed data."""
         raise NotImplementedError("MPC wallet not implemented")

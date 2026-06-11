@@ -637,9 +637,13 @@ def _primed_twak(address):
 
 
 def test_sign_transaction_not_supported():
+    # Phase 1b: twak no longer overrides sign_transaction (override-is-capability
+    # discipline) — the base default raises, naming the missing capability.
     twak = TWAKProvider()
-    with pytest.raises(NotImplementedError, match="no raw-tx signing primitive"):
-        twak.sign_transaction({})
+    with patch("bnbagent.wallets.twak_provider.subprocess.run") as run:
+        with pytest.raises(UnsupportedWalletOperation, match="sign.transaction"):
+            twak.sign_transaction({})
+    run.assert_not_called()  # P0: no CLI call is ever attempted
 
 
 def test_sign_message_normalises_and_self_checks():
@@ -705,14 +709,14 @@ def test_sign_message_malformed_signature_raises_descriptive():
 
 
 def test_sign_typed_data_unsupported_no_cli_call():
-    # P0: no spec-forward CLI path — the method raises without shelling out,
-    # pointing x402 consumers at the delegated payer path.
+    # P0: no spec-forward CLI path — the (base-default) method raises without
+    # shelling out, pointing x402 consumers at the delegated payer path.
     twak = TWAKProvider()
     with patch("bnbagent.wallets.twak_provider.subprocess.run") as run:
-        with pytest.raises(UnsupportedWalletOperation, match="x402") as exc:
+        with pytest.raises(UnsupportedWalletOperation, match="sign.typed_data") as exc:
             twak.sign_typed_data({}, {}, {})
     run.assert_not_called()
-    assert "delegated payer path" in str(exc.value)
+    assert "x402 payer path" in str(exc.value)
 
 
 def test_address_cached_after_first_lookup():

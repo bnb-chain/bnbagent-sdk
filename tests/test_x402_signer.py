@@ -316,3 +316,41 @@ def test_budget_rolls_back_when_wallet_raises_nonpolicy_exception(wallet):
         signer.sign_payment(**p, expected_to=p["message"]["to"])
     # Reservation was released
     assert signer.budget.spent(U_MAINNET) == 0
+
+
+# ── Composition-time capability gate (Phase 1b) ──────────────────────────
+
+
+def test_twak_wallet_rejected_at_construction_without_cli_calls():
+    """A wallet whose supports() reports no sign.typed_data is refused in
+    X402Signer.__init__ — before any payment flow, and with zero twak CLI
+    invocations (the gate must not shell out)."""
+    from unittest.mock import patch
+
+    from bnbagent.wallets import TWAKProvider, UnsupportedWalletOperation
+
+    with patch("bnbagent.wallets.twak_provider.subprocess.run") as run:
+        with pytest.raises(UnsupportedWalletOperation, match="delegated x402 payer"):
+            X402Signer(TWAKProvider())
+        run.assert_not_called()
+
+
+def test_duck_typed_signer_without_supports_constructs_and_signs():
+    """A plain object exposing only address + sign_typed_data (no supports())
+    passes the gate — the narrow TypedDataSigner protocol use case."""
+
+    class DuckSigner:
+        address = "0x" + "a" * 40
+
+        def sign_typed_data(self, domain, types, message):
+            return {"signature": b"\x01" * 65}
+
+    signer = X402Signer(
+        DuckSigner(),
+        max_value_per_call={U_MAINNET: 1_000_000},
+        session_budget={U_MAINNET: 5_000_000},
+    )
+    p = _payload(from_addr=signer.wallet_address)
+    signed = signer.sign_payment(**p, expected_to=p["message"]["to"])
+    assert "signature" in signed
+    assert signer.budget.spent(U_MAINNET) == p["message"]["value"]
