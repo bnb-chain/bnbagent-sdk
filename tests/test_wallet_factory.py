@@ -84,6 +84,10 @@ class TestIntrospection:
             assert wallet.exists() is False
 
     def test_twak_exists_true_when_status_ok(self):
+        # Field-verified v0.18.0: `wallet status` exits 0 either way — only
+        # the agentWallet field signals a configured wallet.
         wallet = create_wallet_provider("twak", chain="bsc")
-        with patch("subprocess.run", return_value=_completed({"success": True})):
+        with patch("subprocess.run", return_value=_completed({"agentWallet": "configured"})):
             assert wallet.exists() is True
+        with patch("subprocess.run", return_value=_completed({"agentWallet": "not configured"})):
+            assert wallet.exists() is False

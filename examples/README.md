@@ -9,6 +9,7 @@ End-to-end examples for ERC-8183 (AgenticCommerce + EvaluatorRouter + Optimistic
 | [client/](client/) | Client | Stand-alone scripts that walk a job through each of the five canonical flows (happy path, dispute-reject, stalemate-expire, never-submit, cancel-open) |
 | [voter/](voter/) | Voter | Whitelisted voter casting `voteReject` on disputed jobs |
 | [agent-server/](agent-server/) | Provider | FastAPI agent with funded-job poll loop. Shows three storage backends (local / IPFS / SQLite) inline in `src/service.py` |
+| [twak/](twak/) | Wallet | TWAK wallet: hermetic quickstart (custody + capabilities + guard rails), delegated x402 payer demo, bsctestnet 13-intent smoke |
 
 ## Recommended path
 
@@ -16,6 +17,7 @@ End-to-end examples for ERC-8183 (AgenticCommerce + EvaluatorRouter + Optimistic
 1. client/      → learn createJob → registerJob → setBudget → fund → submit → settle
 2. voter/       → understand dispute quorum
 3. agent-server → run a full provider with the funded-job poll loop
+4. twak/        → swap the client wallet for twak custody (also: WALLET_KIND=twak in client/)
 ```
 
 ## Prerequisites
@@ -24,6 +26,7 @@ End-to-end examples for ERC-8183 (AgenticCommerce + EvaluatorRouter + Optimistic
 - Testnet BNB ([faucet](https://www.bnbchain.org/en/testnet-faucet))
 - `uv sync` or `pip install bnbagent`
 - Some of the deployed payment token (default: U, see address below)
+- TWAK examples (`twak/`, or `WALLET_KIND=twak` in `client/`) additionally need the twak CLI: `npm i -g @trustwallet/cli` (>= 0.18)
 
 ## BSC Testnet addresses (SDK defaults)
 
