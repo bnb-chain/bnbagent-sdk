@@ -2,8 +2,8 @@
 
 The Trust Wallet Agent Kit (``twak``) CLI owns the full build + sign +
 broadcast lifecycle and exposes only high-level *intent* commands
-(``erc8004 register``, ``erc8004 set-metadata``, ...) plus message/typed-data
-signing. It therefore integrates at the **intent layer**: ``TWAKProvider``
+(``erc8004 register``, ``erc8183 create-job``, ...) plus message signing.
+It therefore integrates at the **intent layer**: ``TWAKProvider``
 is both a :class:`~bnbagent.wallets.WalletProvider` (it has an address and
 can sign messages) and an :class:`~bnbagent.wallets.IntentExecutor` (it is
 its own execution backend — there is no separate local signer to wrap).
@@ -40,13 +40,21 @@ Security / operational notes:
 - ``--json`` is always appended (it implies ``--yes``, skipping interactive
   confirmation, per the twak spec).
 
-Compatibility caveats against the current ``twak`` surface (tracked for the
-TWAK team):
-- ``erc8004 register`` has no inline metadata parameter, so registration
-  metadata (including the SDK's injected ``built_with``) is replayed as
-  follow-up ``set-metadata`` transactions — non-atomic, best-effort.
-- ``erc8004`` / ``erc8183`` are deployed on BNB Smart Chain (both ``bsc``
-  mainnet and ``bsc-testnet``); this provider rejects non-BSC chains.
+Compatibility caveats against ``twak`` v0.18.0 (the authoritative command
+surface is ``docs/twak-cli-gaps-v0.18.0.md``):
+- ``erc8004 register`` takes repeatable ``--metadata key=value`` flags, so
+  registration metadata (including the SDK's injected ``built_with``) is
+  atomic with the mint. (The pre-v0.18.0 ``set-metadata`` replay workaround
+  is resolved and removed.)
+- Supported chain keys are ``bsc`` (mainnet) and ``bsctestnet``; the spec's
+  ``bsc-testnet`` is rejected by the real CLI with ``CHAIN_UNSUPPORTED``
+  (field-verified). This provider rejects non-BSC chains.
+- ``sign_typed_data`` raises :class:`UnsupportedWalletOperation` by design
+  decision (P0): twak signs ERC-8004/8183/x402 payloads internally via its
+  dedicated commands and provides no generic EIP-712 primitive.
+- ``erc8183 submit`` cannot carry ``optParams`` (gaps REQ-1, pending):
+  submitting with non-empty ``opt_params`` fails fast instead of silently
+  producing an unevaluable job — see ``docs/twak-cli-gaps-v0.18.0.md``.
 """
 
 from __future__ import annotations
@@ -56,11 +64,27 @@ import logging
 import subprocess
 from typing import Any
 
-from ..signing import infer_primary_type
+from eth_account import Account
+from eth_account.messages import defunct_hash_message, encode_defunct
+
+from .errors import UnsupportedWalletOperation
 from .intents import (
     ERC8004_REGISTER,
     ERC8004_SET_AGENT_URI,
     ERC8004_SET_METADATA,
+    ERC8183_CLAIM_REFUND,
+    ERC8183_COMPLETE,
+    ERC8183_CREATE_JOB,
+    ERC8183_DISPUTE,
+    ERC8183_FUND,
+    ERC8183_MARK_EXPIRED,
+    ERC8183_REGISTER_JOB,
+    ERC8183_REJECT,
+    ERC8183_SET_BUDGET,
+    ERC8183_SET_PROVIDER,
+    ERC8183_SETTLE,
+    ERC8183_SUBMIT,
+    ERC8183_VOTE_REJECT,
     ExecutionContext,
     Intent,
     IntentExecutor,
@@ -85,12 +109,15 @@ _SETUP_HINT = (
 )
 
 # twak chain keys for BNB Smart Chain. ERC-8004/8183 are deployed on both
-# mainnet ("bsc") and testnet ("bsc-testnet"). Both are accepted and passed
-# through to twak verbatim — this is forward-compatible: "bsc-testnet" works
-# the moment twak ships testnet support (in progress on the twak side); until
-# then twak rejects it at runtime and we surface that error.
+# mainnet ("bsc") and testnet ("bsctestnet"). Field-verified against twak
+# v0.18.0: the spec's "bsc-testnet" key is rejected by the real CLI with
+# CHAIN_UNSUPPORTED ('Did you mean "bsc"?') — "bsctestnet" is the key that
+# works.
 _DEFAULT_CHAIN = "bsc"
-_ALLOWED_CHAINS = {"bsc", "bsc-testnet"}
+_ALLOWED_CHAINS = {"bsc", "bsctestnet"}
+
+_ZERO_ADDRESS = "0x" + "00" * 20
+_ZERO_REASON = b"\x00" * 32
 
 
 class TWAKProvider(WalletProvider, IntentExecutor):
@@ -98,10 +125,9 @@ class TWAKProvider(WalletProvider, IntentExecutor):
 
     Args:
         chain: twak chain key for BNB Smart Chain — ``"bsc"`` (mainnet) or
-            ``"bsc-testnet"``. ERC-8004/8183 are deployed on both. The value
-            is passed through to twak verbatim. (``bsc-testnet`` support is
-            being rolled out on the twak side; until it lands, twak rejects it
-            at runtime.)
+            ``"bsctestnet"``. ERC-8004/8183 are deployed on both. The value
+            is passed through to twak verbatim. (Note: the spec's
+            ``bsc-testnet`` spelling is rejected by the real CLI.)
         twak_bin: Path to (or name of) the ``twak`` executable.
         timeout: Per-command timeout in seconds.
 
@@ -115,10 +141,13 @@ class TWAKProvider(WalletProvider, IntentExecutor):
     / keychain); when they are missing the operation blocks with a clear error.
 
     Raises:
-        ValueError: If ``chain`` is not ``"bsc"`` / ``"bsc-testnet"``.
+        ValueError: If ``chain`` is not ``"bsc"`` / ``"bsctestnet"``.
     """
 
     kind = "twak"
+    # twak's `fund` does approve + deposit itself, so the SDK facade skips
+    # its own allowance top-up for this wallet.
+    fund_bundles_approval = True
 
     def __init__(
         self,
@@ -131,7 +160,8 @@ class TWAKProvider(WalletProvider, IntentExecutor):
             raise ValueError(
                 f"TWAKProvider supports BNB Smart Chain only — chain must be "
                 f"one of {sorted(_ALLOWED_CHAINS)} (got chain={chain!r}). "
-                "ERC-8004/8183 are deployed on bsc (mainnet) and bsc-testnet."
+                "ERC-8004/8183 are deployed on bsc (mainnet) and bsctestnet "
+                "(note: twak's testnet key is 'bsctestnet', not 'bsc-testnet')."
             )
         self._chain = chain.lower()
         self._twak_bin = twak_bin
@@ -144,9 +174,15 @@ class TWAKProvider(WalletProvider, IntentExecutor):
     def _run(self, args: list[str]) -> dict[str, Any]:
         """Run ``twak <args> --json`` and return the parsed JSON object.
 
+        Failure = non-zero exit, a truthy ``error`` field, or ``success`` set
+        to false. The *absence* of ``success`` is never trusted as success —
+        the real CLI omits the field inconsistently across error envelopes
+        (field-verified on v0.18.0).
+
         Raises:
             RuntimeError: If the binary is missing, the command exits
-                non-zero, the output is not JSON, or ``success`` is false.
+                non-zero, the output is not JSON, or the envelope reports
+                an error.
         """
         cmd = [self._twak_bin, *args, "--json"]
         try:
@@ -175,7 +211,7 @@ class TWAKProvider(WalletProvider, IntentExecutor):
                 f"twak returned non-JSON output for {_redact(cmd)}: {proc.stdout[:500]!r}"
             ) from e
 
-        if data.get("success") is False:
+        if data.get("error") or data.get("success") is False:
             raise RuntimeError(self._format_error(cmd, proc.stdout, proc.stderr))
         return data
 
@@ -192,10 +228,30 @@ class TWAKProvider(WalletProvider, IntentExecutor):
                 detail = err
         except (json.JSONDecodeError, AttributeError):
             pass
+        # "unknown command/option" means the installed twak predates the
+        # command surface this provider targets — point at the upgrade, not
+        # at the (irrelevant) setup steps.
+        combined = f"{stderr} {stdout}"
+        if "unknown command" in combined or "unknown option" in combined:
+            hint = (
+                "The installed twak CLI does not recognise this command/option "
+                "— upgrade twak to >= v0.18.0 (`npm install -g @trustwallet/cli`)."
+            )
+        else:
+            hint = _SETUP_HINT
         return (
             f"twak command failed ({_redact(cmd)}): {detail or '<no output>'}. "
-            f"{_SETUP_HINT}"
+            f"{hint}"
         )
+
+    @staticmethod
+    def _extract_tx_hash(data: dict[str, Any]) -> str | None:
+        """Pull the tx hash out of a twak result envelope, tolerantly.
+
+        The spec says ``txHash`` but the real CLI returns ``hash``
+        (gaps REQ-3) — try the field-verified name first.
+        """
+        return data.get("hash") or data.get("txHash") or data.get("transactionHash")
 
     @staticmethod
     def _split_signature(signature: str) -> dict[str, Any]:
@@ -291,7 +347,16 @@ class TWAKProvider(WalletProvider, IntentExecutor):
             self.create_wallet()
 
     def sign_message(self, message: str) -> dict[str, Any]:
-        """Sign a message via ``twak wallet sign-message`` (EIP-191)."""
+        """Sign a message via ``twak wallet sign-message`` (EIP-191).
+
+        Three adaptations over the raw CLI output (gaps S-4):
+        1. the signature is normalised to a ``0x`` prefix;
+        2. the EIP-191 digest is computed client-side (the CLI returns none);
+        3. the signer is recovered from the digest + signature and checked
+           against the wallet address — we compute the digest ourselves but
+           twak produced the signature, so a recovery round-trip is the only
+           runtime proof both sides agree on the message bytes.
+        """
         self._ensure_wallet()
         data = self._run(
             ["wallet", "sign-message", "--chain", self._chain, "--message", message]
@@ -299,8 +364,29 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         signature = data.get("signature")
         if not signature:
             raise RuntimeError(f"twak `sign-message` returned no signature: {data!r}")
+        if not signature.startswith("0x"):
+            signature = "0x" + signature
+        digest = "0x" + bytes(defunct_hash_message(text=message)).hex()
+        try:
+            recovered = Account.recover_message(
+                encode_defunct(text=message), signature=signature
+            )
+        except Exception as e:
+            raise RuntimeError(
+                f"twak `sign-message` returned a malformed signature "
+                f"({signature[:20]}...): {e}"
+            ) from e
+        if recovered.lower() != self.address.lower():
+            raise RuntimeError(
+                f"twak sign-message self-check failed: signature recovers to "
+                f"{recovered}, expected the wallet address {self.address}. "
+                "The SDK computes the EIP-191 digest client-side while twak "
+                "signs out of process — a recovery mismatch means the two "
+                "sides encoded the message bytes differently, and using this "
+                "signature would fail verification later. Refusing to return it."
+            )
         return {
-            "messageHash": data.get("digest") or data.get("messageHash"),
+            "messageHash": digest,
             "signature": signature,
             **self._split_signature(signature),
         }
@@ -324,115 +410,107 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         types: dict[str, list[dict[str, str]]],
         message: dict[str, Any],
     ) -> dict[str, Any]:
-        """Sign EIP-712 typed data via ``twak wallet sign-typed-data``.
+        """Not supported: twak has no generic EIP-712 signing primitive.
 
-        Builds the canonical ``eth_signTypedData_v4`` payload and pipes it to
-        twak. Note: policy enforcement is delegated to twak's own
-        domain-confirmation flow — the SDK's :class:`SigningPolicy` does not
-        gate this path because signing happens out of process.
+        twak signs its ERC-8004/8183/x402 payloads internally via dedicated
+        commands; a standalone ``sign-typed-data`` does not exist on v0.18.0
+        (field-verified) and, per the twak team's assessment, likely never
+        will. No CLI call is attempted (design decision P0).
         """
-        self._ensure_wallet()
-        primary_type = infer_primary_type(types)
-        type_defs = dict(types)
-        if "EIP712Domain" not in type_defs:
-            type_defs["EIP712Domain"] = _domain_type_fields(domain)
-        typed_data = {
-            "types": type_defs,
-            "primaryType": primary_type,
-            "domain": domain,
-            "message": message,
-        }
-        cmd = [self._twak_bin, "wallet", "sign-typed-data", "--stdin", "--chain", self._chain, "--json"]
-        try:
-            proc = subprocess.run(
-                cmd,
-                input=json.dumps(typed_data),
-                capture_output=True,
-                text=True,
-                timeout=self._timeout,
-            )
-        except FileNotFoundError as e:
-            raise RuntimeError(
-                f"twak CLI not found (looked for {self._twak_bin!r})."
-            ) from e
-        except subprocess.TimeoutExpired as e:
-            raise RuntimeError(f"twak sign-typed-data timed out after {self._timeout}s") from e
-        if proc.returncode != 0:
-            raise RuntimeError(self._format_error(cmd, proc.stdout, proc.stderr))
-        data = json.loads(proc.stdout)
-        signature = data["signature"]
-        return {
-            "messageHash": data.get("digest"),
-            "signature": signature,
-            **self._split_signature(signature),
-        }
+        raise UnsupportedWalletOperation(
+            "sign_typed_data (EIP-712)",
+            reason=(
+                "twak signs ERC-8004/8183/x402 payloads internally via its "
+                "dedicated commands and provides no generic EIP-712 primitive"
+            ),
+            alternative=(
+                "for x402 payments use the delegated payer path (twak's x402 "
+                "client); for anything else use an EVM wallet"
+            ),
+        )
 
     # ── IntentExecutor ──
 
     def make_executor(self, context: ExecutionContext) -> IntentExecutor:
         """This wallet broadcasts its own transactions, so it *is* its own
-        executor. The web3/paymaster ``context`` is not needed."""
+        executor. The web3 ``context`` is not needed; a paymaster cannot be
+        honoured (gaps REQ-2) and triggers a warning."""
+        if context.paymaster is not None:
+            logger.warning(
+                "TWAKProvider: twak has no paymaster support (gaps REQ-2) — "
+                "the paymaster is ignored and gas is paid from the twak "
+                "wallet's BNB balance."
+            )
         return self
 
     def execute(self, intent: Intent) -> dict[str, Any]:
         """Execute a high-level intent by delegating to the twak CLI."""
         # Validate first so an unsupported intent never triggers wallet
         # creation or any CLI call.
-        if intent.name not in (
-            ERC8004_REGISTER,
-            ERC8004_SET_METADATA,
-            ERC8004_SET_AGENT_URI,
-        ):
-            raise NotImplementedError(
-                f"TWAKProvider does not support intent {intent.name!r}. "
-                "Supported: erc8004.register / erc8004.set_metadata / erc8004.set_agent_uri."
+        handler = self._INTENT_HANDLERS.get(intent.name)
+        if handler is None:
+            supported = ", ".join(sorted(self._INTENT_HANDLERS))
+            raise UnsupportedWalletOperation(
+                f"intent {intent.name!r}",
+                reason=(
+                    "twak cannot execute arbitrary contract calls — it only "
+                    f"speaks a fixed command menu (supported intents: {supported})"
+                ),
+                alternative="use an EVM wallet for arbitrary contract calls",
+            )
+        if intent.kwargs.get("opt_params"):
+            # The twak CLI has no --opt-params on any erc8183 write; dropping
+            # caller data silently is never acceptable (P4).
+            if intent.name == ERC8183_SUBMIT:
+                raise UnsupportedWalletOperation(
+                    "erc8183.submit with non-empty opt_params",
+                    reason=(
+                        "the twak CLI always submits empty optParams, so the "
+                        "deliverable_url carried there would be dropped and "
+                        "the job would become unevaluable — protocol-breaking, "
+                        "so this fails fast instead of submitting silently"
+                    ),
+                    alternative=(
+                        "use an EVM wallet for the provider (seller) role "
+                        "until twak ships --opt-params"
+                    ),
+                    ref="REQ-1",
+                )
+            raise UnsupportedWalletOperation(
+                f"{intent.name} with non-empty opt_params",
+                reason=(
+                    "the twak CLI has no --opt-params flag; the caller's data "
+                    "would be silently dropped"
+                ),
+                alternative="send empty opt_params or use an EVM wallet",
+                ref="S-1",
             )
         self._ensure_wallet()
-        if intent.name == ERC8004_REGISTER:
-            return self._register(intent.kwargs)
-        if intent.name == ERC8004_SET_METADATA:
-            return self._set_metadata(intent.kwargs)
-        return self._set_agent_uri(intent.kwargs)
+        return handler(self, intent.kwargs)
+
+    def _tx_result(self, data: dict[str, Any], **extra: Any) -> dict[str, Any]:
+        """Canonical executor result envelope for a twak write command."""
+        return {
+            "success": True,
+            "transactionHash": self._extract_tx_hash(data),
+            "receipt": None,
+            **extra,
+        }
+
+    # ── erc8004 handlers ──
 
     def _register(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         agent_uri = kwargs["agent_uri"]
         metadata: list[dict[str, str]] = kwargs.get("metadata") or []
-
-        data = self._run(["erc8004", "register", "--uri", agent_uri, "--chain", self._chain])
-        agent_id = data.get("agentId")
-        tx_hash = data.get("txHash") or data.get("transactionHash")
-
-        # twak's register carries no metadata; replay each entry (including
-        # the injected built_with) as a follow-up set-metadata. Best-effort:
-        # the agent is already registered, so a failed entry warns rather than
-        # unwinding the registration (mirrors the local set-agent-uri follow-up).
-        metadata_txs: list[str | None] = []
-        if metadata and agent_id is not None:
-            for entry in metadata:
-                try:
-                    m = self._run(
-                        [
-                            "erc8004", "set-metadata", str(agent_id),
-                            "--key", entry["key"], "--value", entry["value"],
-                            "--chain", self._chain,
-                        ]
-                    )
-                    metadata_txs.append(m.get("txHash") or m.get("transactionHash"))
-                except Exception as e:  # noqa: BLE001 - best-effort, surfaced as warning
-                    logger.warning(
-                        "TWAKProvider: agent %s registered but set-metadata for key=%r "
-                        "failed (metadata partially applied): %s",
-                        agent_id, entry.get("key"), e,
-                    )
-
-        return {
-            "success": True,
-            "transactionHash": tx_hash,
-            "agentId": agent_id,
-            "owner": data.get("owner"),
-            "receipt": None,
-            "metadataTxs": metadata_txs,
-        }
+        # v0.18.0: --metadata is repeatable and atomic with the mint, so all
+        # entries (including the injected built_with) ride the register tx.
+        args = ["erc8004", "register", "--uri", agent_uri]
+        for entry in metadata:
+            args += ["--metadata", f"{entry['key']}={entry['value']}"]
+        data = self._run([*args, "--chain", self._chain])
+        return self._tx_result(
+            data, agentId=data.get("agentId"), owner=data.get("owner")
+        )
 
     def _set_metadata(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         data = self._run(
@@ -442,11 +520,7 @@ class TWAKProvider(WalletProvider, IntentExecutor):
                 "--chain", self._chain,
             ]
         )
-        return {
-            "success": True,
-            "transactionHash": data.get("txHash") or data.get("transactionHash"),
-            "receipt": None,
-        }
+        return self._tx_result(data)
 
     def _set_agent_uri(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         data = self._run(
@@ -455,23 +529,135 @@ class TWAKProvider(WalletProvider, IntentExecutor):
                 "--uri", kwargs["agent_uri"], "--chain", self._chain,
             ]
         )
-        return {
-            "success": True,
-            "transactionHash": data.get("txHash") or data.get("transactionHash"),
-            "receipt": None,
-        }
+        return self._tx_result(data)
 
+    # ── erc8183 handlers ──
 
-def _domain_type_fields(domain: dict[str, Any]) -> list[dict[str, str]]:
-    """Derive the EIP712Domain type field list from the domain values present."""
-    spec = [
-        ("name", "string"),
-        ("version", "string"),
-        ("chainId", "uint256"),
-        ("verifyingContract", "address"),
-        ("salt", "bytes32"),
-    ]
-    return [{"name": n, "type": t} for n, t in spec if n in domain]
+    def _erc8183(self, command: str, job_id: Any, *extra: str) -> dict[str, Any]:
+        """Run ``twak erc8183 <command> <jobId> [extra...] --chain <chain>``."""
+        data = self._run(
+            ["erc8183", command, str(job_id), *extra, "--chain", self._chain]
+        )
+        return self._tx_result(data)
+
+    def _create_job(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        args = [
+            "erc8183", "create-job",
+            "--provider", kwargs["provider"],
+            "--evaluator", kwargs["evaluator"],
+            "--expires-at", str(kwargs["expired_at"]),
+            "--description", kwargs["description"],
+        ]
+        hook = kwargs.get("hook")
+        if hook and hook.lower() != _ZERO_ADDRESS:
+            args += ["--hook", hook]
+        data = self._run([*args, "--chain", self._chain])
+        return self._tx_result(data, jobId=data.get("jobId"))
+
+    def _set_provider(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        return self._erc8183(
+            "set-provider", kwargs["job_id"], "--provider", kwargs["provider"]
+        )
+
+    def _set_budget(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        return self._erc8183(
+            "set-budget", kwargs["job_id"], "--amount", str(kwargs["amount"])
+        )
+
+    def _fund(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        # twak's `fund` has no amount flag: it approves + deposits whatever
+        # the on-chain budget is, not the caller's expected_budget. Pre-check
+        # via `status` so a budget changed underneath the caller fails here
+        # instead of escrowing the wrong amount (gaps S-2 client-side guard;
+        # `budget` is a flat string in the real status output, field-verified).
+        job_id = kwargs["job_id"]
+        expected_budget = kwargs["expected_budget"]
+        status = self._run(["erc8183", "status", str(job_id), "--chain", self._chain])
+        on_chain_budget = status.get("budget")
+        if on_chain_budget is None:
+            raise RuntimeError(
+                f"TWAKProvider cannot pre-check job {job_id} before funding: "
+                f"twak `erc8183 status` returned no budget field: {status!r}"
+            )
+        if int(on_chain_budget) != int(expected_budget):
+            raise RuntimeError(
+                f"TWAKProvider refuses to fund job {job_id}: twak's `fund` "
+                f"deposits the on-chain budget, not the caller's amount, and "
+                f"the on-chain budget ({on_chain_budget!r}) does not match "
+                f"expected_budget ({expected_budget!r}). Set the budget first "
+                "or pass the on-chain value. (Client-side pre-check for gaps "
+                "S-2 in docs/twak-cli-gaps-v0.18.0.md.)"
+            )
+        data = self._run(["erc8183", "fund", str(job_id), "--chain", self._chain])
+        result = self._tx_result(data)
+        if data.get("approveHash"):
+            result["approveHash"] = data["approveHash"]
+        return result
+
+    def _submit(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        # Non-empty opt_params is rejected up front in execute() (REQ-1).
+        deliverable: bytes = kwargs["deliverable"]
+        return self._erc8183(
+            "submit", kwargs["job_id"], "--deliverable", "0x" + deliverable.hex()
+        )
+
+    def _complete(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        return self._reason_op("complete", kwargs)
+
+    def _reject(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        return self._reason_op("reject", kwargs)
+
+    def _reason_op(self, command: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+        extra: list[str] = []
+        reason: bytes = kwargs.get("reason") or b""
+        if reason and reason != _ZERO_REASON:  # twak defaults --reason to zero
+            extra = ["--reason", "0x" + reason.hex()]
+        return self._erc8183(command, kwargs["job_id"], *extra)
+
+    def _claim_refund(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        return self._erc8183("claim-refund", kwargs["job_id"])
+
+    def _register_job(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        return self._erc8183(
+            "register-job", kwargs["job_id"], "--policy", kwargs["policy"]
+        )
+
+    def _settle(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        extra: list[str] = []
+        evidence: bytes = kwargs.get("evidence") or b""
+        if evidence:  # twak defaults --evidence to 0x
+            extra = ["--evidence", "0x" + evidence.hex()]
+        return self._erc8183("settle", kwargs["job_id"], *extra)
+
+    def _mark_expired(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        return self._erc8183("mark-expired", kwargs["job_id"])
+
+    def _dispute(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        return self._erc8183("dispute", kwargs["job_id"])
+
+    def _vote_reject(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        return self._erc8183("vote-reject", kwargs["job_id"])
+
+    # Dispatch table: intent name → handler. Values are the plain functions
+    # from the class body, so they are called as handler(self, kwargs).
+    _INTENT_HANDLERS = {
+        ERC8004_REGISTER: _register,
+        ERC8004_SET_METADATA: _set_metadata,
+        ERC8004_SET_AGENT_URI: _set_agent_uri,
+        ERC8183_CREATE_JOB: _create_job,
+        ERC8183_SET_PROVIDER: _set_provider,
+        ERC8183_SET_BUDGET: _set_budget,
+        ERC8183_FUND: _fund,
+        ERC8183_SUBMIT: _submit,
+        ERC8183_COMPLETE: _complete,
+        ERC8183_REJECT: _reject,
+        ERC8183_CLAIM_REFUND: _claim_refund,
+        ERC8183_REGISTER_JOB: _register_job,
+        ERC8183_SETTLE: _settle,
+        ERC8183_MARK_EXPIRED: _mark_expired,
+        ERC8183_DISPUTE: _dispute,
+        ERC8183_VOTE_REJECT: _vote_reject,
+    }
 
 
 def _redact(cmd: list[str]) -> str:

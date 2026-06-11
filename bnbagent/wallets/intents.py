@@ -34,6 +34,20 @@ ERC8004_REGISTER = "erc8004.register"
 ERC8004_SET_METADATA = "erc8004.set_metadata"
 ERC8004_SET_AGENT_URI = "erc8004.set_agent_uri"
 
+ERC8183_CREATE_JOB = "erc8183.create_job"
+ERC8183_SET_PROVIDER = "erc8183.set_provider"
+ERC8183_SET_BUDGET = "erc8183.set_budget"
+ERC8183_FUND = "erc8183.fund"
+ERC8183_SUBMIT = "erc8183.submit"
+ERC8183_COMPLETE = "erc8183.complete"
+ERC8183_REJECT = "erc8183.reject"
+ERC8183_CLAIM_REFUND = "erc8183.claim_refund"
+ERC8183_REGISTER_JOB = "erc8183.register_job"
+ERC8183_SETTLE = "erc8183.settle"
+ERC8183_MARK_EXPIRED = "erc8183.mark_expired"
+ERC8183_DISPUTE = "erc8183.dispute"
+ERC8183_VOTE_REJECT = "erc8183.vote_reject"
+
 
 @dataclass
 class Intent:

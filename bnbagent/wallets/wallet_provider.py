@@ -28,6 +28,16 @@ class WalletProvider(ABC):
     #: Concrete providers override it; third-party subclasses keep the default.
     kind: ClassVar[str] = "custom"
 
+    #: Whether this wallet's ERC-8183 ``fund`` execution bundles the
+    #: payment-token approval itself (fund bundles approval: approve +
+    #: deposit in one operation). ``False`` for pure signers — the SDK
+    #: manages the allowance and sends a separate ``approve`` before
+    #: ``fund``. A self-broadcasting backend that owns the funding flow
+    #: end-to-end (e.g. the twak CLI, whose ``erc8183 fund`` approves then
+    #: deposits) sets this to ``True`` so the SDK skips its own allowance
+    #: top-up.
+    fund_bundles_approval: ClassVar[bool] = False
+
     @property
     def key_location(self) -> str | None:
         """Human-readable description of *where this wallet's key lives*.
