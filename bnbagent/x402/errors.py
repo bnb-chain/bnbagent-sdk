@@ -26,3 +26,11 @@ class X402BudgetExhaustedError(X402SignerError):
 
 class X402PolicyError(X402SignerError):
     """A SigningPolicy violation surfaced from the underlying wallet."""
+
+
+class X402NoPayableRouteError(X402SignerError):
+    """The quote's ``accepts`` list held no route this client can pay.
+
+    The quoting client filters out routes on chains it does not support,
+    so an empty list means the endpoint and the wallet share no network.
+    """

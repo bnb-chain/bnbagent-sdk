@@ -8,6 +8,7 @@ Tier 1 (public API — available via ``from bnbagent import ...``):
     ERC8183Client, JobStatus, Verdict
     SigningPolicy, PolicyViolation
     X402Signer
+    load_env
 
 Tier 2 (import from subpackage):
     from bnbagent.erc8183 import CommerceClient, RouterClient, PolicyClient, NegotiationHandler
@@ -35,6 +36,9 @@ from .erc8004 import AgentEndpoint, ERC8004Agent
 # Exceptions
 from .exceptions import BNBAgentError
 
+# Opt-in .env loading (never called at import time — applications opt in)
+from .core.env import load_env
+
 # High-level facade
 from .main import BNBAgent
 
@@ -54,6 +58,7 @@ __all__ = [
     "BNBAgentConfig",
     "NetworkConfig",
     "BNBAgentError",
+    "load_env",
     # ERC-8004
     "ERC8004Agent",
     "AgentEndpoint",

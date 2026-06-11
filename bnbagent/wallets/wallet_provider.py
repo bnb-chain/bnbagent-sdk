@@ -9,10 +9,11 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from .capabilities import SIGN_MESSAGE, SIGN_TRANSACTION, SIGN_TYPED_DATA
+from .capabilities import SIGN_MESSAGE, SIGN_TRANSACTION, SIGN_TYPED_DATA, X402_PAY
 from .errors import UnsupportedWalletOperation
 
 if TYPE_CHECKING:
+    from ..x402.payer import X402Payer
     from .intents import ExecutionContext, IntentExecutor
 
 
@@ -153,6 +154,34 @@ class WalletProvider(ABC):
             wallet_provider=self,
             paymaster=context.paymaster,
             receipt_timeout=context.receipt_timeout,
+        )
+
+    def make_x402_payer(self, **payer_kwargs: Any) -> X402Payer:
+        """Return the :class:`~bnbagent.x402.X402Payer` for this wallet.
+
+        The default is a **capability gate**, not dead code — the same
+        pattern as the ``sign_*`` defaults (design §3.2): wallets without a
+        payment backend get a descriptive refusal at composition time, and
+        a delegated backend (e.g. twak) overrides this to return its own
+        payer. ``payer_kwargs`` are forwarded verbatim to the payer
+        constructor (the :func:`~bnbagent.wallets.create_wallet_provider`
+        kwargs convention), so payer-specific options never freeze this
+        signature.
+
+        When ``LocalX402Payer`` lands (Phase 3, lifted from studio's
+        buyer), this default upgrades to returning it for wallets with the
+        ``sign.typed_data`` capability — a strictly additive change.
+        """
+        raise UnsupportedWalletOperation(
+            X402_PAY,
+            reason=(
+                f"the {self.kind!r} wallet has no x402 payment backend in "
+                "the SDK yet"
+            ),
+            alternative=(
+                "wallets with sign.typed_data can use X402Signer directly "
+                "today; a local payer that upgrades this default is planned"
+            ),
         )
 
     @property

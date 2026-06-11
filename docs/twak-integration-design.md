@@ -36,7 +36,7 @@
 ════════╪════════════════════════════════╪════════════════════════════════════╪═══════════
  TWAK   ▼                                ▼                                    ▼
        TWAKProvider（自身即 executor）    TwakX402Payer 【1c】                  sign_message ✓（三件适配）
-       【1a】erc8004×3 + erc8183×12      五项预检 → request                    sign_typed_data ✗（四道闸；
+       【1a】erc8004×3 + erc8183×13      五项预检 → request                    sign_typed_data ✗（四道闸；
        守卫: opt_params/fund预检/         --max-payment --yes                   不携带任何实现——P0：判定
        paymaster→WARN/未知intent拒绝      → 按报价金额记账                       大概率不会支持，直接抛错）
 ════════╪═══════════════ (L8 custody, 1c) ══════════════════════════════════════════════════
@@ -59,7 +59,7 @@
 
 robot-ux 的 b2e85eb 引入了 IntentExecutor 执行缝并接入 TWAK（仅 erc8004 三个 intent）。本设计完成其预留的 8183 接入，并解决三个新问题：
 
-1. **twak 是受限钱包**：只能执行固定命令菜单（8004×5 + 8183×12 + x402 客户端），无任意交易签名，无通用 EIP-712（v0.18.0 实测无 `sign-typed-data` 命令 [实测]）——`WalletProvider` 四个抽象方法它只能诚实实现一个半；
+1. **twak 是受限钱包**：只能执行固定命令菜单（8004×5 + 8183×12 条 CLI 命令（13 个 SDK intent，complete/reject 同 reason 形态）+ x402 客户端），无任意交易签名，无通用 EIP-712（v0.18.0 实测无 `sign-typed-data` 命令 [实测]）——`WalletProvider` 四个抽象方法它只能诚实实现一个半；
 2. **x402 形态不同**：twak 的 x402 是完整 HTTP 客户端（内签 EIP-3009/Permit2），与 SDK 的签名原语层 `X402Signer` 不在同一高度；
 3. **部署形态**：studio 把 keystore 放 AWS Secrets Manager、冷启动物化——twak 的固定路径 custody（`~/.twak/`）必须兼容该模式。
 
@@ -399,7 +399,7 @@ trust kind 接线（`ensure_twak_materialized` + bundle 4 键）；AgentCore `co
 
 ### Backlog（已记录，不阻塞）
 
-- bsctestnet 真实冒烟（12 命令全生命周期）——触发：首次联调或 Phase 2 前（用户决定本期不含）
+- bsctestnet 真实冒烟（13 个 intent 全生命周期）——触发：首次联调或 Phase 2 前（用户决定本期不含）
 - message-signing 钱包级策略（防 SIWE 钓鱼）——若需要，加在 WalletProvider 基类层对所有钱包统一
 - 装配期过滤落点（apex 工具组装层）确认
 - 向 twak 团队问询：NaaS 端 server-side spending policy 是否有/计划有
@@ -427,7 +427,7 @@ trust kind 接线（`ensure_twak_materialized` + bundle 4 键）；AgentCore `co
 |---|---|---|---|
 | 1 | chain key = `bsctestnet` | `bsc-testnet` 被 `CHAIN_UNSUPPORTED: Did you mean "bsc"?` 拒绝 | 实测 |
 | 2 | 8183 全量 Intent 化 | erc8004 模板 + intents.py docstring "(… fund a job, …)" 自证规划 | 代码 |
-| 3 | 分发表 12 命令 | gaps 全 ✅（job 137/138 等）+ 0.18 help | 实测+gaps |
+| 3 | 分发表 13 个 intent | gaps 全 ✅（job 137/138 等）+ 0.18 help | 实测+gaps |
 | 4 | fund 预检 | S-2 + status JSON budget 扁平字符串 | 实测 |
 | 5 | submit fail-fast | gaps Note 1：tx `0xfa057a11…81f4` 链上实证 optParams 空 | gaps |
 | 6 | paymaster WARNING | REQ-2 + "必须预存 BNB" 实测 | gaps |
