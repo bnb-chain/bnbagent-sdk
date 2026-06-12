@@ -94,9 +94,8 @@ def _router():
     return run, calls
 
 
-def _intent_router(output, *, status_output=None):
-    """Return (run_fn, calls): wallet-status probe succeeds, ``erc8183
-    status`` (the fund pre-check) gets ``status_output``, everything else
+def _intent_router(output):
+    """Return (run_fn, calls): wallet-status probe succeeds, everything else
     gets ``output``."""
     calls: list[list[str]] = []
 
@@ -104,8 +103,6 @@ def _intent_router(output, *, status_output=None):
         calls.append(cmd)
         if cmd[1] == "wallet" and cmd[2] == "status":
             return _completed(cmd, {"agentWallet": "configured"})
-        if cmd[1] == "erc8183" and cmd[2] == "status":
-            return _completed(cmd, status_output)
         return _completed(cmd, output)
 
     return run, calls
@@ -181,6 +178,9 @@ def test_make_executor_warns_on_paymaster(caplog):
         executor = twak.make_executor(context)
     assert executor is twak  # warned, not rejected: the operation still runs
     assert "paymaster" in caplog.text
+    # v0.19.0 wording: mainnet gas is auto-sponsored via MegaFuel; testnet
+    # sponsorship is still pending upstream (gaps REQ-2).
+    assert "MegaFuel" in caplog.text
     assert "REQ-2" in caplog.text
 
 
@@ -283,7 +283,16 @@ def test_set_agent_uri_via_contract_uses_set_uri():
             ERC8183_SET_PROVIDER,
             {"job_id": 137, "provider": _PROVIDER_ADDR, "opt_params": b""},
             ["set-provider", "137", "--provider", _PROVIDER_ADDR],
-            id="set_provider",
+            id="set_provider-empty-opt-params-no-flag",
+        ),
+        pytest.param(
+            ERC8183_SET_PROVIDER,
+            {"job_id": 137, "provider": _PROVIDER_ADDR, "opt_params": b"\x01\x02"},
+            [
+                "set-provider", "137", "--provider", _PROVIDER_ADDR,
+                "--opt-params", "0x0102",
+            ],
+            id="set_provider-opt-params-passthrough-s1",
         ),
         pytest.param(
             ERC8183_SET_BUDGET,
@@ -308,6 +317,15 @@ def test_set_agent_uri_via_contract_uses_set_uri():
             {"job_id": 137, "reason": b"\x12" * 32, "opt_params": b""},
             ["complete", "137", "--reason", "0x" + "12" * 32],
             id="complete-nonzero-reason-as-0x-hex",
+        ),
+        pytest.param(
+            ERC8183_COMPLETE,
+            {"job_id": 137, "reason": b"\x12" * 32, "opt_params": b"\x01"},
+            [
+                "complete", "137", "--reason", "0x" + "12" * 32,
+                "--opt-params", "0x01",
+            ],
+            id="complete-reason-then-opt-params",
         ),
         pytest.param(
             ERC8183_REJECT,
@@ -437,19 +455,22 @@ def test_create_job_includes_nonzero_hook():
     ]
 
 
-# ── erc8183.fund: status pre-check (gaps S-2 client-side guard) ──
+# ── erc8183.fund: --expected-budget atomic pin (gaps S-2, v0.19.0) ──
 
-def _fund_intent(expected_budget):
+def _fund_intent(expected_budget, opt_params=b""):
     return Intent(
         name=ERC8183_FUND,
-        kwargs={"job_id": 137, "expected_budget": expected_budget, "opt_params": b""},
+        kwargs={
+            "job_id": 137,
+            "expected_budget": expected_budget,
+            "opt_params": opt_params,
+        },
     )
 
 
-def test_fund_budget_match_proceeds_and_surfaces_approve_hash():
+def test_fund_pins_expected_budget_no_status_precheck_and_surfaces_approve_hash():
     run, calls = _intent_router(
-        {"success": True, "hash": "0xfund", "approveHash": "0xappr"},
-        status_output={"success": True, "budget": "1000", "status": "Open"},
+        {"success": True, "hash": "0xfund", "approveHash": "0xappr"}
     )
     twak = TWAKProvider()
     result = _execute(twak, _fund_intent(1000), run)
@@ -459,77 +480,111 @@ def test_fund_budget_match_proceeds_and_surfaces_approve_hash():
         "receipt": None,
         "approveHash": "0xappr",  # twak's fund is approve + deposit, two txs
     }
-    assert calls[1] == ["twak", "erc8183", "status", "137", "--chain", "bsc", "--json"]
-    assert calls[2] == ["twak", "erc8183", "fund", "137", "--chain", "bsc", "--json"]
+    # v0.19.0 (S-2): the contract reverts atomically on budget drift — the
+    # old client-side `erc8183 status` pre-check is gone entirely.
+    assert calls[0] == _WALLET_STATUS_CMD
+    assert calls[1] == [
+        "twak", "erc8183", "fund", "137",
+        "--expected-budget", "1000", "--chain", "bsc", "--json",
+    ]
+    assert len(calls) == 2
+    assert all(not (c[1] == "erc8183" and c[2] == "status") for c in calls)
+
+
+def test_fund_opt_params_passthrough():
+    run, calls = _intent_router({"success": True, "hash": "0xfund"})
+    twak = TWAKProvider()
+    _execute(twak, _fund_intent(1000, opt_params=b"\xca\xfe"), run)
+    assert calls[1] == [
+        "twak", "erc8183", "fund", "137",
+        "--expected-budget", "1000", "--opt-params", "0xcafe",
+        "--chain", "bsc", "--json",
+    ]
 
 
 def test_fund_without_approve_hash_omits_key():
-    run, _ = _intent_router(
-        {"success": True, "hash": "0xfund"},
-        status_output={"success": True, "budget": "1000"},
-    )
+    run, _ = _intent_router({"success": True, "hash": "0xfund"})
     twak = TWAKProvider()
     result = _execute(twak, _fund_intent(1000), run)
     assert "approveHash" not in result
 
 
-def test_fund_status_missing_budget_raises_descriptive():
-    run, calls = _intent_router(
-        _TX_OUT,
-        status_output={"success": True, "status": "Open"},  # no budget field
-    )
-    twak = TWAKProvider()
-    with pytest.raises(RuntimeError, match="no budget field"):
-        _execute(twak, _fund_intent(1000), run)
-    assert all(not (c[1] == "erc8183" and c[2] == "fund") for c in calls)
+def test_fund_budget_mismatch_revert_surfaces_selector():
+    # v0.19.0: budget drift reverts on-chain with BudgetMismatch() and the
+    # CLI passes the raw revert through as an error envelope (field-verified
+    # error-passthrough shape per the gaps doc). The selector must reach the
+    # caller so the mismatch is diagnosable.
+    def run(cmd, **kwargs):
+        if cmd[1] == "wallet" and cmd[2] == "status":
+            return _completed(cmd, {"agentWallet": "configured"})
+        return _completed(
+            cmd,
+            {"error": "execution reverted: 0x99b0fc87", "errorCode": "TX_FAILED"},
+            returncode=1,
+        )
 
-
-def test_fund_budget_mismatch_raises_before_funding():
-    run, calls = _intent_router(
-        _TX_OUT,
-        status_output={"success": True, "budget": "1000"},
-    )
     twak = TWAKProvider()
-    with pytest.raises(RuntimeError) as exc:
+    with pytest.raises(RuntimeError, match="0x99b0fc87"):
         _execute(twak, _fund_intent(999), run)
-    message = str(exc.value)
-    assert "1000" in message  # the on-chain budget twak would escrow
-    assert "999" in message  # the caller's expected_budget
-    assert "S-2" in message
-    # the fund command itself was never issued
-    assert all(not (c[1] == "erc8183" and c[2] == "fund") for c in calls)
+
+
+# ── opt-params passthrough (REQ-1 / S-1, v0.19.0) ──
+
+def test_submit_opt_params_passthrough_req1():
+    # v0.19.0 (REQ-1): the deliverable_url JSON the SDK facade encodes into
+    # optParams rides the submit tx verbatim — seller role works end-to-end.
+    opt = b'{"deliverable_url":"ipfs://x"}'
+    run, calls = _intent_router(_TX_OUT)
+    twak = TWAKProvider()
+    result = _execute(
+        twak,
+        Intent(
+            name=ERC8183_SUBMIT,
+            kwargs={"job_id": 137, "deliverable": b"\xab" * 32, "opt_params": opt},
+        ),
+        run,
+    )
+    assert result == {"success": True, "transactionHash": "0xfeed", "receipt": None}
+    assert calls[1] == [
+        "twak", "erc8183", "submit", "137",
+        "--deliverable", "0x" + "ab" * 32,
+        "--opt-params", "0x" + opt.hex(),
+        "--chain", "bsc", "--json",
+    ]
+
+
+def test_set_budget_opt_params_passthrough_s1():
+    run, calls = _intent_router(_TX_OUT)
+    twak = TWAKProvider()
+    _execute(
+        twak,
+        Intent(
+            name=ERC8183_SET_BUDGET,
+            kwargs={"job_id": 137, "amount": 1, "opt_params": b"x"},
+        ),
+        run,
+    )
+    assert calls[1] == [
+        "twak", "erc8183", "set-budget", "137", "--amount", "1",
+        "--opt-params", "0x78", "--chain", "bsc", "--json",
+    ]
+
+
+def test_empty_opt_params_emits_no_flag():
+    run, calls = _intent_router(_TX_OUT)
+    twak = TWAKProvider()
+    _execute(
+        twak,
+        Intent(
+            name=ERC8183_SET_BUDGET,
+            kwargs={"job_id": 137, "amount": 1, "opt_params": b""},
+        ),
+        run,
+    )
+    assert "--opt-params" not in calls[1]
 
 
 # ── guards: fail fast, no wallet probe, no CLI call ──
-
-def test_submit_nonempty_opt_params_fails_fast_req1():
-    twak = TWAKProvider()
-    with patch("bnbagent.wallets.twak_provider.subprocess.run") as run:
-        with pytest.raises(UnsupportedWalletOperation, match="REQ-1"):
-            twak.execute(
-                Intent(
-                    name=ERC8183_SUBMIT,
-                    kwargs={
-                        "job_id": 137,
-                        "deliverable": b"\xab" * 32,
-                        "opt_params": b"\x01",
-                    },
-                )
-            )
-    run.assert_not_called()
-
-
-def test_non_submit_opt_params_guard_s1():
-    twak = TWAKProvider()
-    with patch("bnbagent.wallets.twak_provider.subprocess.run") as run:
-        with pytest.raises(UnsupportedWalletOperation, match="S-1"):
-            twak.execute(
-                Intent(
-                    name=ERC8183_SET_BUDGET,
-                    kwargs={"job_id": 137, "amount": 1, "opt_params": b"x"},
-                )
-            )
-    run.assert_not_called()
 
 
 def test_unknown_intent_rejected_listing_supported():
@@ -592,7 +647,7 @@ def test_unknown_command_in_stderr_hints_upgrade():
         )
 
     twak = TWAKProvider()
-    with pytest.raises(RuntimeError, match=r"upgrade twak to >= v0\.18\.0"):
+    with pytest.raises(RuntimeError, match=r"upgrade twak to >= v0\.19\.0"):
         _execute(
             twak,
             Intent(
@@ -1105,3 +1160,35 @@ def test_create_wallet_password_requirement_maps_to_descriptive_error():
     with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
         with pytest.raises(RuntimeError, match="S-8"):
             twak.create_wallet()
+
+
+def test_create_job_string_job_id_normalised_to_int():
+    # Field-verified v0.19.0: the CLI emits numeric ids as JSON strings
+    # ("150"); the local-executor path yields ints from event logs. The
+    # envelope must agree or downstream uint256 web3 calls break (live-found).
+    run, _ = _intent_router({"success": True, "hash": "0xfeed", "jobId": "150"})
+    twak = TWAKProvider()
+    result = _execute(
+        twak,
+        Intent(
+            name=ERC8183_CREATE_JOB,
+            kwargs={
+                "provider": _PROVIDER_ADDR,
+                "evaluator": _EVALUATOR_ADDR,
+                "expired_at": 1750000000,
+                "description": "live-found normalisation",
+                "hook": _ZERO_ADDRESS,
+            },
+        ),
+        run,
+    )
+    assert result["jobId"] == 150 and isinstance(result["jobId"], int)
+
+
+def test_register_string_agent_id_normalised_to_int():
+    run, _ = _intent_router({"success": True, "hash": "0xreg", "agentId": "1362"})
+    twak = TWAKProvider()
+    result = _execute(
+        twak, Intent(name=ERC8004_REGISTER, kwargs={"agent_uri": "https://a/c.json"}), run
+    )
+    assert result["agentId"] == 1362 and isinstance(result["agentId"], int)

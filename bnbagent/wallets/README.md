@@ -197,8 +197,9 @@ Constructor behavior:
 ### `TWAKProvider`
 
 Self-broadcasting wallet backed by the Trust Wallet Agent Kit (`twak`) CLI —
-**v0.18.0 minimum** (an older CLI answers `unknown command`, and the raised
-error says to upgrade rather than pointing at setup). Implements both
+**v0.19.0 minimum** (an older CLI answers `unknown command`/`unknown option`
+on the flags this provider emits, and the raised error says to upgrade rather
+than pointing at setup). Implements both
 `WalletProvider` and `IntentExecutor` (it `make_executor`s to itself). Key
 custody lives entirely inside twak. Design rationale:
 [`docs/twak-integration-design.md`](../../docs/twak-integration-design.md);
@@ -208,9 +209,9 @@ upstream gap tracking (the `REQ-n` / `S-n` IDs cited below):
 | Member | Description |
 |---|---|
 | `address` | Read from `twak wallet address` (cached); the `expected_address` identity check runs on the first lookup. |
-| `sign_message` | Via `twak wallet sign-message`, with three adaptations (gaps S-4): `0x`-prefix normalization, client-side EIP-191 digest, and an ecrecover self-check against the wallet address. |
+| `sign_message` | Via `twak wallet sign-message`. The CLI itself now returns a `0x`-prefixed signature + `digest` field (gaps S-4, shipped v0.19.0); the SDK keeps its adapter — idempotent `0x` normalization, its own EIP-191 digest, and an ecrecover self-check — as an integrity loop (the v0.19.0 CLI digest byte-matches the SDK's computation, cross-checked). |
 | `sign_transaction` / `sign_typed_data` | **Not overridden** — the base default raises `UnsupportedWalletOperation` (twak has no raw-tx or generic EIP-712 primitive; not overriding keeps them out of `capabilities()`). |
-| `execute(intent)` | Full dispatch: 3 `erc8004.*` + 13 `erc8183.*` intents, 1:1 with the v0.18.0 command menu, with fail-fast guards (see the signing model below). |
+| `execute(intent)` | Full dispatch: 3 `erc8004.*` + 13 `erc8183.*` intents, 1:1 with the v0.19.0 command menu. `opt_params` passes through raw (`--opt-params`) on every erc8183 write — REQ-1 for `submit`, S-1 for the rest, both shipped in v0.19.0 (see the signing model below). |
 | `make_x402_payer(**kw)` | Returns a `TwakX402Payer` — the delegated x402 path (see below). |
 | `x402_quote` / `x402_request` | Raw x402 CLI transport used by the payer (policy checks live in the payer). |
 | `create_wallet()` | Create a twak wallet if none exists (idempotent). Password never on the CLI. |
@@ -236,15 +237,15 @@ TWAKProvider(
 )
 ```
 
-Notes (all field-verified against twak v0.18.0):
+Notes (all field-verified against twak v0.19.0):
 
 - `erc8004 register` takes repeatable `--metadata key=value` flags, so
   registration metadata is **atomic with the mint**. (The pre-v0.18.0
   `set-metadata` replay workaround is resolved and removed.)
-- `erc8183 fund` has no amount flag — twak deposits whatever the on-chain
-  budget is. The provider pre-checks `status` and refuses to fund when the
-  on-chain budget ≠ the caller's `expected_budget` (client-side guard for
-  gaps S-2).
+- `erc8183 fund` pins the amount with `--expected-budget` (gaps S-2, shipped
+  v0.19.0): the contract reverts atomically with `BudgetMismatch()` if the
+  on-chain budget drifted. This replaced the provider's old client-side
+  `status` pre-check, closing the check-then-fund race for good.
 - The wallet password is read by twak from the OS keychain or
   `TWAK_WALLET_PASSWORD` — never passed on the command line (INV-1).
 
@@ -252,7 +253,7 @@ Notes (all field-verified against twak v0.18.0):
 the wallet for you (auto-create), but never handles API secrets. Before the
 first operation:
 
-1. Install the CLI: `npm install -g @trustwallet/cli` (>= v0.18.0).
+1. Install the CLI: `npm install -g @trustwallet/cli` (>= v0.19.0).
 2. Set API credentials: `twak init --api-key <id> --api-secret <secret>`, or
    export `TWAK_ACCESS_ID` / `TWAK_HMAC_SECRET` (CI). twak reads these itself.
 3. Make the password reachable: `TWAK_WALLET_PASSWORD` env var or
@@ -283,11 +284,11 @@ asked to "sign bytes", only to "do things". What that means per role:
 | Role / operation | TWAK | Why / tracking |
 |---|---|---|
 | ERC-8183 **client (buyer)** — `create_job → set_budget → register_job → fund → settle` / `dispute` | ✅ | Full lifecycle via the intent dispatch, field-tested on `bsctestnet`. |
-| ERC-8183 **provider (seller)** — `submit` | ❌ until twak ships **REQ-1** | The SDK's `submit` carries `{"deliverable_url": …}` in `optParams`; the twak CLI always submits **empty** optParams, so the job could not be evaluated (protocol-breaking). The provider fails fast (`UnsupportedWalletOperation`, ref REQ-1) instead of submitting silently. Other writes with non-empty `opt_params` are likewise rejected (ref **S-1**). |
+| ERC-8183 **provider (seller)** — `submit` | ✅ (>= v0.19.0, **REQ-1** shipped) | `submit` passes `{"deliverable_url": …}` through as raw `--opt-params`, proven on-chain: `bsctestnet` job 150's `JobInitialised` event carries the full deliverable-URL JSON (v0.18.0 jobs emitted empty optParams). The other erc8183 writes pass `opt_params` through too (**S-1**, also v0.19.0) — the old fail-fast guards are retired; on an older CLI the unknown flag fails loudly with an upgrade hint. |
 | ERC-8183 **evaluator / voter** — `complete`, `vote_reject`, `settle` | ✅ | |
-| **x402 buyer** | ✅ (mainnet routes) | Via the delegated `TwakX402Payer` (`make_x402_payer()`). twak rejects testnet routes as "no supported route". |
+| **x402 buyer** | ✅ (mainnet routes) | Via the delegated `TwakX402Payer` (`make_x402_payer()`). twak rejects testnet routes as "no supported route" (testnet routes are being worked on upstream). |
 | **`X402Signer`** | ❌ | No `sign.typed_data` — `X402Signer(twak_wallet)` is rejected at composition time with a pointer to `make_x402_payer()`. |
-| **Paymaster (sponsored gas)** | ❌ until **REQ-2** | `make_executor` logs a WARNING when handed a paymaster; gas is paid from the twak wallet's BNB — **pre-fund it**. |
+| **Paymaster (sponsored gas)** | ✅ mainnet · ❌ testnet (**REQ-2**) | On `bsc` mainnet twak sponsors broadcasts automatically (MegaFuel, since v0.18.0 — nothing to configure). On `bsctestnet` gas is paid from the twak wallet's BNB — **pre-fund it**. The SDK-side paymaster is never used (twak owns its own broadcast); `make_executor` logs a WARNING when handed one. |
 | **Arbitrary contract calls** | ❌ | Fixed command menu; an unknown intent raises with a pointer to use an EVM wallet (`calls.arbitrary`). |
 
 The capability sets, verbatim from `capabilities()`:

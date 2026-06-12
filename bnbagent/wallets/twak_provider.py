@@ -40,21 +40,27 @@ Security / operational notes:
 - ``--json`` is always appended (it implies ``--yes``, skipping interactive
   confirmation, per the twak spec).
 
-Compatibility caveats against ``twak`` v0.18.0 (the authoritative command
-surface is ``docs/twak-cli-gaps-v0.18.0.md``):
+Compatibility notes against ``twak`` v0.19.0 — the minimum supported version
+(the authoritative command surface is ``docs/twak-cli-gaps-v0.18.0.md``, the
+shared tracking doc; on an older CLI, flags this provider emits fail loudly
+with an upgrade hint):
+- Every erc8183 write passes ``opt_params`` through raw as ``--opt-params``
+  (REQ-1 for ``submit`` — the seller role works end-to-end — and S-1 for the
+  rest, both shipped in v0.19.0).
+- ``fund`` pins the amount with ``--expected-budget`` (S-2, v0.19.0): the
+  contract reverts atomically with ``BudgetMismatch()`` on drift, which
+  replaced this provider's old client-side ``status`` pre-check.
 - ``erc8004 register`` takes repeatable ``--metadata key=value`` flags, so
   registration metadata (including the SDK's injected ``built_with``) is
-  atomic with the mint. (The pre-v0.18.0 ``set-metadata`` replay workaround
-  is resolved and removed.)
+  atomic with the mint.
 - Supported chain keys are ``bsc`` (mainnet) and ``bsctestnet``; the spec's
   ``bsc-testnet`` is rejected by the real CLI with ``CHAIN_UNSUPPORTED``
   (field-verified). This provider rejects non-BSC chains.
 - ``sign_typed_data`` raises :class:`UnsupportedWalletOperation` by design
   decision (P0): twak signs ERC-8004/8183/x402 payloads internally via its
   dedicated commands and provides no generic EIP-712 primitive.
-- ``erc8183 submit`` cannot carry ``optParams`` (gaps REQ-1, pending):
-  submitting with non-empty ``opt_params`` fails fast instead of silently
-  producing an unevaluable job — see ``docs/twak-cli-gaps-v0.18.0.md``.
+- Gas: on bsc mainnet twak sponsors broadcasts automatically (MegaFuel); on
+  bsctestnet the wallet pays its own gas (REQ-2 pending).
 """
 
 from __future__ import annotations
@@ -301,7 +307,7 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         if "unknown command" in combined or "unknown option" in combined:
             hint = (
                 "The installed twak CLI does not recognise this command/option "
-                "— upgrade twak to >= v0.18.0 (`npm install -g @trustwallet/cli`)."
+                "— upgrade twak to >= v0.19.0 (`npm install -g @trustwallet/cli`)."
             )
         else:
             hint = _SETUP_HINT
@@ -612,8 +618,10 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         honoured (gaps REQ-2) and triggers a warning."""
         if context.paymaster is not None:
             logger.warning(
-                "TWAKProvider: twak has no paymaster support (gaps REQ-2) — "
-                "the paymaster is ignored and gas is paid from the twak "
+                "TWAKProvider: the SDK-side paymaster is ignored — twak owns "
+                "its own broadcast. On bsc mainnet twak sponsors gas "
+                "automatically (MegaFuel); on bsctestnet sponsorship is not "
+                "available yet (gaps REQ-2) and gas is paid from the twak "
                 "wallet's BNB balance."
             )
         return self
@@ -633,35 +641,20 @@ class TWAKProvider(WalletProvider, IntentExecutor):
                 ),
                 alternative="use an EVM wallet for arbitrary contract calls",
             )
-        if intent.kwargs.get("opt_params"):
-            # The twak CLI has no --opt-params on any erc8183 write; dropping
-            # caller data silently is never acceptable (P4).
-            if intent.name == ERC8183_SUBMIT:
-                raise UnsupportedWalletOperation(
-                    "erc8183.submit with non-empty opt_params",
-                    reason=(
-                        "the twak CLI always submits empty optParams, so the "
-                        "deliverable_url carried there would be dropped and "
-                        "the job would become unevaluable — protocol-breaking, "
-                        "so this fails fast instead of submitting silently"
-                    ),
-                    alternative=(
-                        "use an EVM wallet for the provider (seller) role "
-                        "until twak ships --opt-params"
-                    ),
-                    ref="REQ-1",
-                )
-            raise UnsupportedWalletOperation(
-                f"{intent.name} with non-empty opt_params",
-                reason=(
-                    "the twak CLI has no --opt-params flag; the caller's data "
-                    "would be silently dropped"
-                ),
-                alternative="send empty opt_params or use an EVM wallet",
-                ref="S-1",
-            )
         self._ensure_wallet()
         return handler(self, intent.kwargs)
+
+    @staticmethod
+    def _opt_params(kwargs: dict[str, Any]) -> list[str]:
+        """``--opt-params 0x<hex>`` when the caller sent non-empty optParams.
+
+        v0.19.0 added raw optParams passthrough on every erc8183 write
+        (REQ-1 for submit, S-1 for the rest), so the pre-v0.19 fail-fast
+        guards are retired — the bytes now ride the transaction verbatim.
+        On an older CLI the unknown flag fails loudly with the upgrade hint.
+        """
+        opt_params: bytes = kwargs.get("opt_params") or b""
+        return ["--opt-params", "0x" + opt_params.hex()] if opt_params else []
 
     def _tx_result(self, data: dict[str, Any], **extra: Any) -> dict[str, Any]:
         """Canonical executor result envelope for a twak write command."""
@@ -684,7 +677,7 @@ class TWAKProvider(WalletProvider, IntentExecutor):
             args += ["--metadata", f"{entry['key']}={entry['value']}"]
         data = self._run([*args, "--chain", self._chain])
         return self._tx_result(
-            data, agentId=data.get("agentId"), owner=data.get("owner")
+            data, agentId=_as_int(data.get("agentId")), owner=data.get("owner")
         )
 
     def _set_metadata(self, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -727,53 +720,49 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         if hook and hook.lower() != _ZERO_ADDRESS:
             args += ["--hook", hook]
         data = self._run([*args, "--chain", self._chain])
-        return self._tx_result(data, jobId=data.get("jobId"))
+        # twak emits numeric ids as JSON strings ("150" — field-verified); the
+        # local executor path yields ints from event logs. Normalize so both
+        # backends honour the same envelope and downstream web3 calls
+        # (uint256 args) don't blow up on a str.
+        return self._tx_result(data, jobId=_as_int(data.get("jobId")))
 
     def _set_provider(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         return self._erc8183(
-            "set-provider", kwargs["job_id"], "--provider", kwargs["provider"]
+            "set-provider", kwargs["job_id"],
+            "--provider", kwargs["provider"], *self._opt_params(kwargs),
         )
 
     def _set_budget(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         return self._erc8183(
-            "set-budget", kwargs["job_id"], "--amount", str(kwargs["amount"])
+            "set-budget", kwargs["job_id"],
+            "--amount", str(kwargs["amount"]), *self._opt_params(kwargs),
         )
 
     def _fund(self, kwargs: dict[str, Any]) -> dict[str, Any]:
-        # twak's `fund` has no amount flag: it approves + deposits whatever
-        # the on-chain budget is, not the caller's expected_budget. Pre-check
-        # via `status` so a budget changed underneath the caller fails here
-        # instead of escrowing the wrong amount (gaps S-2 client-side guard;
-        # `budget` is a flat string in the real status output, field-verified).
-        job_id = kwargs["job_id"]
-        expected_budget = kwargs["expected_budget"]
-        status = self._run(["erc8183", "status", str(job_id), "--chain", self._chain])
-        on_chain_budget = status.get("budget")
-        if on_chain_budget is None:
-            raise RuntimeError(
-                f"TWAKProvider cannot pre-check job {job_id} before funding: "
-                f"twak `erc8183 status` returned no budget field: {status!r}"
-            )
-        if int(on_chain_budget) != int(expected_budget):
-            raise RuntimeError(
-                f"TWAKProvider refuses to fund job {job_id}: twak's `fund` "
-                f"deposits the on-chain budget, not the caller's amount, and "
-                f"the on-chain budget ({on_chain_budget!r}) does not match "
-                f"expected_budget ({expected_budget!r}). Set the budget first "
-                "or pass the on-chain value. (Client-side pre-check for gaps "
-                "S-2 in docs/twak-cli-gaps-v0.18.0.md.)"
-            )
-        data = self._run(["erc8183", "fund", str(job_id), "--chain", self._chain])
+        # v0.19.0: --expected-budget pins the amount atomically — the contract
+        # reverts with BudgetMismatch() if the on-chain budget differs, which
+        # closes the check-then-fund race the old client-side `status`
+        # pre-check could not (gaps S-2, shipped).
+        data = self._run(
+            [
+                "erc8183", "fund", str(kwargs["job_id"]),
+                "--expected-budget", str(kwargs["expected_budget"]),
+                *self._opt_params(kwargs), "--chain", self._chain,
+            ]
+        )
         result = self._tx_result(data)
         if data.get("approveHash"):
             result["approveHash"] = data["approveHash"]
         return result
 
     def _submit(self, kwargs: dict[str, Any]) -> dict[str, Any]:
-        # Non-empty opt_params is rejected up front in execute() (REQ-1).
+        # v0.19.0 (REQ-1): optParams pass through raw, so the deliverable_url
+        # JSON the SDK facade encodes there reaches OptimisticPolicy's
+        # JobInitialised event — the seller role works end-to-end.
         deliverable: bytes = kwargs["deliverable"]
         return self._erc8183(
-            "submit", kwargs["job_id"], "--deliverable", "0x" + deliverable.hex()
+            "submit", kwargs["job_id"],
+            "--deliverable", "0x" + deliverable.hex(), *self._opt_params(kwargs),
         )
 
     def _complete(self, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -787,7 +776,9 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         reason: bytes = kwargs.get("reason") or b""
         if reason and reason != _ZERO_REASON:  # twak defaults --reason to zero
             extra = ["--reason", "0x" + reason.hex()]
-        return self._erc8183(command, kwargs["job_id"], *extra)
+        return self._erc8183(
+            command, kwargs["job_id"], *extra, *self._opt_params(kwargs)
+        )
 
     def _claim_refund(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         return self._erc8183("claim-refund", kwargs["job_id"])
@@ -833,6 +824,11 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         ERC8183_DISPUTE: _dispute,
         ERC8183_VOTE_REJECT: _vote_reject,
     }
+
+
+def _as_int(value: Any) -> int | None:
+    """Coerce twak's stringly-typed numeric ids ("150") to int; None stays None."""
+    return None if value is None else int(value)
 
 
 def _redact(cmd: list[str]) -> str:

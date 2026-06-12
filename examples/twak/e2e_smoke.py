@@ -5,47 +5,61 @@ Closes the design-doc backlog item "bsctestnet 真实冒烟（13 个 intent 全�
 ERC-8004/8183 contracts on BSC testnet and asserts each step on-chain, in the
 assert-chain style of examples/security_e2e.py.
 
+Requires twak >= v0.19.0 (`submit --opt-params`, `fund --expected-budget` —
+REQ-1/S-1/S-2 shipped; an older CLI fails loudly with an upgrade hint).
+
 ⚠️  THIS SCRIPT SPENDS TESTNET FUNDS AND TAKES WALL-CLOCK TIME. ⚠️
-    - testnet BNB for gas on ~15 transactions (twak pays its own gas —
-      no paymaster, gaps REQ-2)
-    - 2 × 0.01 test-U escrowed (job A pays out to the provider, job C is
-      refunded at expiry)
+    - testnet BNB for gas on ~15 transactions (on bsctestnet twak pays its
+      own gas — sponsorship is mainnet-only so far, gaps REQ-2)
+    - 2 × 0.01 test-U escrowed, both of which come back: job A pays out to
+      the twak wallet itself (it plays client AND provider), job C is
+      refunded at expiry
     - total runtime ≈ the policy's dispute window (24 h on this testnet
       deployment) + ~10 minutes of transactions (window printed
       up front; the OptimisticPolicy window on the target network decides)
 
+Since v0.19.0 (REQ-1) the twak wallet plays BOTH roles on each job — client
+and provider — as a self-deal: a host has exactly ONE twak wallet (per HOME),
+so two *distinct* twak parties on one machine are impossible, but the same
+wallet on both sides is fine for a smoke and was proven on-chain (job 150).
+No EVM key is needed except the optional whitelisted voter.
+
 Coverage strategy — correctness over coverage (the policy semantics decide
 what can honestly be asserted; see the table printed at the end):
 
-    job A  happy path WITHOUT dispute: create → set_provider → set_budget →
-           register_job → fund → (negative twak submit, REQ-1) → EVM submit →
-           wait out the dispute window → twak settle → COMPLETED.
+    job A  happy path WITHOUT dispute: create → set_provider (the twak
+           wallet itself) → set_budget → register_job → fund → twak submit
+           WITH {"deliverable_url": …} opt_params (positive, REQ-1 shipped
+           v0.19.0; asserts SUBMITTED + on-chain deliverable == manifest
+           hash) → wait out the dispute window → twak settle → COMPLETED.
            "Silence approves": there is no voteApprove on-chain, so an
            undisputed job settles APPROVE once submittedAt+disputeWindow
            passes — that is the only state a twak `settle` can be asserted
            against without voters.
     job B  cancel-open: create → twak reject while Open → REJECTED.
-    job C  dispute stalemate: create(+provider) → budget → register → fund →
-           EVM submit → twak dispute → [optional EVM voter vote_reject] →
-           verdict stays PENDING (quorum, snapshotted at dispute time, is
-           normally 3 — one vote cannot flip it, and a disputed job can NOT
-           be settled while PENDING) → wait past expiredAt → twak
-           claim_refund → EXPIRED → twak mark_expired (router reconcile).
+    job C  dispute stalemate: create(+provider=twak itself) → budget →
+           register → fund → twak submit → twak dispute → [optional EVM
+           voter vote_reject] → verdict stays PENDING (quorum, snapshotted
+           at dispute time, cannot be reached by one vote, and a disputed
+           job can NOT be settled while PENDING) → wait past expiredAt →
+           twak claim_refund → EXPIRED → twak mark_expired (router
+           reconcile).
 
     NOT exercised (with reasons, mirroring the gaps-doc verification-log
-    style): twak submit (positive) — REQ-1; twak complete — evaluator-only,
-    and on router-registered jobs the evaluator is the Router contract, so no
-    EOA may call it (routed completion happens inside settle); twak
-    vote_reject — requires the twak wallet to be a whitelisted voter on
-    OptimisticPolicy (an on-chain permission, not a wallet capability).
+    style): twak complete — evaluator-only, and on router-registered jobs
+    the evaluator is the Router contract, so no EOA may call it (routed
+    completion happens inside settle); twak vote_reject — requires the twak
+    wallet to be a whitelisted voter on OptimisticPolicy (an on-chain
+    permission, not a wallet capability).
 
 Environment (.env / .env.local next to this script, see .env.example):
     NETWORK               bsc-testnet (default; the only supported value —
                           this smoke deliberately refuses mainnet)
-    PROVIDER_PRIVATE_KEY  REQUIRED. EVM key for the provider (seller) role:
-                          twak cannot submit a deliverable_url (REQ-1).
     VOTER_PRIVATE_KEY     optional. Whitelisted-voter EVM key; casts one
-                          (non-flipping) vote_reject on job C.
+                          (non-flipping) vote_reject on job C. The only EVM
+                          key left — since v0.19.0 the provider (seller)
+                          role is played by the twak wallet itself, so the
+                          old PROVIDER_PRIVATE_KEY is gone.
     AGENT_URI             optional. When set, step 1 registers an ERC-8004
                           agent via the SDK ContractInterface intent path
                           (mints a new agent NFT every run — hence opt-in).
@@ -76,11 +90,7 @@ from bnbagent.erc8183 import (
     JobStatus,
     Verdict,
 )
-from bnbagent.wallets import (
-    EVMWalletProvider,
-    TWAKProvider,
-    UnsupportedWalletOperation,
-)
+from bnbagent.wallets import EVMWalletProvider, TWAKProvider
 
 HERE = Path(__file__).resolve().parent
 
@@ -98,7 +108,7 @@ TWAK_CHAIN = "bsctestnet"
 DELIVERABLE_URL = "https://example.invalid/manifest.json"  # on-chain flow only
 
 # Minimum preflight balances. Gas: ~15 testnet txs with headroom. Escrow:
-# two job budgets (A pays out, C is refunded) plus dust for fees.
+# two job budgets (A pays out to the twak wallet itself, C is refunded).
 MIN_BNB_WEI = 5 * 10**15  # 0.005 tBNB
 
 
@@ -162,10 +172,8 @@ def make_manifest(client: ERC8183Client, job_id: int, text: str) -> DeliverableM
     )
 
 
-def make_clients() -> tuple[
-    TWAKProvider, ERC8183Client, ERC8183Client, ERC8183Client | None, str
-]:
-    """Build the twak wallet+client, the EVM provider client and the voter."""
+def make_clients() -> tuple[TWAKProvider, ERC8183Client, ERC8183Client | None, str]:
+    """Build the twak wallet+client and the optional EVM voter client."""
     network_name = os.environ.get("NETWORK", "bsc-testnet")
     if network_name != "bsc-testnet":
         raise SystemExit(
@@ -177,31 +185,25 @@ def make_clients() -> tuple[
     if rpc_url:
         nc = dataclasses.replace(nc, rpc_url=rpc_url)
 
-    provider_pk = os.environ.get("PROVIDER_PRIVATE_KEY")
-    if not provider_pk:
-        raise SystemExit(
-            "PROVIDER_PRIVATE_KEY is required: the provider (seller) role must "
-            "be an EVM wallet — twak cannot carry the deliverable_url in "
-            "optParams (gaps REQ-1), so it cannot submit."
-        )
-
     twak_wallet = TWAKProvider(
         chain=TWAK_CHAIN, twak_bin=os.environ.get("TWAK_BIN", "twak")
     )
     twak_client = ERC8183Client(wallet_provider=twak_wallet, network=nc)
 
     # persist=False: ephemeral in-memory wrap of a raw testnet key — demo
-    # pattern only (same as examples/client/_helpers.make_wallet).
-    def evm_client(pk: str) -> ERC8183Client:
-        return ERC8183Client(
-            EVMWalletProvider(password="example", private_key=pk, persist=False),
+    # pattern only (same as examples/client/_helpers.make_wallet). Only the
+    # optional voter is EVM now; the seller role is twak itself (REQ-1
+    # shipped in v0.19.0).
+    voter_pk = os.environ.get("VOTER_PRIVATE_KEY")
+    voter_client = (
+        ERC8183Client(
+            EVMWalletProvider(password="example", private_key=voter_pk, persist=False),
             network=nc,
         )
-
-    provider_client = evm_client(provider_pk)
-    voter_pk = os.environ.get("VOTER_PRIVATE_KEY")
-    voter_client = evm_client(voter_pk) if voter_pk else None
-    return twak_wallet, twak_client, provider_client, voter_client, network_name
+        if voter_pk
+        else None
+    )
+    return twak_wallet, twak_client, voter_client, network_name
 
 
 # ── the assert chain ───────────────────────────────────────────────────────
@@ -211,20 +213,20 @@ def main() -> int:  # noqa: PLR0915 - a linear assert chain reads best inline
     load_env(root=HERE)  # real env > .env.local > .env (never overrides)
 
     print("twak bsctestnet smoke — 13-intent lifecycle")
-    print("⚠️  spends testnet BNB (gas) + 0.02 test-U (escrow).")
+    print("⚠️  spends testnet BNB (gas); 0.02 test-U is escrowed but returns "
+          "(job A self-deals, job C refunds).")
 
-    twak_wallet, twak, provider, voter, network_name = make_clients()
+    twak_wallet, twak, voter, network_name = make_clients()
     twak_addr = twak.address  # the ERC8183Client's account == the twak wallet
-    provider_addr = provider.address
     window = int(twak.policy.dispute_window())
     # The settle/claim_refund steps wait out the REAL on-chain dispute window —
-    # on this testnet deployment that is 24 HOURS (86400s), so steps 12-14 are
-    # an overnight tail, not a coffee break. Everything up to step 11 runs in
+    # on this testnet deployment that is 24 HOURS (86400s), so steps 11-13 are
+    # an overnight tail, not a coffee break. Everything up to step 10 runs in
     # minutes; aborting mid-wait still prints the coverage table, and the tail
     # can be finished later (settle/claim-refund/mark-expired are permissionless
     # twak intents against the printed jobIds).
     print(
-        f"⚠️  steps 12-14 wait out the on-chain dispute window: {window}s "
+        f"⚠️  steps 11-13 wait out the on-chain dispute window: {window}s "
         f"({window / 3600:.1f} h). Ctrl-C mid-wait keeps all prior PASSes."
     )
     decimals = twak.token_decimals()
@@ -232,8 +234,8 @@ def main() -> int:  # noqa: PLR0915 - a linear assert chain reads best inline
     budget = 10**decimals // 100  # 0.01 test-U in atomic units
 
     print(f"network        : {network_name} (chainId={twak.network.chain_id})")
-    print(f"twak wallet    : {twak_addr} (client/buyer + evaluator-side calls)")
-    print(f"EVM provider   : {provider_addr} (seller — submits, REQ-1)")
+    print(f"twak wallet    : {twak_addr} (client/buyer AND provider/seller — "
+          "self-deal; one twak wallet per host)")
     print(f"dispute window : {window}s ({window / 60:.1f} min)")
     print(f"job budget     : {budget} atomic ({budget / 10**decimals} {symbol})")
 
@@ -299,14 +301,16 @@ def main() -> int:  # noqa: PLR0915 - a linear assert chain reads best inline
     mark("erc8183.create_job", "exercised", f"jobs A/B/C (A={job_a})")
     ok(2, f"job A created, jobId={job_a}", res.get("transactionHash"))
 
-    step(3, "erc8183.set_provider — the v0.18-only command (twak)")
-    res = twak.set_provider(job_a, provider_addr)
+    step(3, "erc8183.set_provider — point job A at the twak wallet itself (twak)")
+    # The twak wallet plays the seller too (self-deal): one twak wallet per
+    # host, and since v0.19.0 (REQ-1) it can submit — proven on job 150.
+    res = twak.set_provider(job_a, twak_addr)
     wait_for(
-        f"job {job_a} provider == {provider_addr}",
-        lambda: twak.get_job(job_a).provider.lower() == provider_addr.lower(),
+        f"job {job_a} provider == {twak_addr}",
+        lambda: twak.get_job(job_a).provider.lower() == twak_addr.lower(),
     )
-    mark("erc8183.set_provider", "exercised", f"job A -> {provider_addr[:10]}…")
-    ok(3, "provider set on-chain", res.get("transactionHash"))
+    mark("erc8183.set_provider", "exercised", f"job A -> {twak_addr[:10]}… (self)")
+    ok(3, "provider set on-chain (the twak wallet itself)", res.get("transactionHash"))
 
     step(4, f"erc8183.set_budget — {budget} atomic (twak)")
     res = twak.set_budget(job_a, budget)
@@ -322,46 +326,42 @@ def main() -> int:  # noqa: PLR0915 - a linear assert chain reads best inline
     mark("erc8183.register_job", "exercised", "jobs A and C")
     ok(5, "registered with the policy router", res.get("transactionHash"))
 
-    step(6, "erc8183.fund — approve+deposit bundled, S-2 precheck (twak)")
+    step(6, "erc8183.fund — approve+deposit bundled, atomic --expected-budget (twak)")
     # fund_bundles_approval=True: the SDK skips its own allowance top-up;
-    # twak approves + deposits itself. Before that, the provider's S-2 guard
-    # reads `erc8183 status` and refuses if the on-chain budget != ours —
-    # reaching FUNDED therefore proves the precheck passed.
+    # twak approves + deposits itself. The amount is pinned on-chain via
+    # `--expected-budget` (S-2, shipped v0.19.0): the contract reverts with
+    # BudgetMismatch() on drift — the old client-side status pre-check is
+    # gone, so reaching FUNDED proves the atomic guard was satisfied.
     res = twak.fund(job_a, budget)
     wait_for(
         f"job {job_a} FUNDED",
         lambda: twak.get_job_status(job_a) == JobStatus.FUNDED,
     )
-    mark("erc8183.fund", "exercised", "S-2 budget precheck passed implicitly")
+    mark("erc8183.fund", "exercised", "atomic --expected-budget matched (S-2)")
     extra = f" approveHash={res['approveHash']}" if res.get("approveHash") else ""
-    ok(6, f"escrow funded (S-2 precheck passed){extra}", res.get("transactionHash"))
+    ok(6, f"escrow funded (--expected-budget matched){extra}", res.get("transactionHash"))
 
-    step(7, "NEGATIVE: twak submit with deliverable_url must fail fast (REQ-1)")
+    step(7, "erc8183.submit — twak submits WITH deliverable_url (REQ-1, v0.19.0)")
+    # POSITIVE since v0.19.0: `submit --opt-params` passes the
+    # {"deliverable_url": …} JSON through raw, so the policy's JobInitialised
+    # event carries it and the job is evaluable (on-chain proof: job 150).
     manifest = make_manifest(twak, job_a, f"smoke deliverable for job {job_a}")
-    try:
-        twak.submit(job_a, manifest.manifest_hash(), {"deliverable_url": DELIVERABLE_URL})
-        raise fail(7, "twak submit did NOT raise — REQ-1 guard missing")
-    except UnsupportedWalletOperation as e:
-        if "REQ-1" not in str(e):
-            raise fail(7, f"guard raised but without the REQ-1 reference: {e}") from e
-        print(f"   UnsupportedWalletOperation as expected:\n     {e}")
-    if twak.get_job_status(job_a) != JobStatus.FUNDED:
-        raise fail(7, "job state changed — the guard must fire before any CLI call")
-    mark("erc8183.submit", "negative-path", "REQ-1 fail-fast asserted; job unchanged")
-    ok(7, "rejected pre-CLI with REQ-1 reference; job A still FUNDED")
-
-    step(8, "EVM provider submits properly (manifest hash + deliverable_url)")
-    res = provider.submit(
+    res = twak.submit(
         job_a, manifest.manifest_hash(), {"deliverable_url": DELIVERABLE_URL}
     )
     wait_for(
         f"job {job_a} SUBMITTED",
         lambda: twak.get_job_status(job_a) == JobStatus.SUBMITTED,
     )
-    ok(8, "deliverable submitted by the EVM provider", res.get("transactionHash"))
+    if twak.get_job(job_a).deliverable != manifest.manifest_hash():
+        raise fail(7, "on-chain deliverable != the submitted manifest hash")
+    mark("erc8183.submit", "exercised",
+         "positive, REQ-1 shipped v0.19.0; deliverable hash matches")
+    ok(7, "twak submitted; SUBMITTED + deliverable == manifest hash",
+       res.get("transactionHash"))
 
     # ── job B: cancel while Open ──────────────────────────────────────────
-    step(9, "erc8183.reject — cancel-open, job B (twak)")
+    step(8, "erc8183.reject — cancel-open, job B (twak)")
     res = twak.create_job(
         provider=ZERO_ADDRESS,
         expired_at=int(time.time()) + window + 20 * 60,
@@ -375,7 +375,7 @@ def main() -> int:  # noqa: PLR0915 - a linear assert chain reads best inline
         lambda: twak.get_job_status(job_b) == JobStatus.REJECTED,
     )
     mark("erc8183.reject", "exercised", f"job B={job_b} cancel-open -> REJECTED")
-    ok(9, "job B rejected while Open (no escrow moved)", res.get("transactionHash"))
+    ok(8, "job B rejected while Open (no escrow moved)", res.get("transactionHash"))
 
     # ── job C: dispute → stalemate → refund at expiry ─────────────────────
     # The OptimisticPolicy is "silence approves" with a reject-only quorum:
@@ -384,11 +384,11 @@ def main() -> int:  # noqa: PLR0915 - a linear assert chain reads best inline
     # The kernel's universal escape hatch is claimRefund after expiredAt, so
     # C's expiry is kept as tight as the submit deadline allows (the
     # provider must submit before expiredAt - disputeWindow).
-    step(10, "erc8183.dispute — job C (twak)")
+    step(9, "erc8183.dispute — job C (twak)")
     slack_c = 8 * 60
     expired_c = int(time.time()) + window + slack_c
     res = twak.create_job(
-        provider=provider_addr,  # set directly; set_provider already covered
+        provider=twak_addr,  # set directly; set_provider already covered
         expired_at=expired_c,
         description="twak e2e smoke: job C (dispute stalemate)",
     )
@@ -403,31 +403,31 @@ def main() -> int:  # noqa: PLR0915 - a linear assert chain reads best inline
         lambda: twak.get_job_status(job_c) == JobStatus.FUNDED,
     )
     manifest_c = make_manifest(twak, job_c, f"smoke deliverable for job {job_c}")
-    provider.submit(job_c, manifest_c.manifest_hash(), {"deliverable_url": DELIVERABLE_URL})
+    twak.submit(job_c, manifest_c.manifest_hash(), {"deliverable_url": DELIVERABLE_URL})
     wait_for(
         f"job {job_c} SUBMITTED",
         lambda: twak.get_job_status(job_c) == JobStatus.SUBMITTED,
     )
-    print(f"   job C funded + submitted (expiredAt={expired_c})")
+    print(f"   job C funded + submitted by twak (expiredAt={expired_c})")
     res = twak.dispute(job_c)  # client-only, within the dispute window
     wait_for(f"job {job_c} disputed", lambda: twak.policy.disputed(job_c))
     verdict, _ = twak.get_verdict(job_c)
     if verdict != Verdict.PENDING:
-        raise fail(10, f"expected PENDING right after dispute, got {verdict.name}")
+        raise fail(9, f"expected PENDING right after dispute, got {verdict.name}")
     quorum = twak.dispute_quorum_snapshot(job_c)
     mark("erc8183.dispute", "exercised", f"job C={job_c}, quorum snapshot={quorum}")
-    ok(10, f"disputed; verdict=PENDING, quorum snapshot={quorum}",
+    ok(9, f"disputed; verdict=PENDING, quorum snapshot={quorum}",
        res.get("transactionHash"))
 
-    # ── step 11: optional single voter (EVM) — cannot flip the verdict ────
-    step(11, "vote_reject — optional, via the EVM voter (not a twak intent)")
+    # ── step 10: optional single voter (EVM) — cannot flip the verdict ────
+    step(10, "vote_reject — optional, via the EVM voter (not a twak intent)")
     c_settled_by_quorum = False
     if voter is not None:
         voter_addr = voter.address
         if not twak.policy.is_voter(voter_addr):
             mark("erc8183.vote_reject", "skipped",
                  f"VOTER {voter_addr[:10]}… not whitelisted on OptimisticPolicy")
-            print(f"   SKIP [11] {voter_addr} is not a whitelisted voter")
+            print(f"   SKIP [10] {voter_addr} is not a whitelisted voter")
         else:
             before = twak.policy.reject_votes(job_c)
             res = voter.vote_reject(job_c)
@@ -448,20 +448,20 @@ def main() -> int:  # noqa: PLR0915 - a linear assert chain reads best inline
                 c_settled_by_quorum = True
                 mark("erc8183.vote_reject", "exercised (EVM voter)",
                      "quorum met -> settle -> REJECTED")
-                ok(11, "quorum met; job C settled REJECTED",
+                ok(10, "quorum met; job C settled REJECTED",
                    res.get("transactionHash"))
             else:
                 mark("erc8183.vote_reject", "exercised (EVM voter)",
                      f"{votes}/{quorum} votes — verdict stays PENDING by design")
-                ok(11, f"vote counted ({votes}/{quorum}); verdict stays PENDING")
+                ok(10, f"vote counted ({votes}/{quorum}); verdict stays PENDING")
     else:
         mark("erc8183.vote_reject", "skipped",
              "no VOTER_PRIVATE_KEY; twak-side also impossible (twak wallet is "
              "not a whitelisted voter — on-chain permission, not a wallet gap)")
-        print("   SKIP [11] VOTER_PRIVATE_KEY not set")
+        print("   SKIP [10] VOTER_PRIVATE_KEY not set")
 
-    # ── step 12: settle job A after the window (silence approves) ─────────
-    step(12, "erc8183.settle — job A after the dispute window (twak)")
+    # ── step 11: settle job A after the window (silence approves) ─────────
+    step(11, "erc8183.settle — job A after the dispute window (twak)")
     submitted_at = twak.get_job(job_a).submitted_at
     wait_until(submitted_at + window + 5, "job A's dispute window to elapse")
     res = twak.settle(job_a)  # permissionless: applies the policy verdict
@@ -470,14 +470,15 @@ def main() -> int:  # noqa: PLR0915 - a linear assert chain reads best inline
         lambda: twak.get_job_status(job_a) == JobStatus.COMPLETED,
     )
     mark("erc8183.settle", "exercised", f"job A={job_a} -> COMPLETED (no dispute)")
-    ok(12, "job A settled -> COMPLETED (provider paid)", res.get("transactionHash"))
+    ok(11, "job A settled -> COMPLETED (escrow back to the twak wallet — "
+           "it is the provider)", res.get("transactionHash"))
 
-    # ── steps 13/14: refund + reconcile job C ──────────────────────────────
-    step(13, "erc8183.claim_refund — job C after expiry (twak)")
+    # ── steps 12/13: refund + reconcile job C ──────────────────────────────
+    step(12, "erc8183.claim_refund — job C after expiry (twak)")
     if c_settled_by_quorum:
         mark("erc8183.claim_refund", "skipped", "job C settled by quorum instead")
         mark("erc8183.mark_expired", "skipped", "job C settled by quorum instead")
-        print("   SKIP [13/14] job C already settled REJECTED via quorum")
+        print("   SKIP [12/13] job C already settled REJECTED via quorum")
     else:
         wait_until(expired_c + 5, "job C's expiredAt to pass")
         res = twak.claim_refund(job_c)  # permissionless escape hatch
@@ -487,9 +488,9 @@ def main() -> int:  # noqa: PLR0915 - a linear assert chain reads best inline
         )
         mark("erc8183.claim_refund", "exercised",
              f"job C={job_c} disputed-but-PENDING -> EXPIRED, escrow refunded")
-        ok(13, "escrow refunded; job C -> EXPIRED", res.get("transactionHash"))
+        ok(12, "escrow refunded; job C -> EXPIRED", res.get("transactionHash"))
 
-        step(14, "erc8183.mark_expired — reconcile the Router (twak)")
+        step(13, "erc8183.mark_expired — reconcile the Router (twak)")
         # claimRefund bypasses the Router (kernel-only), leaving its in-flight
         # counter stale — mark_expired is the permissionless reconcile.
         before = twak.inflight_job_count()
@@ -498,7 +499,7 @@ def main() -> int:  # noqa: PLR0915 - a linear assert chain reads best inline
         # Soft check: a shared testnet can move the counter concurrently.
         print(f"   router inflight count: {before} -> {after}")
         mark("erc8183.mark_expired", "exercised", f"inflight {before} -> {after}")
-        ok(14, "router reconciled for the refunded job", res.get("transactionHash"))
+        ok(13, "router reconciled for the refunded job", res.get("transactionHash"))
 
     # ── intents that cannot be honestly exercised ──────────────────────────
     mark("erc8183.complete", "skipped",

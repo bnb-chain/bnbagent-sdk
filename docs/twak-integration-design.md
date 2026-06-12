@@ -1,7 +1,7 @@
 # TWAK × bnbagent-sdk 集成设计（最终方案）
 
 > 状态：**Phase 1a–1c 已实施**（commits 928e8e1 / 368c55d / 29cb7f5），等待 twak 上游（续作见 [`twak-next-steps.md`](./twak-next-steps.md)）｜ 日期：2026-06-11 ｜ 作者：SDK 团队（基于 robot-ux b2e85eb 架构延伸）
-> 基线：twak CLI **v0.18.0**（命令面唯一事实源：[`docs/twak-cli-gaps-v0.18.0.md`](./twak-cli-gaps-v0.18.0.md)）
+> 基线：twak CLI **v0.18.0**（命令面唯一事实源：[`docs/twak-cli-gaps-v0.18.0.md`](./twak-cli-gaps-v0.18.0.md)）｜ 2026-06-12 起最低支持 **v0.19.0**（REQ-1/S-1/S-2/S-3/S-4 已上线，守卫①②与 fund 预检退役——见 §8 触发表与 §11）
 > 关联仓库：`bnbagent-studio`（部署形态与政策层的兼容性约束来源）
 >
 > 证据等级标注：**[实测]** 本设计过程中直接验证 ｜ **[gaps]** 团队实测文档 ｜ **[peer]** GitHub 同行调研 ｜ **[代码]** 仓库现状事实
@@ -37,7 +37,7 @@
  TWAK   ▼                                ▼                                    ▼
        TWAKProvider（自身即 executor）    TwakX402Payer 【1c】                  sign_message ✓（三件适配）
        【1a】erc8004×3 + erc8183×13      五项预检 → request                    sign_typed_data ✗（四道闸；
-       守卫: opt_params/fund预检/         --max-payment --yes                   不携带任何实现——P0：判定
+       opt_params 透传(v0.19)；守卫:      --max-payment --yes                   不携带任何实现——P0：判定
        paymaster→WARN/未知intent拒绝      → 按报价金额记账                       大概率不会支持，直接抛错）
 ════════╪═══════════════ (L8 custody, 1c) ══════════════════════════════════════════════════
         │  开发机: .env.local ─load_env()─▶ 进程env ─继承─▶ twak 子进程
@@ -88,6 +88,8 @@ robot-ux 的 b2e85eb 引入了 IntentExecutor 执行缝并接入 TWAK（仅 erc8
 - EVM 路径行为零变化：`LocalExecutor` 与 `_send_tx` 同源（nonce/预检/gas floor/重试）[代码]；mixin 的 `_send_tx` 保留给 erc20 等未迁移调用方。
 - `ERC8183Client.fund()`：`wallet.fund_bundles_approval is True` 时跳过 allowance 预审批（twak 的 `fund` 自带 approve+deposit 两笔 [gaps]）。`is True` 写法保证 MagicMock 测试不误触。行为标志留属性、不进能力集（§3.4 粒度纪律）。
 
+> 2026-06-12 更新：下面的分发表与守卫规则保留为 **v0.18.0 时期的设计记录**。twak **v0.19.0**（REQ-1/S-1/S-2 上线）后：守卫①②退役、opt_params 在全部 erc8183 写命令上原样透传（`--opt-params`）、fund 的 status 预检删除改传 `--expected-budget`（合约侧原子 `BudgetMismatch()`）。执行记录见 §8 触发表与 §11。
+
 #### TWAK 分发表（v0.18.0 命令面 1:1）
 
 | Intent | twak 命令 | 备注 |
@@ -102,7 +104,7 @@ robot-ux 的 b2e85eb 引入了 IntentExecutor 执行缝并接入 TWAK（仅 erc8
 | `erc8183.complete` / `reject` | `--reason <0xhex32>`（零值省略） | |
 | `erc8183.claim_refund` / `register_job` / `settle` / `mark_expired` / `dispute` / `vote_reject` | 同名直映射（`register-job --policy`、`settle --evidence`） | [gaps] 全 ✅ |
 
-#### 守卫规则（P4 落地，全部抛 `UnsupportedWalletOperation`，message = 能力/原因 + 替代路径 + REQ/S 编号）
+#### 守卫规则（P4 落地，全部抛 `UnsupportedWalletOperation`，message = 能力/原因 + 替代路径 + REQ/S 编号；①② 已于 v0.19.0 退役，见上方更新框）
 
 1. 除 submit 外的写操作带非空 `opt_params` → 拒绝，引用 **S-1**（现状 SDK 这 5 处本就只发空值 [代码]，守卫只拦异常用法）；
 2. submit 带非空 `opt_params` → 拒绝，引用 **REQ-1**（[gaps] Note 1 链上实证：twak 提交的 job 137 `JobInitialised` optParams 为空 → 不可评估，协议级断裂；SDK facade 的 submit 必带 deliverable_url，故 twak 卖方角色在 REQ-1 前整体不可用——文档明示）；
@@ -386,11 +388,11 @@ TWAKProvider `home`/`expected_address`/`auto_create` + `x402_quote`/`x402_reques
 
 | 触发 | 动作 | 规模 |
 |---|---|---|
-| REQ-1 上线 | submit `--opt-params` + 解除守卫② | <10 行 |
+| REQ-1 上线 | submit `--opt-params` + 解除守卫② — **已执行 2026-06-12**（twak v0.19.0；job 150 链上证明：JobInitialised 携带完整 deliverable_url optParams）。submit 本身确如预测 <10 行；实际 diff 同批还退役了守卫①（S-1 同版上线，opt_params 改为全写命令透传）与 fund 的 S-2 预检 | <10 行（submit 本体；含守卫退役略超） |
 | sign-typed-data 上线（**团队判断：大概率不会发生，P0**） | 按当时 CLI **实测**重新实现 override（历史代码在 git；eip712-twak-spec 仅作参考）；验证 X402Signer 对 twak 点亮 | 小 |
 | 买方需求 / 与 studio 协调达成 | LocalX402Payer 自 studio buyer.py 上提；make_x402_payer 默认实现升级（能力增强，非破坏） | 中 |
-| REQ-2 上线 | paymaster 透传 + 撤 WARNING | 小 |
-| S-2 上线 | 删 fund 预检 | 小 |
+| REQ-2 上线 | paymaster 透传 + 撤 WARNING（部分解除：bsc 主网 twak 自动赞助 MegaFuel，自 v0.18.0；bsctestnet 仍自费、上游在做） | 小 |
+| S-2 上线 | 删 fund 预检 — **已执行 2026-06-12**（改传 `--expected-budget`，合约侧原子 `BudgetMismatch()`，twak v0.19.0） | 小 |
 | 第二个 transport（REST/NaaS） | 从 `_run` 提取 transport 接口 | 机械重构 |
 
 ### studio 移交清单（不在本仓库）
@@ -480,7 +482,7 @@ trust kind 接线（`ensure_twak_materialized` + bundle 4 键）；AgentCore `co
 
 ### 10.4 端到端流程走查（final review）
 
-① twak 买方 8183 全程（create→budget→register→fund→settle）无断点；卖方 submit 被守卫②明确拦截（REQ-1 前预期行为）。
+① twak 买方 8183 全程（create→budget→register→fund→settle）无断点；卖方 submit 被守卫②明确拦截（REQ-1 前预期行为；2026-06-12 起守卫②退役、submit 透传 `--opt-params`——见 §8/§11）。
 ② twak x402：studio 政策 → make_x402_payer → quote（不建钱包）→ 五项预检 → request → 按报价记账 → 统一信封。三层纵深成立。
 ③ 部署冷启动：SM → env → materialize → TWAKProvider(home, expected_address, auto_create=False) → 身份核对失败即停。前提：container 形态。
 
@@ -499,6 +501,7 @@ trust kind 接线（`ensure_twak_materialized` + bundle 4 键）；AgentCore `co
 | F-2 | 窗口预检默认 600s → **3600s** | 实测 Bazaar 规范端点 3600s；twak 路径实际签名窗口由 twak 决定，检查对象语义不同 |
 | F-3 | x402_quote 不触发 _ensure_wallet | quote 只读无需钱包；否则报价即可能静默建钱包（违反 INV-4） |
 | **P0**（用户 review） | **TWAK 不携带 sign_typed_data 实现**：1a 删 spec 调用路径改直接抛错，1b 删 override 落回基类默认闸 | ① 团队判断 twak 大概率不会支持；② P4 自洽——批评 bsc-testnet 按 spec 超前实现翻车，却保留同模式的 spec 调用路径，双标；③ **修复能力自动推导矛盾**："覆写即能力"规则下保留 override 会让 TWAK 被误判具备 sign.typed_data，击穿闸0/闸1 |
+| F-4（2026-06-12 联调实发现） | twak 以 JSON **字符串**返回数字 id（`"150"`，实测）→ `_create_job`/`_register` 将 jobId/agentId 归一为 `int` 再入信封 | 信封修正：本地 executor 从事件日志取到的是 int，两个执行后端必须遵守同一信封，str 化的 jobId 会让下游 web3 uint256 调用爆炸 |
 
 ## 12. 残留风险/假设（带触发器，均不阻塞）
 
@@ -508,5 +511,5 @@ trust kind 接线（`ensure_twak_materialized` + bundle 4 键）；AgentCore `co
 | twak fund 在 allowance 已足时是否重复 approve | 极低 | bsctestnet 冒烟时确认（gas 浪费级，非正确性） |
 | `--metadata` 值含 `=` 的解析边界 | 低 | 1a 测试期实测 |
 | request 对非 JSON 响应体的渲染 | 低 | 1c 实现期实测（X402PaymentResult.response 按 raw 设计兜底） |
-| REQ-1 时间表 | 低 | 守卫兜底；Phase 2 diff <10 行 |
+| REQ-1 时间表 | ~~低~~ 已消除 | **已解除**：v0.19.0 上线（2026-06-12 执行，job 150 链上证明） |
 | quote→request TOCTOU | 低 | --max-payment + prefer-* + 文档 |
