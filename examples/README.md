@@ -26,7 +26,7 @@ End-to-end examples for ERC-8183 (AgenticCommerce + EvaluatorRouter + Optimistic
 - Testnet BNB ([faucet](https://www.bnbchain.org/en/testnet-faucet))
 - `uv sync` or `pip install bnbagent`
 - Some of the deployed payment token (default: U, see address below)
-- TWAK examples (`twak/`, or `WALLET_KIND=twak` in `client/`) additionally need the twak CLI: `npm i -g @trustwallet/cli` (>= 0.18)
+- TWAK examples (`twak/`, or `WALLET_KIND=twak` in `client/`) additionally need the twak CLI: `npm i -g @trustwallet/cli` (>= 0.19)
 
 ## BSC Testnet addresses (SDK defaults)
 

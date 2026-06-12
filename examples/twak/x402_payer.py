@@ -15,7 +15,7 @@ read-only or constructed to be rejected by the payer's precheck before any
 payment could occur. Actual payment hides behind explicit flags.
 
 Prerequisites:
-    - A configured twak wallet (>= v0.18.0 CLI): credentials + wallet +
+    - A configured twak wallet (>= v0.19.0 CLI): credentials + wallet +
       password reachable (TWAK_WALLET_PASSWORD or OS keychain).
     - Internet access (the quote endpoints are live x402 sellers).
     - twak pays mainnet routes only (it rejects testnet routes as
@@ -107,7 +107,8 @@ def free_mode(wallet: TWAKProvider, tracker: SessionBudgetTracker) -> int:
     banner("2. quote — x402.org/protected (empty-accepts route filtering)")
     # This endpoint advertises base-sepolia (testnet) routes. The twak client
     # pre-filters routes it cannot pay, leaving accepts == []. NOTE the
-    # v0.18.0 CLI also EXITS NON-ZERO on that outcome, so the SDK surfaces it
+    # CLI also EXITS NON-ZERO on that outcome (S-9, re-verified on v0.19.0),
+    # so the SDK surfaces it
     # as a RuntimeError rather than an empty X402Quote — both shapes mean the
     # same thing: nothing here is payable by this wallet.
     try:

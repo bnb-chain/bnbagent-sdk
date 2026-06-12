@@ -16,9 +16,9 @@ The four stops:
 
 Prerequisites:
     - The twak CLI on PATH (or point TWAK_BIN at one, e.g.
-      ``TWAK_BIN=./node_modules/.bin/twak``), >= v0.18.0.
+      ``TWAK_BIN=./node_modules/.bin/twak``), >= v0.19.0.
     - twak API credentials — the one thing this script cannot fabricate:
-      the v0.18.0 CLI refuses *every* command (even ``wallet create``)
+      the CLI refuses *every* command (even ``wallet create``)
       without them. Either ``~/.twak/credentials.json`` (from ``twak init``
       / ``twak setup``) or the TWAK_ACCESS_ID / TWAK_HMAC_SECRET env vars.
       The script copies them into each throwaway home; they are API-access
@@ -75,7 +75,7 @@ def banner(msg: str) -> None:
 def provision_credentials(home: Path) -> str:
     """Make twak API credentials reachable inside the throwaway ``home``.
 
-    twak v0.18.0 requires API credentials for every command, so a truly
+    twak requires API credentials for every command, so a truly
     empty home cannot even create a wallet. Credentials are read by twak
     from ``<home>/.twak/credentials.json`` or from the TWAK_ACCESS_ID /
     TWAK_HMAC_SECRET env vars (which the provider's subprocesses inherit
@@ -108,10 +108,9 @@ def create_throwaway_wallet(provider: TWAKProvider, home: Path) -> str:
 
     ``create_wallet()`` keeps the password OFF argv (INV-1) and expects twak
     to resolve it from TWAK_WALLET_PASSWORD / the keychain. The shipped
-    v0.18.0 CLI, however, hard-requires ``--password`` on argv for
-    ``wallet create`` (env resolution only covers *unlock*), and its
-    ``wallet status`` exits 0 even with no wallet — so the SDK call
-    currently fails. We try it first (so this script self-heals when either
+    CLI, however, hard-requires ``--password`` on argv for ``wallet create``
+    (env resolution only covers *unlock*; gaps S-8, re-verified unchanged on
+    v0.19.0) — so the SDK call currently fails. We try it first (so this script self-heals when either
     side fixes the mismatch) and fall back to driving the CLI directly.
     The fallback puts the throwaway password on argv — acceptable for a
     demo wallet in a tempdir, never for a real one.
@@ -121,7 +120,7 @@ def create_throwaway_wallet(provider: TWAKProvider, home: Path) -> str:
     except RuntimeError as e:
         print("  [note] SDK create_wallet() failed against this CLI build:")
         print(f"         {str(e)[:120]}...")
-        print("         (twak v0.18.0 requires --password on argv for create;")
+        print("         (twak requires --password on argv for create — gaps S-8;")
         print("          falling back to a direct CLI create — demo wallet only)")
     proc = subprocess.run(  # noqa: S603 - fixed arg list, no shell
         [
@@ -313,7 +312,7 @@ def step_d_deployment(twak: TWAKProvider, home1: Path, home2: Path, home3: Path)
         print(f"3. wrong expected_address -> WalletIdentityMismatch:\n   {e}")
 
     # auto_create=False against an EMPTY home: fail closed. The intended
-    # error points at materialize_twak_home(); against the v0.18.0 CLI the
+    # error points at materialize_twak_home(); against the real CLI the
     # exists() probe is fooled (`twak wallet status` exits 0 with
     # "not configured"), so today you get the CLI's own "No wallet found"
     # instead — the operation still fails closed, and crucially no wallet
