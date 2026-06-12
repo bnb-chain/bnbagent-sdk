@@ -22,22 +22,22 @@ Only items bnbagent-sdk actually consumes. Status lifecycle: `🙅 open` →
 
 | ID | Request | Priority | Blocks | Status |
 |----|---------|----------|--------|--------|
-| REQ-1 | `erc8183 submit --opt-params <hex>` (raw passthrough) | **P0** | the provider role entirely: bnbagent-sdk's `submit` carries `{"deliverable_url": …}` in optParams; without it a twak-submitted job cannot be evaluated (see note 1) | 🙅 open |
-| REQ-2 | paymaster broadcast for `erc8004`/`erc8183` writes (`--paymaster-url <rpc>` or `TWAK_PAYMASTER_URL`) | P1 | zero-BNB sponsored deployments | 🙅 open |
-| REQ-3 | tx-hash field naming stability: spec says `{ success, txHash }`, CLI returns `hash` / `approveHash` with no `success`. We parse `hash` today — **pick one as canonical, align the spec document, and don't change it without notice** | P2 | client parsing stability | 🙅 open |
+| REQ-1 | `erc8183 submit --opt-params <hex>` (raw passthrough) | **P0** | the provider role entirely: bnbagent-sdk's `submit` carries `{"deliverable_url": …}` in optParams; without it a twak-submitted job cannot be evaluated (see note 1) | ✅ shipped in v0.19.0 |
+| REQ-2 | paymaster broadcast for `erc8004`/`erc8183` writes (`--paymaster-url <rpc>` or `TWAK_PAYMASTER_URL`) | P1 | zero-BNB sponsored deployments | 🤝 — bsc-mainnet ✅ (v0.18.0, automatic) · bsc-testnet 🙅 |
+| REQ-3 | tx-hash field naming stability: spec says `{ success, txHash }`, CLI returns `hash` / `approveHash` with no `success`. We parse `hash` today — **pick one as canonical, align the spec document, and don't change it without notice** | P2 | client parsing stability | 🤝 — canonical is `hash` (+ `approveHash`), ✅ in v0.19.0; spec document alignment pending |
 
 ## Suggestions (non-blocking — we have client-side workarounds, or they serve CLI-only users)
 
 | ID | Suggestion | Why non-blocking for us |
 |----|------------|--------------------------|
-| S-1 | `--opt-params <hex>` on the other 5 `erc8183` write commands (`set-provider`, `set-budget`, `fund`, `complete`, `reject`) | the contract takes it, but bnbagent-sdk currently always sends empty optParams on these; only `submit` (REQ-1) carries real content |
-| S-2 | `erc8183 fund --expected-budget <atomic>` | we pre-check the on-chain budget via `status` before funding; the flag would only close the small check-then-fund race window with the contract's atomic `BudgetMismatch()` guard |
-| S-3 | `erc8183 policy-info <jobId>` read command (`{ policy, disputeWindow, submittedAt, disputed, rejectVotes, quorumSnapshot, settleableAt }`) | bnbagent-sdk reads these views via its own RPC; valuable for CLI-only users (pre-flight `--expires-at`, settle timing, avoiding opaque reverts on repeat `dispute`/`vote-reject`) |
-| S-4 | `wallet sign-message`: `0x`-prefix the signature, add a `digest` field | we normalize the prefix and compute the EIP-191 digest client-side (plus an ecrecover self-check, since digest and signature now come from different implementations) |
-| S-5 | a config-home override (`TWAK_HOME` env var or `--home` flag) — `~/.twak` is hardcoded (`os.homedir()`), which breaks read-only code mounts and one-wallet-per-OS-user multi-agent hosts | we relocate by overriding `HOME` on the subprocess (field-verified to work, but it is unpromised behavior we'd rather not depend on) |
+| S-1 | `--opt-params <hex>` on the other 5 `erc8183` write commands (`set-provider`, `set-budget`, `fund`, `complete`, `reject`) — ✅ (v0.19.0) | the contract takes it, but bnbagent-sdk currently always sends empty optParams on these; only `submit` (REQ-1) carries real content |
+| S-2 | `erc8183 fund --expected-budget <atomic>` — ✅ (v0.19.0) | superseded — the SDK now passes `--expected-budget` and removed its client-side pre-check |
+| S-3 | `erc8183 policy-info <jobId>` read command (`{ policy, disputeWindow, submittedAt, disputed, rejectVotes, voteQuorum, quorumSnapshot, settleableAt }`) — ✅ (v0.19.0) | bnbagent-sdk reads these views via its own RPC; valuable for CLI-only users (pre-flight `--expires-at`, settle timing, avoiding opaque reverts on repeat `dispute`/`vote-reject`) |
+| S-4 | `wallet sign-message`: `0x`-prefix the signature, add a `digest` field — ✅ (v0.19.0) | CLI fixed; SDK keeps the ecrecover self-check as an integrity loop |
+| S-5 | a config-home override (`TWAK_HOME` env var or `--home` flag) — `~/.twak` is hardcoded (`os.homedir()`), which breaks read-only code mounts and one-wallet-per-OS-user multi-agent hosts (re-verified unchanged on v0.19.0) | we relocate by overriding `HOME` on the subprocess (field-verified to work, but it is unpromised behavior we'd rather not depend on) |
 | S-6 | `wallet import` (mnemonic / private key) — `wallet create` only mints a fresh mnemonic, so an agent's existing on-chain identity cannot move into twak | we accept the address change + ERC-8004 re-register on wallet-kind switch; the ERC-8004 `agentWallet` / set-wallet mechanism (in the spec, not in the CLI) would be the identity-continuity fix |
-| S-8 | `wallet create` should honor `TWAK_WALLET_PASSWORD` when `--password` is absent (and support headless creation without forcing the OS keychain) — today creation hard-requires the password **on argv** (`requiredOption`), which leaks it to every process via `ps`; the env var only unlocks existing wallets | we refuse to pass secrets on argv: programmatic creation raises a descriptive error pointing at manual creation or `materialize_twak_home()` |
-| S-9 | `x402 quote` should exit 0 when the endpoint answers but no route is payable — today an empty `accepts` exits non-zero while the JSON says `success: true` (exit code and envelope disagree) | we trust the explicit success envelope over the exit code in that direction |
+| S-8 | `wallet create` should honor `TWAK_WALLET_PASSWORD` when `--password` is absent (and support headless creation without forcing the OS keychain) — today creation hard-requires the password **on argv** (`requiredOption`), which leaks it to every process via `ps`; the env var only unlocks existing wallets (re-verified unchanged on v0.19.0) | we refuse to pass secrets on argv: programmatic creation raises a descriptive error pointing at manual creation or `materialize_twak_home()` |
+| S-9 | `x402 quote` should exit 0 when the endpoint answers but no route is payable — today an empty `accepts` exits non-zero while the JSON says `success: true` (exit code and envelope disagree) (re-verified unchanged on v0.19.0) | we trust the explicit success envelope over the exit code in that direction |
 | S-7 | `x402 request --json`: include payment receipt metadata (e.g. `{payment: {amount, asset, network, txHash}, body: …}`) — the success output today is the paid endpoint's response body verbatim; the amount/asset/payTo only appear in a human-readable stderr banner, and the x402 `PAYMENT-RESPONSE` header twak consumes already carries these fields | our session-budget accounting debits the *quoted* amount (or the `--max-payment` cap) instead of the actual settlement |
 
 **Open question for the twak team:** does the hosted/NaaS side have (or plan) server-side
@@ -101,17 +101,17 @@ create-job → set-budget → register-job → fund → submit → settle
 | | `--description <text>` ✅ | ↑ | |
 | | `--hook <addr>` ✅ | ↑ | |
 | `set-provider <jobId>` | `--provider <addr>` ✅ | `AgenticCommerce.setProvider(uint256 jobId, address provider, bytes optParams)` | bsc-mainnet ✅ · bsc-testnet ✅ |
-| | 🙅 `+ --opt-params <hex>` → S-1 | ↑ | |
+| | `--opt-params <hex>` ✅ (v0.19.0) → S-1 | ↑ | |
 | `set-budget <jobId>` | `--amount <atomic>` ✅ | `AgenticCommerce.setBudget(uint256 jobId, uint256 amount, bytes optParams)` | bsc-mainnet ✅ · bsc-testnet ✅ |
-| | 🙅 `+ --opt-params <hex>` → S-1 | ↑ | |
-| `fund <jobId>` | 🙅 `+ --expected-budget <atomic>` → S-2 | **Two txs:** ERC-20 `approve(commerce, budget)`, then `AgenticCommerce.fund(uint256 jobId, uint256 expectedBudget, bytes optParams)` | bsc-mainnet ✅ · bsc-testnet ✅ |
-| | 🙅 `+ --opt-params <hex>` → S-1 | ↑ | |
+| | `--opt-params <hex>` ✅ (v0.19.0) → S-1 | ↑ | |
+| `fund <jobId>` | `--expected-budget <atomic>` ✅ (v0.19.0) → S-2 | **Two txs:** ERC-20 `approve(commerce, budget)`, then `AgenticCommerce.fund(uint256 jobId, uint256 expectedBudget, bytes optParams)` | bsc-mainnet ✅ · bsc-testnet ✅ |
+| | `--opt-params <hex>` ✅ (v0.19.0) → S-1 | ↑ | |
 | `submit <jobId>` | `--deliverable <bytes32>` ✅ | `AgenticCommerce.submit(uint256 jobId, bytes32 deliverable, bytes optParams)` | bsc-mainnet ✅ · bsc-testnet ✅ |
-| | 🙅 ***`+ --opt-params <hex>` → REQ-1 ← the one P0 gap (note 1)*** | ↑ | |
+| | `--opt-params <hex>` ✅ (v0.19.0) → REQ-1 (note 1) | ↑ | |
 | `complete <jobId>` | `--reason <bytes32>` (defaults to zero) ✅ | `AgenticCommerce.complete(uint256 jobId, bytes32 reason, bytes optParams)` | bsc-mainnet ✅ · bsc-testnet ✅ |
-| | 🙅 `+ --opt-params <hex>` → S-1 | ↑ | |
+| | `--opt-params <hex>` ✅ (v0.19.0) → S-1 | ↑ | |
 | `reject <jobId>` | `--reason <bytes32>` (defaults to zero) ✅ | `AgenticCommerce.reject(uint256 jobId, bytes32 reason, bytes optParams)` | bsc-mainnet ✅ · bsc-testnet ✅ |
-| | 🙅 `+ --opt-params <hex>` → S-1 | ↑ | |
+| | `--opt-params <hex>` ✅ (v0.19.0) → S-1 | ↑ | |
 | `claim-refund <jobId>` | — | `AgenticCommerce.claimRefund(uint256 jobId)` *(permissionless after expiry)* | bsc-mainnet ✅ · bsc-testnet ✅ |
 | `status <jobId>` | — | `AgenticCommerce.getJob(uint256 jobId) → Job` + `paymentToken()` *(read-only)* | bsc-mainnet ✅ · bsc-testnet ✅ |
 | `register-job <jobId>` | `--policy <addr>` (defaults to the deployed `OptimisticPolicy`) ✅ | `EvaluatorRouter.registerJob(uint256 jobId, address policy)` *(client only)* | bsc-mainnet ✅ · bsc-testnet ✅ |
@@ -119,7 +119,7 @@ create-job → set-budget → register-job → fund → submit → settle
 | `mark-expired <jobId>` | — | `EvaluatorRouter.markExpired(uint256 jobId)` *(permissionless — Router bookkeeping after `claim-refund`, which bypasses hooks)* | bsc-mainnet ✅ · bsc-testnet ✅ |
 | `dispute <jobId>` | — | `OptimisticPolicy.dispute(uint256 jobId)` *(client, within the dispute window)* | bsc-mainnet ✅ · bsc-testnet ✅ |
 | `vote-reject <jobId>` | — | `OptimisticPolicy.voteReject(uint256 jobId)` *(whitelisted voter; quorum = 3)* | bsc-mainnet ✅ · bsc-testnet ✅ |
-| 🙅 `+ policy-info <jobId>` → S-3 | — *(read-only)* | `Router.jobPolicy(jobId)` + `Policy.disputeWindow()` + `submittedAt(jobId)` + `disputed(jobId)` + `rejectVotes(jobId)` + `disputeQuorumSnapshot(jobId)` | bsc-mainnet 🙅 · bsc-testnet 🙅 |
+| `policy-info <jobId>` ✅ (v0.19.0) → S-3 | — *(read-only)* | `Router.jobPolicy(jobId)` + `Policy.disputeWindow()` + `submittedAt(jobId)` + `disputed(jobId)` + `rejectVotes(jobId)` + `disputeQuorumSnapshot(jobId)` | bsc-mainnet ✅ (v0.19.0) · bsc-testnet ✅ (v0.19.0) |
 
 **Note 1 — REQ-1, the `submit` optParams gap.** Every mutating kernel function
 carries a trailing `bytes optParams`; the CLI always sends `0x`. On `submit`
@@ -129,7 +129,9 @@ this is **protocol-breaking**: the Router's `afterAction` forwards optParams to
 evaluators/voters read the deliverable manifest URL (e.g.
 `{"deliverable_url":"ipfs://…"}` in the bnbagent-sdk optimistic flow). A
 twak-submitted job emits **empty** optParams and cannot be evaluated. On-chain
-evidence: see Verification log.
+evidence: see Verification log. **✅ fixed in v0.19.0** — counter-evidence on
+job 150 in the Verification log (the same event now carries the full
+`deliverable_url` JSON).
 
 ### Custom-error selectors
 
@@ -151,7 +153,8 @@ them client-side**. One FYI from field testing: our in-window `settle` revert ca
 back as `{"error":"execution reverted","errorCode":"UNKNOWN_ERROR"}` with no
 selector in the payload. Client-side mapping only works as long as the raw
 selector / revert data passes through the `error` field — please keep it passing
-through.
+through. **✅ fixed in v0.19.0** — the selector now always passes through on both
+networks (`{"error":"execution reverted: 0x…","errorCode":"TX_FAILED"}`).
 
 ### `status` ordinals
 
@@ -192,8 +195,8 @@ gas on whitelisted contracts.
 
 | Capability | bnbagent-sdk | twak v0.18.0 |
 |---|---|---|
-| Sponsored broadcast via paymaster RPC | ✅ default on `bsc` (`https://bsc-megafuel.nodereal.io`) and `bsctestnet` (`https://bsc-megafuel-testnet.nodereal.io`) | 🙅 → REQ-2 |
-| `isSponsorable` pre-check | ✅ | 🙅 → REQ-2 |
+| Sponsored broadcast via paymaster RPC | ✅ default on `bsc` (`https://bsc-megafuel.nodereal.io`) and `bsctestnet` (`https://bsc-megafuel-testnet.nodereal.io`) | bsc-mainnet ✅ (v0.18.0, automatic) · bsc-testnet 🙅 → REQ-2 |
+| `isSponsorable` pre-check | ✅ | bsc-mainnet ✅ (v0.18.0) · bsc-testnet 🙅 → REQ-2 |
 
 **REQ-2 detail:** a way to route broadcasts through a sponsor RPC for
 `erc8004` / `erc8183` write commands — e.g. a `--paymaster-url <rpc>` flag or a
@@ -209,6 +212,12 @@ write).
 | twak version | Date | What was verified |
 |---|---|---|
 | v0.18.0 | 2026-06-10 | 14 commands field-tested on `bsctestnet`: erc8004 `register` (agents 1350, 1351 — incl. atomic `--metadata`), `set-uri`, `set-metadata`, `get-metadata`, `show`; erc8183 `create-job` (jobs 137, 138), `set-provider`, `set-budget`, `register-job`, `fund` (2-tx approve+deposit confirmed), `submit`, `reject`, `dispute`, `status`. optParams gap evidenced on job 137: tx `0xfa057a11cb3a526e9d2351a7bf5a7aa8dd324c9cb80b3343cc28da88980681f4`, decoded calldata `submit(jobId=137, deliverable=0xabab…, optParams='')`, policy event `JobInitialised(…, optParams='')`. x402 `quote` verified against a live 402 endpoint; `request` not exercised end-to-end (mainnet-only routes). Not exercised: `complete` (evaluator-only), `claim-refund` / `mark-expired` (need expiry), `vote-reject` (needs whitelisted voter), `settle` happy path (only the in-window revert was exercised). |
+| v0.19.0 | 2026-06-12 | New flag surface probed: `--opt-params` accepted on all six erc8183 writes (help text verified on `set-provider`/`set-budget`/`fund`/`complete`/`reject`; `submit` exercised live), `fund --expected-budget`, `policy-info`. REQ-1 proven on-chain with a fully twak-driven lifecycle on `bsctestnet` job 150 (twak as client AND provider): `create-job` `0x642a0d0d…40fa`, `register-job` `0xfe44a46b…93ad`, `set-budget` `0x29f251cd…c3cd`, `fund --expected-budget` `0x88e158a5…cb95` (approveHash `0x88fd802e…9927`), `submit --opt-params` `0xf0790150…b6e7` → status SUBMITTED, on-chain `deliverable` == manifest hash, and the policy's `JobInitialised` event carries 70 bytes optParams = `{"deliverable_url":"https://example.invalid/req1-proof-manifest.json"}` (contrast: v0.18.0 job 137 emitted empty optParams). `policy-info` verified live (returns policy/disputeWindow/submittedAt/disputed/rejectVotes/voteQuorum/quorumSnapshot/settleableAt; note: this testnet's `voteQuorum` is actually `2`, not the 3 documented above). `sign-message` now returns a `0x`-prefixed signature + `digest` field; the digest byte-matches the SDK's own EIP-191 computation (cross-checked). Error-selector passthrough confirmed fixed: reverts surface as `{"error":"execution reverted: 0x<selector>","errorCode":"TX_FAILED"}` on both networks. Re-verified unchanged: S-5 (no `TWAK_HOME` — HOME override still required and still works), S-8 (`wallet create` still hard-requires `--password` on argv), S-9 (`x402 quote` still exits rc=1 with `success:true` on empty accepts). `wallet status` output shape unchanged (`agentWallet` field). |
 
 *Contact: BNB Chain bnbagent-sdk team. All findings reproducible on `bsctestnet`;
 test scripts and tx hashes available on request.*
+
+---
+
+**twak team (2026-06-11):** the remaining open items — x402 `request` on
+`bsc-testnet` and the REQ-2 `bsc-testnet` sponsored broadcast — are being worked on.

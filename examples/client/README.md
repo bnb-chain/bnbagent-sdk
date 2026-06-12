@@ -62,17 +62,20 @@ What switches and what doesn't:
   so the client address is whatever `twak wallet address` says, and the
   wallet password is resolved by twak itself (`TWAK_WALLET_PASSWORD` or the
   OS keychain) — the SDK never sees it.
-- **Provider / voter roles: always EVM** (`PROVIDER_PRIVATE_KEY` /
-  `VOTER_PRIVATE_KEY`). twak's `submit` cannot carry the `deliverable_url`
-  optParams, so the provider (seller) role is unusable until upstream
-  **REQ-1** lands — see
+- **Provider / voter roles: stay EVM in these examples**
+  (`PROVIDER_PRIVATE_KEY` / `VOTER_PRIVATE_KEY`). The seller role itself
+  works on twak since **v0.19.0** (REQ-1 shipped — `submit` carries the
+  `deliverable_url` optParams), but a machine has exactly **one** twak
+  wallet (per HOME), so twak cannot play two *distinct* parties locally —
+  these flows keep the counterparty on EVM for that reason. See
   [`docs/twak-cli-gaps-v0.18.0.md`](../../docs/twak-cli-gaps-v0.18.0.md)
   and the role matrix in
-  [`bnbagent/wallets/README.md`](../../bnbagent/wallets/README.md).
+  [`bnbagent/wallets/README.md`](../../bnbagent/wallets/README.md). (For a
+  fully twak-driven both-roles self-deal, see `examples/twak/e2e_smoke.py`.)
 
 Prerequisites (one-time):
 
-1. `npm install -g @trustwallet/cli` (>= 0.18).
+1. `npm install -g @trustwallet/cli` (>= 0.19).
 2. twak API credentials: `twak init --api-key <id> --api-secret <secret>`,
    or `TWAK_ACCESS_ID` / `TWAK_HMAC_SECRET` env vars.
 3. A created twak wallet on the target network, **funded with testnet BNB
