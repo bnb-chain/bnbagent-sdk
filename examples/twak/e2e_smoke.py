@@ -5,7 +5,7 @@ Closes the design-doc backlog item "bsctestnet 真实冒烟（13 个 intent 全�
 ERC-8004/8183 contracts on BSC testnet and asserts each step on-chain, in the
 assert-chain style of examples/security/e2e.py.
 
-Requires twak >= v0.19.0 (`submit --opt-params`, `fund --expected-budget` —
+Requires twak >= v0.19.1 (`submit --opt-params`, `fund --expected-budget` —
 REQ-1/S-1/S-2 shipped; an older CLI fails loudly with an upgrade hint).
 
 ⚠️  THIS SCRIPT SPENDS TESTNET FUNDS AND TAKES WALL-CLOCK TIME. ⚠️
@@ -257,6 +257,23 @@ def main() -> int:  # noqa: PLR0915 - a linear assert chain reads best inline
             f"(has {u_bal / 10**decimals}). Top it up on {network_name} and rerun.",
         )
     ok(0, f"capabilities match the documented set ({len(caps)}), balances sufficient")
+
+    # ── step 0b: sign-message text semantics on a hex-shaped message ──────
+    # S-11 regression net (twak <= v0.19.0 hex-decoded 0x messages and signed
+    # the wrong bytes): a negotiation-hash-shaped message must sign under
+    # EIP-191 TEXT semantics so verifiers can ecrecover(text) — the exact
+    # contract ERC-8183 provider_sig relies on. Free (no chain interaction).
+    step("0b", "sign-message: hex-shaped message signs as TEXT (S-11 net)")
+    from eth_account import Account
+    from eth_account.messages import encode_defunct
+
+    hex_shaped = "0x" + "ab" * 32
+    sig = twak_wallet.sign_message(hex_shaped)["signature"]
+    recovered = Account.recover_message(encode_defunct(text=hex_shaped), signature=sig)
+    if recovered.lower() != twak_addr.lower():
+        raise fail("0b", f"ecrecover(text) -> {recovered}, expected {twak_addr} "
+                         "(twak <= v0.19.0 S-11 regression? upgrade to >= v0.19.1)")
+    ok("0b", "twak signature recovers under text semantics (EVM-compatible)")
 
     # ── step 1: erc8004.register (atomic --metadata), opt-in ──────────────
     step(1, "erc8004.register with metadata (twak)")

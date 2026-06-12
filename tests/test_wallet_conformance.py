@@ -141,18 +141,23 @@ def _completed(payload: dict[str, Any]) -> types.SimpleNamespace:
     return types.SimpleNamespace(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
 
 
-def _prime_twak_for_sign_message(twak: TWAKProvider, runner: MagicMock) -> None:
+def _prime_twak_for_sign_message(
+    twak: TWAKProvider, runner: MagicMock, message: str = "conformance probe"
+) -> None:
     """Script the CLI so twak's sign.message is exercisable offline.
 
     The mocked twak output must be a *real* signature over the probe message
     (the provider ecrecovers it against the wallet address), so we sign with
-    the test key and report that key's address as the wallet.
+    the test key and report that key's address as the wallet. The mock signs
+    TEXT semantics — the twak >= v0.19.1 contract ("input is always text") —
+    so any SDK-side encoding trick re-introduced into the provider breaks
+    the recovery self-check here.
     """
     acct = Account.from_key(_TEST_KEY)
     twak._address = acct.address
     twak._ensured = True
     signed = Account.sign_message(
-        encode_defunct(text="conformance probe"), private_key=_TEST_KEY
+        encode_defunct(text=message), private_key=_TEST_KEY
     )
     runner.side_effect = lambda cmd, **kwargs: _completed(
         {"success": True, "signature": bytes(signed.signature).hex()}
@@ -274,3 +279,26 @@ def test_twak_make_executor_returns_itself(no_real_cli):
     twak = _make_provider("twak")
     assert twak.make_executor(ExecutionContext(web3=Mock())) is twak
     assert no_real_cli.call_count == 0  # construction-time seam, no CLI probe
+
+
+# ── cross-kind signature compatibility (S-11 regression net) ──
+
+#: A message that *looks* like hex — the shape of an ERC-8183 negotiation
+#: hash, which provider_sig signs by protocol definition.
+HEX_SHAPED_MESSAGE = "0x" + "ab" * 32
+
+
+def test_sign_message_text_semantics_for_hex_shaped_message(kind, provider, no_real_cli):
+    """Every kind must sign a 0x-shaped message under EIP-191 TEXT semantics,
+    so a verifier's ecrecover(text) works regardless of which wallet produced
+    the signature. Guards the twak <= v0.19.0 hex-decode regression class
+    (S-11) and any SDK-side encoding trick."""
+    if SIGN_MESSAGE not in provider.capabilities():
+        pytest.skip(f"{kind} does not declare sign.message")
+    if kind == "twak":
+        _prime_twak_for_sign_message(provider, no_real_cli, message=HEX_SHAPED_MESSAGE)
+    result = provider.sign_message(HEX_SHAPED_MESSAGE)
+    recovered = Account.recover_message(
+        encode_defunct(text=HEX_SHAPED_MESSAGE), signature=result["signature"]
+    )
+    assert recovered.lower() == provider.address.lower()
