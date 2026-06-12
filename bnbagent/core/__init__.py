@@ -14,10 +14,8 @@ from ..exceptions import (
     StorageError,
 )
 from .abi_loader import create_web3
-from .module import BNBAgentModule, ModuleInfo
 from .nonce_manager import NonceManager
 from .paymaster import Paymaster
-from .registry import ModuleRegistry
 
 __all__ = [
     "BNBAgentError",
@@ -32,7 +30,4 @@ __all__ = [
     "NonceManager",
     "Paymaster",
     "SCAN_API_URL",
-    "BNBAgentModule",
-    "ModuleInfo",
-    "ModuleRegistry",
 ]

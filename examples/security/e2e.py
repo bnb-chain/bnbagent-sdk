@@ -9,7 +9,7 @@ Prerequisites:
     pip install -e .  # SDK installed in the current env
 
 Usage:
-    python examples/security_e2e.py
+    python examples/security/e2e.py
 
 Exit code 0 + 6 assertions logged means the policy stack is intact.
 """

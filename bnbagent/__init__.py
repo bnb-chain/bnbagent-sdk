@@ -2,7 +2,7 @@
 BNBAgent SDK — Python toolkit for building on-chain AI agents on BNB Chain.
 
 Tier 1 (public API — available via ``from bnbagent import ...``):
-    BNBAgent, BNBAgentConfig, NetworkConfig, BNBAgentError
+    NetworkConfig, BNBAgentError
     ERC8004Agent, AgentEndpoint
     WalletProvider, EVMWalletProvider
     ERC8183Client, JobStatus, Verdict
@@ -12,8 +12,9 @@ Tier 1 (public API — available via ``from bnbagent import ...``):
 
 Tier 2 (import from subpackage):
     from bnbagent.erc8183 import CommerceClient, RouterClient, PolicyClient, NegotiationHandler
-    from bnbagent.erc8183.server import create_erc8183_app, ERC8183JobOps
+    from bnbagent.erc8183 import ERC8183JobOps, funded_job_watcher
     from bnbagent.erc8183.config import ERC8183Config
+    from bnbagent.utils import SlidingWindowLimiter, RateLimitExceeded
     from bnbagent.core import create_web3
     from bnbagent.erc20 import MinimalERC20Client, load_erc20_abi
     from bnbagent.storage import LocalStorageProvider, IPFSStorageProvider
@@ -28,7 +29,7 @@ from __future__ import annotations
 from .erc8183 import ERC8183Client, JobStatus, Verdict
 
 # Configuration
-from .config import BNBAgentConfig, NetworkConfig
+from .config import NetworkConfig
 
 # ERC-8004 Identity Registry
 from .erc8004 import AgentEndpoint, ERC8004Agent
@@ -38,9 +39,6 @@ from .exceptions import BNBAgentError
 
 # Opt-in .env loading (never called at import time — applications opt in)
 from .core.env import load_env
-
-# High-level facade
-from .main import BNBAgent
 
 # Wallets
 from .wallets import EVMWalletProvider, WalletProvider
@@ -54,8 +52,6 @@ from .x402 import X402Signer
 from ._version import __version__
 __all__ = [
     # Core
-    "BNBAgent",
-    "BNBAgentConfig",
     "NetworkConfig",
     "BNBAgentError",
     "load_env",

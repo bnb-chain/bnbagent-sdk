@@ -130,6 +130,15 @@ _SETUP_HINT = (
 _DEFAULT_CHAIN = "bsc"
 _ALLOWED_CHAINS = {"bsc", "bsctestnet"}
 
+#: SDK network preset name → twak CLI chain key. The single source of this
+#: mapping — consumers (configs, examples, downstream wallet factories)
+#: should use it instead of hand-rolling the "bsc-testnet" → "bsctestnet"
+#: translation.
+TWAK_CHAIN_FOR_NETWORK = {
+    "bsc-mainnet": "bsc",
+    "bsc-testnet": "bsctestnet",
+}
+
 _ZERO_ADDRESS = "0x" + "00" * 20
 _ZERO_REASON = b"\x00" * 32
 
@@ -498,10 +507,27 @@ class TWAKProvider(WalletProvider, IntentExecutor):
            against the wallet address — we compute the digest ourselves but
            twak produced the signature, so a recovery round-trip is the only
            runtime proof both sides agree on the message bytes.
+
+        Chain key: ``sign-message``'s ``--chain`` selects the *key family*
+        (its help says "e.g., ethereum, solana"), not the network — it
+        accepts ``bsc`` but rejects ``bsctestnet`` (field-verified on
+        v0.19.0). EIP-191 signing is chain-agnostic and the wallet address
+        is identical on both BNB networks, so we always pass ``bsc`` here;
+        the recovery self-check below guards any key drift.
+
+        Encoding: the CLI auto-decodes a ``0x``-prefixed ``--message`` as raw
+        bytes (S-4), which would silently diverge from the SDK's text
+        semantics (``EVMWalletProvider`` signs ``encode_defunct(text=...)``)
+        whenever the message looks like hex — e.g. a negotiation hash. We
+        therefore ALWAYS hex-encode the text ourselves: ``personal_sign``
+        over ``message.encode("utf-8")`` is byte-identical to the text
+        semantics (field-verified on v0.19.0), and the explicit bytes mode
+        removes the CLI-side ambiguity for every input.
         """
         self._ensure_wallet()
+        message_hex = "0x" + message.encode("utf-8").hex()
         data = self._run(
-            ["wallet", "sign-message", "--chain", self._chain, "--message", message]
+            ["wallet", "sign-message", "--chain", "bsc", "--message", message_hex]
         )
         signature = data.get("signature")
         if not signature:

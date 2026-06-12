@@ -3,7 +3,7 @@
 Closes the design-doc backlog item "bsctestnet 真实冒烟（13 个 intent 全生命周期）"
 (docs/twak-integration-design.md §8): drives the twak wallet through the real
 ERC-8004/8183 contracts on BSC testnet and asserts each step on-chain, in the
-assert-chain style of examples/security_e2e.py.
+assert-chain style of examples/security/e2e.py.
 
 Requires twak >= v0.19.0 (`submit --opt-params`, `fund --expected-budget` —
 REQ-1/S-1/S-2 shipped; an older CLI fails loudly with an upgrade hint).

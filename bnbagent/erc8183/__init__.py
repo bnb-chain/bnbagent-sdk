@@ -16,7 +16,6 @@ from __future__ import annotations
 from .client import DEFAULT_APPROVE_FLOOR_UNITS, ERC8183Client
 from .commerce import CommerceClient
 from .constants import get_erc8183_config
-from .module import ERC8183Module, create_module
 from .negotiation import (
     NegotiationHandler,
     NegotiationRequest,
@@ -27,6 +26,7 @@ from .negotiation import (
 )
 from .policy import PolicyClient
 from .router import RouterClient
+from .job_ops import ERC8183JobOps, funded_job_watcher
 from .schema import SCHEMA_VERSION, DeliverableManifest, JobDescription
 from .types import (
     REASON_APPROVED,
@@ -64,8 +64,9 @@ __all__ = [
     "JobDescription",
     "DeliverableManifest",
     "SCHEMA_VERSION",
-    # Module
+    # Headless provider primitives
+    "ERC8183JobOps",
+    "funded_job_watcher",
+    # Per-network defaults
     "get_erc8183_config",
-    "ERC8183Module",
-    "create_module",
 ]

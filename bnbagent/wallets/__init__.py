@@ -15,7 +15,7 @@ from .intents import ExecutionContext, Intent, IntentExecutor
 from .mpc_wallet_provider import MPCWalletProvider
 from .protocols import MessageSigner, TypedDataSigner
 from .twak_custody import materialize_twak_home
-from .twak_provider import TWAKProvider
+from .twak_provider import TWAK_CHAIN_FOR_NETWORK, TWAKProvider
 from .wallet_provider import WalletProvider
 
 __all__ = [
@@ -34,4 +34,5 @@ __all__ = [
     "ExecutionContext",
     "create_wallet_provider",
     "SUPPORTED_WALLET_KINDS",
+    "TWAK_CHAIN_FOR_NETWORK",
 ]

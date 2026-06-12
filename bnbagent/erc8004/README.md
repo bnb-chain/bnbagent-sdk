@@ -33,11 +33,10 @@ agent_uri = sdk.generate_agent_uri(
     name="my-agent",
     description="AI agent for document processing",
     endpoints=[
-        AgentEndpoint(
-            name="A2A",
-            endpoint="https://myagent.example/.well-known/agent-card.json",
-            version="0.3.0",
-        )
+        # A2A first, MCP second — these constructors encode each protocol's
+        # registration convention; the SDK ships no protocol runtime.
+        AgentEndpoint.a2a("https://myagent.example", version="0.3.0"),
+        AgentEndpoint.mcp("https://myagent.example/mcp"),
     ],
 )
 result = sdk.register_agent(agent_uri=agent_uri)
@@ -74,6 +73,13 @@ Dataclass describing a single protocol endpoint.
 | `endpoint` | `str` | URL (`https://...`). |
 | `version` | `str \| None` | Optional protocol version. |
 | `capabilities` | `list[str] \| None` | Optional capability tags. |
+
+Protocol-aware constructors (registration conventions only — no runtime):
+
+| Constructor | Behavior |
+|---|---|
+| `AgentEndpoint.a2a(base_url, *, version=None, capabilities=None)` | Appends the A2A discovery path `/.well-known/agent-card.json` unless already present. |
+| `AgentEndpoint.mcp(url, *, version=None, capabilities=None)` | Registers the MCP server URL + protocol version, per the EIP-8004 registration-file example. stdio servers have no registrable URL (enforced by the `http(s)://` validation). |
 
 ### `get_erc8004_config(network)`
 
@@ -117,5 +123,5 @@ Override with env vars when needed:
 ## Related
 
 - [`wallets`](../wallets/README.md) -- wallet providers used for signing.
-- [`core`](../core/README.md) -- paymaster, nonce manager, module system.
+- [`core`](../core/README.md) -- paymaster, nonce manager, shared infrastructure.
 - [`erc8183`](../erc8183/README.md) -- ERC-8183 protocol built on top of agent identities.

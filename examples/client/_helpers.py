@@ -12,18 +12,15 @@ from dotenv import dotenv_values
 
 import bnbagent
 from bnbagent.erc8183 import ERC8183Client
-from bnbagent.wallets import EVMWalletProvider, TWAKProvider
+from bnbagent.wallets import TWAK_CHAIN_FOR_NETWORK, EVMWalletProvider, TWAKProvider
 from bnbagent.config import resolve_network
 
 ROOT = Path(__file__).resolve().parent
 
-# SDK network name → twak chain key. The twak CLI rejects the SDK spelling
-# ("bsc-testnet") with CHAIN_UNSUPPORTED (field-verified on v0.18.0) — its
-# BNB Smart Chain keys are "bsc" and "bsctestnet", no hyphen.
-_TWAK_CHAIN_FOR_NETWORK = {
-    "bsc-testnet": "bsctestnet",
-    "bsc-mainnet": "bsc",
-}
+# SDK network name → twak chain key: single source of truth in the SDK
+# (the twak CLI rejects the SDK spelling "bsc-testnet" — its keys are
+# "bsc" and "bsctestnet", no hyphen).
+_TWAK_CHAIN_FOR_NETWORK = TWAK_CHAIN_FOR_NETWORK
 
 
 def load_env() -> None:
@@ -107,10 +104,11 @@ def make_primary_client(s: Settings) -> ERC8183Client:
       scripts don't change at all (wallet polymorphism: ``ERC8183Client``
       routes every write through ``wallet.make_executor()``).
 
-    Only the CLIENT role switches. The provider/voter wallets always stay
-    EVM: twak cannot submit deliverables until upstream REQ-1 lands (its
-    ``submit`` drops the ``deliverable_url`` optParams — see the role
-    matrix in ``bnbagent/wallets/README.md``).
+    Only the CLIENT role switches here; the provider/voter wallets stay EVM
+    to keep these scripts simple. Since twak v0.19.0 the seller role is also
+    twak-capable (``submit`` carries optParams) — see the role matrix in
+    ``bnbagent/wallets/README.md`` and the WALLET_KIND switch in the
+    a2a-agent / agent-server examples.
     """
     if s.wallet_kind == "twak":
         try:

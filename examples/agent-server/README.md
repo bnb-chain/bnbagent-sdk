@@ -1,8 +1,17 @@
-# Blockchain News Agent (ERC-8183)
+# Blockchain News Agent (ERC-8183, HTTP serving reference)
 
 A production-like ERC-8183 provider agent that searches for blockchain news using
-DuckDuckGo and stores deliverables on IPFS via Pinata. Demonstrates the full
-provider lifecycle under ERC-8183:
+DuckDuckGo and stores deliverables on IPFS via Pinata.
+
+This example is also the SDK's **HTTP serving reference implementation**: the
+FastAPI factory (`create_erc8183_app`, funded-job poll wiring, `/negotiate` +
+job routes) lives in this directory at `src/erc8183_server.py` — it is example
+code, not SDK API. Copy the directory and own it; the SDK underneath provides
+only the headless primitives (`ERC8183JobOps`, `funded_job_watcher`,
+`NegotiationHandler`, `SlidingWindowLimiter`). For the recommended
+agent-facing surface (A2A), see `../a2a-agent`.
+
+Demonstrates the full provider lifecycle under ERC-8183:
 
 ```
 client createJob → registerJob → setBudget → fund
