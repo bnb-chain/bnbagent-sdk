@@ -40,8 +40,10 @@ Security / operational notes:
 - ``--json`` is always appended (it implies ``--yes``, skipping interactive
   confirmation, per the twak spec).
 
-Compatibility notes against ``twak`` v0.19.0 — the minimum supported version
-(the authoritative command surface is ``docs/twak-cli-gaps-v0.18.0.md``, the
+Compatibility notes against ``twak`` v0.19.1 — the minimum supported version
+(v0.19.0 is excluded: its ``sign-message`` hex-decoded ``0x``-shaped messages
+and signed the wrong bytes — fixed in v0.19.1, "input is always text". The
+authoritative command surface is ``docs/twak-cli-gaps-v0.18.0.md``, the
 shared tracking doc; on an older CLI, flags this provider emits fail loudly
 with an upgrade hint):
 - Every erc8183 write passes ``opt_params`` through raw as ``--opt-params``
@@ -129,6 +131,13 @@ _SETUP_HINT = (
 # works.
 _DEFAULT_CHAIN = "bsc"
 _ALLOWED_CHAINS = {"bsc", "bsctestnet"}
+
+# ``wallet sign-message --chain`` is a *key-family* selector (help: "e.g.,
+# ethereum, solana"), not a network selector: it accepts "bsc" but rejects
+# "bsctestnet" (S-10, field-verified v0.19.0/v0.19.1). EIP-191 carries no
+# chain information and the wallet address is identical on both BNB
+# networks, so this pin is permanently correct regardless of upstream.
+_SIGN_MESSAGE_CHAIN = "bsc"
 
 #: SDK network preset name → twak CLI chain key. The single source of this
 #: mapping — consumers (configs, examples, downstream wallet factories)
@@ -316,7 +325,7 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         if "unknown command" in combined or "unknown option" in combined:
             hint = (
                 "The installed twak CLI does not recognise this command/option "
-                "— upgrade twak to >= v0.19.0 (`npm install -g @trustwallet/cli`)."
+                "— upgrade twak to >= v0.19.1 (`npm install -g @trustwallet/cli`)."
             )
         else:
             hint = _SETUP_HINT
@@ -510,24 +519,24 @@ class TWAKProvider(WalletProvider, IntentExecutor):
 
         Chain key: ``sign-message``'s ``--chain`` selects the *key family*
         (its help says "e.g., ethereum, solana"), not the network — it
-        accepts ``bsc`` but rejects ``bsctestnet`` (field-verified on
-        v0.19.0). EIP-191 signing is chain-agnostic and the wallet address
-        is identical on both BNB networks, so we always pass ``bsc`` here;
-        the recovery self-check below guards any key drift.
+        accepts ``bsc`` but rejects ``bsctestnet`` (S-10, field-verified on
+        v0.19.0 and still present on v0.19.1). EIP-191 signing is
+        chain-agnostic and the wallet address is identical on both BNB
+        networks, so we always pass :data:`_SIGN_MESSAGE_CHAIN`; the recovery
+        self-check below guards any key drift. This pin stays correct even
+        if the CLI later accepts ``bsctestnet``.
 
-        Encoding: the CLI auto-decodes a ``0x``-prefixed ``--message`` as raw
-        bytes (S-4), which would silently diverge from the SDK's text
-        semantics (``EVMWalletProvider`` signs ``encode_defunct(text=...)``)
-        whenever the message looks like hex — e.g. a negotiation hash. We
-        therefore ALWAYS hex-encode the text ourselves: ``personal_sign``
-        over ``message.encode("utf-8")`` is byte-identical to the text
-        semantics (field-verified on v0.19.0), and the explicit bytes mode
-        removes the CLI-side ambiguity for every input.
+        Encoding: the message is passed verbatim — twak >= v0.19.1 signs the
+        input as text always ("input is always text", upstream fix for the
+        S-11 regression), matching the SDK's text semantics
+        (``EVMWalletProvider`` signs ``encode_defunct(text=...)``). On the
+        excluded versions (<= v0.19.0) a ``0x``-shaped message — e.g. a
+        negotiation hash — was hex-decoded and signed as raw bytes; the
+        self-check below catches that divergence and names it.
         """
         self._ensure_wallet()
-        message_hex = "0x" + message.encode("utf-8").hex()
         data = self._run(
-            ["wallet", "sign-message", "--chain", "bsc", "--message", message_hex]
+            ["wallet", "sign-message", "--chain", _SIGN_MESSAGE_CHAIN, "--message", message]
         )
         signature = data.get("signature")
         if not signature:
@@ -551,7 +560,12 @@ class TWAKProvider(WalletProvider, IntentExecutor):
                 "The SDK computes the EIP-191 digest client-side while twak "
                 "signs out of process — a recovery mismatch means the two "
                 "sides encoded the message bytes differently, and using this "
-                "signature would fail verification later. Refusing to return it."
+                "signature would fail verification later. Refusing to return it. "
+                "Known cause: twak <= v0.19.0 hex-decodes a 0x-shaped message "
+                "and signs the raw bytes (S-11, fixed in v0.19.1 — see "
+                "docs/twak-cli-gaps-v0.18.0.md). Fix: upgrade twak to >= "
+                "v0.19.1 (`npm install -g @trustwallet/cli`), or switch this "
+                "agent to WALLET_KIND=evm."
             )
         return {
             "messageHash": digest,

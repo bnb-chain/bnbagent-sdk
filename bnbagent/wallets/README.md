@@ -197,7 +197,7 @@ Constructor behavior:
 ### `TWAKProvider`
 
 Self-broadcasting wallet backed by the Trust Wallet Agent Kit (`twak`) CLI —
-**v0.19.0 minimum** (an older CLI answers `unknown command`/`unknown option`
+**v0.19.1 minimum** (v0.19.0 is excluded — its `sign-message` hex-decoded `0x`-shaped messages, S-11; an older CLI answers `unknown command`/`unknown option`
 on the flags this provider emits, and the raised error says to upgrade rather
 than pointing at setup). Implements both
 `WalletProvider` and `IntentExecutor` (it `make_executor`s to itself). Key
@@ -209,7 +209,7 @@ upstream gap tracking (the `REQ-n` / `S-n` IDs cited below):
 | Member | Description |
 |---|---|
 | `address` | Read from `twak wallet address` (cached); the `expected_address` identity check runs on the first lookup. |
-| `sign_message` | Via `twak wallet sign-message`. The CLI itself now returns a `0x`-prefixed signature + `digest` field (gaps S-4, shipped v0.19.0); the SDK keeps its adapter — idempotent `0x` normalization, its own EIP-191 digest, and an ecrecover self-check — as an integrity loop (the v0.19.0 CLI digest byte-matches the SDK's computation, cross-checked). |
+| `sign_message` | Via `twak wallet sign-message`. The CLI itself now returns a `0x`-prefixed signature + `digest` field (gaps S-4, shipped v0.19.0); the SDK keeps its adapter — idempotent `0x` normalization, its own EIP-191 digest, and an ecrecover self-check — as an integrity loop. The chain key is pinned to `bsc` (`--chain` is a key-family selector that rejects `bsctestnet`, S-10) and messages pass verbatim as TEXT (twak >= v0.19.1 contract; <= v0.19.0 hex-decoded `0x`-shaped messages — S-11, the self-check catches and names it). |
 | `sign_transaction` / `sign_typed_data` | **Not overridden** — the base default raises `UnsupportedWalletOperation` (twak has no raw-tx or generic EIP-712 primitive; not overriding keeps them out of `capabilities()`). |
 | `execute(intent)` | Full dispatch: 3 `erc8004.*` + 13 `erc8183.*` intents, 1:1 with the v0.19.0 command menu. `opt_params` passes through raw (`--opt-params`) on every erc8183 write — REQ-1 for `submit`, S-1 for the rest, both shipped in v0.19.0 (see the signing model below). |
 | `make_x402_payer(**kw)` | Returns a `TwakX402Payer` — the delegated x402 path (see below). |
@@ -253,7 +253,7 @@ Notes (all field-verified against twak v0.19.0):
 the wallet for you (auto-create), but never handles API secrets. Before the
 first operation:
 
-1. Install the CLI: `npm install -g @trustwallet/cli` (>= v0.19.0).
+1. Install the CLI: `npm install -g @trustwallet/cli` (>= v0.19.1).
 2. Set API credentials: `twak init --api-key <id> --api-secret <secret>`, or
    export `TWAK_ACCESS_ID` / `TWAK_HMAC_SECRET` (CI). twak reads these itself.
 3. Make the password reachable: `TWAK_WALLET_PASSWORD` env var or

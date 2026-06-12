@@ -647,7 +647,7 @@ def test_unknown_command_in_stderr_hints_upgrade():
         )
 
     twak = TWAKProvider()
-    with pytest.raises(RuntimeError, match=r"upgrade twak to >= v0\.19\.0"):
+    with pytest.raises(RuntimeError, match=r"upgrade twak to >= v0\.19\.1"):
         _execute(
             twak,
             Intent(
@@ -715,7 +715,7 @@ def test_sign_message_normalises_and_self_checks():
     def run(cmd, **kwargs):
         assert cmd == [
             "twak", "wallet", "sign-message",
-            "--chain", "bsc", "--message", "0x" + message.encode().hex(), "--json",
+            "--chain", "bsc", "--message", message, "--json",
         ]
         return _completed(cmd, {"success": True, "signature": raw_sig})
 
@@ -732,7 +732,7 @@ def test_sign_message_normalises_and_self_checks():
 
 def test_sign_message_uses_base_chain_key_on_testnet():
     """sign-message's --chain is a key-family selector: the CLI accepts "bsc"
-    but rejects "bsctestnet" (field-verified v0.19.0). A testnet-pinned
+    but rejects "bsctestnet" (S-10, field-verified v0.19.0/v0.19.1). A testnet-pinned
     provider must still sign with the base key — EIP-191 is chain-agnostic
     and the address is identical on both BNB networks."""
     message = "hello twak"
@@ -746,7 +746,7 @@ def test_sign_message_uses_base_chain_key_on_testnet():
     def run(cmd, **kwargs):
         assert cmd == [
             "twak", "wallet", "sign-message",
-            "--chain", "bsc", "--message", "0x" + message.encode().hex(), "--json",
+            "--chain", "bsc", "--message", message, "--json",
         ]
         return _completed(cmd, {"success": True, "signature": "0x" + bytes(signed.signature).hex()})
 
