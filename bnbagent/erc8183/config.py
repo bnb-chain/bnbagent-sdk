@@ -5,8 +5,8 @@ and adds the three ERC-8183-specific concerns:
 
 - ``storage``      — off-chain deliverable store.
 - ``service_price`` — minimum budget (in raw token units) this provider
-  will accept; used by ``ERC8183JobOps.verify_job`` (HTTP 402) and by the
-  ``NegotiationHandler`` to advertise a floor in ``/negotiate`` responses.
+  will accept; used by ``ERC8183JobOps.verify_job`` (``budget_too_low``)
+  and by the ``NegotiationHandler`` to advertise a floor in quotes.
 
 Contract-address overrides are NOT fields on this class. Use either:
 
@@ -147,30 +147,36 @@ class ERC8183Config(AgentConfig):
                 used.  Pass an explicit instance to use IPFS, a custom DB
                 backend, or any other ``StorageProvider`` subclass.
         """
-        wallet_password = get_env("WALLET_PASSWORD") or ""
-        if not wallet_password:
-            raise ValueError(
-                "ERC8183Config validation failed: WALLET_PASSWORD is required. "
-                "Set WALLET_PASSWORD to encrypt/decrypt the wallet keystore."
-            )
-
         wallet_kwargs = cls._wallet_kwargs_from_env()
-        private_key = wallet_kwargs["private_key"]
-        wallet_address = wallet_kwargs["wallet_address"]
+        wallet_kind = (wallet_kwargs.get("wallet_kind") or "").strip().lower()
 
-        if not private_key:
-            from ..wallets import EVMWalletProvider
+        # The WALLET_PASSWORD requirement and keystore probing are EVM-kind
+        # concerns. A non-EVM kind (e.g. twak) owns its custody end-to-end —
+        # passwords never pass through the SDK (INV-1).
+        if wallet_kind in ("", "evm"):
+            wallet_password = get_env("WALLET_PASSWORD") or ""
+            if not wallet_password:
+                raise ValueError(
+                    "ERC8183Config validation failed: WALLET_PASSWORD is required. "
+                    "Set WALLET_PASSWORD to encrypt/decrypt the wallet keystore."
+                )
 
-            if EVMWalletProvider.keystore_exists(address=wallet_address or None):
-                logger.info(
-                    "[ERC8183Config] Loading wallet from existing keystore "
-                    "(PRIVATE_KEY not set)"
-                )
-            else:
-                logger.info(
-                    "[ERC8183Config] No PRIVATE_KEY and no keystore found — "
-                    "a new wallet will be auto-generated"
-                )
+            private_key = wallet_kwargs["private_key"]
+            wallet_address = wallet_kwargs["wallet_address"]
+
+            if not private_key:
+                from ..wallets import EVMWalletProvider
+
+                if EVMWalletProvider.keystore_exists(address=wallet_address or None):
+                    logger.info(
+                        "[ERC8183Config] Loading wallet from existing keystore "
+                        "(PRIVATE_KEY not set)"
+                    )
+                else:
+                    logger.info(
+                        "[ERC8183Config] No PRIVATE_KEY and no keystore found — "
+                        "a new wallet will be auto-generated"
+                    )
 
         if storage is None:
             from ..storage import LocalStorageProvider

@@ -39,9 +39,9 @@ from ddgs import DDGS
 env_file = os.path.basename(os.environ.get("ENV_FILE", ".env"))
 load_dotenv(Path(__file__).resolve().parent.parent / env_file)
 
-# SDK imports
+# SDK imports + the example's own HTTP server factory (src/erc8183_server.py)
 from bnbagent.erc8183.config import ERC8183Config
-from bnbagent.erc8183.server import create_erc8183_app
+from erc8183_server import create_erc8183_app
 
 logging.basicConfig(
     level=logging.INFO,

@@ -7,14 +7,17 @@ Two pieces:
   prefix conventions stay consistent.
 - :class:`AgentConfig` — dataclass base that captures the configuration
   concepts common to **every** agent the SDK ships (network + wallet).
-  Module-specific configs (``ERC8183Config``, ``BNBAgentConfig``, ...) inherit
-  from this and add only their own fields.
+  Module-specific configs (``ERC8183Config``, ...) inherit from this and
+  add only their own fields.
 
 Env var convention
 ------------------
 - **Global** (no prefix): keys that describe the SDK process as a whole
   (``NETWORK``, ``RPC_URL``, ``PRIVATE_KEY``, ``WALLET_PASSWORD``,
-  ``WALLET_ADDRESS``, ``DEBUG``).
+  ``WALLET_ADDRESS``, ``WALLET_KIND``, ``TWAK_BIN``, ``DEBUG``).
+  ``WALLET_KIND=twak`` switches every ``*Config.from_env()`` entry point to
+  the twak wallet (chain pinned to the config's network); ``TWAK_BIN``
+  optionally points at a version-pinned twak binary.
 - **Module-scoped**: ``<MODULE>_<KEY>`` (e.g. ``ERC8183_COMMERCE_ADDRESS``,
   ``ERC8004_REGISTRY_ADDRESS``, ``STORAGE_PROVIDER``).
 
@@ -100,7 +103,25 @@ class AgentConfig:
         ):
             from ..wallets import create_wallet_provider
 
-            self.wallet_provider = create_wallet_provider(self.wallet_kind)
+            kwargs: dict[str, str] = {}
+            if self.wallet_kind.strip().lower() == "twak":
+                # Pin twak to the config's network (chain identity must not
+                # drift from the chain the clients will talk to), and honor
+                # the TWAK_BIN override (e.g. a version-pinned shim).
+                from ..wallets.twak_provider import TWAK_CHAIN_FOR_NETWORK
+
+                net_name = (
+                    self.network
+                    if isinstance(self.network, str)
+                    else getattr(self.network, "name", "")
+                )
+                chain = TWAK_CHAIN_FOR_NETWORK.get(net_name)
+                if chain:
+                    kwargs["chain"] = chain
+                twak_bin = get_env("TWAK_BIN")
+                if twak_bin:
+                    kwargs["twak_bin"] = twak_bin
+            self.wallet_provider = create_wallet_provider(self.wallet_kind, **kwargs)
             return
 
         if self.private_key and not self.wallet_provider:
@@ -168,10 +189,12 @@ class AgentConfig:
         private_key = get_env("PRIVATE_KEY") or ""
         wallet_password = get_env("WALLET_PASSWORD") or ""
         wallet_address = get_env("WALLET_ADDRESS") or ""
+        wallet_kind = get_env("WALLET_KIND") or ""
         return {
             "private_key": private_key,
             "wallet_password": wallet_password,
             "wallet_address": wallet_address,
+            "wallet_kind": wallet_kind,
         }
 
     @classmethod

@@ -106,3 +106,55 @@ class TestAgentEndpoint:
 
         with pytest.raises(ValueError, match="must contain 'name' and 'endpoint' fields"):
             AgentEndpoint.from_dict({"endpoint": "https://example.com"})
+
+
+class TestA2AConstructor:
+    def test_appends_well_known_path(self):
+        ep = AgentEndpoint.a2a("https://agent.example")
+        assert ep.name == "A2A"
+        assert ep.endpoint == "https://agent.example/.well-known/agent-card.json"
+
+    def test_trailing_slash_normalized(self):
+        ep = AgentEndpoint.a2a("https://agent.example/")
+        assert ep.endpoint == "https://agent.example/.well-known/agent-card.json"
+
+    def test_full_card_url_not_doubled(self):
+        url = "https://agent.example/.well-known/agent-card.json"
+        assert AgentEndpoint.a2a(url).endpoint == url
+
+    def test_base_with_path(self):
+        ep = AgentEndpoint.a2a("https://host.example/agents/foo")
+        assert ep.endpoint == "https://host.example/agents/foo/.well-known/agent-card.json"
+
+    def test_version_and_capabilities_passthrough(self):
+        ep = AgentEndpoint.a2a("https://agent.example", version="0.3.0", capabilities=["chat"])
+        assert ep.version == "0.3.0"
+        assert ep.capabilities == ["chat"]
+
+    def test_invalid_scheme_rejected(self):
+        with pytest.raises(ValueError, match="http"):
+            AgentEndpoint.a2a("ftp://agent.example")
+
+
+class TestMCPConstructor:
+    def test_url_and_version_only(self):
+        """Per the EIP-8004 registration-file example: bare URL + version."""
+        ep = AgentEndpoint.mcp("https://agent.example/mcp", version="2025-06-18")
+        assert ep.name == "MCP"
+        assert ep.endpoint == "https://agent.example/mcp"
+        assert ep.version == "2025-06-18"
+        assert ep.capabilities == []
+
+    def test_capabilities_pure_passthrough(self):
+        ep = AgentEndpoint.mcp("https://agent.example/mcp", capabilities=["tools"])
+        assert ep.capabilities == ["tools"]
+
+    def test_stdio_has_no_registrable_url(self):
+        """A stdio MCP server has no http(s) URL — rejected by endpoint validation."""
+        with pytest.raises(ValueError, match="http"):
+            AgentEndpoint.mcp("stdio://local")
+
+    def test_round_trips_to_dict(self):
+        ep = AgentEndpoint.mcp("https://agent.example/mcp", version="2025-06-18")
+        again = AgentEndpoint.from_dict(ep.to_dict())
+        assert again == ep

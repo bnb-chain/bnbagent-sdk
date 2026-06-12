@@ -19,15 +19,15 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import APIRouter, FastAPI, Request
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from ...core.config import get_env
-from ...storage import LocalStorageProvider, StorageProvider
-from ..config import ERC8183_ENV_PREFIX, ERC8183Config
-from ..negotiation import NegotiationHandler
-from .job_ops import ERC8183JobOps
-from .rate_limit import SlidingWindowLimiter
+from bnbagent.core.config import get_env
+from bnbagent.erc8183 import ERC8183JobOps
+from bnbagent.erc8183.config import ERC8183_ENV_PREFIX, ERC8183Config
+from bnbagent.erc8183.negotiation import NegotiationHandler
+from bnbagent.storage import LocalStorageProvider, StorageProvider
+from bnbagent.utils import RateLimitExceeded, SlidingWindowLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +149,27 @@ def _build_negotiate_limiter() -> SlidingWindowLimiter:
     )
 
 
+# The SDK's error_code values are transport-neutral semantic strings; this
+# HTTP shell owns the mapping to status codes.
+_HTTP_STATUS = {
+    "budget_too_low": 402,
+    "not_assigned": 403,
+    "not_found": 404,
+    "job_expired": 408,
+    "wrong_status": 409,
+    "quote_expired": 410,
+    "description_invalid": 410,
+    "submit_deadline_passed": 410,
+    "payload_too_large": 413,
+    "internal_error": 500,
+    "chain_unavailable": 503,
+}
+
+
+def _http_status(result: dict, default: int) -> int:
+    return _HTTP_STATUS.get(result.get("error_code"), default)
+
+
 def _create_erc8183_routes(state: ERC8183State) -> APIRouter:
     router = APIRouter(tags=["ERC-8183"])
     negotiate_limiter = _build_negotiate_limiter()
@@ -157,7 +178,7 @@ def _create_erc8183_routes(state: ERC8183State) -> APIRouter:
     async def get_job(job_id: int):
         result = await state.job_ops.get_job(job_id)
         if not result.get("success"):
-            return JSONResponse(result, status_code=result.get("error_code", 500))
+            return JSONResponse(result, status_code=_http_status(result, 500))
         if "status" in result and hasattr(result["status"], "value"):
             result["status"] = result["status"].value
         return JSONResponse(result)
@@ -166,9 +187,10 @@ def _create_erc8183_routes(state: ERC8183State) -> APIRouter:
     async def get_job_response(job_id: int):
         result = await state.job_ops.get_response(job_id)
         if not result.get("success"):
-            # get_response distinguishes "no response exists" (404) from
-            # "deliverable exists but temporarily unresolvable" (503).
-            return JSONResponse(result, status_code=result.get("error_code") or 404)
+            # get_response distinguishes "no response exists" (not_found → 404)
+            # from "deliverable exists but temporarily unresolvable"
+            # (chain_unavailable → 503).
+            return JSONResponse(result, status_code=_http_status(result, 404))
         return JSONResponse(result)
 
     @router.get("/job/{job_id}/verify")
@@ -176,13 +198,17 @@ def _create_erc8183_routes(state: ERC8183State) -> APIRouter:
         result = await state.job_ops.verify_job(job_id)
         return JSONResponse(
             result,
-            status_code=200 if result.get("valid") else result.get("error_code", 400),
+            status_code=200 if result.get("valid") else _http_status(result, 400),
         )
 
     @router.post("/negotiate")
     async def negotiate(request: Request):
         client_ip = request.client.host if request.client else "unknown"
-        negotiate_limiter.check(client_ip)
+        try:
+            negotiate_limiter.check(client_ip)
+        except RateLimitExceeded:
+            # The SDK limiter is transport-agnostic; this HTTP shell maps it to 429.
+            raise HTTPException(status_code=429, detail="Too many requests")
 
         try:
             body = await request.json()
@@ -280,7 +306,12 @@ def create_erc8183_app(
                         await asyncio.to_thread(on_job_skipped, target, reason)
                 except Exception as exc:
                     logger.error(f"[ERC-8183] on_job_skipped callback error: {exc}")
-            return {"success": False, "error": reason, "error_code": error_code}
+            return {
+                "success": False,
+                "error": reason,
+                "error_code": error_code,
+                "retryable": bool(verification.get("retryable")),
+            }
 
         job = verification["job"]
 
@@ -324,8 +355,7 @@ def create_erc8183_app(
             if submission.get("success"):
                 retry_attempts.pop(job_id, None)
                 return
-            code = submission.get("error_code")
-            if isinstance(code, int) and 400 <= code < 500:
+            if not submission.get("retryable"):
                 # Permanent (not provider, expired, under-priced, oversize,
                 # no longer FUNDED, ...) — retrying cannot succeed.
                 retry_attempts.pop(job_id, None)

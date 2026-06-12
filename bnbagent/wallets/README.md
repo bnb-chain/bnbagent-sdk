@@ -14,7 +14,7 @@ The `wallets` module owns two responsibilities in the bnbagent SDK:
    either be signed-and-broadcast *by* the SDK, or broadcast *itself*.
 
 As of v0.2.0, `WalletProvider` is the **primary** way to configure signing
-across the SDK. Both `BNBAgentConfig` and `ERC8183Config` accept
+across the SDK. `AgentConfig` subclasses (e.g. `ERC8183Config`) accept
 `wallet_provider=` directly, or auto-wrap `private_key` + `wallet_password`
 into an `EVMWalletProvider` at construction time (clearing the plaintext key
 immediately).
@@ -153,7 +153,7 @@ Configs accept a `wallet_kind` for non-EVM providers (the `evm` path stays on
 the `private_key` + `wallet_password` convenience flow):
 
 ```python
-config = BNBAgentConfig(wallet_kind="twak", network="bsc-mainnet")
+config = ERC8183Config(wallet_kind="twak", network="bsc-mainnet")
 # -> __post_init__ builds TWAKProvider via the factory
 ```
 
@@ -462,7 +462,7 @@ inheritance required.
 
 ## Config Auto-Wrap
 
-Both `BNBAgentConfig` and `ERC8183Config` support a convenience pattern:
+`AgentConfig` subclasses (e.g. `ERC8183Config`) support a convenience pattern:
 
 ```python
 from bnbagent.erc8183.config import ERC8183Config

@@ -24,15 +24,15 @@ from typing import Any
 
 from web3 import Web3
 
-from ...config import NetworkConfig
-from ...core.config import get_env
-from ...exceptions import RpcRangeLimitError
-from ...storage.storage_provider import StorageProvider
-from ...wallets.wallet_provider import WalletProvider
-from ..client import ERC8183Client
-from ..config import ERC8183_ENV_PREFIX
-from ..schema import SCHEMA_VERSION, DeliverableManifest
-from ..types import JobStatus
+from ..config import NetworkConfig
+from ..core.config import get_env
+from ..exceptions import RpcRangeLimitError
+from ..storage.storage_provider import StorageProvider
+from ..wallets.wallet_provider import WalletProvider
+from .client import ERC8183Client
+from .config import ERC8183_ENV_PREFIX
+from .schema import SCHEMA_VERSION, DeliverableManifest
+from .types import JobStatus
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +71,27 @@ _TRANSIENT_ERROR_KEYWORDS = (
     "429", "too many requests", "rate limit", "limit exceeded",
 )
 
+# ── Semantic error codes (transport-neutral) ──
+#
+# ``error_code`` values are stable machine-readable strings, NOT HTTP status
+# codes — this module has no transport. A serving layer maps them to its own
+# protocol's rejection (the HTTP example keeps a code → status table).
+#
+# Retry contract: error dicts carry ``"retryable": True`` only for transient
+# failures (``chain_unavailable``, ``internal_error``); absence means the
+# failure is permanent and retrying cannot succeed.
+ERR_BUDGET_TOO_LOW = "budget_too_low"        # budget < service_price
+ERR_NOT_ASSIGNED = "not_assigned"            # job.provider != this agent
+ERR_NOT_FOUND = "not_found"                  # job / stored response missing
+ERR_JOB_EXPIRED = "job_expired"              # past job.expiredAt
+ERR_WRONG_STATUS = "wrong_status"            # job not in the required status
+ERR_QUOTE_EXPIRED = "quote_expired"          # negotiation quote TTL elapsed
+ERR_DESCRIPTION_INVALID = "description_invalid"  # malformed on-chain description (fail closed)
+ERR_SUBMIT_DEADLINE_PASSED = "submit_deadline_passed"  # past expiredAt - disputeWindow
+ERR_PAYLOAD_TOO_LARGE = "payload_too_large"  # response/metadata size cap hit
+ERR_INTERNAL = "internal_error"              # unexpected failure (retryable)
+ERR_CHAIN_UNAVAILABLE = "chain_unavailable"  # transient chain/RPC trouble (retryable)
+
 
 def _exc_error_fields(exc: Exception) -> dict[str, Any]:
     """Safe ``{"error", "error_code"}`` fields for an exception.
@@ -81,9 +102,10 @@ def _exc_error_fields(exc: Exception) -> dict[str, Any]:
     Transport errors are replaced by a generic message and any URL-shaped
     token is redacted (RPC endpoints embed API keys in the path); other
     messages (e.g. revert reasons) pass through. ``error_code`` is
-    HTTP-like: 503 for transient chain/RPC trouble, 500 otherwise. The raw
-    JSON-RPC code (e.g. ``-32005``), when present, rides along separately
-    as ``rpc_error_code`` — never mixed into ``error_code``.
+    ``chain_unavailable`` for transient chain/RPC trouble, ``internal_error``
+    otherwise — both retryable. The raw JSON-RPC code (e.g. ``-32005``), when
+    present, rides along separately as ``rpc_error_code`` — never mixed into
+    ``error_code``.
     """
     payload = exc.args[0] if exc.args else None
     rpc_code = None
@@ -94,10 +116,14 @@ def _exc_error_fields(exc: Exception) -> dict[str, Any]:
     else:
         message = str(exc)
     if any(k in message.lower() for k in _TRANSIENT_ERROR_KEYWORDS):
-        fields = {"error": "Temporary chain/RPC error", "error_code": 503}
+        fields = {
+            "error": "Temporary chain/RPC error",
+            "error_code": ERR_CHAIN_UNAVAILABLE,
+            "retryable": True,
+        }
     else:
         message = re.sub(r"\S+://\S+", "<redacted>", message)
-        fields = {"error": message, "error_code": 500}
+        fields = {"error": message, "error_code": ERR_INTERNAL, "retryable": True}
     if rpc_code is not None:
         fields["rpc_error_code"] = rpc_code
     return fields
@@ -116,8 +142,9 @@ class ERC8183JobOps:
         Optional off-chain storage for deliverable payloads.
     service_price
         Minimum acceptable budget in token raw units. Used by
-        ``verify_job`` to reject under-priced jobs. Advertised decimals in
-        402 responses are fetched dynamically from the payment token.
+        ``verify_job`` to reject under-priced jobs (``budget_too_low``).
+        Advertised decimals in those rejections are fetched dynamically
+        from the payment token.
     """
 
     def __init__(
@@ -209,11 +236,14 @@ class ERC8183JobOps:
         try:
             verification = await self.verify_job(job_id)
             if not verification.get("valid"):
-                return {
+                fields = {
                     "success": False,
                     "error": f"Job verification failed: {verification.get('error', 'unknown')}",
                     "error_code": verification.get("error_code"),
                 }
+                if verification.get("retryable"):
+                    fields["retryable"] = True
+                return fields
 
             max_resp = _max_response_bytes()
             actual_resp = len(response_content.encode("utf-8"))
@@ -224,7 +254,7 @@ class ERC8183JobOps:
                         f"response_content size {actual_resp} bytes exceeds "
                         f"limit {max_resp} bytes"
                     ),
-                    "error_code": 413,
+                    "error_code": ERR_PAYLOAD_TOO_LARGE,
                 }
 
             if metadata is not None:
@@ -239,7 +269,7 @@ class ERC8183JobOps:
                             f"metadata size {actual_meta} bytes exceeds "
                             f"limit {max_meta} bytes"
                         ),
-                        "error_code": 413,
+                        "error_code": ERR_PAYLOAD_TOO_LARGE,
                     }
 
             erc8183 = self._get_client()
@@ -312,7 +342,8 @@ class ERC8183JobOps:
             return {
                 "success": False,
                 "error": "Temporary chain/RPC error" if is_net else "Failed to fetch job from chain",
-                "error_code": 503 if is_net else 500,
+                "error_code": ERR_CHAIN_UNAVAILABLE if is_net else ERR_INTERNAL,
+                "retryable": True,
             }
 
     async def get_job_status(self, job_id: int) -> dict[str, Any]:
@@ -360,7 +391,8 @@ class ERC8183JobOps:
                     f"Deliverable for job {job_id} temporarily unresolvable "
                     "(RPC rate limit); retry"
                 ),
-                "error_code": 503,
+                "error_code": ERR_CHAIN_UNAVAILABLE,
+                "retryable": True,
             }
         except Exception as exc:
             logger.warning(f"[ERC8183JobOps] get_response({job_id}) on-chain fallback failed: {exc}")
@@ -378,12 +410,13 @@ class ERC8183JobOps:
             return {
                 "success": False,
                 "error": f"Deliverable for job {job_id} temporarily unresolvable; retry",
-                "error_code": 503,
+                "error_code": ERR_CHAIN_UNAVAILABLE,
+                "retryable": True,
             }
         return {
             "success": False,
             "error": f"Response not found for job {job_id}",
-            "error_code": 404,
+            "error_code": ERR_NOT_FOUND,
         }
 
     # ---------------------------------------------------- verification helper
@@ -394,11 +427,14 @@ class ERC8183JobOps:
             job_result = await self.get_job(job_id)
             if not job_result.get("success"):
                 # get_job already returns a sanitized message + error_code.
-                return {
+                fields = {
                     "valid": False,
                     "error": job_result.get("error", "Failed to fetch job from chain"),
-                    "error_code": job_result.get("error_code", 500),
+                    "error_code": job_result.get("error_code", ERR_INTERNAL),
                 }
+                if job_result.get("retryable"):
+                    fields["retryable"] = True
+                return fields
 
             me = self.agent_address.lower()
 
@@ -408,20 +444,20 @@ class ERC8183JobOps:
                 return {
                     "valid": False,
                     "error": f"Job status is {status_name}, expected FUNDED",
-                    "error_code": 409,
+                    "error_code": ERR_WRONG_STATUS,
                 }
 
             if str(job_result.get("provider", "")).lower() != me:
                 return {
                     "valid": False,
                     "error": "This agent is not the provider for this job",
-                    "error_code": 403,
+                    "error_code": ERR_NOT_ASSIGNED,
                 }
 
             now = int(time.time())
             expired_at = job_result.get("expiredAt", 0)
             if expired_at <= now:
-                return {"valid": False, "error": "Job has expired", "error_code": 408}
+                return {"valid": False, "error": "Job has expired", "error_code": ERR_JOB_EXPIRED}
 
             # OptimisticPolicy reverts ``commerce.submit`` with ``SubmissionTooLate``
             # once ``now > expiredAt - disputeWindow``. Detect that here so the
@@ -439,7 +475,7 @@ class ERC8183JobOps:
                             "Submission deadline has passed "
                             f"(expiredAt - disputeWindow = {submit_deadline}, now = {now})"
                         ),
-                        "error_code": 410,
+                        "error_code": ERR_SUBMIT_DEADLINE_PASSED,
                     }
             except Exception as exc:
                 logger.warning(
@@ -449,7 +485,7 @@ class ERC8183JobOps:
 
             description = job_result.get("description", "")
             if description:
-                from ..negotiation import parse_job_description
+                from .negotiation import parse_job_description
 
                 try:
                     parsed = parse_job_description(description)
@@ -457,14 +493,14 @@ class ERC8183JobOps:
                     return {
                         "valid": False,
                         "error": f"Malformed job description: {exc}",
-                        "error_code": 410,
+                        "error_code": ERR_DESCRIPTION_INVALID,
                     }
                 if parsed and parsed.quote_expires_at is not None:
                     if now > parsed.quote_expires_at:
                         return {
                             "valid": False,
                             "error": "Negotiation quote has expired",
-                            "error_code": 410,
+                            "error_code": ERR_QUOTE_EXPIRED,
                         }
 
             if self._service_price > 0:
@@ -477,7 +513,7 @@ class ERC8183JobOps:
                             f"Job budget ({budget}) is below agent's"
                             f" service price ({self._service_price})"
                         ),
-                        "error_code": 402,
+                        "error_code": ERR_BUDGET_TOO_LOW,
                         "service_price": str(self._service_price),
                         "decimals": decimals,
                     }
@@ -507,7 +543,8 @@ class ERC8183JobOps:
             return {
                 "valid": False,
                 "error": "Temporary chain/RPC error" if is_net else "Failed to verify job",
-                "error_code": 503 if is_net else 500,
+                "error_code": ERR_CHAIN_UNAVAILABLE if is_net else ERR_INTERNAL,
+                "retryable": True,
             }
 
     # ----------------------------------------------------- pending-job scanner

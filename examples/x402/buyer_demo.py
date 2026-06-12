@@ -20,7 +20,7 @@ just demonstrates the request/response envelope round-trip so SDK users
 can see exactly which bytes go where.
 
 Usage:
-    python examples/x402_buyer_demo.py
+    python examples/x402/buyer_demo.py
 
 Exit code 0 + "ALL STEPS OK" line means the buyer-side envelope is wired
 end-to-end against the SDK's signing surface.

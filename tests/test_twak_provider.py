@@ -715,7 +715,7 @@ def test_sign_message_normalises_and_self_checks():
     def run(cmd, **kwargs):
         assert cmd == [
             "twak", "wallet", "sign-message",
-            "--chain", "bsc", "--message", message, "--json",
+            "--chain", "bsc", "--message", "0x" + message.encode().hex(), "--json",
         ]
         return _completed(cmd, {"success": True, "signature": raw_sig})
 
@@ -728,6 +728,31 @@ def test_sign_message_normalises_and_self_checks():
     assert result["r"] == signed.r
     assert result["s"] == signed.s
     assert result["v"] == signed.v
+
+
+def test_sign_message_uses_base_chain_key_on_testnet():
+    """sign-message's --chain is a key-family selector: the CLI accepts "bsc"
+    but rejects "bsctestnet" (field-verified v0.19.0). A testnet-pinned
+    provider must still sign with the base key — EIP-191 is chain-agnostic
+    and the address is identical on both BNB networks."""
+    message = "hello twak"
+    acct = Account.from_key(_TEST_KEY)
+    signed = Account.sign_message(encode_defunct(text=message), private_key=_TEST_KEY)
+
+    twak = TWAKProvider(chain="bsctestnet")
+    twak._address = acct.address
+    twak._ensured = True
+
+    def run(cmd, **kwargs):
+        assert cmd == [
+            "twak", "wallet", "sign-message",
+            "--chain", "bsc", "--message", "0x" + message.encode().hex(), "--json",
+        ]
+        return _completed(cmd, {"success": True, "signature": "0x" + bytes(signed.signature).hex()})
+
+    with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
+        result = twak.sign_message(message)
+    assert result["signature"] == "0x" + bytes(signed.signature).hex()
 
 
 def test_sign_message_recovery_mismatch_raises():

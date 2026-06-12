@@ -45,10 +45,6 @@ Repository = "https://github.com/bnb-chain/bnbagent-sdk"
 Issues = "https://github.com/bnb-chain/bnbagent-sdk/issues"
 
 [project.optional-dependencies]
-server = [
-    "fastapi>=0.104.0",
-    "uvicorn>=0.24.0",
-]
 ipfs = [
     "httpx>=0.25.0",
 ]
@@ -57,7 +53,6 @@ dev = [
     "pytest-mock>=3.11.0",
     "pytest-asyncio>=0.23.0",
     "httpx>=0.25.0",
-    "fastapi>=0.104.0",
     "ruff>=0.4.0",
 ]
 examples = [
@@ -67,10 +62,6 @@ examples = [
     "uvicorn>=0.24.0",
     "python-dotenv>=1.0.0",
 ]
-
-[project.entry-points."bnbagent.modules"]
-erc8004 = "bnbagent.erc8004:create_module"
-erc8183 = "bnbagent.erc8183:create_module"
 
 [build-system]
 requires = ["hatchling"]

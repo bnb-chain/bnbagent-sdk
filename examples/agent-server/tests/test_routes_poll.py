@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from fastapi.testclient import TestClient
 
-from bnbagent.erc8183.server.routes import create_erc8183_app
+from erc8183_server import create_erc8183_app
 
 
 def _fake_state(job_ops):
@@ -62,13 +62,13 @@ def _valid(job_id=1):
 
 class TestFundedPollRetry:
     def test_transient_verify_failure_retries_then_succeeds(self, monkeypatch):
-        transient = {"valid": False, "error": "Temporary chain/RPC error", "error_code": 503}
+        transient = {"valid": False, "error": "Temporary chain/RPC error", "error_code": "chain_unavailable", "retryable": True}
         ops = _job_ops(
             verify_results=[transient, _valid()],
             pending_jobs=[{"jobId": 1}],
         )
         monkeypatch.setattr(
-            "bnbagent.erc8183.server.routes.create_erc8183_state",
+            "erc8183_server.create_erc8183_state",
             lambda config: _fake_state(ops),
         )
         _run_app(
@@ -80,13 +80,13 @@ class TestFundedPollRetry:
         assert ops.submit_result.await_count == 1
 
     def test_permanent_failure_does_not_retry(self, monkeypatch):
-        permanent = {"valid": False, "error": "This agent is not the provider", "error_code": 403}
+        permanent = {"valid": False, "error": "This agent is not the provider", "error_code": "not_assigned"}
         ops = _job_ops(
             verify_results=lambda job_id: permanent,
             pending_jobs=[{"jobId": 1}],
         )
         monkeypatch.setattr(
-            "bnbagent.erc8183.server.routes.create_erc8183_state",
+            "erc8183_server.create_erc8183_state",
             lambda config: _fake_state(ops),
         )
         _run_app(ops, on_job=lambda job: "answer", seconds=0.3)
@@ -94,13 +94,13 @@ class TestFundedPollRetry:
         ops.submit_result.assert_not_called()
 
     def test_retries_are_capped(self, monkeypatch):
-        transient = {"valid": False, "error": "Temporary chain/RPC error", "error_code": 503}
+        transient = {"valid": False, "error": "Temporary chain/RPC error", "error_code": "chain_unavailable", "retryable": True}
         ops = _job_ops(
             verify_results=lambda job_id: transient,
             pending_jobs=[{"jobId": 1}],
         )
         monkeypatch.setattr(
-            "bnbagent.erc8183.server.routes.create_erc8183_state",
+            "erc8183_server.create_erc8183_state",
             lambda config: _fake_state(ops),
         )
         _run_app(ops, on_job=lambda job: "answer", seconds=0.8)
@@ -110,28 +110,28 @@ class TestFundedPollRetry:
 
 
 class TestResponseRoute:
-    """/response forwards get_response's error_code (503 vs 404), BUG-06."""
+    """/response maps get_response's semantic error_code (chain_unavailable→503 vs not_found→404), BUG-06."""
 
     def _http(self, get_response_result, monkeypatch):
         ops = MagicMock()
         ops.agent_address = "0x" + "aa" * 20
         ops.get_response = AsyncMock(return_value=get_response_result)
         monkeypatch.setattr(
-            "bnbagent.erc8183.server.routes.create_erc8183_state",
+            "erc8183_server.create_erc8183_state",
             lambda config: _fake_state(ops),
         )
         return TestClient(create_erc8183_app(config=MagicMock()))
 
     def test_unresolvable_deliverable_forwards_503(self, monkeypatch):
         http = self._http(
-            {"success": False, "error": "temporarily unresolvable", "error_code": 503},
+            {"success": False, "error": "temporarily unresolvable", "error_code": "chain_unavailable", "retryable": True},
             monkeypatch,
         )
         assert http.get("/erc8183/job/1/response").status_code == 503
 
     def test_genuine_not_found_is_404(self, monkeypatch):
         http = self._http(
-            {"success": False, "error": "Response not found", "error_code": 404},
+            {"success": False, "error": "Response not found", "error_code": "not_found"},
             monkeypatch,
         )
         assert http.get("/erc8183/job/1/response").status_code == 404

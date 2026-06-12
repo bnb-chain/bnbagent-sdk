@@ -310,7 +310,6 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
-    { name = "fastapi" },
     { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -327,19 +326,13 @@ examples = [
 ipfs = [
     { name = "httpx" },
 ]
-server = [
-    { name = "fastapi" },
-    { name = "uvicorn" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", marker = "extra == 'examples'", specifier = ">=0.19" },
     { name = "ddgs", marker = "extra == 'examples'", specifier = ">=6.0" },
     { name = "eth-account", specifier = ">=0.10.0" },
-    { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.104.0" },
     { name = "fastapi", marker = "extra == 'examples'", specifier = ">=0.104.0" },
-    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.104.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.25.0" },
     { name = "httpx", marker = "extra == 'ipfs'", specifier = ">=0.25.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
@@ -350,10 +343,9 @@ requires-dist = [
     { name = "requests", specifier = ">=2.31.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4.0" },
     { name = "uvicorn", marker = "extra == 'examples'", specifier = ">=0.24.0" },
-    { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.24.0" },
     { name = "web3", specifier = ">=6.15.0" },
 ]
-provides-extras = ["dev", "examples", "ipfs", "server"]
+provides-extras = ["dev", "examples", "ipfs"]
 
 [[package]]
 name = "certifi"

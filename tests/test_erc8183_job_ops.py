@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from bnbagent.erc8183.commerce import _decode_job
-from bnbagent.erc8183.server.job_ops import ERC8183JobOps, funded_job_watcher
+from bnbagent.erc8183.job_ops import ERC8183JobOps, funded_job_watcher
 from bnbagent.erc8183.types import Job, JobStatus
 
 ME = "0x" + "aa" * 20
@@ -85,7 +85,7 @@ class TestVerifyJob:
         result = await ops.verify_job(1)
         assert result["valid"] is False
         assert "FUNDED" in result["error"]
-        assert result["error_code"] == 409
+        assert result["error_code"] == "wrong_status"
 
     @pytest.mark.asyncio
     async def test_rejects_foreign_provider(self):
@@ -94,7 +94,7 @@ class TestVerifyJob:
         client.get_job.return_value = _job(provider=OTHER)
         result = await ops.verify_job(1)
         assert result["valid"] is False
-        assert result["error_code"] == 403
+        assert result["error_code"] == "not_assigned"
 
     @pytest.mark.asyncio
     async def test_rejects_expired(self):
@@ -103,7 +103,7 @@ class TestVerifyJob:
         client.get_job.return_value = _job(expired_at=int(time.time()) - 100)
         result = await ops.verify_job(1)
         assert result["valid"] is False
-        assert result["error_code"] == 408
+        assert result["error_code"] == "job_expired"
 
     @pytest.mark.asyncio
     async def test_rejects_under_priced(self):
@@ -112,7 +112,7 @@ class TestVerifyJob:
         client.get_job.return_value = _job(budget=1000)
         result = await ops.verify_job(1)
         assert result["valid"] is False
-        assert result["error_code"] == 402
+        assert result["error_code"] == "budget_too_low"
         assert result["service_price"] == "5000"
 
     @pytest.mark.asyncio
@@ -136,7 +136,7 @@ class TestVerifyJob:
         client.get_job.return_value = _job(description=bad)
         result = await ops.verify_job(1)
         assert result["valid"] is False
-        assert result["error_code"] == 410
+        assert result["error_code"] == "description_invalid"
         assert "Malformed" in result["error"]
 
     @pytest.mark.asyncio
@@ -160,7 +160,7 @@ class TestVerifyJob:
         client.get_job.return_value = _job(description=good)
         result = await ops.verify_job(1)
         assert result["valid"] is False
-        assert result["error_code"] == 410
+        assert result["error_code"] == "quote_expired"
         assert "expired" in result["error"].lower()
 
     @pytest.mark.asyncio
@@ -209,7 +209,7 @@ class TestSubmitResult:
         client.get_job.return_value = _job(status=JobStatus.FUNDED)
         result = await ops.submit_result(1, "x" * 1025)
         assert result["success"] is False
-        assert result["error_code"] == 413
+        assert result["error_code"] == "payload_too_large"
         assert "response_content size" in result["error"]
         client.submit.assert_not_called()
 
@@ -221,7 +221,7 @@ class TestSubmitResult:
         client.get_job.return_value = _job(status=JobStatus.FUNDED)
         result = await ops.submit_result(1, "ok", metadata={"k": "v" * 400})
         assert result["success"] is False
-        assert result["error_code"] == 413
+        assert result["error_code"] == "payload_too_large"
         assert "metadata size" in result["error"]
         client.submit.assert_not_called()
 
@@ -448,7 +448,7 @@ class TestGetSubmittedJobs:
         )
         result = await ops.get_submitted_jobs()
         assert result["success"] is False
-        assert result["error_code"] == 503
+        assert result["error_code"] == "chain_unavailable"
         assert result["rpc_error_code"] == -32005
 
 
@@ -582,24 +582,24 @@ class TestExcErrorFields:
     """Error envelopes never embed dict-reprs or RPC URLs (BUG-09)."""
 
     def test_web3_dict_error_surfaces_inner_message(self):
-        from bnbagent.erc8183.server.job_ops import _exc_error_fields
+        from bnbagent.erc8183.job_ops import _exc_error_fields
 
         exc = ValueError({"code": -32000, "message": "insufficient funds for gas"})
         fields = _exc_error_fields(exc)
         assert fields["error"] == "insufficient funds for gas"
-        assert fields["error_code"] == 500
+        assert fields["error_code"] == "internal_error"
         assert fields["rpc_error_code"] == -32000
 
     def test_rate_limited_rpc_is_503(self):
-        from bnbagent.erc8183.server.job_ops import _exc_error_fields
+        from bnbagent.erc8183.job_ops import _exc_error_fields
 
         exc = ValueError({"code": -32005, "message": "limit exceeded"})
         fields = _exc_error_fields(exc)
-        assert fields["error_code"] == 503
+        assert fields["error_code"] == "chain_unavailable"
         assert fields["rpc_error_code"] == -32005
 
     def test_transport_error_does_not_leak_url(self):
-        from bnbagent.erc8183.server.job_ops import _exc_error_fields
+        from bnbagent.erc8183.job_ops import _exc_error_fields
 
         exc = ConnectionError(
             "HTTPSConnectionPool(host='rpc.example.com'): Max retries exceeded "
@@ -607,18 +607,18 @@ class TestExcErrorFields:
         )
         fields = _exc_error_fields(exc)
         assert "SECRETKEY" not in fields["error"]
-        assert fields["error_code"] == 503
+        assert fields["error_code"] == "chain_unavailable"
 
     def test_revert_reason_passes_through(self):
-        from bnbagent.erc8183.server.job_ops import _exc_error_fields
+        from bnbagent.erc8183.job_ops import _exc_error_fields
 
         exc = RuntimeError("Transaction would revert: NotProvider")
         fields = _exc_error_fields(exc)
         assert fields["error"] == "Transaction would revert: NotProvider"
-        assert fields["error_code"] == 500
+        assert fields["error_code"] == "internal_error"
 
     def test_non_transient_url_is_redacted_not_replaced(self):
-        from bnbagent.erc8183.server.job_ops import _exc_error_fields
+        from bnbagent.erc8183.job_ops import _exc_error_fields
 
         exc = RuntimeError(
             "Cannot publish: ERC8183_AGENT_URL is not set "
@@ -635,12 +635,12 @@ class TestExcErrorFields:
             return_value={
                 "valid": False,
                 "error": "Job status is SUBMITTED, expected FUNDED",
-                "error_code": 409,
+                "error_code": "wrong_status",
             }
         )
         result = await ops.submit_result(1, "content")
         assert result["success"] is False
-        assert result["error_code"] == 409
+        assert result["error_code"] == "wrong_status"
 
 
 class TestGetResponseClassification:
@@ -659,30 +659,30 @@ class TestGetResponseClassification:
         ops = self._ops({"success": True, "status": JobStatus.SUBMITTED})
         result = await ops.get_response(1)
         assert result["success"] is False
-        assert result["error_code"] == 503
+        assert result["error_code"] == "chain_unavailable"
 
     @pytest.mark.asyncio
     async def test_completed_job_unresolvable_is_503(self):
         ops = self._ops({"success": True, "status": JobStatus.COMPLETED})
         result = await ops.get_response(1)
-        assert result["error_code"] == 503
+        assert result["error_code"] == "chain_unavailable"
 
     @pytest.mark.asyncio
     async def test_never_submitted_job_is_genuine_404(self):
         ops = self._ops({"success": True, "status": JobStatus.FUNDED})
         result = await ops.get_response(1)
-        assert result["error_code"] == 404
+        assert result["error_code"] == "not_found"
 
     @pytest.mark.asyncio
-    async def test_unknown_status_is_503(self):
+    async def test_unknown_status_is_chain_unavailable(self):
         ops = self._ops(
-            {"success": False, "error": "Temporary chain/RPC error", "error_code": 503}
+            {"success": False, "error": "Temporary chain/RPC error", "error_code": "chain_unavailable", "retryable": True}
         )
         result = await ops.get_response(1)
-        assert result["error_code"] == 503
+        assert result["error_code"] == "chain_unavailable"
 
     @pytest.mark.asyncio
-    async def test_rate_limited_resolution_is_503_without_status_lookup(self):
+    async def test_rate_limited_resolution_is_chain_unavailable_without_status_lookup(self):
         from bnbagent.exceptions import RpcRangeLimitError
 
         storage = MagicMock(spec=["download", "upload"])
@@ -692,5 +692,26 @@ class TestGetResponseClassification:
         ops.get_job = AsyncMock()
         result = await ops.get_response(1)
         assert result["success"] is False
-        assert result["error_code"] == 503
+        assert result["error_code"] == "chain_unavailable"
         ops.get_job.assert_not_called()
+
+
+class TestRetryableContract:
+    """Permanent rejections carry no retryable flag; transient ones carry True."""
+
+    @pytest.mark.asyncio
+    async def test_permanent_rejection_not_retryable(self):
+        ops = _make_ops(service_price=10)
+        client = _inject_client(ops)
+        client.get_job.return_value = _job(budget=1)
+        client.token_decimals.return_value = 18
+        result = await ops.verify_job(1)
+        assert result["error_code"] == "budget_too_low"
+        assert "retryable" not in result
+
+    def test_transient_exception_is_retryable(self):
+        from bnbagent.erc8183.job_ops import _exc_error_fields
+
+        fields = _exc_error_fields(Exception("connection timeout"))
+        assert fields["error_code"] == "chain_unavailable"
+        assert fields["retryable"] is True

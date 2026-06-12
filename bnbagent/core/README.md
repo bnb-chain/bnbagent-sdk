@@ -3,9 +3,9 @@
 ## Overview
 
 The `core` module contains the internal infrastructure shared across all
-bnbagent protocol modules. It provides nonce management, paymaster
-integration, a reusable contract transaction mixin, the plugin module system,
-and ABI loading utilities.
+bnbagent protocol packages. It provides nonce management, paymaster
+integration, a reusable contract transaction mixin, and ABI loading
+utilities.
 
 Exception types are defined in the top-level `bnbagent.exceptions` module and
 re-exported from `bnbagent.core` for convenience.
@@ -25,12 +25,6 @@ re-exported from `bnbagent.core` for convenience.
   rate-limit and nonce errors. Prefers `WalletProvider.sign_transaction()`
   when available, falls back to raw `private_key` signing. Used by
   `ERC8183Client`, `CommerceClient`, `RouterClient`, and `PolicyClient`.
-- **ModuleRegistry** -- discovers, validates dependencies, and initializes
-  `BNBAgentModule` plugins. Supports built-in modules, explicit
-  registration, and `pyproject.toml` entry points.
-- **BNBAgentModule** -- abstract base class for protocol modules with a
-  well-defined lifecycle: `__init__` -> `initialize(config)` ->
-  `get_actions()` -> `shutdown()`.
 
 ## API Reference
 
@@ -66,27 +60,6 @@ raw private keys are never accepted at this layer.
 | `_send_tx(fn, value=0, gas=2_000_000, skip_preflight=False)` | Build, sign, and send a write transaction with retry. Includes pre-flight `eth_call` simulation (surfaces revert reasons before spending gas), dynamic gas price with 20% buffer, and on-chain revert detection (`receipt.status == 0`). Pass `skip_preflight=True` when the node returns opaque `0x` reverts. |
 | `_call_with_retry(fn)` | Execute a read-only contract call with rate-limit retry. |
 
-### `ModuleRegistry`
-
-| Method | Description |
-|---|---|
-| `register(module)` | Explicitly register a `BNBAgentModule`. |
-| `discover()` | Auto-discover built-in and entry-point modules. |
-| `initialize_all(config)` | Initialize all modules in dependency order. |
-| `get(name)` | Retrieve a registered module by name. |
-| `list_modules()` | Return `ModuleInfo` for all registered modules. |
-| `shutdown_all()` | Shut down all modules in reverse order. |
-
-### `BNBAgentModule` (ABC)
-
-| Method | Description |
-|---|---|
-| `info()` | Return `ModuleInfo(name, version, description, dependencies)`. |
-| `default_config()` | Return default config dict (lazy, calls `resolve_network()`). |
-| `initialize(config, **kwargs)` | Receive merged config and shared infra. |
-| `get_actions()` | Return AI-invocable action descriptors (reserved). |
-| `shutdown()` | Clean up resources. |
-
 ## Transaction Retry Strategy
 
 `ContractClientMixin._send_tx()` uses the following retry policy:
@@ -100,20 +73,9 @@ Nonce errors trigger an immediate re-sync from the chain and retry. Rate
 limits (`429` / `"too many requests"`) use exponential backoff
 (`base * 2^attempt`). All other errors are raised immediately.
 
-## Third-Party Module Entry Points
-
-Third-party modules can register via `pyproject.toml`:
-
-```toml
-[project.entry-points."bnbagent.modules"]
-my_module = "my_package:create_module"
-```
-
-`ModuleRegistry.discover()` will find and register the module automatically.
-
 ## Related
 
-- [`erc8004`](../erc8004/README.md) -- ERC-8004 module, uses `Paymaster` and `ModuleRegistry`.
-- [`erc8183`](../erc8183/README.md) -- ERC-8183 module, uses `ContractClientMixin` and `NonceManager`.
+- [`erc8004`](../erc8004/README.md) -- ERC-8004 package, uses `Paymaster`.
+- [`erc8183`](../erc8183/README.md) -- ERC-8183 package, uses `ContractClientMixin` and `NonceManager`.
 - [`wallets`](../wallets/README.md) -- `ContractClientMixin` delegates signing to `WalletProvider`.
 - [`storage`](../storage/README.md) -- off-chain storage used alongside core infra.

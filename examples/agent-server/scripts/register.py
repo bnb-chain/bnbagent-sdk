@@ -28,11 +28,12 @@ load_dotenv(Path(__file__).resolve().parent.parent / env_file)
 
 
 def main():
+    wallet_kind = os.getenv("WALLET_KIND", "evm").lower()
     private_key = os.getenv("PRIVATE_KEY")
     wallet_password = os.getenv("WALLET_PASSWORD", "demo-password")
 
-    if not private_key:
-        print("Error: PRIVATE_KEY environment variable is required")
+    if wallet_kind != "twak" and not private_key:
+        print("Error: PRIVATE_KEY environment variable is required for WALLET_KIND=evm")
         print("Set it in .env at the project root")
         sys.exit(1)
 
@@ -61,10 +62,20 @@ def main():
         print("Run: pip install bnbagent")
         sys.exit(1)
 
-    wallet = EVMWalletProvider(
-        password=wallet_password,
-        private_key=private_key,
-    )
+    if wallet_kind == "twak":
+        # Same switch as WALLET_KIND in service.py — 8004 writes route
+        # through the wallet's own executor, so twak signs + broadcasts.
+        from bnbagent.wallets import TWAK_CHAIN_FOR_NETWORK, create_wallet_provider
+
+        twak_kwargs = {"chain": TWAK_CHAIN_FOR_NETWORK["bsc-testnet"]}
+        if os.getenv("TWAK_BIN"):
+            twak_kwargs["twak_bin"] = os.environ["TWAK_BIN"]
+        wallet = create_wallet_provider("twak", **twak_kwargs)
+    else:
+        wallet = EVMWalletProvider(
+            password=wallet_password,
+            private_key=private_key,
+        )
 
     sdk = ERC8004Agent(
         network="bsc-testnet",
@@ -74,14 +85,17 @@ def main():
 
     print(f"  Wallet:      {sdk.wallet_address}")
 
+    # This example serves a plain HTTP surface, so it registers a generic
+    # "web" endpoint (the EIP-8004 endpoint `name` is an open string; A2A /
+    # MCP / OASF are the spec-named types). For a protocol-typed registration
+    # — AgentEndpoint.a2a() / AgentEndpoint.mcp() — see ../../a2a-agent.
     agent_uri = sdk.generate_agent_uri(
         name=agent_name,
         description=agent_description,
         endpoints=[
             AgentEndpoint(
-                name="ERC-8183",
+                name="web",
                 endpoint=agent_endpoint,
-                version="0.1.0",
             ),
         ],
     )

@@ -36,5 +36,4 @@ pytest -v
 | `test_local_storage.py` | `LocalStorageProvider` — file I/O, permissions, path traversal |
 | `test_ipfs_storage.py` | `IPFSStorageProvider` — Pinata upload, CID validation, gateway |
 | `test_storage_from_env.py` | `LocalStorageProvider.from_env` / `IPFSStorageProvider.from_env` — env config per provider |
-| `test_module_system.py` | `BNBAgentModule` / `ModuleRegistry` — module composition |
 | `test_multicall.py` | `multicall_read` — Multicall3 batch reads |

@@ -1,13 +1,12 @@
-"""Tests for the in-memory sliding-window rate limiter used on /negotiate."""
+"""Tests for the in-memory sliding-window rate limiter (bnbagent.utils)."""
 
 from __future__ import annotations
 
 import time
 
 import pytest
-from fastapi import HTTPException
 
-from bnbagent.erc8183.server.rate_limit import SlidingWindowLimiter
+from bnbagent.utils.rate_limit import RateLimitExceeded, SlidingWindowLimiter
 
 
 class TestSlidingWindowLimiter:
@@ -20,15 +19,14 @@ class TestSlidingWindowLimiter:
         limiter = SlidingWindowLimiter(max_requests=2, window_seconds=60.0)
         limiter.check("1.2.3.4")
         limiter.check("1.2.3.4")
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(RateLimitExceeded):
             limiter.check("1.2.3.4")
-        assert exc.value.status_code == 429
 
     def test_keys_are_independent(self):
         limiter = SlidingWindowLimiter(max_requests=1, window_seconds=60.0)
         limiter.check("1.2.3.4")
         limiter.check("5.6.7.8")  # different key, fresh budget
-        with pytest.raises(HTTPException):
+        with pytest.raises(RateLimitExceeded):
             limiter.check("1.2.3.4")
 
     def test_window_recovers_after_expiry(self, monkeypatch):
@@ -37,7 +35,7 @@ class TestSlidingWindowLimiter:
 
         limiter = SlidingWindowLimiter(max_requests=1, window_seconds=10.0)
         limiter.check("ip")
-        with pytest.raises(HTTPException):
+        with pytest.raises(RateLimitExceeded):
             limiter.check("ip")
 
         clock[0] += 11.0  # past the 10s window
