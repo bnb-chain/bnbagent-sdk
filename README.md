@@ -29,6 +29,7 @@ pip install "bnbagent[ipfs]"
 ## Table of Contents
 
 - [What is ERC-8004?](#what-is-erc-8004)
+- [Gas sponsorship (paymaster)](#gas-sponsorship-paymaster)
 - [What is ERC-8183?](#what-is-erc-8183)
 - [Quick Start: Register an Agent (ERC-8004)](#quick-start-register-an-agent-erc-8004)
 - [Quick Start: Run an ERC-8183 Provider](#quick-start-run-an-erc-8183-provider)
@@ -52,6 +53,14 @@ pip install "bnbagent[ipfs]"
 - **Metadata** — Arbitrary key-value pairs attached to your agent record
 
 **Gas-free registration**: On BSC Testnet, registration transactions are sponsored by [MegaFuel paymaster](https://docs.nodereal.io/docs/megafuel) — you don't need tBNB for gas.
+
+## Gas sponsorship (paymaster)
+
+With an `EVMWalletProvider`, the SDK routes writes through the MegaFuel paymaster when configured and lets MegaFuel decide per transaction: sponsorable writes are sent gas-free, everything else self-pays automatically — no sponsorship policy is hard-coded in the SDK, and a paymaster outage just falls back to self-pay.
+
+- **ERC-8004** — sponsored on both networks.
+- **ERC-8183** — on **BSC Testnet** the SDK routes the protocol writes through MegaFuel and lets it decide per call (e.g. `fund` and `settle` are sponsored today); whatever MegaFuel declines self-pays automatically. **Mainnet is never sponsored** — writes self-pay and the SDK skips the probe entirely there. Two things to note: (1) provider payout has no separate "withdraw" — it happens inside `settle` (→ `complete`); (2) the only ERC-20 `approve` is on the **payment token** (not an ERC-8183 function), sent by `fund()` only when the allowance is insufficient, through the ERC-20 client's own self-pay path — so a fresh testnet buyer needs a little tBNB for that first approve.
+- **twak wallet** — sponsorship is twak-internal and not controlled by the SDK (mainnet auto-sponsored, testnet self-pays); see [`docs/twak.md`](docs/twak.md).
 
 ## What is ERC-8183?
 
@@ -339,6 +348,14 @@ Transaction signing is abstracted behind the `WalletProvider` ABC (`address`, `s
 - In-memory mode (`persist=False`) — no disk I/O; used internally when configs auto-wrap a `private_key` + `wallet_password` pair.
 - Auto-wrap — `ERC8183Config` (and other `AgentConfig` subclasses) accept `private_key=` directly and wrap it into `EVMWalletProvider(persist=False)` in `__post_init__`, immediately zeroing the plaintext field.
 - Keystores written with `0o600` permissions (directory `0o700`).
+
+**Built-in: `TWAKProvider` (Trust Wallet Agent Kit CLI)** — a self-custody, self-broadcasting wallet whose capabilities differ substantially from `EVMWalletProvider`. **Read [`docs/twak.md`](docs/twak.md) before swapping in twak.** The key differences:
+
+- **No raw-transaction or generic EIP-712 signing** (`sign.transaction` / `sign.typed_data` are absent) — twak signs ERC-8004 / ERC-8183 / x402 payloads internally and only exposes high-level operations. Anything that needs direct EIP-712 (e.g. an `X402Signer` you construct yourself) requires `EVMWalletProvider`.
+- **Self-broadcasting** — the SDK holds no key and sends no transaction; twak signs and broadcasts each operation itself. x402 is a *delegated payer* (`make_x402_payer()`), not a signer.
+- **Restricted surface** — BSC only (`bsc` / `bsctestnet`); x402 `request` is mainnet-only so far; on testnet twak pays its own gas (no paymaster). Full method-by-method support matrix, contract addresses, and boundaries: [`docs/twak.md`](docs/twak.md).
+
+Construct with `TWAKProvider(chain="bsc")` or `WALLET_KIND=twak`. Because every client routes writes through `wallet.make_executor()`, EVM ↔ twak is a one-line swap **for the high-level flows** — but the capability gaps above are not papered over: unsupported calls raise `UnsupportedWalletOperation`.
 
 **Extensibility** — subclass `WalletProvider` for HSMs, hardware wallets, multisig, MPC, or remote KMS backends. Inject via `wallet_provider=` on any config or client. `MPCWalletProvider` ships as a stub placeholder.
 

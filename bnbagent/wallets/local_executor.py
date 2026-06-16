@@ -123,8 +123,13 @@ class LocalExecutor(IntentExecutor):
     ) -> dict[str, Any]:
         """Build, sign, send, and wait for receipt for a contract function.
 
-        Automatically uses paymaster if available, otherwise uses standard
-        Web3 transaction flow with nonce management and retry.
+        When a paymaster is configured, attempt a sponsored broadcast; if the
+        transaction is not sponsorable (or the paymaster is unreachable), fall
+        back to self-pay rather than failing. This lets the per-(protocol,
+        network) sponsorship matrix be resolved at runtime by MegaFuel's
+        ``pm_isSponsorable`` — e.g. ERC-8183 mainnet writes (never sponsored)
+        self-pay automatically while testnet writes are sponsored — with no
+        sponsorship policy hard-coded into the executor.
         """
         try:
             wallet_address = self.wallet_provider.address
@@ -132,126 +137,20 @@ class LocalExecutor(IntentExecutor):
             logger.debug(f"Gas estimate: {gas_estimate}")
             gas_limit = int(gas_estimate * 1.2)  # Add 20% buffer
 
-            # Use paymaster if available, otherwise use standard Web3
-            if self.paymaster:
-                # Get nonce from paymaster
-                nonce = self.paymaster.eth_getTransactionCount(wallet_address, "pending")
-                logger.debug(f"Got nonce from paymaster: {nonce}")
-
-                # Build transaction
-                transaction = function.build_transaction(
-                    {
-                        "from": wallet_address,
-                        "chainId": self.web3.eth.chain_id,
-                        "nonce": nonce,
-                        "gas": gas_limit,
-                        "gasPrice": max(self.web3.eth.gas_price, MIN_GAS_PRICE_WEI),
-                    }
+            tx_hash: bytes | None = None
+            tx_hash_hex = ""
+            if self.paymaster is not None:
+                sponsored = self._try_sponsored(
+                    function, gas_limit, wallet_address, description
+                )
+                if sponsored is not None:
+                    tx_hash, tx_hash_hex = sponsored
+            if tx_hash is None:
+                tx_hash, tx_hash_hex = self._send_self_pay(
+                    function, gas_limit, wallet_address, description
                 )
 
-                logger.debug(f"Building {description} transaction: {transaction}")
-
-                # Pre-flight simulation to surface revert reason before spending gas
-                self._run_preflight(transaction, description)
-
-                # Check if transaction is sponsorable
-                is_sponsorable = self.paymaster.isSponsorable(transaction)
-                if not is_sponsorable:
-                    logger.error("Transaction is not sponsorable")
-                    raise ValueError("Transaction is not sponsorable")
-                else:
-                    logger.debug("Transaction is sponsorable")
-                    transaction["gasPrice"] = 0
-
-                # Sign transaction via wallet provider
-                signed_txn = self.wallet_provider.sign_transaction(transaction)
-                signed_tx_hex = signed_txn["rawTransaction"].hex()
-
-                # Send transaction via paymaster
-                tx_hash_hex = self.paymaster.eth_sendRawTransaction(
-                    signed_tx_hex, tx_options={"UserAgent": "bnbagent/v1.0.0"}
-                )
-                # Convert hex string to bytes for receipt waiting
-                if not tx_hash_hex.startswith("0x"):
-                    tx_hash_hex = "0x" + tx_hash_hex
-                tx_hash = bytes.fromhex(tx_hash_hex[2:])  # Remove 0x prefix
-                logger.debug(f"Transaction sent via paymaster: {tx_hash_hex}")
-            else:
-                # Standard Web3 path with NonceManager + retry on transient errors.
-                nonce_mgr = NonceManager.for_account(self.web3, wallet_address)
-                last_error: Exception | None = None
-                tx_hash = None
-                tx_hash_hex = ""
-
-                for attempt in range(MAX_RETRIES):
-                    nonce = nonce_mgr.get_nonce()
-                    try:
-                        # Floor at MIN_GAS_PRICE_WEI and add 20% headroom so a
-                        # low eth_gasPrice on quiet networks doesn't leave the
-                        # tx stranded in mempool below the miner cutoff.
-                        try:
-                            gas_price = max(
-                                int(self.web3.eth.gas_price * 1.2),
-                                MIN_GAS_PRICE_WEI,
-                            )
-                        except Exception:
-                            gas_price = MIN_GAS_PRICE_WEI
-
-                        transaction = function.build_transaction(
-                            {
-                                "from": wallet_address,
-                                "chainId": self.web3.eth.chain_id,
-                                "nonce": nonce,
-                                "gasPrice": gas_price,
-                                "gas": gas_limit,
-                            }
-                        )
-                        logger.debug(f"Building {description} transaction: {transaction}")
-
-                        self._run_preflight(transaction, description)
-
-                        signed_txn = self.wallet_provider.sign_transaction(transaction)
-                        tx_hash = self.web3.eth.send_raw_transaction(
-                            signed_txn["rawTransaction"]
-                        )
-                        tx_hash_hex = tx_hash.hex()
-                        if not tx_hash_hex.startswith("0x"):
-                            tx_hash_hex = "0x" + tx_hash_hex
-                        logger.debug(f"Transaction sent via Web3: {tx_hash_hex}")
-                        break
-                    except Exception as send_err:
-                        last_error = send_err
-                        error_str = str(send_err).lower()
-
-                        if nonce_mgr.handle_error(send_err, nonce) and attempt < MAX_RETRIES - 1:
-                            logger.warning(
-                                f"[LocalExecutor] Nonce error, retry "
-                                f"{attempt + 1}/{MAX_RETRIES}"
-                            )
-                            continue
-
-                        is_rate_limit = (
-                            "429" in error_str or "too many requests" in error_str
-                        )
-                        if is_rate_limit and attempt < MAX_RETRIES - 1:
-                            delay = RETRY_BASE_DELAY * (2**attempt)
-                            logger.warning(
-                                f"[LocalExecutor] Rate limited, retry "
-                                f"{attempt + 1}/{MAX_RETRIES} in {delay:.1f}s"
-                            )
-                            time.sleep(delay)
-                            continue
-
-                        # Non-retryable: invalidate cached nonce so the next
-                        # caller re-seeds from chain rather than leaving a gap.
-                        nonce_mgr.reset()
-                        raise
-
-                if tx_hash is None:
-                    # All retries exhausted with retryable errors.
-                    raise last_error  # type: ignore[misc]
-
-            # Wait for receipt (always use Web3 for receipt waiting)
+            # Wait for receipt (always via Web3, regardless of how it was sent).
             receipt = self.web3.eth.wait_for_transaction_receipt(
                 tx_hash, timeout=self.receipt_timeout
             )
@@ -276,3 +175,144 @@ class LocalExecutor(IntentExecutor):
         except Exception as e:
             logger.error(f"Failed to execute {description}: {str(e)}")
             raise
+
+    def _try_sponsored(
+        self,
+        function: ContractFunction,
+        gas_limit: int,
+        wallet_address: str,
+        description: str,
+    ) -> tuple[bytes, str] | None:
+        """Attempt a paymaster-sponsored broadcast.
+
+        Returns ``(tx_hash, tx_hash_hex)`` on success, or ``None`` when the tx
+        is not sponsorable or the paymaster is unreachable — the caller then
+        falls back to self-pay. A genuine pre-flight revert propagates (self-pay
+        could not fix it). The sponsored *send* itself is not retried into a
+        self-pay fallback (avoids any double-broadcast risk once submitted).
+        """
+        try:
+            nonce = self.paymaster.eth_getTransactionCount(wallet_address, "pending")
+        except Exception as exc:
+            logger.warning(
+                "[LocalExecutor] paymaster nonce fetch failed for %s (%s); self-paying",
+                description, exc,
+            )
+            return None
+
+        transaction = function.build_transaction(
+            {
+                "from": wallet_address,
+                "chainId": self.web3.eth.chain_id,
+                "nonce": nonce,
+                "gas": gas_limit,
+                "gasPrice": max(self.web3.eth.gas_price, MIN_GAS_PRICE_WEI),
+            }
+        )
+        logger.debug(f"Building sponsored {description} transaction: {transaction}")
+
+        # Pre-flight simulation to surface a revert reason before spending gas.
+        self._run_preflight(transaction, description)
+
+        try:
+            sponsorable = self.paymaster.isSponsorable(transaction)
+        except Exception as exc:
+            logger.warning(
+                "[LocalExecutor] isSponsorable check failed for %s (%s); self-paying",
+                description, exc,
+            )
+            return None
+        if not sponsorable:
+            logger.info(
+                "[LocalExecutor] %s is not sponsorable on this network; self-paying gas",
+                description,
+            )
+            return None
+
+        transaction["gasPrice"] = 0
+        signed_txn = self.wallet_provider.sign_transaction(transaction)
+        tx_hash_hex = self.paymaster.eth_sendRawTransaction(
+            signed_txn["rawTransaction"].hex(), tx_options={"UserAgent": "bnbagent/v1.0.0"}
+        )
+        if not tx_hash_hex.startswith("0x"):
+            tx_hash_hex = "0x" + tx_hash_hex
+        tx_hash = bytes.fromhex(tx_hash_hex[2:])
+        logger.debug(f"Transaction sent via paymaster: {tx_hash_hex}")
+        return tx_hash, tx_hash_hex
+
+    def _send_self_pay(
+        self,
+        function: ContractFunction,
+        gas_limit: int,
+        wallet_address: str,
+        description: str,
+    ) -> tuple[bytes, str]:
+        """Standard Web3 broadcast: the wallet pays its own gas, with
+        NonceManager + retry on transient (nonce / rate-limit) errors."""
+        nonce_mgr = NonceManager.for_account(self.web3, wallet_address)
+        last_error: Exception | None = None
+
+        for attempt in range(MAX_RETRIES):
+            nonce = nonce_mgr.get_nonce()
+            try:
+                # Floor at MIN_GAS_PRICE_WEI and add 20% headroom so a low
+                # eth_gasPrice on quiet networks doesn't leave the tx stranded
+                # in mempool below the miner cutoff.
+                try:
+                    gas_price = max(
+                        int(self.web3.eth.gas_price * 1.2),
+                        MIN_GAS_PRICE_WEI,
+                    )
+                except Exception:
+                    gas_price = MIN_GAS_PRICE_WEI
+
+                transaction = function.build_transaction(
+                    {
+                        "from": wallet_address,
+                        "chainId": self.web3.eth.chain_id,
+                        "nonce": nonce,
+                        "gasPrice": gas_price,
+                        "gas": gas_limit,
+                    }
+                )
+                logger.debug(f"Building self-pay {description} transaction: {transaction}")
+
+                self._run_preflight(transaction, description)
+
+                signed_txn = self.wallet_provider.sign_transaction(transaction)
+                tx_hash = self.web3.eth.send_raw_transaction(
+                    signed_txn["rawTransaction"]
+                )
+                tx_hash_hex = tx_hash.hex()
+                if not tx_hash_hex.startswith("0x"):
+                    tx_hash_hex = "0x" + tx_hash_hex
+                logger.debug(f"Transaction sent via Web3: {tx_hash_hex}")
+                return tx_hash, tx_hash_hex
+            except Exception as send_err:
+                last_error = send_err
+                error_str = str(send_err).lower()
+
+                if nonce_mgr.handle_error(send_err, nonce) and attempt < MAX_RETRIES - 1:
+                    logger.warning(
+                        f"[LocalExecutor] Nonce error, retry "
+                        f"{attempt + 1}/{MAX_RETRIES}"
+                    )
+                    continue
+
+                is_rate_limit = "429" in error_str or "too many requests" in error_str
+                if is_rate_limit and attempt < MAX_RETRIES - 1:
+                    delay = RETRY_BASE_DELAY * (2**attempt)
+                    logger.warning(
+                        f"[LocalExecutor] Rate limited, retry "
+                        f"{attempt + 1}/{MAX_RETRIES} in {delay:.1f}s"
+                    )
+                    time.sleep(delay)
+                    continue
+
+                # Non-retryable: invalidate cached nonce so the next caller
+                # re-seeds from chain rather than leaving a gap.
+                nonce_mgr.reset()
+                raise
+
+        # All retries exhausted with retryable errors.
+        raise last_error  # type: ignore[misc]

@@ -64,14 +64,12 @@ What switches and what doesn't:
   OS keychain) — the SDK never sees it.
 - **Provider / voter roles: stay EVM in these examples**
   (`PROVIDER_PRIVATE_KEY` / `VOTER_PRIVATE_KEY`). The seller role itself
-  works on twak since **v0.19.0** (REQ-1 shipped — `submit` carries the
-  `deliverable_url` optParams), but a machine has exactly **one** twak
-  wallet (per HOME), so twak cannot play two *distinct* parties locally —
-  these flows keep the counterparty on EVM for that reason. See
-  [`docs/twak-cli-gaps-v0.18.0.md`](../../docs/twak-cli-gaps-v0.18.0.md)
-  and the role matrix in
-  [`bnbagent/wallets/README.md`](../../bnbagent/wallets/README.md). (For a
-  fully twak-driven both-roles self-deal, see `examples/twak/e2e_smoke.py`.)
+  works on twak since **v0.19.0** (`submit` carries the `deliverable_url`
+  optParams), but a machine has exactly **one** twak wallet (per HOME), so
+  twak cannot play two *distinct* parties locally — these flows keep the
+  counterparty on EVM for that reason. See the capability reference
+  [`docs/twak.md`](../../docs/twak.md). (For a fully twak-driven both-roles
+  self-deal, see `examples/twak/e2e_smoke.py`.)
 
 Prerequisites (one-time):
 

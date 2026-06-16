@@ -274,3 +274,51 @@ class TestPolicyAdminOpsStayOnSendTx:
         client.set_quorum(3)
         client._send_tx.assert_called_once()
         client._execute_intent.assert_not_called()
+
+
+class TestPaymasterWiring:
+    """ERC-8183 writes thread the client's paymaster into the executor, and
+    ERC8183Client builds one only on networks MegaFuel sponsors (testnet)."""
+
+    def test_execute_intent_passes_paymaster_into_context(self):
+        sentinel = object()
+        executor = _RecordingExecutor()
+        wallet = MagicMock()
+        wallet.address = FAKE_ADDRESS
+        wallet.make_executor.return_value = executor
+        client = CommerceClient(MagicMock(), FAKE_CONTRACT, wallet, abi=[], paymaster=sentinel)
+
+        client.set_budget(job_id=1, amount=10)
+
+        ctx = wallet.make_executor.call_args.args[0]
+        assert ctx.paymaster is sentinel
+
+    def test_no_paymaster_threads_none(self):
+        executor = _RecordingExecutor()
+        wallet = MagicMock()
+        wallet.address = FAKE_ADDRESS
+        wallet.make_executor.return_value = executor
+        client = CommerceClient(MagicMock(), FAKE_CONTRACT, wallet, abi=[])
+
+        client.set_budget(job_id=1, amount=10)
+        ctx = wallet.make_executor.call_args.args[0]
+        assert ctx.paymaster is None
+
+    def test_build_paymaster_testnet_only(self):
+        from bnbagent.config import resolve_network
+        from bnbagent.core.paymaster import Paymaster
+        from bnbagent.erc8183.client import ERC8183Client
+
+        testnet = resolve_network("bsc-testnet")
+        mainnet = resolve_network("bsc-mainnet")
+        assert isinstance(ERC8183Client._build_paymaster(testnet, False), Paymaster)
+        assert ERC8183Client._build_paymaster(mainnet, False) is None
+
+    def test_build_paymaster_respects_use_paymaster_flag(self):
+        import dataclasses
+
+        from bnbagent.config import resolve_network
+        from bnbagent.erc8183.client import ERC8183Client
+
+        testnet_off = dataclasses.replace(resolve_network("bsc-testnet"), use_paymaster=False)
+        assert ERC8183Client._build_paymaster(testnet_off, False) is None

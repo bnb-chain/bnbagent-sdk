@@ -201,10 +201,9 @@ Self-broadcasting wallet backed by the Trust Wallet Agent Kit (`twak`) CLI —
 on the flags this provider emits, and the raised error says to upgrade rather
 than pointing at setup). Implements both
 `WalletProvider` and `IntentExecutor` (it `make_executor`s to itself). Key
-custody lives entirely inside twak. Design rationale:
-[`docs/twak-integration-design.md`](../../docs/twak-integration-design.md);
-upstream gap tracking (the `REQ-n` / `S-n` IDs cited below):
-[`docs/twak-cli-gaps-v0.18.0.md`](../../docs/twak-cli-gaps-v0.18.0.md).
+custody lives entirely inside twak. Full capability reference (supported
+ERC-8004 / ERC-8183 / x402 methods, boundaries, contract addresses):
+[`docs/twak.md`](../../docs/twak.md).
 
 | Member | Description |
 |---|---|
@@ -436,8 +435,8 @@ by calling and catching.
 
 - `UnsupportedWalletOperation(NotImplementedError)` — a wallet backend cannot
   service an operation. The message is assembled from the capability/operation
-  name, the reason, an alternative path, and an optional upstream-tracking
-  `REQ-n` / `S-n` reference. Subclasses `NotImplementedError`, so existing
+  name, the reason, an alternative path, and an optional free-form `ref`
+  pointer. Subclasses `NotImplementedError`, so existing
   `except NotImplementedError` callers keep working.
 - `WalletIdentityMismatch(RuntimeError)` — a provider pinned with
   `expected_address` resolved to a different address (usually a stale or
@@ -582,5 +581,4 @@ in.
 - [`erc8004`](../erc8004/README.md) — builds `Intent`s and runs them via the wallet's executor.
 - [`erc8183`](../erc8183/README.md) — uses `WalletProvider` via `ERC8183Config` for job transactions.
 - [`core`](../core/README.md) — `ContractClientMixin` delegates signing to `WalletProvider`.
-- [`docs/twak-integration-design.md`](../../docs/twak-integration-design.md) — full rationale for the TWAK integration (capability model, guard layers, custody).
-- [`docs/twak-cli-gaps-v0.18.0.md`](../../docs/twak-cli-gaps-v0.18.0.md) — upstream twak gap tracking (the `REQ-n` / `S-n` IDs).
+- [`docs/twak.md`](../../docs/twak.md) — twak capability reference: supported ERC-8004 / ERC-8183 / x402 methods, the delegated x402 payer, boundaries, and contract addresses.

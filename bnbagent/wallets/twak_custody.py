@@ -3,8 +3,7 @@
 In deployment the encrypted twak wallet does not live on disk ahead of time:
 the runtime pulls it from the secret bundle (``TWAK_WALLET_JSON``, optionally
 ``TWAK_CREDENTIALS_JSON``) and writes it under a writable ``home`` before
-constructing ``TWAKProvider(home=..., auto_create=False)`` — the deployment
-recipe in ``docs/twak-integration-design.md`` §4.4. This mirrors studio's
+constructing ``TWAKProvider(home=..., auto_create=False)``. This mirrors studio's
 ``ensure_keystore_materialized`` for the EVM keystore; the twak wallet is
 simply the second wallet kind fed by the same pattern.
 

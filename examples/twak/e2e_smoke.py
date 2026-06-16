@@ -1,12 +1,12 @@
 """bsctestnet end-to-end smoke for the TWAK intent dispatch.
 
-Closes the design-doc backlog item "bsctestnet 真实冒烟（13 个 intent 全生命周期）"
-(docs/twak-integration-design.md §8): drives the twak wallet through the real
-ERC-8004/8183 contracts on BSC testnet and asserts each step on-chain, in the
-assert-chain style of examples/security/e2e.py.
+Drives the twak wallet through the real ERC-8004/8183 contracts on BSC
+testnet and asserts each step on-chain (all 13 erc8183 intents, full
+lifecycle), in the assert-chain style of examples/security/e2e.py. twak
+capability reference: docs/twak.md.
 
-Requires twak >= v0.19.1 (`submit --opt-params`, `fund --expected-budget` —
-REQ-1/S-1/S-2 shipped; an older CLI fails loudly with an upgrade hint).
+Requires twak >= v0.19.1 (`submit --opt-params`, `fund --expected-budget`;
+an older CLI fails loudly with an upgrade hint).
 
 ⚠️  THIS SCRIPT SPENDS TESTNET FUNDS AND TAKES WALL-CLOCK TIME. ⚠️
     - testnet BNB for gas on ~15 transactions (on bsctestnet twak pays its
