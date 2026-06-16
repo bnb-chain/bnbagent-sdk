@@ -43,9 +43,9 @@ Security / operational notes:
 Compatibility notes against ``twak`` v0.19.1 — the minimum supported version
 (v0.19.0 is excluded: its ``sign-message`` hex-decoded ``0x``-shaped messages
 and signed the wrong bytes — fixed in v0.19.1, "input is always text". The
-authoritative command surface is ``docs/twak-cli-gaps-v0.18.0.md``, the
-shared tracking doc; on an older CLI, flags this provider emits fail loudly
-with an upgrade hint):
+capability reference (supported methods per protocol) is ``docs/twak.md``;
+on an older CLI, flags this provider emits fail loudly with an upgrade
+hint):
 - Every erc8183 write passes ``opt_params`` through raw as ``--opt-params``
   (REQ-1 for ``submit`` — the seller role works end-to-end — and S-1 for the
   rest, both shipped in v0.19.0).
@@ -464,8 +464,7 @@ class TWAKProvider(WalletProvider, IntentExecutor):
                     "the wallet manually once — `twak wallet create "
                     "--password <pw>` in an interactive shell — or "
                     "materialize an existing wallet.json via "
-                    "materialize_twak_home(). Tracked upstream as S-8 in "
-                    "docs/twak-cli-gaps-v0.18.0.md."
+                    "materialize_twak_home()."
                 ) from e
             raise
         self._address = None  # invalidate cache so the new address is re-read
@@ -562,10 +561,9 @@ class TWAKProvider(WalletProvider, IntentExecutor):
                 "sides encoded the message bytes differently, and using this "
                 "signature would fail verification later. Refusing to return it. "
                 "Known cause: twak <= v0.19.0 hex-decodes a 0x-shaped message "
-                "and signs the raw bytes (S-11, fixed in v0.19.1 — see "
-                "docs/twak-cli-gaps-v0.18.0.md). Fix: upgrade twak to >= "
-                "v0.19.1 (`npm install -g @trustwallet/cli`), or switch this "
-                "agent to WALLET_KIND=evm."
+                "and signs the raw bytes (fixed in v0.19.1). Fix: upgrade "
+                "twak to >= v0.19.1 (`npm install -g @trustwallet/cli`), or "
+                "switch this agent to WALLET_KIND=evm (see docs/twak.md)."
             )
         return {
             "messageHash": digest,

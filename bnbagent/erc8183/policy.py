@@ -45,6 +45,7 @@ class PolicyClient(ContractClientMixin):
         wallet_provider: WalletProvider | None = None,
         *,
         abi: list | None = None,
+        paymaster: Any = None,
     ) -> None:
         self.w3 = web3
         self.address = Web3.to_checksum_address(contract_address)
@@ -53,6 +54,9 @@ class PolicyClient(ContractClientMixin):
         )
         self._wallet_provider = wallet_provider
         self._account = wallet_provider.address if wallet_provider is not None else None
+        # Optional gas sponsorship for the intent write path (read by the
+        # ContractClientMixin executor seam). None = self-pay.
+        self._paymaster = paymaster
 
     # ----------------------------------------------------------------- writes
 

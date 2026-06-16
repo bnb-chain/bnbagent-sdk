@@ -49,9 +49,8 @@ exercise both natively.
 
 ## Further reading
 
+- [`docs/twak.md`](../../docs/twak.md) — twak capability reference: supported
+  ERC-8004 / ERC-8183 / x402 methods, the delegated x402 payer, boundaries,
+  and contract addresses.
 - [`bnbagent/wallets/README.md`](../../bnbagent/wallets/README.md) — TWAK
   provider reference: signing model, capability sets, custody, deployment.
-- [`docs/twak-integration-design.md`](../../docs/twak-integration-design.md)
-  — full design rationale (guard layers, the delegated-payer seam, INV-1…5).
-- [`docs/twak-cli-gaps-v0.18.0.md`](../../docs/twak-cli-gaps-v0.18.0.md) —
-  upstream gap tracking (the `REQ-n` / `S-n` IDs cited in error messages).

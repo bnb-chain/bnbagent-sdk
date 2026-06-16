@@ -58,8 +58,15 @@ class ContractClientMixin:
         if executor is None:
             from ..wallets.intents import ExecutionContext
 
+            # ``_paymaster`` is optional and set by clients that opt into gas
+            # sponsorship (e.g. ERC8183Client on a sponsored network); absent
+            # for read-only or self-pay clients. The wallet's executor decides
+            # how to use it (the local executor sponsors when sponsorable and
+            # self-pays otherwise; a self-broadcasting wallet ignores it).
             executor = self._wallet_provider.make_executor(
-                ExecutionContext(web3=self.w3)
+                ExecutionContext(
+                    web3=self.w3, paymaster=getattr(self, "_paymaster", None)
+                )
             )
             self._intent_executor = executor
         return executor.execute(intent)

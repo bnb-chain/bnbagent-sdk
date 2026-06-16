@@ -18,9 +18,8 @@ class UnsupportedWalletOperation(NotImplementedError):
 
     The message is assembled from the capability (or operation) name, the
     reason it is unsupported, an optional alternative path, and an optional
-    upstream-tracking reference (a ``REQ-n`` / ``S-n`` ID from
-    ``docs/twak-cli-gaps-v0.18.0.md``). Raising with just the first positional
-    argument uses it verbatim as the message.
+    free-form reference pointer (``ref``). Raising with just the first
+    positional argument uses it verbatim as the message.
     """
 
     def __init__(
@@ -37,7 +36,7 @@ class UnsupportedWalletOperation(NotImplementedError):
         if alternative:
             message += f" Alternative: {alternative}."
         if ref:
-            message += f" (tracked as {ref} in docs/twak-cli-gaps-v0.18.0.md)"
+            message += f" (ref: {ref})"
         super().__init__(message)
 
 

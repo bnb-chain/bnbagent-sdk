@@ -1168,8 +1168,8 @@ def test_run_trusts_success_envelope_over_nonzero_exit():
 
 
 def test_create_wallet_password_requirement_maps_to_descriptive_error():
-    # v0.18.0 hard-requires --password on argv for creation; the SDK refuses
-    # to pass secrets there (INV-1) and must explain instead (gaps S-8).
+    # twak hard-requires --password on argv for creation; the SDK refuses
+    # to pass secrets there (INV-1) and must explain the manual path instead.
     twak = TWAKProvider()
 
     def run(cmd, **kwargs):
@@ -1183,7 +1183,7 @@ def test_create_wallet_password_requirement_maps_to_descriptive_error():
         raise AssertionError(f"unexpected twak command: {cmd}")
 
     with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
-        with pytest.raises(RuntimeError, match="S-8"):
+        with pytest.raises(RuntimeError, match="materialize_twak_home"):
             twak.create_wallet()
 
 
