@@ -27,7 +27,14 @@ from typing import TYPE_CHECKING, Any
 from web3 import Web3
 from web3.contract.contract import ContractFunction
 
-from ..core.contract_mixin import MAX_RETRIES, MIN_GAS_PRICE_WEI, RETRY_BASE_DELAY
+from ..core.contract_mixin import (
+    DEFAULT_RECEIPT_TIMEOUT,  # noqa: F401  — re-exported for back-compat
+    MAX_RETRIES,
+    MIN_GAS_PRICE_WEI,
+    RETRY_BASE_DELAY,
+    get_default_receipt_timeout,
+    min_gas_price_wei,
+)
 from ..core.nonce_manager import NonceManager
 from ..core.paymaster import Paymaster
 from .intents import Intent, IntentExecutor
@@ -36,10 +43,6 @@ if TYPE_CHECKING:
     from .wallet_provider import WalletProvider
 
 logger = logging.getLogger(__name__)
-
-# Default seconds to wait for a transaction receipt. web3.py's own default
-# (120s) is too short on congested BNB Chain / paymaster-relayed paths.
-DEFAULT_RECEIPT_TIMEOUT = 300
 
 
 class LocalExecutor(IntentExecutor):
@@ -50,7 +53,8 @@ class LocalExecutor(IntentExecutor):
         wallet_provider: Local signer used to sign the transaction.
         paymaster: Optional paymaster for gas sponsorship. When provided,
             used for nonce retrieval and transaction sending.
-        receipt_timeout: Seconds to wait for a transaction receipt.
+        receipt_timeout: Seconds to wait for a transaction receipt. ``None``
+            (default) resolves the SDK default at execute time.
     """
 
     def __init__(
@@ -58,11 +62,13 @@ class LocalExecutor(IntentExecutor):
         web3: Web3,
         wallet_provider: WalletProvider,
         paymaster: Paymaster | None = None,
-        receipt_timeout: int = DEFAULT_RECEIPT_TIMEOUT,
+        receipt_timeout: int | None = None,
     ):
         self.web3 = web3
         self.wallet_provider = wallet_provider
         self.paymaster = paymaster
+        # None = resolve the SDK default lazily at execute time, so a runtime
+        # set_default_receipt_timeout() is honored even by a cached executor.
         self.receipt_timeout = receipt_timeout
 
     def execute(self, intent: Intent) -> dict[str, Any]:
@@ -151,9 +157,12 @@ class LocalExecutor(IntentExecutor):
                 )
 
             # Wait for receipt (always via Web3, regardless of how it was sent).
-            receipt = self.web3.eth.wait_for_transaction_receipt(
-                tx_hash, timeout=self.receipt_timeout
+            timeout = (
+                self.receipt_timeout
+                if self.receipt_timeout is not None
+                else get_default_receipt_timeout()
             )
+            receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash, timeout=timeout)
 
             if receipt["status"] == 0:
                 logger.error(
@@ -206,7 +215,10 @@ class LocalExecutor(IntentExecutor):
                 "chainId": self.web3.eth.chain_id,
                 "nonce": nonce,
                 "gas": gas_limit,
-                "gasPrice": max(self.web3.eth.gas_price, MIN_GAS_PRICE_WEI),
+                "gasPrice": max(
+                    self.web3.eth.gas_price,
+                    min_gas_price_wei(self.web3.eth.chain_id),
+                ),
             }
         )
         logger.debug(f"Building sponsored {description} transaction: {transaction}")
@@ -252,19 +264,22 @@ class LocalExecutor(IntentExecutor):
         nonce_mgr = NonceManager.for_account(self.web3, wallet_address)
         last_error: Exception | None = None
 
+        # Per-chain gas-price floor, resolved once (chain_id is an RPC call).
+        try:
+            floor_wei = min_gas_price_wei(self.web3.eth.chain_id)
+        except Exception:
+            floor_wei = MIN_GAS_PRICE_WEI
+
         for attempt in range(MAX_RETRIES):
             nonce = nonce_mgr.get_nonce()
             try:
-                # Floor at MIN_GAS_PRICE_WEI and add 20% headroom so a low
+                # Floor at the per-chain minimum and add 20% headroom so a low
                 # eth_gasPrice on quiet networks doesn't leave the tx stranded
-                # in mempool below the miner cutoff.
+                # in mempool below the validator cutoff.
                 try:
-                    gas_price = max(
-                        int(self.web3.eth.gas_price * 1.2),
-                        MIN_GAS_PRICE_WEI,
-                    )
+                    gas_price = max(int(self.web3.eth.gas_price * 1.2), floor_wei)
                 except Exception:
-                    gas_price = MIN_GAS_PRICE_WEI
+                    gas_price = floor_wei
 
                 transaction = function.build_transaction(
                     {

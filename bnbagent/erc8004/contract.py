@@ -23,7 +23,6 @@ from ..wallets.intents import (
     ExecutionContext,
     Intent,
 )
-from ..wallets.local_executor import DEFAULT_RECEIPT_TIMEOUT
 
 if TYPE_CHECKING:
     from ..wallets import WalletProvider
@@ -48,7 +47,7 @@ class ContractInterface:
         wallet_provider: WalletProvider,
         paymaster: Paymaster | None = None,
         debug: bool = False,
-        receipt_timeout: int = DEFAULT_RECEIPT_TIMEOUT,
+        receipt_timeout: int | None = None,
     ):
         """
         Initialize the contract interface.
@@ -61,8 +60,9 @@ class ContractInterface:
                       If provided, used for nonce retrieval and transaction sending.
                       If None, uses standard Web3 transaction flow.
             debug: Enable debug logging
-            receipt_timeout: Seconds to wait for a transaction receipt
-                            (default: ``DEFAULT_RECEIPT_TIMEOUT`` = 300).
+            receipt_timeout: Seconds to wait for a transaction receipt.
+                            ``None`` (default) uses the SDK default (300s,
+                            tunable via ``set_default_receipt_timeout``).
         """
         self.web3 = web3
         self.contract_address = Web3.to_checksum_address(contract_address)

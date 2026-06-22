@@ -143,3 +143,40 @@ class TestExecuteIntent:
 
         client._wallet_provider.make_executor.assert_called_once()
         assert executor.execute.call_count == 2
+
+
+class TestGasPriceFloor:
+    """Per-chain gas-price floor (BUG-12) on the ``_send_tx`` write path."""
+
+    def test_floors_at_one_gwei_on_testnet(self, client, mock_web3):
+        mock_web3.eth.chain_id = 97
+        mock_web3.eth.gas_price = 100  # absurdly low → floor must kick in
+        fn = _make_fn()
+        client._send_tx(fn)
+        assert fn.build_transaction.call_args[0][0]["gasPrice"] == 1_000_000_000
+
+    def test_uses_network_price_when_above_floor(self, client, mock_web3):
+        mock_web3.eth.chain_id = 97
+        mock_web3.eth.gas_price = 5_000_000_000  # 5 Gwei
+        fn = _make_fn()
+        client._send_tx(fn)
+        assert fn.build_transaction.call_args[0][0]["gasPrice"] == 6_000_000_000
+
+
+class TestReceiptTimeoutPassed:
+    """``_send_tx`` must wait with the shared default receipt timeout (BUG-13)."""
+
+    def test_send_tx_passes_default_timeout(self, client, mock_web3):
+        fn = _make_fn()
+        client._send_tx(fn)
+        _, kwargs = mock_web3.eth.wait_for_transaction_receipt.call_args
+        assert kwargs["timeout"] == 300
+
+    def test_send_tx_honors_runtime_setter(self, client, mock_web3):
+        from bnbagent import set_default_receipt_timeout
+
+        set_default_receipt_timeout(456)
+        fn = _make_fn()
+        client._send_tx(fn)
+        _, kwargs = mock_web3.eth.wait_for_transaction_receipt.call_args
+        assert kwargs["timeout"] == 456

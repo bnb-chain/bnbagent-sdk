@@ -9,6 +9,7 @@ Tier 1 (public API — available via ``from bnbagent import ...``):
     SigningPolicy, PolicyViolation
     X402Signer
     load_env
+    set_default_receipt_timeout, get_default_receipt_timeout, set_min_gas_price_wei
 
 Tier 2 (import from subpackage):
     from bnbagent.erc8183 import CommerceClient, RouterClient, PolicyClient, NegotiationHandler
@@ -40,6 +41,14 @@ from .exceptions import BNBAgentError
 # Opt-in .env loading (never called at import time — applications opt in)
 from .core.env import load_env
 
+# Transaction tuning (gas-price floor + receipt timeout) — public knobs that
+# replace any downstream monkey-patching of SDK internals.
+from .core.contract_mixin import (
+    get_default_receipt_timeout,
+    set_default_receipt_timeout,
+    set_min_gas_price_wei,
+)
+
 # Wallets
 from .wallets import EVMWalletProvider, WalletProvider
 
@@ -55,6 +64,10 @@ __all__ = [
     "NetworkConfig",
     "BNBAgentError",
     "load_env",
+    # Transaction tuning
+    "set_default_receipt_timeout",
+    "get_default_receipt_timeout",
+    "set_min_gas_price_wei",
     # ERC-8004
     "ERC8004Agent",
     "AgentEndpoint",

@@ -74,3 +74,15 @@ def clear_nonce_singletons():
     from bnbagent.core.nonce_manager import NonceManager
 
     NonceManager._clear_all()
+
+
+@pytest.fixture(autouse=True)
+def reset_tx_config_overrides():
+    """Reset module-global tx-tuning overrides so tests don't leak into each other."""
+    from bnbagent.core import contract_mixin as cm
+
+    cm._min_gas_price_override = None
+    cm._receipt_timeout_override = None
+    yield
+    cm._min_gas_price_override = None
+    cm._receipt_timeout_override = None

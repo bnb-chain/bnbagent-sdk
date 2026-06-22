@@ -88,12 +88,13 @@ class ExecutionContext:
         web3: Connected ``Web3`` instance (typed ``Any`` to avoid importing
             web3 into this lightweight module).
         paymaster: Optional paymaster for gas sponsorship.
-        receipt_timeout: Seconds to wait for a transaction receipt.
+        receipt_timeout: Seconds to wait for a transaction receipt. ``None``
+            (default) defers to the SDK default, resolved at execute time.
     """
 
     web3: Any
     paymaster: Any = None
-    receipt_timeout: int = 300
+    receipt_timeout: int | None = None
 
 
 class IntentExecutor(ABC):
