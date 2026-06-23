@@ -84,7 +84,6 @@ async def main():
     wallet = EVMWalletProvider(
         password=wallet_password, 
         private_key=private_key, 
-        persist=False if not private_key else True
     )
     client = ERC8183Client(wallet, network=network)
 
