@@ -108,7 +108,7 @@ Built-in behaviour:
 
 - **`funded_job_watcher`**: signer-free detection loop over `get_pending_jobs()` — fires `on_funded` once per newly FUNDED job assigned to this provider; retries on transient failure; never submits or settles by itself.
 - **Deliverable size caps**: `submit_result` rejects oversized payloads before upload — `response_content` is capped at 5 MB and the `metadata` JSON at 256 KB. Override via `ERC8183_MAX_RESPONSE_BYTES` / `ERC8183_MAX_METADATA_BYTES`. Excess returns `error_code="payload_too_large"`.
-- **Semantic error codes**: failure dicts carry a transport-neutral string `error_code` (`budget_too_low`, `not_assigned`, `not_found`, `job_expired`, `wrong_status`, `quote_expired`, `description_invalid`, `submit_deadline_passed`, `payload_too_large`, `internal_error`, `chain_unavailable`) plus `"retryable": True` on transient failures only. A serving layer maps codes to its own protocol's rejection — the HTTP example keeps a code → status table.
+- **Semantic error codes**: failure dicts carry a transport-neutral string `error_code` (`budget_too_low`, `not_assigned`, `not_found`, `job_expired`, `wrong_status`, `description_invalid`, `submit_deadline_passed`, `payload_too_large`, `internal_error`, `chain_unavailable`) plus `"retryable": True` on transient failures only. A serving layer maps codes to its own protocol's rejection — the HTTP example keeps a code → status table.
 - **Settle is delegated** to operator scripts. `router.settle(jobId)` is permissionless; operators run a separate process (or an ad-hoc script using `ERC8183Client.settle`) once the dispute window elapses or a verdict is finalised.
 
 How the loop faces the world (A2A / MCP / HTTP) is the application's choice —
@@ -151,7 +151,7 @@ are rejected at negotiation time with reason code `TASK_TOO_LONG` (`0x07`) —
 the description is **not** silently truncated, because truncating after
 signing would invalidate `negotiation_hash` / `provider_sig`.
 
-Quote TTL is bounded by `NegotiationHandler.MAX_QUOTE_TTL_SECONDS = 300` so
+Quote TTL is bounded by `NegotiationHandler.MAX_QUOTE_TTL_SECONDS = 900` so
 leaked or replayed `provider_sig` values cannot accumulate value over time.
 Public quote endpoints should be throttled (every accepted request burns a
 wallet signature) — `bnbagent.utils.SlidingWindowLimiter` is the SDK's

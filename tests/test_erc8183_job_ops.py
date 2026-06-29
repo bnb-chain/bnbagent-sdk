@@ -140,11 +140,14 @@ class TestVerifyJob:
         assert "Malformed" in result["error"]
 
     @pytest.mark.asyncio
-    async def test_rejects_expired_quote(self):
+    async def test_accepts_expired_quote_when_funded(self):
+        # Regression guard for BUG-V2-629-02: once a job is FUNDED the price is
+        # already escrowed on-chain, so an elapsed negotiation quote TTL must NOT
+        # block fulfillment — re-checking it here only strands escrowed funds.
         import json as _json
 
         past = int(time.time()) - 1
-        good = _json.dumps(
+        expired_quote = _json.dumps(
             {
                 "version": 1,
                 "negotiated_at": past - 60,
@@ -157,11 +160,35 @@ class TestVerifyJob:
         )
         ops = _make_ops()
         client = _inject_client(ops)
-        client.get_job.return_value = _job(description=good)
+        client.get_job.return_value = _job(description=expired_quote)
+        result = await ops.verify_job(1)
+        assert result["valid"] is True
+
+    @pytest.mark.asyncio
+    async def test_expired_quote_still_budget_gated(self):
+        # The economic guard after funding is the budget check, not the quote TTL:
+        # an under-budget FUNDED job with an expired quote is still rejected, and
+        # via budget_too_low (not the removed quote_expired path).
+        import json as _json
+
+        past = int(time.time()) - 1
+        expired_quote = _json.dumps(
+            {
+                "version": 1,
+                "negotiated_at": past - 60,
+                "task": "x",
+                "terms": {"deliverables": "y", "quality_standards": "z"},
+                "price": "1",
+                "currency": "0x" + "00" * 20,
+                "quote_expires_at": past,
+            }
+        )
+        ops = _make_ops(service_price=5000)
+        client = _inject_client(ops)
+        client.get_job.return_value = _job(budget=1000, description=expired_quote)
         result = await ops.verify_job(1)
         assert result["valid"] is False
-        assert result["error_code"] == "quote_expired"
-        assert "expired" in result["error"].lower()
+        assert result["error_code"] == "budget_too_low"
 
     @pytest.mark.asyncio
     async def test_accepts_equal_or_higher_budget(self):

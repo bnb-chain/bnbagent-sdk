@@ -500,7 +500,7 @@ class NegotiationHandler:
             service_price="20000000000000000000",  # 20 tokens (18 decimals)
             currency="0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
             wallet_provider=wallet,               # enables provider_sig
-            quote_ttl_seconds=3600,               # quote valid for 1 hour
+            quote_ttl_seconds=900,                # quote valid for 15 minutes
         )
 
         # Or auto-fetch currency from contract:
@@ -514,7 +514,7 @@ class NegotiationHandler:
         return result.to_dict()
     """
 
-    MAX_QUOTE_TTL_SECONDS = 300  # 5 minutes — bounds the lifetime of provider_sig
+    MAX_QUOTE_TTL_SECONDS = 900  # 15 minutes — bounds the lifetime of provider_sig
 
     def __init__(
         self,

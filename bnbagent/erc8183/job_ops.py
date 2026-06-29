@@ -85,7 +85,6 @@ ERR_NOT_ASSIGNED = "not_assigned"            # job.provider != this agent
 ERR_NOT_FOUND = "not_found"                  # job / stored response missing
 ERR_JOB_EXPIRED = "job_expired"              # past job.expiredAt
 ERR_WRONG_STATUS = "wrong_status"            # job not in the required status
-ERR_QUOTE_EXPIRED = "quote_expired"          # negotiation quote TTL elapsed
 ERR_DESCRIPTION_INVALID = "description_invalid"  # malformed on-chain description (fail closed)
 ERR_SUBMIT_DEADLINE_PASSED = "submit_deadline_passed"  # past expiredAt - disputeWindow
 ERR_PAYLOAD_TOO_LARGE = "payload_too_large"  # response/metadata size cap hit
@@ -488,20 +487,20 @@ class ERC8183JobOps:
                 from .negotiation import parse_job_description
 
                 try:
-                    parsed = parse_job_description(description)
+                    # Fail closed on a malformed / type-confused description.
+                    # The negotiation quote TTL (quote_expires_at) is intentionally
+                    # NOT enforced here: verify_job only runs once a job is FUNDED
+                    # (price already escrowed on-chain), so re-checking the TTL post-
+                    # fund can only strand funds — it cannot undo the commit. The TTL
+                    # guards a signed quote pre-commit; after funding the budget check
+                    # below is the economic guard that matters.
+                    parse_job_description(description)
                 except Exception as exc:
                     return {
                         "valid": False,
                         "error": f"Malformed job description: {exc}",
                         "error_code": ERR_DESCRIPTION_INVALID,
                     }
-                if parsed and parsed.quote_expires_at is not None:
-                    if now > parsed.quote_expires_at:
-                        return {
-                            "valid": False,
-                            "error": "Negotiation quote has expired",
-                            "error_code": ERR_QUOTE_EXPIRED,
-                        }
 
             if self._service_price > 0:
                 budget = job_result.get("budget", 0)
