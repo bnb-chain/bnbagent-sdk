@@ -38,6 +38,7 @@ from .erc8004 import AgentEndpoint, ERC8004Agent
 # Exceptions
 from .exceptions import (
     BNBAgentError,
+    ERC8004PartialRegistrationError,
     TransactionPendingError,
 )
 
@@ -67,6 +68,7 @@ __all__ = [
     "NetworkConfig",
     "BNBAgentError",
     "TransactionPendingError",
+    "ERC8004PartialRegistrationError",
     "load_env",
     # Transaction tuning
     "set_default_receipt_timeout",

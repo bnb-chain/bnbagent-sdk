@@ -118,6 +118,41 @@ class TransactionPendingError(BNBAgentError):
         )
 
 
+class ERC8004PartialRegistrationError(BNBAgentError):
+    """
+    An ERC-8004 agent was registered on-chain (``agent_id`` assigned) but the
+    follow-up ``setAgentURI`` that populates the ``registrations[]`` field did
+    not complete.
+
+    The agent exists and is owned by the wallet; only URI completion is
+    outstanding. Retry via ``setAgentURI`` / ``bag erc8004 update-endpoint``.
+    ``tx_hash`` is set only when the completion tx was broadcast but left
+    pending (the cause is a :class:`TransactionPendingError`).
+    """
+
+    def __init__(
+        self,
+        agent_id: int,
+        agent_uri: str | None,
+        cause: Exception,
+        tx_hash: str | None = None,
+        retryable: bool = True,
+    ):
+        self.agent_id = agent_id
+        self.agent_uri = agent_uri
+        self.cause = cause
+        self.tx_hash = tx_hash
+        self.retryable = retryable
+        msg = (
+            f"agent registered (agent_id={agent_id}) but agent_uri/registrations "
+            f"completion failed: {cause}. "
+            "Retry setAgentURI / `bag erc8004 update-endpoint`."
+        )
+        if tx_hash:
+            msg += f" pending tx_hash={tx_hash}"
+        super().__init__(msg)
+
+
 class JobError(BNBAgentError):
     """
     Job operation failed.

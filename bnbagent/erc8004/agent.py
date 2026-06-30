@@ -21,7 +21,7 @@ from web3 import Web3
 
 from ..constants import SCAN_API_URL
 from ..core.paymaster import Paymaster
-from ..exceptions import TransactionPendingError
+from ..exceptions import ERC8004PartialRegistrationError, TransactionPendingError
 from .agent_uri import AgentURIGenerator
 from ..wallets import WalletProvider
 from .constants import get_erc8004_config
@@ -364,11 +364,30 @@ class ERC8004Agent:
                         )
                         self.contract.set_agent_uri(agent_id, final_agent_uri)
                         logger.info(f"Updated agent URI with registrations (agentId={agent_id})")
+                except TransactionPendingError as e:
+                    # register confirmed (agent_id assigned) but the setAgentURI
+                    # completion tx is broadcast-yet-unconfirmed. Surface a
+                    # partial-success carrying agent_id AND the pending tx_hash
+                    # so the caller can prompt the user to retry/await rather
+                    # than mistaking the whole register for success.
+                    raise ERC8004PartialRegistrationError(
+                        agent_id=agent_id,
+                        agent_uri=final_agent_uri,
+                        cause=e,
+                        tx_hash=e.tx_hash,
+                        retryable=True,
+                    ) from e
                 except Exception as e:
-                    logger.warning(
-                        f"Failed to update agent URI with registrations: {str(e)}. "
-                        "The agent is registered but registrations field may be empty."
-                    )
+                    # register confirmed but URI completion failed outright
+                    # (revert, build error, ...). Still a partial success: the
+                    # agent exists; the registrations field is just empty.
+                    raise ERC8004PartialRegistrationError(
+                        agent_id=agent_id,
+                        agent_uri=final_agent_uri,
+                        cause=e,
+                        tx_hash=None,
+                        retryable=True,
+                    ) from e
 
             # Add final agentURI to result
             result["agentURI"] = final_agent_uri
@@ -381,9 +400,10 @@ class ERC8004Agent:
 
             return result
 
-        except TransactionPendingError:
-            # The register tx itself was broadcast-yet-unconfirmed — surface the
-            # pending signal (with tx_hash) rather than a flat failure.
+        except (ERC8004PartialRegistrationError, TransactionPendingError):
+            # Partial success (agent registered, URI completion outstanding) or
+            # the register tx itself broadcast-yet-unconfirmed — both carry
+            # actionable state for the caller; don't relabel as a flat failure.
             raise
         except Exception as e:
             logger.error(f"Agent registration failed: {str(e)}")
