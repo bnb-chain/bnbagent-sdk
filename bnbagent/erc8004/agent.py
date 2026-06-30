@@ -21,6 +21,7 @@ from web3 import Web3
 
 from ..constants import SCAN_API_URL
 from ..core.paymaster import Paymaster
+from ..exceptions import TransactionPendingError
 from .agent_uri import AgentURIGenerator
 from ..wallets import WalletProvider
 from .constants import get_erc8004_config
@@ -380,6 +381,10 @@ class ERC8004Agent:
 
             return result
 
+        except TransactionPendingError:
+            # The register tx itself was broadcast-yet-unconfirmed — surface the
+            # pending signal (with tx_hash) rather than a flat failure.
+            raise
         except Exception as e:
             logger.error(f"Agent registration failed: {str(e)}")
             raise
@@ -582,6 +587,10 @@ class ERC8004Agent:
             result["agentURI"] = agent_uri
             return result
 
+        except TransactionPendingError:
+            # Broadcast OK but not yet confirmed — propagate the pending signal
+            # (with tx_hash) so the caller can check later / safely rerun.
+            raise
         except Exception as e:
             logger.error(f"Failed to set agent URI: {str(e)}")
             raise

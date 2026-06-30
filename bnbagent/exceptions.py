@@ -90,6 +90,34 @@ class RpcRangeLimitError(NetworkError):
     pass
 
 
+class TransactionPendingError(BNBAgentError):
+    """
+    A transaction was broadcast successfully but its receipt did not arrive
+    within the timeout.
+
+    This is NOT a failure: the transaction may still confirm on-chain. Callers
+    must surface ``tx_hash`` so the user can check later or safely retry, and
+    must NOT treat this as a revert. Distinct from :class:`ContractError`,
+    which means the transaction failed (reverted, rejected, or never broadcast).
+    """
+
+    def __init__(
+        self,
+        tx_hash: str,
+        timeout_seconds: int,
+        message: str | None = None,
+    ):
+        self.tx_hash = tx_hash
+        self.timeout_seconds = timeout_seconds
+        super().__init__(
+            message
+            or (
+                f"Transaction {tx_hash} broadcast but not confirmed within "
+                f"{timeout_seconds}s; check later or retry safely."
+            )
+        )
+
+
 class JobError(BNBAgentError):
     """
     Job operation failed.

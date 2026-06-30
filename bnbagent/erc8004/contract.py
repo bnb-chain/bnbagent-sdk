@@ -16,6 +16,7 @@ from web3 import Web3
 from web3.contract.contract import ContractFunction
 
 from ..core.paymaster import Paymaster
+from ..exceptions import TransactionPendingError
 from ..wallets.intents import (
     ERC8004_REGISTER,
     ERC8004_SET_AGENT_URI,
@@ -219,6 +220,10 @@ class ContractInterface:
                 "receipt": receipt,
             }
 
+        except TransactionPendingError:
+            # Tx broadcast but not yet confirmed — propagate the pending
+            # signal (with tx_hash) instead of masking it as a fatal failure.
+            raise
         except Exception as e:
             logger.error(f"Failed to register agent: {str(e)}")
             raise RuntimeError(f"Agent registration failed: {str(e)}") from e
@@ -352,6 +357,10 @@ class ContractInterface:
                 "receipt": result.get("receipt"),
             }
 
+        except TransactionPendingError:
+            # Tx broadcast but not yet confirmed — propagate the pending
+            # signal (with tx_hash) instead of masking it as a fatal failure.
+            raise
         except Exception as e:
             logger.error(f"Failed to set agent URI: {str(e)}")
             raise RuntimeError(f"Failed to set agent URI: {str(e)}") from e

@@ -742,3 +742,15 @@ class TestRetryableContract:
         fields = _exc_error_fields(Exception("connection timeout"))
         assert fields["error_code"] == "chain_unavailable"
         assert fields["retryable"] is True
+
+    def test_pending_tx_is_not_retryable_and_carries_hash(self):
+        """A broadcast-yet-unconfirmed write must NOT be flagged retryable
+        (a blind retry would risk a double-broadcast) and must expose tx_hash."""
+        from bnbagent import TransactionPendingError
+        from bnbagent.erc8183.job_ops import _exc_error_fields
+
+        exc = TransactionPendingError(tx_hash="0x" + "ab" * 32, timeout_seconds=300)
+        fields = _exc_error_fields(exc)
+        assert fields["error_code"] == "tx_pending"
+        assert fields["retryable"] is False
+        assert fields["tx_hash"] == "0x" + "ab" * 32

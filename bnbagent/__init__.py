@@ -36,7 +36,10 @@ from .config import NetworkConfig
 from .erc8004 import AgentEndpoint, ERC8004Agent
 
 # Exceptions
-from .exceptions import BNBAgentError
+from .exceptions import (
+    BNBAgentError,
+    TransactionPendingError,
+)
 
 # Opt-in .env loading (never called at import time — applications opt in)
 from .core.env import load_env
@@ -63,6 +66,7 @@ __all__ = [
     # Core
     "NetworkConfig",
     "BNBAgentError",
+    "TransactionPendingError",
     "load_env",
     # Transaction tuning
     "set_default_receipt_timeout",

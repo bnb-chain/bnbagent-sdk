@@ -26,7 +26,7 @@ from web3 import Web3
 
 from ..config import NetworkConfig
 from ..core.config import get_env
-from ..exceptions import RpcRangeLimitError
+from ..exceptions import RpcRangeLimitError, TransactionPendingError
 from ..storage.storage_provider import StorageProvider
 from ..wallets.wallet_provider import WalletProvider
 from .client import ERC8183Client
@@ -90,6 +90,7 @@ ERR_SUBMIT_DEADLINE_PASSED = "submit_deadline_passed"  # past expiredAt - disput
 ERR_PAYLOAD_TOO_LARGE = "payload_too_large"  # response/metadata size cap hit
 ERR_INTERNAL = "internal_error"              # unexpected failure (retryable)
 ERR_CHAIN_UNAVAILABLE = "chain_unavailable"  # transient chain/RPC trouble (retryable)
+ERR_TX_PENDING = "tx_pending"                # tx broadcast but unconfirmed (NOT retryable)
 
 
 def _exc_error_fields(exc: Exception) -> dict[str, Any]:
@@ -105,7 +106,18 @@ def _exc_error_fields(exc: Exception) -> dict[str, Any]:
     otherwise — both retryable. The raw JSON-RPC code (e.g. ``-32005``), when
     present, rides along separately as ``rpc_error_code`` — never mixed into
     ``error_code``.
+
+    A :class:`TransactionPendingError` is reported as ``tx_pending`` and is
+    NOT retryable: the write was already broadcast, so a blind retry would
+    risk a double-broadcast — the caller should check ``tx_hash`` later.
     """
+    if isinstance(exc, TransactionPendingError):
+        return {
+            "error": str(exc),
+            "error_code": ERR_TX_PENDING,
+            "retryable": False,
+            "tx_hash": exc.tx_hash,
+        }
     payload = exc.args[0] if exc.args else None
     rpc_code = None
     if isinstance(payload, dict) and "message" in payload:

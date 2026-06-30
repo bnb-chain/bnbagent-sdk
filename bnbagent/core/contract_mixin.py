@@ -7,8 +7,9 @@ import os
 import time
 from typing import Any
 
-from web3.exceptions import ContractLogicError
+from web3.exceptions import ContractLogicError, TimeExhausted
 
+from ..exceptions import TransactionPendingError
 from ..networks.addresses import BSC_MAINNET_CHAIN_ID, BSC_TESTNET_CHAIN_ID
 from .nonce_manager import NonceManager
 
@@ -226,9 +227,21 @@ class ContractClientMixin:
                 signed = self._wallet_provider.sign_transaction(tx)
                 raw_tx = signed["rawTransaction"]
                 tx_hash = self.w3.eth.send_raw_transaction(raw_tx)
-                receipt = self.w3.eth.wait_for_transaction_receipt(
-                    tx_hash, timeout=get_default_receipt_timeout()
-                )
+                timeout = get_default_receipt_timeout()
+                try:
+                    receipt = self.w3.eth.wait_for_transaction_receipt(
+                        tx_hash, timeout=timeout
+                    )
+                except TimeExhausted as exc:
+                    # Broadcast OK (nonce consumed) but unconfirmed in time —
+                    # surface as pending with the hash, never as a fatal/retry
+                    # (a blind retry would risk a double-broadcast).
+                    tx_hash_hex = tx_hash.hex()
+                    if not tx_hash_hex.startswith("0x"):
+                        tx_hash_hex = "0x" + tx_hash_hex
+                    raise TransactionPendingError(
+                        tx_hash=tx_hash_hex, timeout_seconds=timeout
+                    ) from exc
                 if receipt["status"] == 0:
                     raise RuntimeError(
                         f"Transaction reverted on-chain: {receipt['transactionHash'].hex()}"
@@ -238,6 +251,9 @@ class ContractClientMixin:
                     "status": receipt["status"],
                     "receipt": receipt,
                 }
+            except TransactionPendingError:
+                # Broadcast succeeded; not a failure and not retryable here.
+                raise
             except Exception as e:
                 last_error = e
                 error_str = str(e).lower()

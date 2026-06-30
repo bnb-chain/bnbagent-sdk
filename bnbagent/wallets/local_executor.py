@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from web3 import Web3
 from web3.contract.contract import ContractFunction
+from web3.exceptions import TimeExhausted
 
 from ..core.contract_mixin import (
     DEFAULT_RECEIPT_TIMEOUT,  # noqa: F401  — re-exported for back-compat
@@ -37,6 +38,7 @@ from ..core.contract_mixin import (
 )
 from ..core.nonce_manager import NonceManager
 from ..core.paymaster import Paymaster
+from ..exceptions import TransactionPendingError
 from .intents import Intent, IntentExecutor
 
 if TYPE_CHECKING:
@@ -162,7 +164,24 @@ class LocalExecutor(IntentExecutor):
                 if self.receipt_timeout is not None
                 else get_default_receipt_timeout()
             )
-            receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash, timeout=timeout)
+            try:
+                receipt = self.web3.eth.wait_for_transaction_receipt(
+                    tx_hash, timeout=timeout
+                )
+            except TimeExhausted as exc:
+                # The tx was broadcast (tx_hash is known) but did not confirm
+                # in time. This is NOT fatal — surface it as pending with the
+                # hash preserved so the caller can check later / retry safely,
+                # rather than masking it as a failed transaction.
+                logger.warning(
+                    "[LocalExecutor] %s broadcast but no receipt after %ss: %s",
+                    description,
+                    timeout,
+                    tx_hash_hex,
+                )
+                raise TransactionPendingError(
+                    tx_hash=tx_hash_hex, timeout_seconds=timeout
+                ) from exc
 
             if receipt["status"] == 0:
                 logger.error(
@@ -181,6 +200,9 @@ class LocalExecutor(IntentExecutor):
                 "receipt": receipt,
             }
 
+        except TransactionPendingError:
+            # Already logged as pending above; not a failure — propagate as-is.
+            raise
         except Exception as e:
             logger.error(f"Failed to execute {description}: {str(e)}")
             raise

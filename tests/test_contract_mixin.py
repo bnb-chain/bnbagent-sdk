@@ -180,3 +180,25 @@ class TestReceiptTimeoutPassed:
         client._send_tx(fn)
         _, kwargs = mock_web3.eth.wait_for_transaction_receipt.call_args
         assert kwargs["timeout"] == 456
+
+
+class TestSendTxReceiptTimeoutPending:
+    """A timed-out receipt on the legacy ``_send_tx`` path is pending, not fatal,
+    and is never retried into a double-broadcast (parity with LocalExecutor)."""
+
+    def test_timeout_raises_pending_with_tx_hash(self, client, mock_web3):
+        from web3.exceptions import TimeExhausted
+
+        from bnbagent import TransactionPendingError
+        from tests.conftest import FAKE_TX_HASH
+
+        mock_web3.eth.wait_for_transaction_receipt.side_effect = TimeExhausted(
+            "not in the chain after 300 seconds"
+        )
+        fn = _make_fn()
+        with pytest.raises(TransactionPendingError) as ei:
+            client._send_tx(fn)
+
+        assert ei.value.tx_hash == FAKE_TX_HASH
+        # broadcast happened exactly once — no retry of an in-flight tx
+        assert mock_web3.eth.send_raw_transaction.call_count == 1
