@@ -15,22 +15,23 @@ def policy_client(mock_web3):
     with patch("bnbagent.erc8183.policy._load_abi", return_value=[{"type": "function", "name": "dispute"}]):
         client = PolicyClient(mock_web3, "0x" + "11" * 20, wallet)
         client._send_tx = MagicMock()
+        client._execute_intent = MagicMock()
         client._call_with_retry = MagicMock()
         yield client
 
 
 class TestPolicyClient:
     def test_dispute(self, policy_client):
-        policy_client._send_tx.return_value = {"status": 1}
+        policy_client._execute_intent.return_value = {"status": 1}
         res = policy_client.dispute(1)
         assert res == {"status": 1}
-        policy_client._send_tx.assert_called_once()
+        policy_client._execute_intent.assert_called_once()
 
     def test_vote_reject(self, policy_client):
-        policy_client._send_tx.return_value = {"status": 1}
+        policy_client._execute_intent.return_value = {"status": 1}
         res = policy_client.vote_reject(1)
         assert res == {"status": 1}
-        policy_client._send_tx.assert_called_once()
+        policy_client._execute_intent.assert_called_once()
 
     def test_check(self, policy_client):
         policy_client._call_with_retry.return_value = (1, b"reason")
