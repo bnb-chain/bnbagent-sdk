@@ -8,9 +8,6 @@ Exports:
   ``RPC_URL`` env override. **Module-specific contract overrides live in
   their own module configs** (e.g. ``ERC8183Config``, ``get_erc8004_config``),
   not here.
-- :class:`BNBAgentConfig` — top-level SDK facade; composes modules via
-  :class:`ModuleRegistry`. Inherits wallet + network plumbing from
-  :class:`AgentConfig`.
 
 Env var surface
 ---------------
@@ -23,10 +20,9 @@ project-root ``.env.example`` is the authoritative reference.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
-from .core.config import AgentConfig, get_env
+from .core.config import get_env
 
 logger = logging.getLogger(__name__)
 
@@ -86,11 +82,20 @@ def resolve_network(network: str | NetworkConfig = "bsc-testnet") -> NetworkConf
     Accepts either a preset name (``"bsc-testnet"`` / ``"bsc-mainnet"``) or a
     concrete ``NetworkConfig`` instance:
 
-    - **String** → look up the preset; apply ``RPC_URL`` env override if set.
+    - **String** → look up the preset; apply the RPC env override if set.
       Module-scoped contract-address envs (``ERC8183_*``, ``ERC8004_*``) are
       NOT read here — they belong to each module's own config loader.
     - **NetworkConfig** → returned as-is; env vars are never applied (fully
       explicit control is the point of passing an object).
+
+    RPC override precedence (a process that touches several networks needs
+    per-network pins — a single shared URL would silently apply to the wrong
+    chain):
+
+    1. ``RPC_URL_<NETWORK>`` — per-network, e.g. ``RPC_URL_BSC_TESTNET`` /
+       ``RPC_URL_BSC_MAINNET`` (preset name uppercased, ``-`` → ``_``).
+    2. ``RPC_URL`` — global, network-agnostic.
+    3. The preset default.
     """
     if isinstance(network, NetworkConfig):
         return network
@@ -99,7 +104,8 @@ def resolve_network(network: str | NetworkConfig = "bsc-testnet") -> NetworkConf
     if nc is None:
         raise ValueError(f"Unknown network: {network}")
 
-    rpc_override = get_env("RPC_URL")
+    per_network_key = f"RPC_URL_{nc.name.upper().replace('-', '_')}"
+    rpc_override = get_env(per_network_key) or get_env("RPC_URL")
     if rpc_override:
         use_paymaster = not rpc_override.startswith("http://localhost")
         return NetworkConfig(
@@ -114,72 +120,3 @@ def resolve_network(network: str | NetworkConfig = "bsc-testnet") -> NetworkConf
             policy_contract=nc.policy_contract,
         )
     return nc
-
-
-@dataclass
-class BNBAgentConfig(AgentConfig):
-    """Top-level SDK config — aggregates wallet + network + module settings.
-
-    Usage:
-        from bnbagent.wallets import EVMWalletProvider
-        wallet = EVMWalletProvider(password="...", private_key="0x...")
-        config = BNBAgentConfig(wallet_provider=wallet)
-
-        # Convenience (auto-wraps into EVMWalletProvider):
-        config = BNBAgentConfig(private_key="0x...", wallet_password="...")
-
-        # From environment:
-        config = BNBAgentConfig.from_env()
-    """
-
-    settings: dict[str, Any] = field(default_factory=dict)
-    modules: dict[str, dict[str, Any]] = field(default_factory=dict)
-
-    def __repr__(self) -> str:
-        net_name = (
-            self.network if isinstance(self.network, str) else self.network.name
-        )
-        return (
-            f"BNBAgentConfig("
-            f"network='{net_name}', "
-            f"{self._wallet_info_repr()}, "
-            f"settings={list(self.settings.keys())}, "
-            f"modules={list(self.modules.keys())})"
-        )
-
-    def get(self, key: str, default: Any = None) -> Any:
-        """Get a config value. Supports dotted keys: ``'erc8183.service_price'``."""
-        if "." in key:
-            module_name, sub_key = key.split(".", 1)
-            return self.modules.get(module_name, {}).get(sub_key, default)
-        return self.settings.get(key, default)
-
-    def to_flat_dict(self) -> dict[str, Any]:
-        """Flatten to a single dict for ``module.initialize(config)``."""
-        flat = dict(self.settings)
-        flat["network"] = self.network
-        flat["wallet_provider"] = self.wallet_provider
-        for mod_name, mod_settings in self.modules.items():
-            for k, v in mod_settings.items():
-                flat[f"{mod_name}.{k}"] = v
-        return flat
-
-    @property
-    def network_config(self) -> NetworkConfig:
-        """Resolve the current network to a concrete ``NetworkConfig``."""
-        return resolve_network(self.network) if isinstance(self.network, str) else self.network
-
-    @classmethod
-    def from_env(cls) -> BNBAgentConfig:
-        """Create config from environment variables.
-
-        Reads the **global** env surface only (network + wallet + debug).
-        Module-specific settings are loaded inside each module's own
-        ``*Config.from_env`` — keep those concerns separate.
-        """
-        wallet_kwargs = cls._wallet_kwargs_from_env()
-        return cls(
-            network=get_env("NETWORK", "bsc-testnet"),
-            settings={"debug": (get_env("DEBUG", "false") or "false").lower() == "true"},
-            **wallet_kwargs,
-        )

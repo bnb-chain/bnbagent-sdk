@@ -22,22 +22,17 @@ pip install bnbagent
 The base package includes ERC-8004 identity registration and the ERC-8183 client stack. Install optional extras for additional features:
 
 ```bash
-# ERC-8183 server components (FastAPI + Uvicorn)
-pip install "bnbagent[server]"
-
 # IPFS storage (HTTP pinning service backend, e.g. Pinata)
 pip install "bnbagent[ipfs]"
-
-# All extras
-pip install "bnbagent[server,ipfs]"
 ```
 
 ## Table of Contents
 
 - [What is ERC-8004?](#what-is-erc-8004)
+- [Gas sponsorship (paymaster)](#gas-sponsorship-paymaster)
 - [What is ERC-8183?](#what-is-erc-8183)
 - [Quick Start: Register an Agent (ERC-8004)](#quick-start-register-an-agent-erc-8004)
-- [Quick Start: Run an ERC-8183 Agent Server](#quick-start-run-an-erc-8183-agent-server)
+- [Quick Start: Run an ERC-8183 Provider](#quick-start-run-an-erc-8183-provider)
 - [Quick Start: Use `ERC8183Client` from a Client](#quick-start-use-erc8183client-from-a-client)
 - [Configuration Reference](#configuration-reference)
 - [Architecture & Components](#architecture--components)
@@ -58,6 +53,14 @@ pip install "bnbagent[server,ipfs]"
 - **Metadata** — Arbitrary key-value pairs attached to your agent record
 
 **Gas-free registration**: On BSC Testnet, registration transactions are sponsored by [MegaFuel paymaster](https://docs.nodereal.io/docs/megafuel) — you don't need tBNB for gas.
+
+## Gas sponsorship (paymaster)
+
+With an `EVMWalletProvider`, the SDK routes writes through the MegaFuel paymaster when configured and lets MegaFuel decide per transaction: sponsorable writes are sent gas-free, everything else self-pays automatically — no sponsorship policy is hard-coded in the SDK, and a paymaster outage just falls back to self-pay.
+
+- **ERC-8004** — sponsored on both networks.
+- **ERC-8183** — on **BSC Testnet** the SDK routes the protocol writes through MegaFuel and lets it decide per call (e.g. `fund` and `settle` are sponsored today); whatever MegaFuel declines self-pays automatically. **Mainnet is never sponsored** — writes self-pay and the SDK skips the probe entirely there. Two things to note: (1) provider payout has no separate "withdraw" — it happens inside `settle` (→ `complete`); (2) the only ERC-20 `approve` is on the **payment token** (not an ERC-8183 function), sent by `fund()` only when the allowance is insufficient, through the ERC-20 client's own self-pay path — so a fresh testnet buyer needs a little tBNB for that first approve.
+- **twak wallet** — sponsorship is twak-internal and not controlled by the SDK (mainnet auto-sponsored, testnet self-pays); see [`docs/twak.md`](docs/twak.md).
 
 ## What is ERC-8183?
 
@@ -171,11 +174,11 @@ agent_uri = sdk.generate_agent_uri(
     name="my-ai-agent",
     description="AI agent for document processing",
     endpoints=[
-        AgentEndpoint(
-            name="ERC-8183",
-            endpoint="https://my-agent.example.com/erc8183/status",
-            version="0.1.0",
-        ),
+        # Typed constructors encode the EIP-8004 registration-file format.
+        # A2A first: the registered URL is the spec-defined discovery document.
+        AgentEndpoint.a2a("https://my-agent.example.com"),
+        # MCP second (if you also serve one): bare server URL + protocol version.
+        AgentEndpoint.mcp("https://my-agent.example.com/mcp", version="2025-06-18"),
     ],
 )
 
@@ -185,100 +188,57 @@ print(f"Agent registered! ID: {result['agentId']}, TX: {result['transactionHash'
 
 ---
 
-## Quick Start: Run an ERC-8183 Agent Server
+## Quick Start: Run an ERC-8183 Provider
 
-Set up an agent server that accepts jobs, processes work, and gets paid.
-
-### Prerequisites
-
-- `pip install "bnbagent[server,ipfs]"`
-- A `.env` file with your credentials (see [`examples/agent-server/.env.example`](examples/agent-server/.env.example))
-
-### Option 1: Standalone App (`create_erc8183_app`)
+The core earn loop is **headless** — no server, no port, no extra
+dependencies. Watch for funded jobs, do the work, submit:
 
 ```python
-# agent.py
-from bnbagent.erc8183.server import create_erc8183_app
+# provider.py
+import asyncio
 
-def execute_job(job: dict) -> str:
-    """Called automatically for each FUNDED job. Return the deliverable string."""
-    return f"Processed: {job['description']}"
+from bnbagent import EVMWalletProvider
+from bnbagent.erc8183 import ERC8183JobOps, funded_job_watcher
+from bnbagent.storage import LocalStorageProvider
 
-app = create_erc8183_app(on_job=execute_job)
-# Routes at /erc8183/negotiate, /erc8183/status, /erc8183/job/{id}, etc.
+wallet = EVMWalletProvider(password="your-secure-password", private_key="0x...")
+ops = ERC8183JobOps(
+    wallet,
+    network="bsc-testnet",
+    storage_provider=LocalStorageProvider(),
+    service_price=1_000_000_000_000_000_000,  # 1 token (18 decimals)
+    agent_url="http://localhost:8003/erc8183",  # public URL for file:// deliverables
+)
+
+async def on_funded(job: dict) -> None:
+    deliverable = f"Processed: {job['description']}"   # your business logic
+    await ops.submit_result(job["jobId"], deliverable)
+
+asyncio.run(funded_job_watcher(ops, on_funded, interval=30))
 ```
 
-```bash
-# .env
-WALLET_PASSWORD=your-secure-password
-PRIVATE_KEY=0x...                                # first run only; encrypted to ~/.bnbagent/wallets/
-ERC8183_AGENT_URL=http://localhost:8003/erc8183  # required for LocalStorageProvider (default)
-ERC8183_SERVICE_PRICE=1000000000000000000        # 1 token (18 decimals)
-# To use IPFS instead, swap to IPFSStorageProvider in your service code and set:
-# STORAGE_API_KEY=your-pinning-service-jwt
-# Optional knobs (see env-var table below for full reference):
-# ERC8183_FUNDED_POLL_INTERVAL=30      # default poll cadence (s)
-# ERC8183_NEGOTIATE_RATE_LIMIT=120     # /negotiate per-IP request budget
-# ERC8183_NEGOTIATE_RATE_WINDOW=60     # rate-limit window (s)
-# ERC8183_MAX_RESPONSE_BYTES=5242880   # response_content cap (5 MB)
-# ERC8183_MAX_METADATA_BYTES=262144    # metadata cap (256 KB)
-```
-
-```bash
-uvicorn agent:app --port 8003
-```
-
-`create_erc8183_app()` handles: wallet keystore, periodic on-chain poll for newly FUNDED jobs assigned to this provider, on-chain verification, calling your handler, uploading the deliverable to storage, and submitting on-chain. Jobs with `budget < service_price` are rejected with HTTP 402. Settle is permissionless — run a separate operator script to call `router.settle(jobId)` once the dispute window elapses.
-
-### Option 2: Mount on Existing App (sub-app)
-
-```python
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from bnbagent.erc8183.server import create_erc8183_app
-
-def execute_job(job: dict) -> str:
-    return f"Processed: {job['description']}"
-
-erc8183_app = create_erc8183_app(on_job=execute_job, prefix="")
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    await erc8183_app.state.startup()
-    yield
-
-app = FastAPI(lifespan=lifespan)
-app.mount("/erc8183", erc8183_app)
-```
-
-Starlette does not propagate lifespan events into mounted sub-apps; call `erc8183_app.state.startup()` from your parent lifespan to launch the funded-job poll loop.
-
-### Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/erc8183/negotiate` | Price negotiation (off-chain). Returns a structured quote. Rate-limited per client IP. |
-| `GET`  | `/erc8183/job/{id}` | Job details from the Commerce kernel. |
-| `GET`  | `/erc8183/job/{id}/response` | Stored deliverable for a submitted job. |
-| `GET`  | `/erc8183/job/{id}/verify` | Verify a job is `FUNDED`, assigned to this provider, not expired, budget ok. |
-| `GET`  | `/erc8183/status` | Agent wallet, contract addresses, service price, payment token, decimals. |
-| `GET`  | `/erc8183/health` | Liveness check. |
-
-### `on_job` Callback
-
-```python
-# Sync or async, with or without per-job metadata:
-def on_job(job: dict) -> str: ...
-async def on_job(job: dict) -> str: ...
-def on_job(job: dict) -> tuple[str, dict]: ...
-async def on_job(job: dict) -> tuple[str, dict]: ...
-```
+`ERC8183JobOps.submit_result` handles on-chain verification, deliverable
+upload to storage, manifest hashing, and the `submit` transaction. The
+watcher is signer-free detection — it never submits or settles by itself.
+Settle is permissionless: run a separate operator script that calls
+`ERC8183Client.settle(jobId)` once the dispute window elapses.
 
 `job` contains: `jobId`, `description`, `budget`, `client`, `provider`, `evaluator`, `status` (always `FUNDED`), `expiredAt`, `hook`.
 
-### Settle
+### Facing the world: A2A, MCP, or HTTP
 
-`router.settle(jobId)` is permissionless — any party can finalise a submitted job once its dispute window elapses. The SDK does not run an in-server settle loop; operators are expected to run a separate script that polls verdicts and calls `ERC8183Client.settle(jobId)` when ready.
+How your agent exposes negotiation and job queries is an application choice —
+the SDK ships protocol capability, not a serving runtime. Recommended
+direction is **A2A first, MCP second**; the SDK provides the ERC-8004
+registration constructors (`AgentEndpoint.a2a()` / `AgentEndpoint.mcp()`) and
+the headless primitives above, and the examples provide copy-and-own serving
+references:
+
+- [`examples/a2a-agent/`](examples/a2a-agent/) — A2A agent card +
+  `message/send` fronting `NegotiationHandler`, with on-chain discovery.
+- [`examples/agent-server/`](examples/agent-server/) — full HTTP provider
+  (FastAPI factory lives in the example at `src/erc8183_server.py`), funded-job
+  poll loop, three storage backends.
 
 ---
 
@@ -352,8 +312,8 @@ See [`examples/client/`](examples/client/) for the five canonical flows (happy, 
 | `ERC8183_AGENT_URL` | If LocalStorageProvider | — | Agent's public base URL including `/erc8183`. Required when storage returns `file://` URLs; the SDK rewrites them to `{ERC8183_AGENT_URL}/job/{id}/response`. |
 | `ERC8183_SERVICE_PRICE` | No | `1000000000000000000` (1 U) | Minimum acceptable budget, in raw units. |
 | `ERC8183_FUNDED_POLL_INTERVAL` | No | `30` | Seconds between funded-job poll passes (agent-server). |
-| `ERC8183_NEGOTIATE_RATE_LIMIT` | No | `120` | Max `/negotiate` requests per window per client IP. |
-| `ERC8183_NEGOTIATE_RATE_WINDOW` | No | `60` | Sliding-window length for `/negotiate` rate limit, in seconds. |
+| `ERC8183_NEGOTIATE_RATE_LIMIT` | No | `120` | Max `/negotiate` requests per window per client IP (agent-server). |
+| `ERC8183_NEGOTIATE_RATE_WINDOW` | No | `60` | Sliding-window length for `/negotiate` rate limit, in seconds (agent-server). |
 | `ERC8183_MAX_RESPONSE_BYTES` | No | `5242880` (5 MB) | Cap on `response_content` size in `submit_result`. |
 | `ERC8183_MAX_METADATA_BYTES` | No | `262144` (256 KB) | Cap on serialised metadata size in `submit_result`. |
 | `ERC8004_REGISTRY_ADDRESS` | No | Network default | ERC-8004 Identity Registry override. |
@@ -369,14 +329,14 @@ See [`.env.example`](.env.example) at the project root for the full surface with
 
 ## Architecture & Components
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full code map, module system, invariants, and data flows. The ERC-8183 stack is split into:
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full code map, invariants, and data flows. The ERC-8183 stack is split into:
 
 - `bnbagent/erc8183/client.py` — `ERC8183Client` facade (most callers use this).
 - `bnbagent/erc8183/commerce.py` — `CommerceClient` (low-level Commerce kernel).
 - `bnbagent/erc8183/router.py` — `RouterClient` (low-level Router).
 - `bnbagent/erc8183/policy.py` — `PolicyClient` (low-level OptimisticPolicy).
 - `bnbagent/erc20/client.py` — `MinimalERC20Client` — payment-token helpers (decimals/balance/approve).
-- `bnbagent/erc8183/server/` — FastAPI factory and async job ops with funded-job poll loop.
+- `bnbagent/erc8183/job_ops.py` — `ERC8183JobOps` + `funded_job_watcher` — headless provider primitives (async job ops, funded-job detection).
 
 ### Wallet Providers
 
@@ -386,8 +346,16 @@ Transaction signing is abstracted behind the `WalletProvider` ABC (`address`, `s
 - Keystore V3 encryption (scrypt + AES-128-CTR), interoperable with MetaMask / Geth.
 - Persistent mode (`persist=True`, default) — keystore at `~/.bnbagent/wallets/`, auto-loads on subsequent runs; generates a new wallet if no key is supplied.
 - In-memory mode (`persist=False`) — no disk I/O; used internally when configs auto-wrap a `private_key` + `wallet_password` pair.
-- Auto-wrap — `BNBAgentConfig`/`ERC8183Config` accept `private_key=` directly and wrap it into `EVMWalletProvider(persist=False)` in `__post_init__`, immediately zeroing the plaintext field.
+- Auto-wrap — `ERC8183Config` (and other `AgentConfig` subclasses) accept `private_key=` directly and wrap it into `EVMWalletProvider(persist=False)` in `__post_init__`, immediately zeroing the plaintext field.
 - Keystores written with `0o600` permissions (directory `0o700`).
+
+**Built-in: `TWAKProvider` (Trust Wallet Agent Kit CLI)** — a self-custody, self-broadcasting wallet whose capabilities differ substantially from `EVMWalletProvider`. **Read [`docs/twak.md`](docs/twak.md) before swapping in twak.** The key differences:
+
+- **No raw-transaction or generic EIP-712 signing** (`sign.transaction` / `sign.typed_data` are absent) — twak signs ERC-8004 / ERC-8183 / x402 payloads internally and only exposes high-level operations. Anything that needs direct EIP-712 (e.g. an `X402Signer` you construct yourself) requires `EVMWalletProvider`.
+- **Self-broadcasting** — the SDK holds no key and sends no transaction; twak signs and broadcasts each operation itself. x402 is a *delegated payer* (`make_x402_payer()`), not a signer.
+- **Restricted surface** — BSC only (`bsc` / `bsctestnet`); x402 `request` is mainnet-only so far; on testnet twak pays its own gas (no paymaster). Full method-by-method support matrix, contract addresses, and boundaries: [`docs/twak.md`](docs/twak.md).
+
+Construct with `TWAKProvider(chain="bsc")` or `WALLET_KIND=twak`. Because every client routes writes through `wallet.make_executor()`, EVM ↔ twak is a one-line swap **for the high-level flows** — but the capability gaps above are not papered over: unsupported calls raise `UnsupportedWalletOperation`.
 
 **Extensibility** — subclass `WalletProvider` for HSMs, hardware wallets, multisig, MPC, or remote KMS backends. Inject via `wallet_provider=` on any config or client. `MPCWalletProvider` ships as a stub placeholder.
 
@@ -437,7 +405,11 @@ Payment token address is read from `commerce.paymentToken()` at runtime.
 |---------|------|-------------|
 | [`examples/client/`](examples/client/) | Client | Five stand-alone scripts for the canonical ERC-8183 flows: happy / dispute-reject / stalemate-expire / never-submit / cancel-open. |
 | [`examples/voter/`](examples/voter/) | Voter | `voteReject` script + `Disputed` event watcher for whitelisted voters. |
-| [`examples/agent-server/`](examples/agent-server/) | Provider | FastAPI agent that searches blockchain news via DuckDuckGo. Demonstrates `create_erc8183_app()`, the funded-job poll loop, and ERC-8004 registration. |
+| [`examples/a2a-agent/`](examples/a2a-agent/) | Provider (A2A) | Recommended serving direction: A2A agent card + `message/send` fronting SDK negotiation, ERC-8004 discovery round-trip, buyer counterpart. |
+| [`examples/agent-server/`](examples/agent-server/) | Provider (HTTP) | HTTP serving reference (FastAPI factory inlined as example code), funded-job poll loop, ERC-8004 registration. |
+| [`examples/twak/`](examples/twak/) | Wallet | TWAK custody quickstart, delegated x402 payer, bsctestnet smoke. |
+| [`examples/x402/`](examples/x402/) | Buyer | x402 buyer flow with mock 402 server. |
+| [`examples/security/`](examples/security/) | Security | Defense-in-depth signing validation. |
 
 ---
 
@@ -447,7 +419,7 @@ Payment token address is read from `commerce.paymentToken()` at runtime.
 
 - **Encrypted keys** — `EVMWalletProvider` uses Keystore V3; plaintext keys are cleared from memory after import.
 - **Submit-time verification** — `submit_result()` re-verifies `FUNDED`, assignment, expiry, and `budget >= service_price` before every on-chain submission.
-- **Budget protection** — Underpriced jobs are rejected with HTTP 402 at `/status`, `/job/{id}/verify`, and at submit time inside `submit_result()`.
+- **Budget protection** — Underpriced jobs are rejected by `verify_job()` and again at submit time inside `submit_result()` (the HTTP example surfaces this as a 402 response).
 - **Permissionless settle** — `router.settle` is callable by anyone. The SDK does not gatekeep settlement; operators run their own settle script when ready.
 - **Non-pausable refund** — `claimRefund` on the kernel is intentionally not pausable and not hookable: funds can always be reclaimed past `expiredAt`.
 - **Storage permissions** — `LocalStorageProvider` uses `0600`/`0700`.
@@ -589,8 +561,8 @@ What are you signing?
 | Opt into Permit2 SignatureTransfer | `extend(primary_type_allowlist={"PermitTransferFrom"})` |
 | Widen validity to 30 min | `extend(max_validity_window_seconds=1800)` |
 
-Examples: see `examples/security_e2e.py` (signing + recovery loop, 6 assertions)
-and `examples/x402_buyer_demo.py` (complete buyer flow with mock 402 server).
+Examples: see `examples/security/e2e.py` (signing + recovery loop, 6 assertions)
+and `examples/x402/buyer_demo.py` (complete buyer flow with mock 402 server).
 
 Full design rationale and threat model: see ADR #30 in the
 [bnbchain-studio](https://github.com/bnb-chain/bnbchain-studio) repo

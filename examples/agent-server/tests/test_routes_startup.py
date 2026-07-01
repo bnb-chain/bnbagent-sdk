@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from bnbagent.erc8183.config import ERC8183Config
-from bnbagent.erc8183.server.routes import create_erc8183_state
+from erc8183_server import create_erc8183_state
 from bnbagent.storage.local_storage_provider import LocalStorageProvider
 
 
@@ -26,7 +26,7 @@ def _config(storage, agent_url=None):
 class TestCreateERC8183StateStartupValidation:
     def test_local_storage_without_agent_url_raises(self, monkeypatch):
         monkeypatch.setattr(
-            "bnbagent.erc8183.server.routes.ERC8183JobOps.erc8183_client",
+            "erc8183_server.ERC8183JobOps.erc8183_client",
             property(lambda self: MagicMock(
                 payment_token="0x" + "00" * 20,
                 token_decimals=MagicMock(return_value=18),
@@ -39,7 +39,7 @@ class TestCreateERC8183StateStartupValidation:
 
     def test_local_storage_with_agent_url_succeeds(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            "bnbagent.erc8183.server.routes.ERC8183JobOps",
+            "erc8183_server.ERC8183JobOps",
             _FakeJobOps,
         )
         config = _config(
@@ -51,7 +51,7 @@ class TestCreateERC8183StateStartupValidation:
 
     def test_custom_storage_without_agent_url_succeeds(self, monkeypatch):
         monkeypatch.setattr(
-            "bnbagent.erc8183.server.routes.ERC8183JobOps",
+            "erc8183_server.ERC8183JobOps",
             _FakeJobOps,
         )
         mock_storage = MagicMock(spec=[])  # not a LocalStorageProvider

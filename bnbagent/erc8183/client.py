@@ -50,6 +50,14 @@ logger = logging.getLogger(__name__)
 # ``approve_floor=0`` (exact) or a custom floor.
 DEFAULT_APPROVE_FLOOR_UNITS: int = 100
 
+# Chain IDs where MegaFuel sponsors ERC-8183 writes, so ``ERC8183Client``
+# wires a paymaster into the write path. bsc-testnet (97) is sponsored;
+# bsc-mainnet (56) is **never** sponsored for ERC-8183 — its writes self-pay,
+# and we don't even probe ``isSponsorable`` there (the hot production path).
+# If mainnet sponsorship ever lands, add 56 here — that single edit flips it.
+# (ERC-8004 sponsorship is independent and handled in erc8004/agent.py.)
+ERC8183_PAYMASTER_CHAIN_IDS: frozenset[int] = frozenset({97})
+
 
 class ERC8183Client:
     """High-level facade over Commerce + Router + Policy.
@@ -106,15 +114,50 @@ class ERC8183Client:
             wallet_provider.address if wallet_provider is not None else None
         )
 
-        self.commerce = CommerceClient(self.w3, nc.commerce_contract, wallet_provider)
-        self.router = RouterClient(self.w3, nc.router_contract, wallet_provider)
-        self.policy = PolicyClient(self.w3, nc.policy_contract, wallet_provider)
+        # Gas sponsorship: wire a paymaster into the write path only on
+        # networks where MegaFuel sponsors ERC-8183 (testnet today; mainnet
+        # never — see ERC8183_PAYMASTER_CHAIN_IDS). The executor still gates
+        # each write on isSponsorable and self-pays when it cannot sponsor, so
+        # this only decides whether to *attempt* sponsorship at all.
+        paymaster = self._build_paymaster(nc, debug)
+
+        self.commerce = CommerceClient(
+            self.w3, nc.commerce_contract, wallet_provider, paymaster=paymaster
+        )
+        self.router = RouterClient(
+            self.w3, nc.router_contract, wallet_provider, paymaster=paymaster
+        )
+        self.policy = PolicyClient(
+            self.w3, nc.policy_contract, wallet_provider, paymaster=paymaster
+        )
 
         # Cached payment-token state (populated lazily).
         self._payment_token_address: str | None = None
         self._payment_token_decimals: int | None = None
         self._payment_token_symbol: str | None = None
         self._erc20: MinimalERC20Client | None = None
+
+    @staticmethod
+    def _build_paymaster(nc: NetworkConfig, debug: bool):
+        """Return a ``Paymaster`` for ERC-8183 writes, or ``None`` to self-pay.
+
+        Built only when the network enables a paymaster AND its chain is one
+        MegaFuel sponsors ERC-8183 on (``ERC8183_PAYMASTER_CHAIN_IDS``). On
+        every other network — notably bsc-mainnet — this returns ``None`` so
+        writes self-pay without ever probing ``isSponsorable``.
+
+        Note: the ERC-20 ``approve`` inside :meth:`fund` runs through the
+        ERC-20 client's own self-pay path and is not sponsored here.
+        """
+        if (
+            nc.use_paymaster
+            and nc.paymaster_url
+            and nc.chain_id in ERC8183_PAYMASTER_CHAIN_IDS
+        ):
+            from ..core.paymaster import Paymaster
+
+            return Paymaster(paymaster_url=nc.paymaster_url, debug=debug)
+        return None
 
     # ------------------------------------------------------------ token cache
 
@@ -252,6 +295,12 @@ class ERC8183Client:
         ``erc8183.approve_payment_token(spender, cap)``; the allowance check
         above will then detect the existing allowance and skip the approve.
         """
+        # A self-broadcasting backend (e.g. twak) bundles approve+deposit in
+        # its own fund operation — skip the SDK-side allowance management.
+        # ``is True`` guards against MagicMock wallets in tests.
+        if getattr(self._wallet_provider, "fund_bundles_approval", False) is True:
+            return self.commerce.fund(job_id, amount)
+
         current = self.token_allowance(self.address, self.commerce.address)
         if current < amount:
             if approve_floor is None:

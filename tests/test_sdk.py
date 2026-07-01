@@ -269,6 +269,48 @@ class TestERC8004Agent:
         assert "transactionHash" in result
         assert "agentURI" in result
 
+    def _uri_with_endpoint(self, sdk):
+        return sdk.generate_agent_uri(
+            name="Partial Agent",
+            description="d",
+            endpoints=[
+                AgentEndpoint(
+                    name="A2A",
+                    endpoint="https://agent.example/.well-known/agent-card.json",
+                )
+            ],
+        )
+
+    def test_register_partial_when_set_agent_uri_fails(self, sdk):
+        """register confirmed but setAgentURI failing must raise partial, not success
+        (BUG-V2-630-15)."""
+        from bnbagent import ERC8004PartialRegistrationError
+
+        sdk.contract.set_agent_uri.side_effect = RuntimeError("setAgentURI reverted")
+        agent_uri = self._uri_with_endpoint(sdk)
+
+        with pytest.raises(ERC8004PartialRegistrationError) as ei:
+            sdk.register_agent(agent_uri=agent_uri)
+
+        assert ei.value.agent_id == 1
+        assert ei.value.tx_hash is None
+        assert ei.value.retryable is True
+
+    def test_register_partial_carries_tx_hash_when_completion_pending(self, sdk):
+        """A pending setAgentURI must surface the partial error WITH the tx hash."""
+        from bnbagent import ERC8004PartialRegistrationError, TransactionPendingError
+
+        sdk.contract.set_agent_uri.side_effect = TransactionPendingError(
+            tx_hash="0x" + "ab" * 32, timeout_seconds=300
+        )
+        agent_uri = self._uri_with_endpoint(sdk)
+
+        with pytest.raises(ERC8004PartialRegistrationError) as ei:
+            sdk.register_agent(agent_uri=agent_uri)
+
+        assert ei.value.agent_id == 1
+        assert ei.value.tx_hash == "0x" + "ab" * 32
+
     def test_agent_endpoint_model(self):
         """Test AgentEndpoint model validation"""
         # Valid endpoint

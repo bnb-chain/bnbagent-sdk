@@ -90,6 +90,69 @@ class RpcRangeLimitError(NetworkError):
     pass
 
 
+class TransactionPendingError(BNBAgentError):
+    """
+    A transaction was broadcast successfully but its receipt did not arrive
+    within the timeout.
+
+    This is NOT a failure: the transaction may still confirm on-chain. Callers
+    must surface ``tx_hash`` so the user can check later or safely retry, and
+    must NOT treat this as a revert. Distinct from :class:`ContractError`,
+    which means the transaction failed (reverted, rejected, or never broadcast).
+    """
+
+    def __init__(
+        self,
+        tx_hash: str,
+        timeout_seconds: int,
+        message: str | None = None,
+    ):
+        self.tx_hash = tx_hash
+        self.timeout_seconds = timeout_seconds
+        super().__init__(
+            message
+            or (
+                f"Transaction {tx_hash} broadcast but not confirmed within "
+                f"{timeout_seconds}s; check later or retry safely."
+            )
+        )
+
+
+class ERC8004PartialRegistrationError(BNBAgentError):
+    """
+    An ERC-8004 agent was registered on-chain (``agent_id`` assigned) but the
+    follow-up ``setAgentURI`` that populates the ``registrations[]`` field did
+    not complete.
+
+    The agent exists and is owned by the wallet; only URI completion is
+    outstanding. Retry via ``setAgentURI`` / ``bag erc8004 update-endpoint``.
+    ``tx_hash`` is set only when the completion tx was broadcast but left
+    pending (the cause is a :class:`TransactionPendingError`).
+    """
+
+    def __init__(
+        self,
+        agent_id: int,
+        agent_uri: str | None,
+        cause: Exception,
+        tx_hash: str | None = None,
+        retryable: bool = True,
+    ):
+        self.agent_id = agent_id
+        self.agent_uri = agent_uri
+        self.cause = cause
+        self.tx_hash = tx_hash
+        self.retryable = retryable
+        msg = (
+            f"agent registered (agent_id={agent_id}) but agent_uri/registrations "
+            f"completion failed: {cause}. "
+            "Retry setAgentURI / `bag erc8004 update-endpoint`."
+        )
+        if tx_hash:
+            msg += f" pending tx_hash={tx_hash}"
+        super().__init__(msg)
+
+
 class JobError(BNBAgentError):
     """
     Job operation failed.

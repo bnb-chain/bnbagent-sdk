@@ -185,4 +185,4 @@ to ensure deterministic output regardless of dict ordering.
 ## Related
 
 - [`erc8183`](../erc8183/README.md) — uses `StorageProvider` for deliverable persistence.
-- [`core`](../core/README.md) — module system and shared infrastructure.
+- [`core`](../core/README.md) — shared infrastructure.

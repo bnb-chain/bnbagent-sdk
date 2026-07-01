@@ -19,6 +19,12 @@ from web3 import Web3
 from web3.contract import Contract
 
 from ..core.contract_mixin import ContractClientMixin
+from ..wallets.intents import (
+    ERC8183_MARK_EXPIRED,
+    ERC8183_REGISTER_JOB,
+    ERC8183_SETTLE,
+    Intent,
+)
 from ..wallets.wallet_provider import WalletProvider
 from .types import JobStatus, Verdict
 
@@ -38,6 +44,7 @@ class RouterClient(ContractClientMixin):
         wallet_provider: WalletProvider | None = None,
         *,
         abi: list | None = None,
+        paymaster: Any = None,
     ) -> None:
         self.w3 = web3
         self.address = Web3.to_checksum_address(contract_address)
@@ -46,6 +53,9 @@ class RouterClient(ContractClientMixin):
         )
         self._wallet_provider = wallet_provider
         self._account = wallet_provider.address if wallet_provider is not None else None
+        # Optional gas sponsorship for the intent write path (read by the
+        # ContractClientMixin executor seam). None = self-pay.
+        self._paymaster = paymaster
 
     # ----------------------------------------------------------------- writes
 
@@ -54,12 +64,26 @@ class RouterClient(ContractClientMixin):
         fn = self.contract.functions.registerJob(
             job_id, Web3.to_checksum_address(policy)
         )
-        return self._send_tx(fn)
+        return self._execute_intent(
+            Intent(
+                name=ERC8183_REGISTER_JOB,
+                kwargs={"job_id": job_id, "policy": policy},
+                call=fn,
+                description="register job",
+            )
+        )
 
     def settle(self, job_id: int, evidence: bytes = b"") -> dict[str, Any]:
         """Permissionless: pull the policy verdict and apply it to the kernel."""
         fn = self.contract.functions.settle(job_id, evidence)
-        return self._send_tx(fn)
+        return self._execute_intent(
+            Intent(
+                name=ERC8183_SETTLE,
+                kwargs={"job_id": job_id, "evidence": evidence},
+                call=fn,
+                description="settle job",
+            )
+        )
 
     def mark_expired(self, job_id: int) -> dict[str, Any]:
         """Permissionless: reconcile the in-flight counter for a job that
@@ -68,7 +92,14 @@ class RouterClient(ContractClientMixin):
         expirable state. Required before ``setCommerce`` can be called once
         any job took the ``claimRefund`` path (audit L03)."""
         fn = self.contract.functions.markExpired(job_id)
-        return self._send_tx(fn)
+        return self._execute_intent(
+            Intent(
+                name=ERC8183_MARK_EXPIRED,
+                kwargs={"job_id": job_id},
+                call=fn,
+                description="mark expired",
+            )
+        )
 
     # ------------------------------------------------------------------ views
 

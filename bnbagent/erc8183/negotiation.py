@@ -59,7 +59,7 @@ class DescriptionTooLongError(ValueError):
 
 if TYPE_CHECKING:
     from .client import ERC8183Client
-    from ..wallets.wallet_provider import WalletProvider
+    from ..wallets.protocols import MessageSigner
 
 
 class ReasonCode:
@@ -500,7 +500,7 @@ class NegotiationHandler:
             service_price="20000000000000000000",  # 20 tokens (18 decimals)
             currency="0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
             wallet_provider=wallet,               # enables provider_sig
-            quote_ttl_seconds=3600,               # quote valid for 1 hour
+            quote_ttl_seconds=900,                # quote valid for 15 minutes
         )
 
         # Or auto-fetch currency from contract:
@@ -514,7 +514,7 @@ class NegotiationHandler:
         return result.to_dict()
     """
 
-    MAX_QUOTE_TTL_SECONDS = 300  # 5 minutes — bounds the lifetime of provider_sig
+    MAX_QUOTE_TTL_SECONDS = 900  # 15 minutes — bounds the lifetime of provider_sig
 
     def __init__(
         self,
@@ -522,7 +522,7 @@ class NegotiationHandler:
         currency: str,
         estimated_completion_seconds: int = 120,
         require_quality_standards: bool = True,
-        wallet_provider: WalletProvider | None = None,
+        wallet_provider: MessageSigner | None = None,
         quote_ttl_seconds: int = 300,
         chain_id: int | None = None,
         verifying_contract: str | None = None,
@@ -582,7 +582,7 @@ class NegotiationHandler:
         service_price: str,
         estimated_completion_seconds: int = 120,
         require_quality_standards: bool = True,
-        wallet_provider: WalletProvider | None = None,
+        wallet_provider: MessageSigner | None = None,
         quote_ttl_seconds: int = 300,
     ) -> NegotiationHandler:
         """

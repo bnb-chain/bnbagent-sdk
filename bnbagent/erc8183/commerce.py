@@ -18,6 +18,17 @@ from web3 import Web3
 from web3.contract import Contract
 
 from ..core.contract_mixin import ContractClientMixin
+from ..wallets.intents import (
+    ERC8183_CLAIM_REFUND,
+    ERC8183_COMPLETE,
+    ERC8183_CREATE_JOB,
+    ERC8183_FUND,
+    ERC8183_REJECT,
+    ERC8183_SET_BUDGET,
+    ERC8183_SET_PROVIDER,
+    ERC8183_SUBMIT,
+    Intent,
+)
 from ..wallets.wallet_provider import WalletProvider
 from .types import ZERO_ADDRESS, ZERO_REASON, Job, JobStatus
 
@@ -62,6 +73,7 @@ class CommerceClient(ContractClientMixin):
         wallet_provider: WalletProvider | None = None,
         *,
         abi: list | None = None,
+        paymaster: Any = None,
     ) -> None:
         self.w3 = web3
         self.address = Web3.to_checksum_address(contract_address)
@@ -70,6 +82,9 @@ class CommerceClient(ContractClientMixin):
         )
         self._wallet_provider = wallet_provider
         self._account = wallet_provider.address if wallet_provider is not None else None
+        # Optional gas sponsorship for the intent write path (read by the
+        # ContractClientMixin executor seam). None = self-pay.
+        self._paymaster = paymaster
 
     # ----------------------------------------------------------------- writes
 
@@ -90,10 +105,26 @@ class CommerceClient(ContractClientMixin):
             description,
             Web3.to_checksum_address(hook),
         )
-        result = self._send_tx(fn)
-        logs = self.contract.events.JobCreated().process_receipt(result["receipt"])
-        if logs:
-            result["jobId"] = logs[0]["args"]["jobId"]
+        result = self._execute_intent(
+            Intent(
+                name=ERC8183_CREATE_JOB,
+                kwargs={
+                    "provider": provider,
+                    "evaluator": evaluator,
+                    "expired_at": expired_at,
+                    "description": description,
+                    "hook": hook,
+                },
+                call=fn,
+                description="create job",
+            )
+        )
+        # Semantic backends surface jobId directly; the local path parses it
+        # from the JobCreated event in the receipt.
+        if result.get("jobId") is None and result.get("receipt") is not None:
+            logs = self.contract.events.JobCreated().process_receipt(result["receipt"])
+            if logs:
+                result["jobId"] = logs[0]["args"]["jobId"]
         return result
 
     def set_provider(
@@ -105,7 +136,14 @@ class CommerceClient(ContractClientMixin):
         fn = self.contract.functions.setProvider(
             job_id, Web3.to_checksum_address(provider), opt_params
         )
-        return self._send_tx(fn)
+        return self._execute_intent(
+            Intent(
+                name=ERC8183_SET_PROVIDER,
+                kwargs={"job_id": job_id, "provider": provider, "opt_params": opt_params},
+                call=fn,
+                description="set provider",
+            )
+        )
 
     def set_budget(
         self,
@@ -114,7 +152,14 @@ class CommerceClient(ContractClientMixin):
         opt_params: bytes = b"",
     ) -> dict[str, Any]:
         fn = self.contract.functions.setBudget(job_id, amount, opt_params)
-        return self._send_tx(fn)
+        return self._execute_intent(
+            Intent(
+                name=ERC8183_SET_BUDGET,
+                kwargs={"job_id": job_id, "amount": amount, "opt_params": opt_params},
+                call=fn,
+                description="set budget",
+            )
+        )
 
     def fund(
         self,
@@ -124,7 +169,18 @@ class CommerceClient(ContractClientMixin):
     ) -> dict[str, Any]:
         """Deposit escrow. Caller MUST have approved ``expected_budget`` first."""
         fn = self.contract.functions.fund(job_id, expected_budget, opt_params)
-        return self._send_tx(fn)
+        return self._execute_intent(
+            Intent(
+                name=ERC8183_FUND,
+                kwargs={
+                    "job_id": job_id,
+                    "expected_budget": expected_budget,
+                    "opt_params": opt_params,
+                },
+                call=fn,
+                description="fund job",
+            )
+        )
 
     def submit(
         self,
@@ -135,7 +191,18 @@ class CommerceClient(ContractClientMixin):
         if len(deliverable) != 32:
             raise ValueError("deliverable must be exactly 32 bytes")
         fn = self.contract.functions.submit(job_id, deliverable, opt_params)
-        return self._send_tx(fn)
+        return self._execute_intent(
+            Intent(
+                name=ERC8183_SUBMIT,
+                kwargs={
+                    "job_id": job_id,
+                    "deliverable": deliverable,
+                    "opt_params": opt_params,
+                },
+                call=fn,
+                description="submit deliverable",
+            )
+        )
 
     def complete(
         self,
@@ -147,7 +214,14 @@ class CommerceClient(ContractClientMixin):
         if len(reason) != 32:
             raise ValueError("reason must be exactly 32 bytes")
         fn = self.contract.functions.complete(job_id, reason, opt_params)
-        return self._send_tx(fn)
+        return self._execute_intent(
+            Intent(
+                name=ERC8183_COMPLETE,
+                kwargs={"job_id": job_id, "reason": reason, "opt_params": opt_params},
+                call=fn,
+                description="complete job",
+            )
+        )
 
     def reject(
         self,
@@ -159,12 +233,26 @@ class CommerceClient(ContractClientMixin):
         if len(reason) != 32:
             raise ValueError("reason must be exactly 32 bytes")
         fn = self.contract.functions.reject(job_id, reason, opt_params)
-        return self._send_tx(fn)
+        return self._execute_intent(
+            Intent(
+                name=ERC8183_REJECT,
+                kwargs={"job_id": job_id, "reason": reason, "opt_params": opt_params},
+                call=fn,
+                description="reject job",
+            )
+        )
 
     def claim_refund(self, job_id: int) -> dict[str, Any]:
         """Permissionless refund path after ``expiredAt``. Not pausable, no hook."""
         fn = self.contract.functions.claimRefund(job_id)
-        return self._send_tx(fn)
+        return self._execute_intent(
+            Intent(
+                name=ERC8183_CLAIM_REFUND,
+                kwargs={"job_id": job_id},
+                call=fn,
+                description="claim refund",
+            )
+        )
 
     # ------------------------------------------------------------------ views
 

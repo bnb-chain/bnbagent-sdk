@@ -28,16 +28,60 @@ cp .env.example .env
 
 ```
 WALLET_PASSWORD      keystore password (any string)
-PRIVATE_KEY          client private key (0x...)
+PRIVATE_KEY          client private key (0x...) — not needed when WALLET_KIND=twak
 PROVIDER_ADDRESS     provider EOA
 
 # Optional
+WALLET_KIND                evm (default) | twak — client wallet backend
 NETWORK                    bsc-testnet (default)
 RPC_URL                    override RPC
 ERC8183_COMMERCE_ADDRESS      override commerce proxy
 ERC8183_ROUTER_ADDRESS        override router proxy
 ERC8183_POLICY_ADDRESS        override policy
 ```
+
+## Running the flows with a TWAK wallet
+
+One env var switches the **client** wallet from a local private key to the
+Trust Wallet Agent Kit (`twak`) CLI:
+
+```bash
+WALLET_KIND=twak uv run python happy.py
+```
+
+All five flows run unchanged — `create_job`, `register_job`, `set_budget`,
+`fund`, `dispute`, `settle`, `cancel`, `claim_refund` all go through
+`twak erc8183 ...` instead of local web3 signing. This is the SDK's wallet
+polymorphism at work: the flow scripts contain zero `if twak` branching —
+`make_primary_client()` picks the wallet, and `ERC8183Client` routes every
+write through `wallet.make_executor()`.
+
+What switches and what doesn't:
+
+- **Client role: twak.** `PRIVATE_KEY` becomes optional — twak owns custody,
+  so the client address is whatever `twak wallet address` says, and the
+  wallet password is resolved by twak itself (`TWAK_WALLET_PASSWORD` or the
+  OS keychain) — the SDK never sees it.
+- **Provider / voter roles: stay EVM in these examples**
+  (`PROVIDER_PRIVATE_KEY` / `VOTER_PRIVATE_KEY`). The seller role itself
+  works on twak since **v0.19.0** (`submit` carries the `deliverable_url`
+  optParams), but a machine has exactly **one** twak wallet (per HOME), so
+  twak cannot play two *distinct* parties locally — these flows keep the
+  counterparty on EVM for that reason. See the capability reference
+  [`docs/twak.md`](../../docs/twak.md). (For a fully twak-driven both-roles
+  self-deal, see `examples/twak/e2e_smoke.py`.)
+
+Prerequisites (one-time):
+
+1. `npm install -g @trustwallet/cli` (>= 0.19).
+2. twak API credentials: `twak init --api-key <id> --api-secret <secret>`,
+   or `TWAK_ACCESS_ID` / `TWAK_HMAC_SECRET` env vars.
+3. A created twak wallet on the target network, **funded with testnet BNB
+   (gas) and the payment token** — `twak wallet address` to find it.
+4. The wallet password reachable by twak: `TWAK_WALLET_PASSWORD` (e.g. in
+   `.env.local`) or `twak wallet keychain save`.
+
+For a hermetic, no-funds-required twak tour, see `examples/twak/`.
 
 ## Notes
 

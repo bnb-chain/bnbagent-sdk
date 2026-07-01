@@ -90,22 +90,30 @@ custom = replace(
 erc8183 = ERC8183Client(wallet, network=custom)
 ```
 
-### Provider-side: FastAPI agent
+### Provider-side: headless earn loop
 
 ```python
-from bnbagent.erc8183.server import create_erc8183_app
+from bnbagent.erc8183 import ERC8183JobOps, funded_job_watcher
 
-def execute_job(job: dict) -> str:
-    return f"Processed: {job['description']}"
+ops = ERC8183JobOps(wallet, network="bsc-testnet", storage_provider=storage)
 
-app = create_erc8183_app(on_job=execute_job)
+async def on_funded(job: dict) -> None:
+    deliverable = f"Processed: {job['description']}"
+    await ops.submit_result(job["jobId"], deliverable)
+
+await funded_job_watcher(ops, on_funded, interval=30)
 ```
 
 Built-in behaviour:
 
-- **Funded-job poll loop** (default 30 s, override via `ERC8183_FUNDED_POLL_INTERVAL`): incrementally scans `jobCounter` and auto-processes every newly FUNDED job assigned to this provider — no external trigger required.
-- **Deliverable size caps**: `submit_result` rejects oversized payloads before upload — `response_content` is capped at 5 MB and the `metadata` JSON at 256 KB. Override via `ERC8183_MAX_RESPONSE_BYTES` / `ERC8183_MAX_METADATA_BYTES`. Excess returns `error_code=413`.
+- **`funded_job_watcher`**: signer-free detection loop over `get_pending_jobs()` — fires `on_funded` once per newly FUNDED job assigned to this provider; retries on transient failure; never submits or settles by itself.
+- **Deliverable size caps**: `submit_result` rejects oversized payloads before upload — `response_content` is capped at 5 MB and the `metadata` JSON at 256 KB. Override via `ERC8183_MAX_RESPONSE_BYTES` / `ERC8183_MAX_METADATA_BYTES`. Excess returns `error_code="payload_too_large"`.
+- **Semantic error codes**: failure dicts carry a transport-neutral string `error_code` (`budget_too_low`, `not_assigned`, `not_found`, `job_expired`, `wrong_status`, `description_invalid`, `submit_deadline_passed`, `payload_too_large`, `internal_error`, `chain_unavailable`) plus `"retryable": True` on transient failures only. A serving layer maps codes to its own protocol's rejection — the HTTP example keeps a code → status table.
 - **Settle is delegated** to operator scripts. `router.settle(jobId)` is permissionless; operators run a separate process (or an ad-hoc script using `ERC8183Client.settle`) once the dispute window elapses or a verdict is finalised.
+
+How the loop faces the world (A2A / MCP / HTTP) is the application's choice —
+see `examples/a2a-agent/` (A2A, recommended) and `examples/agent-server/`
+(HTTP reference, including the `/negotiate` quote endpoint).
 
 ### Voter-side: `voteReject` and settle
 
@@ -130,31 +138,27 @@ See [`examples/voter/`](../../examples/voter/).
 
 ## API Reference
 
-### HTTP Endpoints
+### Negotiation contract (transport-agnostic)
 
-All endpoints are mounted under a configurable prefix (default `/erc8183`).
+A negotiation inquiry is `{"task_description": "...", "terms": {...}}` and the
+reply is the signed `NegotiationResult` envelope — regardless of which
+transport carries it (the A2A example carries it in a `message/send` data
+part; the HTTP example as a `POST /negotiate` body).
 
-#### `POST /negotiate`
+The combined `task_description` + `terms` must fit the on-chain
+`job.description` cap (`MAX_DESCRIPTION_BYTES = 4096`). Over-length requests
+are rejected at negotiation time with reason code `TASK_TOO_LONG` (`0x07`) —
+the description is **not** silently truncated, because truncating after
+signing would invalidate `negotiation_hash` / `provider_sig`.
 
-Single-round price negotiation. Request body: `{"terms": {...}, "task_description": "..."}`. Returns either an accepted quote (with signed `negotiation_hash`) or a rejection with a reason code.
-
-The combined `task_description` + `terms` must fit the on-chain `job.description` cap (`MAX_DESCRIPTION_BYTES = 4096`). Over-length requests are rejected at negotiation time with reason code `TASK_TOO_LONG` (`0x07`) — the description is **not** silently truncated, because truncating after signing would invalidate `negotiation_hash` / `provider_sig`.
-
-The endpoint is rate-limited per client IP (defaults: 120 requests / 60 seconds, configurable via `ERC8183_NEGOTIATE_RATE_LIMIT` and `ERC8183_NEGOTIATE_RATE_WINDOW`); over-budget callers receive `429 Too Many Requests`. Quote TTL is bounded by `NegotiationHandler.MAX_QUOTE_TTL_SECONDS = 300` so leaked or replayed `provider_sig` values cannot accumulate value over time.
-
-When deployed behind a reverse proxy (nginx, AWS ALB, k8s ingress), run uvicorn with `--forwarded-allow-ips='<proxy_cidr>'` so `request.client.host` resolves to the real client IP. Without this flag every request appears to originate from the proxy, defeating per-client throttling.
-
-#### `GET /job/{id}` / `/response` / `/verify`
-
-Job details from the kernel; stored deliverable; SDK-side preflight (status, provider, expiry, budget ≥ service_price).
-
-#### `GET /status`
-
-Returns `commerce_address`, `router_address`, `policy_address`, `service_price`, payment token, and decimals so clients know the minimum acceptable budget.
-
-#### `GET /health`
-
-Liveness probe.
+Quote TTL is bounded by `NegotiationHandler.MAX_QUOTE_TTL_SECONDS = 900` so
+leaked or replayed `provider_sig` values cannot accumulate value over time.
+Public quote endpoints should be throttled (every accepted request burns a
+wallet signature) — `bnbagent.utils.SlidingWindowLimiter` is the SDK's
+transport-agnostic building block; the serving layer maps
+`RateLimitExceeded` to its own rejection (HTTP 429, JSON-RPC error, ...).
+Behind a reverse proxy, make sure the real client IP reaches the limiter
+(e.g. uvicorn `--forwarded-allow-ips`).
 
 ---
 
@@ -201,16 +205,21 @@ OptimisticPolicy surface:
 - **Reads**: `check`, `submitted_at`, `disputed`, `reject_votes`, `has_voted`, `is_voter`, `dispute_window`, `vote_quorum`, `dispute_quorum_snapshot`, `active_voter_count`, `admin`, `commerce`, `router`.
 - `get_deliverable_url(job_id, *, hint_block=None)` — reads `JobInitialised.optParams` to extract `deliverable_url`. Pass `hint_block` (e.g. the block number of the `Disputed` event) to keep the `eth_getLogs` window tight and avoid RPC block-range limits.
 
-### `ERC8183JobOps`
+### `ERC8183JobOps` / `funded_job_watcher`
 
-Async wrapper over `ERC8183Client` used by `create_erc8183_app`. Key methods:
-`submit_result`, `get_job`, `get_response`, `get_pending_jobs`, `verify_job`. Settle is permissionless on-chain and is the responsibility of operator scripts, not the agent server.
+`ERC8183JobOps` is the async wrapper over `ERC8183Client` that every serving
+form builds on. Key methods: `submit_result`, `get_job`, `get_response`,
+`get_pending_jobs`, `verify_job`. Constructed with `provider_address=` (no
+wallet) it is the keyless read path — any signing call raises at the SDK
+level. `funded_job_watcher(job_ops, on_funded)` is the signer-free detection
+loop over `get_pending_jobs()`. Settle is permissionless on-chain and is the
+responsibility of operator scripts, not the watcher.
 
 ### `NegotiationHandler`
 
 Single-round negotiation processor. `negotiate(request) → NegotiationResult`; `build_job_description(result)` produces a Schema v1 JSON anchor with `negotiation_hash` + `provider_sig`; `parse_job_description` recovers the structured form.
 
-**Chain binding (recommended).** When `chain_id` and `verifying_contract` are passed to the handler, both fields are embedded in the signed JSON content so `provider_sig` cannot be replayed across EVM chains or commerce contracts. Use `NegotiationHandler.from_erc8183_client(client, service_price=..., wallet_provider=...)` to populate both automatically from the live `ERC8183Client` — this is what `create_erc8183_app()` does by default. Wallet-signing failures inside `negotiate()` now log at `WARNING` level so operators can detect wallet outages (the quote is still returned, but without `provider_sig`).
+**Chain binding (recommended).** When `chain_id` and `verifying_contract` are passed to the handler, both fields are embedded in the signed JSON content so `provider_sig` cannot be replayed across EVM chains or commerce contracts. Use `NegotiationHandler.from_erc8183_client(client, service_price=..., wallet_provider=...)` to populate both automatically from the live `ERC8183Client` (both serving examples do this). Wallet-signing failures inside `negotiate()` log at `WARNING` level so operators can detect wallet outages (the quote is still returned, but without `provider_sig`).
 
 ### Types (`erc8183.types`)
 
@@ -221,7 +230,8 @@ Single-round negotiation processor. `negotiate(request) → NegotiationResult`; 
 
 ### `ERC8183Config`
 
-Unified dataclass consumed by `create_erc8183_app`. Primary API:
+Unified provider-config dataclass (consumed by `ERC8183JobOps` factories and
+the serving examples). Primary API:
 `wallet_provider`, `network` (str or `NetworkConfig`), `storage`,
 `service_price`. Convenience API: `private_key + wallet_password` →
 auto-wrapped into `EVMWalletProvider`; the plaintext key is zeroed

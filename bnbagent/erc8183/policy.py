@@ -25,6 +25,7 @@ from web3.contract import Contract
 
 from ..core.contract_mixin import ContractClientMixin
 from ..exceptions import RpcRangeLimitError
+from ..wallets.intents import ERC8183_DISPUTE, ERC8183_VOTE_REJECT, Intent
 from ..wallets.wallet_provider import WalletProvider
 from .types import Verdict
 
@@ -44,6 +45,7 @@ class PolicyClient(ContractClientMixin):
         wallet_provider: WalletProvider | None = None,
         *,
         abi: list | None = None,
+        paymaster: Any = None,
     ) -> None:
         self.w3 = web3
         self.address = Web3.to_checksum_address(contract_address)
@@ -52,18 +54,35 @@ class PolicyClient(ContractClientMixin):
         )
         self._wallet_provider = wallet_provider
         self._account = wallet_provider.address if wallet_provider is not None else None
+        # Optional gas sponsorship for the intent write path (read by the
+        # ContractClientMixin executor seam). None = self-pay.
+        self._paymaster = paymaster
 
     # ----------------------------------------------------------------- writes
 
     def dispute(self, job_id: int) -> dict[str, Any]:
         """Client raises a dispute. MUST be within dispute window."""
         fn = self.contract.functions.dispute(job_id)
-        return self._send_tx(fn)
+        return self._execute_intent(
+            Intent(
+                name=ERC8183_DISPUTE,
+                kwargs={"job_id": job_id},
+                call=fn,
+                description="dispute job",
+            )
+        )
 
     def vote_reject(self, job_id: int) -> dict[str, Any]:
         """Whitelisted voter casts a reject vote (one per voter per job)."""
         fn = self.contract.functions.voteReject(job_id)
-        return self._send_tx(fn)
+        return self._execute_intent(
+            Intent(
+                name=ERC8183_VOTE_REJECT,
+                kwargs={"job_id": job_id},
+                call=fn,
+                description="vote reject",
+            )
+        )
 
     # ------------------------------------------------------------------ views
 

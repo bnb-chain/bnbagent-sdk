@@ -194,3 +194,43 @@ class TestFromEnvOptional:
         monkeypatch.setenv("WALLET_PASSWORD", VALID_PASSWORD)
         result = ERC8183Config.from_env_optional()
         assert isinstance(result, ERC8183Config)
+
+
+class TestWalletKindFromEnv:
+    """WALLET_KIND switches every *Config.from_env() entry point (smooth swap)."""
+
+    def test_twak_kind_builds_twak_provider_pinned_to_network(self, monkeypatch):
+        from bnbagent.wallets import TWAKProvider
+
+        monkeypatch.setenv("WALLET_KIND", "twak")
+        monkeypatch.setenv("NETWORK", "bsc-testnet")
+        monkeypatch.delenv("PRIVATE_KEY", raising=False)
+        config = ERC8183Config.from_env()
+        assert isinstance(config.wallet_provider, TWAKProvider)
+        assert config.wallet_provider._chain == "bsctestnet"
+
+    def test_twak_bin_env_honored(self, monkeypatch):
+        monkeypatch.setenv("WALLET_KIND", "twak")
+        monkeypatch.setenv("NETWORK", "bsc-mainnet")
+        monkeypatch.setenv("TWAK_BIN", "/opt/twak19")
+        config = ERC8183Config.from_env()
+        assert config.wallet_provider._chain == "bsc"
+        assert config.wallet_provider._twak_bin == "/opt/twak19"
+
+    def test_evm_kind_keeps_private_key_path(self, monkeypatch):
+        from bnbagent.wallets import EVMWalletProvider
+
+        monkeypatch.setenv("WALLET_KIND", "evm")
+        monkeypatch.setenv("PRIVATE_KEY", VALID_PK)
+        monkeypatch.setenv("WALLET_PASSWORD", VALID_PASSWORD)
+        config = ERC8183Config.from_env()
+        assert isinstance(config.wallet_provider, EVMWalletProvider)
+
+    def test_unset_kind_unchanged_default(self, monkeypatch):
+        from bnbagent.wallets import EVMWalletProvider
+
+        monkeypatch.delenv("WALLET_KIND", raising=False)
+        monkeypatch.setenv("PRIVATE_KEY", VALID_PK)
+        monkeypatch.setenv("WALLET_PASSWORD", VALID_PASSWORD)
+        config = ERC8183Config.from_env()
+        assert isinstance(config.wallet_provider, EVMWalletProvider)

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 from bnbagent.erc8004.contract import ContractInterface
+from bnbagent.wallets.local_executor import LocalExecutor
 from tests.conftest import FAKE_ADDRESS, FAKE_CONTRACT_ADDRESS
 
 
@@ -20,6 +21,15 @@ def _make_contract(web3=None, paymaster=None):
     web3.provider.endpoint_uri = "https://fake-rpc.example.com"
     wallet_provider = MagicMock()
     wallet_provider.address = FAKE_ADDRESS
+    # A bare mock is a pure signer: make_executor must yield a real
+    # LocalExecutor wrapping it (matching the production default), so the
+    # build/sign/broadcast logic under test actually runs.
+    wallet_provider.make_executor.side_effect = lambda ctx: LocalExecutor(
+        web3=ctx.web3,
+        wallet_provider=wallet_provider,
+        paymaster=ctx.paymaster,
+        receipt_timeout=ctx.receipt_timeout,
+    )
 
     with patch.object(ContractInterface, "_get_default_abi", return_value=[]):
         with patch("bnbagent.erc8004.contract.Web3.to_checksum_address", side_effect=lambda x: x):
@@ -96,7 +106,7 @@ class TestExecuteTransactionReceiptRevert:
             with pytest.raises(RuntimeError, match="Transaction reverted on-chain"):
                 ci._execute_transaction(fn, description="test-op")
 
-        assert "[ContractInterface]" in caplog.text
+        assert "[LocalExecutor]" in caplog.text
         assert "test-op" in caplog.text
 
     def test_success_receipt_returns_normally(self):
@@ -216,7 +226,7 @@ class TestPreflightEthCall:
                 f.set_exception(concurrent.futures.TimeoutError())
                 return f
 
-        with patch("bnbagent.erc8004.contract._cf.ThreadPoolExecutor", ImmediateTimeoutExecutor):
+        with patch("bnbagent.wallets.local_executor._cf.ThreadPoolExecutor", ImmediateTimeoutExecutor):
             result = ci._execute_transaction(fn, description="timeout-test")
 
         web3.eth.send_raw_transaction.assert_called_once()
@@ -262,6 +272,65 @@ class TestRegisterAgentPropagatesRevert:
 
         with pytest.raises(RuntimeError, match="Agent registration failed"):
             ci.register_agent(agent_uri="https://example.com/agent")
+
+
+class TestReceiptTimeoutPending:
+    """A broadcast tx whose receipt times out is pending, not fatal (BUG-V2-630-16)."""
+
+    def _setup_broadcast(self, web3, sent_hash=b"\xcd" * 32):
+        ci, web3, wallet_provider = _make_contract(web3=web3)
+        fn = MagicMock()
+        fn.estimate_gas.return_value = 100_000
+        fn.build_transaction.return_value = {
+            "from": "0xDeadBeef", "to": "0x1234",
+            "data": "0x", "value": 0, "gas": 100_000,
+            "gasPrice": 3_000_000_000, "nonce": 1, "chainId": 97,
+        }
+        web3.eth.get_transaction_count.return_value = 1
+        web3.eth.gas_price = 3_000_000_000
+        web3.eth.chain_id = 97
+        web3.eth.call.return_value = b""  # pre-flight passes
+
+        raw_bytes = b"\xab" * 32
+        signed = MagicMock()
+        signed.__getitem__ = lambda s, k: raw_bytes if k == "rawTransaction" else None
+        wallet_provider.sign_transaction.return_value = signed
+
+        web3.eth.send_raw_transaction.return_value = sent_hash
+        return ci, web3, fn
+
+    def test_timeout_raises_pending_carrying_tx_hash(self):
+        from web3.exceptions import TimeExhausted
+
+        from bnbagent import TransactionPendingError
+        from bnbagent.core.contract_mixin import get_default_receipt_timeout
+
+        web3 = MagicMock()
+        ci, web3, fn = self._setup_broadcast(web3)
+        web3.eth.wait_for_transaction_receipt.side_effect = TimeExhausted(
+            "is not in the chain after 300 seconds"
+        )
+
+        with pytest.raises(TransactionPendingError) as ei:
+            ci._execute_transaction(fn, description="set agent URI")
+
+        assert ei.value.tx_hash == "0x" + "cd" * 32
+        assert ei.value.timeout_seconds == get_default_receipt_timeout()
+
+    def test_set_agent_uri_propagates_pending_not_runtimeerror(self):
+        """contract.set_agent_uri must NOT wrap pending into a fatal RuntimeError."""
+        from web3.exceptions import TimeExhausted
+
+        from bnbagent import TransactionPendingError
+
+        web3 = MagicMock()
+        ci, web3, fn = self._setup_broadcast(web3)
+        ci.contract = MagicMock()
+        ci.contract.functions.setAgentURI.return_value = fn
+        web3.eth.wait_for_transaction_receipt.side_effect = TimeExhausted("timeout")
+
+        with pytest.raises(TransactionPendingError):
+            ci.set_agent_uri(1, "data:application/json;base64,eyJ4IjoxfQ==")
 
 
 class TestRetryAndNonceManagement:
@@ -318,7 +387,7 @@ class TestRetryAndNonceManagement:
             Exception("HTTP 429: too many requests"),
             sent_hash,
         ]
-        with patch("bnbagent.erc8004.contract.time.sleep") as mock_sleep:
+        with patch("bnbagent.wallets.local_executor.time.sleep") as mock_sleep:
             result = ci._execute_transaction(fn, description="retry-429")
         assert web3.eth.send_raw_transaction.call_count == 2
         mock_sleep.assert_called_once()  # one backoff between the two attempts

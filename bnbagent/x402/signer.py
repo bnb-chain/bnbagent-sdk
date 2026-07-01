@@ -1,4 +1,4 @@
-"""X402Signer — x402-specific signing wrapper around a WalletProvider.
+"""X402Signer — x402-specific signing wrapper around a typed-data signer.
 
 The wallet's :class:`SigningPolicy` defends against the *structural* class
 of blind-sign attacks (unknown domain, denylisted primary type, validity
@@ -25,7 +25,8 @@ from typing import Any
 from web3 import Web3
 
 from ..signing import PolicyViolation
-from ..wallets import WalletProvider
+from ..wallets import TypedDataSigner, UnsupportedWalletOperation
+from ..wallets.capabilities import SIGN_TYPED_DATA
 from .budget import SessionBudgetTracker
 from .errors import (
     X402AmountExceededError,
@@ -40,22 +41,33 @@ logger = logging.getLogger(__name__)
 class X402Signer:
     """Constrained signer for x402 payment flows.
 
-    Construct once per :class:`bnbagent.WalletProvider` per scope/session.
+    Construct once per wallet (any
+    :class:`~bnbagent.wallets.TypedDataSigner`) per scope/session.
     Pass the resulting signer to agent tool functions instead of the raw
     wallet — the closure then cannot bypass the policy stack.
     """
 
     def __init__(
         self,
-        wallet: WalletProvider,
+        wallet: TypedDataSigner,
         *,
         max_value_per_call: dict[str, int] | None = None,
         session_budget: dict[str, int] | None = None,
     ) -> None:
         """
         Args:
-            wallet: The underlying wallet provider. Its own SigningPolicy
-                still applies — X402Signer never bypasses it.
+            wallet: The underlying wallet. Anything matching the narrow
+                :class:`~bnbagent.wallets.TypedDataSigner` protocol
+                (``address`` + ``sign_typed_data``) works — no
+                ``WalletProvider`` inheritance required. The wallet's own
+                SigningPolicy still applies — X402Signer never bypasses it.
+
+        Raises:
+            UnsupportedWalletOperation: The wallet exposes ``supports()``
+                and reports no ``sign.typed_data`` capability — rejected
+                here at composition time, before any payment flow runs.
+                Duck-typed signers without ``supports()`` pass through
+                (the runtime sign call is the gate for those).
             max_value_per_call: ``{token_address: max_base_units}`` cap on
                 ``message['value']`` for any sign_payment call against that
                 token (e.g. ``{U_MAINNET: 1_000_000}`` for 1 USDC if 18
@@ -65,6 +77,24 @@ class X402Signer:
                 cumulative spend across all sign_payment calls in this
                 signer's lifetime. Independent of per-call cap.
         """
+        # Composition-time gate (design §3.3.2 gate 1): a capability-aware
+        # wallet that cannot sign EIP-712 is rejected immediately, with a
+        # pointer to the delegated path. getattr fallback: duck-typed
+        # objects without supports() pass through unchanged — the
+        # narrow-Protocol use case; the runtime gates take over there.
+        supports = getattr(wallet, "supports", None)
+        if callable(supports) and not supports(SIGN_TYPED_DATA):
+            raise UnsupportedWalletOperation(
+                SIGN_TYPED_DATA,
+                reason=(
+                    "this wallet cannot sign EIP-712 typed data, so "
+                    "X402Signer cannot produce x402 payment signatures"
+                ),
+                alternative=(
+                    "use the wallet's delegated x402 payer instead (wallet "
+                    "kinds that sign payments internally, e.g. twak)"
+                ),
+            )
         self._wallet = wallet
         self._max_value: dict[str, int] = {}
         if max_value_per_call:

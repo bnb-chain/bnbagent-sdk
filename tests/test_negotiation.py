@@ -483,13 +483,13 @@ class TestNegotiationHandler:
 
     def test_quote_ttl_cap_enforced(self):
         with pytest.raises(ValueError, match="quote_ttl_seconds"):
-            self._make_handler(quote_ttl_seconds=301)
+            self._make_handler(quote_ttl_seconds=901)
         with pytest.raises(ValueError, match="quote_ttl_seconds"):
             self._make_handler(quote_ttl_seconds=0)
         with pytest.raises(ValueError, match="quote_ttl_seconds"):
             self._make_handler(quote_ttl_seconds=-1)
-        # Boundary: 300 is the max and must succeed.
-        self._make_handler(quote_ttl_seconds=300)
+        # Boundary: 900 is the max and must succeed.
+        self._make_handler(quote_ttl_seconds=900)
 
     def test_quote_ttl_must_be_int(self):
         with pytest.raises(ValueError, match="quote_ttl_seconds"):

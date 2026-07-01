@@ -1,10 +1,14 @@
-"""In-memory sliding-window rate limiter used by public ERC-8183 endpoints.
+"""In-memory sliding-window rate limiter for public agent endpoints.
 
-The agent server's `/negotiate` endpoint signs negotiation hashes with the
+A public `/negotiate`-style endpoint signs negotiation hashes with the
 provider's wallet on every accepted request. Without throttling, any caller
 can drive arbitrary signing work and accumulate signed quotes; this limiter
 caps the per-IP rate to bound that abuse without breaking marketplace
 discovery.
+
+The limiter is transport-agnostic: it raises :class:`RateLimitExceeded`,
+and the serving layer (FastAPI route, MCP tool, A2A handler, ...) converts
+that into its own protocol's rejection (e.g. HTTP 429).
 
 Trade-offs (intentional, single-replica scope):
 - In-memory state: counters are not shared across replicas. Multi-replica
@@ -20,14 +24,20 @@ from __future__ import annotations
 import time
 from collections import OrderedDict, deque
 
-from fastapi import HTTPException
+
+class RateLimitExceeded(Exception):
+    """Raised by :meth:`SlidingWindowLimiter.check` when a key's window is full.
+
+    Transport-agnostic on purpose — the serving layer maps it to its own
+    rejection (HTTP 429, MCP error, ...).
+    """
 
 
 class SlidingWindowLimiter:
     """Per-key sliding-window rate limiter with LRU key eviction.
 
     Allows up to ``max_requests`` events per ``window_seconds`` for any
-    given key. Raises ``HTTPException(429)`` once the budget is exhausted.
+    given key. Raises :class:`RateLimitExceeded` once the budget is exhausted.
     The number of tracked keys is hard-capped at ``max_keys``; once exceeded,
     the least-recently-used key is evicted to reclaim memory.
     """
@@ -57,7 +67,7 @@ class SlidingWindowLimiter:
         return self._max_keys
 
     def check(self, key: str) -> None:
-        """Record a hit for ``key`` or raise 429 if the window is full."""
+        """Record a hit for ``key`` or raise ``RateLimitExceeded`` if the window is full."""
         now = time.monotonic()
         if key in self._buckets:
             # Move to end to mark as most-recently used
@@ -73,8 +83,5 @@ class SlidingWindowLimiter:
         while bucket and bucket[0] <= cutoff:
             bucket.popleft()
         if len(bucket) >= self._max:
-            raise HTTPException(
-                status_code=429,
-                detail="Too many requests",
-            )
+            raise RateLimitExceeded("Too many requests")
         bucket.append(now)
