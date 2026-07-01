@@ -13,22 +13,22 @@ def router_client(mock_web3):
     wallet.address = "0x" + "aa" * 20
     with patch("bnbagent.erc8183.router._load_abi", return_value=[{"type": "function", "name": "settle"}]):
         client = RouterClient(mock_web3, "0x" + "11" * 20, wallet)
-        client._send_tx = MagicMock()
+        client._execute_intent = MagicMock()
         client._call_with_retry = MagicMock()
         yield client
 
 
 class TestRouterClient:
     def test_register_job(self, router_client):
-        router_client._send_tx.return_value = {"status": 1}
+        router_client._execute_intent.return_value = {"status": 1}
         assert router_client.register_job(1, "0x" + "22" * 20) == {"status": 1}
 
     def test_settle(self, router_client):
-        router_client._send_tx.return_value = {"status": 1}
+        router_client._execute_intent.return_value = {"status": 1}
         assert router_client.settle(1, b"evidence") == {"status": 1}
 
     def test_mark_expired(self, router_client):
-        router_client._send_tx.return_value = {"status": 1}
+        router_client._execute_intent.return_value = {"status": 1}
         assert router_client.mark_expired(1) == {"status": 1}
 
     def test_commerce(self, router_client):
