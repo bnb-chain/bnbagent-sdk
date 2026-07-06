@@ -25,6 +25,9 @@ jobs:
     permissions:
       contents: write
       id-token: write  # Required for trusted publishing to PyPI
+    defaults:
+      run:
+        working-directory: python  # Python project lives under python/ (polyglot monorepo)
 
     steps:
       - name: Checkout code
@@ -71,7 +74,7 @@ jobs:
         if: ${{ inputs.release_to_prod }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: ./dist/
+          packages-dir: ./python/dist/
           print-hash: true
           password: ${{ secrets.PYPI_API_TOKEN }}
           # Uses trusted publishing (OIDC) - no token needed
@@ -81,7 +84,7 @@ jobs:
         if: ${{ !inputs.release_to_prod }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: ./dist/
+          packages-dir: ./python/dist/
           print-hash: true
           repository-url: https://test.pypi.org/legacy/
           password: ${{ secrets.TEST_PYPI_API_TOKEN }}
