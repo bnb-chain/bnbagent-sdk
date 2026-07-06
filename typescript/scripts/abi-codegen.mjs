@@ -1,8 +1,11 @@
 import { readdirSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ABIS_DIR = join(import.meta.dirname, "..", "..", "abis");
-const OUT_DIR = join(import.meta.dirname, "..", "src", "abis");
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+const ABIS_DIR = join(__dirname, "..", "..", "abis");
+const OUT_DIR = join(__dirname, "..", "src", "abis");
 mkdirSync(OUT_DIR, { recursive: true });
 
 // lowerCamelCase a PascalCase basename, collapsing a leading acronym run
