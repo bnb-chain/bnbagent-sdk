@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -23,6 +22,7 @@ logger = logging.getLogger(__name__)
 from web3 import Web3
 from web3.contract import Contract
 
+from ..core.abis import load_abi
 from ..core.contract_mixin import ContractClientMixin
 from ..exceptions import RpcRangeLimitError
 from ..wallets.intents import ERC8183_DISPUTE, ERC8183_VOTE_REJECT, Intent
@@ -31,8 +31,7 @@ from .types import Verdict
 
 
 def _load_abi() -> list:
-    abi_path = Path(__file__).parent / "abis" / "OptimisticPolicy.json"
-    return json.loads(abi_path.read_text())
+    return load_abi("OptimisticPolicy.json")
 
 
 class PolicyClient(ContractClientMixin):

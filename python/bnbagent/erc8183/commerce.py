@@ -9,14 +9,13 @@ Synchronous by design; async callers should use ``asyncio.to_thread(...)``.
 
 from __future__ import annotations
 
-import json
 import logging
-from pathlib import Path
 from typing import Any
 
 from web3 import Web3
 from web3.contract import Contract
 
+from ..core.abis import load_abi
 from ..core.contract_mixin import ContractClientMixin
 from ..wallets.intents import (
     ERC8183_CLAIM_REFUND,
@@ -36,8 +35,7 @@ logger = logging.getLogger(__name__)
 
 
 def _load_abi() -> list:
-    abi_path = Path(__file__).parent / "abis" / "AgenticCommerce.json"
-    return json.loads(abi_path.read_text())
+    return load_abi("AgenticCommerce.json")
 
 
 def _decode_job(raw: Any) -> Job:

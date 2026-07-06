@@ -7,19 +7,17 @@ which delegate here.
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any
 
 from web3 import Web3
 
+from ..core.abis import load_abi
 from ..core.contract_mixin import ContractClientMixin
 from ..wallets.wallet_provider import WalletProvider
 
 
 def _load_abi() -> list:
-    abi_path = Path(__file__).parent / "abis" / "ERC20.json"
-    return json.loads(abi_path.read_text())
+    return load_abi("ERC20.json")
 
 
 class MinimalERC20Client(ContractClientMixin):

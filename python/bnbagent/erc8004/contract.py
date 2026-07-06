@@ -7,9 +7,7 @@ Provides methods for registering agents and querying agent information.
 
 from __future__ import annotations
 
-import json
 import logging
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from web3 import Web3
@@ -108,14 +106,12 @@ class ContractInterface:
         Returns:
             List of ABI function definitions
         """
-        # Get the path to the ABI file relative to this module
-        abi_file_path = Path(__file__).parent / "abis" / "IdentityRegistry.json"
+        from ..core.abis import load_abi
 
         try:
-            with open(abi_file_path) as f:
-                return json.load(f)
+            return load_abi("IdentityRegistry.json")
         except Exception as e:
-            raise ValueError(f"Failed to load ABI from file {abi_file_path}: {str(e)}") from e
+            raise ValueError(f"Failed to load IdentityRegistry ABI: {str(e)}") from e
 
     def _execute_transaction(
         self,

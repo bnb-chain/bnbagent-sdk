@@ -82,6 +82,18 @@ exclude = [
 [tool.hatch.build.targets.wheel]
 packages = ["bnbagent"]
 
+# Contract ABIs are language-neutral and shared with the TypeScript SDK, so they
+# live at the repo root (../abis) as the single source of truth. The custom build
+# hook below copies them into the package (bnbagent/abis/) at build time so
+# `pip install` ships them; `artifacts` forces their inclusion even though the
+# copied dir is git-ignored. The runtime loader (bnbagent/core/abis.py) reads the
+# in-package copy when installed and falls back to ../abis for a source checkout.
+[tool.hatch.build]
+artifacts = ["bnbagent/abis/*.json"]
+
+[tool.hatch.build.hooks.custom]
+path = "hatch_build.py"
+
 [tool.ruff]
 target-version = "py310"
 line-length = 99

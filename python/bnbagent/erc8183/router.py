@@ -11,13 +11,12 @@ registered with it. Its two primary public-surface methods are:
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any
 
 from web3 import Web3
 from web3.contract import Contract
 
+from ..core.abis import load_abi
 from ..core.contract_mixin import ContractClientMixin
 from ..wallets.intents import (
     ERC8183_MARK_EXPIRED,
@@ -30,8 +29,7 @@ from .types import JobStatus, Verdict
 
 
 def _load_abi() -> list:
-    abi_path = Path(__file__).parent / "abis" / "EvaluatorRouter.json"
-    return json.loads(abi_path.read_text())
+    return load_abi("EvaluatorRouter.json")
 
 
 class RouterClient(ContractClientMixin):

@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
+from ..core.abis import load_abi
 from .client import MinimalERC20Client
 
 
 def load_erc20_abi() -> list:
     """Load the minimal ERC-20 ABI bundled with this package."""
-    abi_path = Path(__file__).parent / "abis" / "ERC20.json"
-    return json.loads(abi_path.read_text())
+    return load_abi("ERC20.json")
 
 
 __all__ = ["MinimalERC20Client", "load_erc20_abi"]
