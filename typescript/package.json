@@ -1,0 +1,43 @@
+{
+  "name": "@bnb-chain/bnbagent",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "files": ["dist"],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js", "require": "./dist/index.cjs" },
+    "./erc8004": { "types": "./dist/erc8004/index.d.ts", "import": "./dist/erc8004/index.js", "require": "./dist/erc8004/index.cjs" },
+    "./erc8183": { "types": "./dist/erc8183/index.d.ts", "import": "./dist/erc8183/index.js", "require": "./dist/erc8183/index.cjs" },
+    "./x402": { "types": "./dist/x402/index.d.ts", "import": "./dist/x402/index.js", "require": "./dist/x402/index.cjs" },
+    "./storage": { "types": "./dist/storage/index.d.ts", "import": "./dist/storage/index.js", "require": "./dist/storage/index.cjs" },
+    "./wallets": { "types": "./dist/wallets/index.d.ts", "import": "./dist/wallets/index.js", "require": "./dist/wallets/index.cjs" },
+    "./signing": { "types": "./dist/signing/index.d.ts", "import": "./dist/signing/index.js", "require": "./dist/signing/index.cjs" },
+    "./networks": { "types": "./dist/networks/index.d.ts", "import": "./dist/networks/index.js", "require": "./dist/networks/index.cjs" },
+    "./utils": { "types": "./dist/utils/index.d.ts", "import": "./dist/utils/index.js", "require": "./dist/utils/index.cjs" }
+  },
+  "scripts": {
+    "codegen": "node scripts/abi-codegen.mjs",
+    "build": "tsup",
+    "test": "vitest run",
+    "lint": "biome check src tests"
+  },
+  "dependencies": {
+    "viem": "^2.21.0",
+    "@noble/hashes": "^1.4.0",
+    "@noble/ciphers": "^1.0.0",
+    "dotenv": "^16.4.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "tsup": "^8.0.0",
+    "vitest": "^2.0.0",
+    "@biomejs/biome": "^1.8.0",
+    "@types/node": "^20.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["@biomejs/biome", "esbuild"]
+  }
+}
