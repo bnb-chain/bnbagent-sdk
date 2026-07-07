@@ -24,6 +24,7 @@ export {
   type CreateJobResult,
   type JobCreatedEvent,
   type JobFundedEvent,
+  type JobSubmittedEvent,
 } from "./commerce.js";
 export {
   RouterClient,
@@ -37,3 +38,15 @@ export {
   type PolicyClientOpts,
   type GetDeliverableUrlOpts,
 } from "./policy.js";
+export {
+  DEFAULT_APPROVE_FLOOR_UNITS,
+  ERC8183_PAYMASTER_CHAIN_IDS,
+  ERC8183Client,
+  type CreateJobFacadeOpts,
+  type ERC8183ClientCreateOpts,
+  type FundOpts,
+  type GetDeliverableUrlFacadeOpts,
+  type SubmitOptParams,
+} from "./client.js";
+export { ERC8183Config, type ERC8183ConfigOpts } from "./config.js";
+export { ERC8183_ENV_PREFIX, getErc8183Config } from "./constants.js";

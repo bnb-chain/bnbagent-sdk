@@ -133,6 +133,15 @@ export interface JobCreatedEvent {
   transactionHash: `0x${string}` | null;
 }
 
+/** A `JobSubmitted` event log, flattened for callers. */
+export interface JobSubmittedEvent {
+  jobId: bigint;
+  provider: `0x${string}`;
+  deliverable: `0x${string}`;
+  blockNumber: bigint | null;
+  transactionHash: `0x${string}` | null;
+}
+
 /**
  * Low-level client for the `AgenticCommerceUpgradeable` kernel.
  *
@@ -493,6 +502,32 @@ export class CommerceClient extends ContractBase {
       provider: log.args.provider as `0x${string}`,
       evaluator: log.args.evaluator as `0x${string}`,
       expiredAt: log.args.expiredAt as bigint,
+      blockNumber: log.blockNumber,
+      transactionHash: log.transactionHash,
+    }));
+  }
+
+  /**
+   * `JobSubmitted(jobId, provider, deliverable)` — used by
+   * `ERC8183Client.getDeliverableUrl` to self-resolve the block a job was
+   * submitted in when no `hintBlock` is supplied (see that method's
+   * `_resolveSubmitBlock` walk-back).
+   */
+  async getJobSubmittedEvents(
+    fromBlock: bigint,
+    toBlock: bigint | "latest" = "latest",
+    jobId?: bigint,
+  ): Promise<JobSubmittedEvent[]> {
+    const logs = await this.readEvents({
+      eventName: "JobSubmitted",
+      fromBlock,
+      toBlock,
+      args: jobId !== undefined ? { jobId } : undefined,
+    });
+    return logs.map((log) => ({
+      jobId: log.args.jobId as bigint,
+      provider: log.args.provider as `0x${string}`,
+      deliverable: log.args.deliverable as `0x${string}`,
       blockNumber: log.blockNumber,
       transactionHash: log.transactionHash,
     }));
