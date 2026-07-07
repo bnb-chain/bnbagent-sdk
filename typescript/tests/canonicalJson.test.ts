@@ -58,4 +58,29 @@ describe("canonicalJson", () => {
       '{"a":null,"b":true,"c":false,"d":0}',
     );
   });
+
+  it("matches Python for empty objects and arrays", () => {
+    // python3 -c "import json; print(json.dumps({'a':{},'b':[]},
+    //   sort_keys=True, separators=(',',':')))" -> {"a":{},"b":[]}
+    expect(canonicalJson({ a: {}, b: [] })).toBe('{"a":{},"b":[]}');
+  });
+
+  it("serializes plain integers the JS way (no Python-style .0 float tail)", () => {
+    // JS has one `number` type: 2 === 2.0, so there is no way to recover
+    // "the caller meant a float" the way Python's json.dumps(2.0) -> "2.0"
+    // does. This documents the resulting (intentional) divergence.
+    expect(canonicalJson({ a: 2 })).toBe('{"a":2}');
+  });
+
+  it("throws instead of silently emitting null for non-finite numbers", () => {
+    // JSON.stringify(NaN) === "null", which would silently diverge from
+    // Python's json.dumps(float('nan')) -> "NaN". Fail loud instead.
+    expect(() => canonicalJson({ a: Number.NaN })).toThrow(TypeError);
+    expect(() => canonicalJson({ a: Number.POSITIVE_INFINITY })).toThrow(
+      TypeError,
+    );
+    expect(() => canonicalJson({ a: Number.NEGATIVE_INFINITY })).toThrow(
+      TypeError,
+    );
+  });
 });

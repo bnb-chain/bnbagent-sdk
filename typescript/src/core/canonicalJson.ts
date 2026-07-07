@@ -14,6 +14,11 @@ function sortValue(v: unknown): unknown {
     }
     return out;
   }
+  if (typeof v === "number" && !Number.isFinite(v)) {
+    throw new TypeError(
+      `canonicalJson: non-finite numbers are not allowed (got ${v})`,
+    );
+  }
   return v;
 }
 
@@ -32,6 +37,22 @@ function sortValue(v: unknown): unknown {
  * - Every character code point > 0x7e (including surrogate pairs for
  *   astral characters) is escaped as a lowercase `\uXXXX` sequence, matching
  *   Python's `ensure_ascii=True` behavior exactly.
+ *
+ * Known cross-SDK number constraint: JavaScript has a single `number` type,
+ * so there is no way to tell "integer 2" apart from "float 2.0" the way
+ * Python does. `JSON.stringify(2)` and `JSON.stringify(2.0)` both produce
+ * `"2"`, whereas Python's `json.dumps(2.0)` produces `"2.0"` — a whole-number
+ * float on the Python side can never round-trip through this function.
+ * `-0` also normalizes to `0` (sign is lost), matching `JSON.stringify`.
+ * Because of this, wire schemas shared between the TypeScript and Python
+ * SDKs represent amounts/prices/other decimal-sensitive values as strings,
+ * never as native floats, so hashes and payloads stay byte-identical.
+ *
+ * Non-finite numbers (`NaN`, `Infinity`, `-Infinity`) have no JSON
+ * representation. `JSON.stringify` silently coerces them to `null`, which
+ * would silently diverge from Python's `json.dumps` (which emits the bare
+ * `NaN`/`Infinity`/`-Infinity` tokens). To avoid that silent divergence,
+ * this function throws a `TypeError` instead.
  */
 export function canonicalJson(value: unknown): string {
   return JSON.stringify(sortValue(value)).replace(
