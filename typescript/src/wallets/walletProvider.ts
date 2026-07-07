@@ -202,7 +202,7 @@ export abstract class WalletProvider {
       throw new UnsupportedWalletOperation(SIGN_TRANSACTION, {
         reason: "the default executor signs transactions locally",
         alternative:
-          "self-broadcasting wallets must override make_executor() " +
+          "self-broadcasting wallets must override makeExecutor() " +
           "to return their own IntentExecutor",
       });
     }
@@ -236,7 +236,7 @@ export abstract class WalletProvider {
    * The default throws {@link UnsupportedWalletOperation}; implementing this
    * method declares the `sign.transaction` capability.
    */
-  signTransaction(tx: TransactionRequestLegacy): Promise<SignedTx> {
+  async signTransaction(tx: TransactionRequestLegacy): Promise<SignedTx> {
     void tx;
     throw new UnsupportedWalletOperation(SIGN_TRANSACTION, {
       reason: `the '${this.kind}' wallet does not implement raw-transaction signing`,
@@ -258,7 +258,7 @@ export abstract class WalletProvider {
    * len || message)`) — not interchangeable with the digest returned by
    * `signTypedData`.
    */
-  signMessage(message: string): Promise<SignatureResult> {
+  async signMessage(message: string): Promise<SignatureResult> {
     void message;
     throw new UnsupportedWalletOperation(SIGN_MESSAGE, {
       reason: `the '${this.kind}' wallet does not implement EIP-191 personal-sign`,
@@ -282,7 +282,7 @@ export abstract class WalletProvider {
    * `signMessage`. This is the value that on-chain `ecrecover` will use
    * against this signature.
    */
-  signTypedData(
+  async signTypedData(
     domain: TypedDataDomain,
     types: Record<string, { name: string; type: string }[]>,
     message: Record<string, unknown>,

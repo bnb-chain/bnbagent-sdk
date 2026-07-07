@@ -146,6 +146,19 @@ describe("WalletProvider#makeExecutor", () => {
     expect(thrown).toBeInstanceOf(UnsupportedWalletOperation);
     expect((thrown as Error).message).toContain(SIGN_TRANSACTION);
   });
+
+  it("gate message names makeExecutor() in camelCase, not the Python snake_case make_executor()", () => {
+    const wallet = new AddressOnlyWallet();
+    let thrown: unknown;
+    try {
+      wallet.makeExecutor(makeExecutionContext());
+    } catch (error) {
+      thrown = error;
+    }
+    const message = (thrown as Error).message;
+    expect(message).toContain("makeExecutor()");
+    expect(message).not.toContain("make_executor");
+  });
 });
 
 describe("WalletProvider — default sign.* methods", () => {
@@ -199,6 +212,37 @@ describe("WalletProvider — default sign.* methods", () => {
     expect(thrown).toBeInstanceOf(UnsupportedWalletOperation);
     expect(thrown).toBeInstanceOf(Error);
     expect((thrown as Error).message).toContain(SIGN_TYPED_DATA);
+  });
+});
+
+describe("WalletProvider — default sign.* methods reject asynchronously", () => {
+  // Regression: the default sign.* methods declare `Promise<T>` return
+  // types but used to `throw` synchronously, so a caller composing
+  // `wallet.signX(...).catch(...)` got an uncaught sync throw instead of a
+  // rejected promise. Asserting on the bare call expression (no `async () =>`
+  // wrapper, no try/catch) is exactly what would have thrown synchronously
+  // before the fix — the assignment line itself must not throw.
+
+  it("signMessage returns a rejecting promise rather than throwing synchronously", async () => {
+    const wallet = new AddressOnlyWallet();
+    const p = wallet.signMessage("x");
+    await expect(p).rejects.toBeInstanceOf(UnsupportedWalletOperation);
+  });
+
+  it("signTransaction returns a rejecting promise rather than throwing synchronously", async () => {
+    const wallet = new AddressOnlyWallet();
+    const p = wallet.signTransaction({} as never);
+    await expect(p).rejects.toBeInstanceOf(UnsupportedWalletOperation);
+  });
+
+  it("signTypedData returns a rejecting promise rather than throwing synchronously", async () => {
+    const wallet = new AddressOnlyWallet();
+    const p = wallet.signTypedData(
+      { name: "Conformance", version: "1", chainId: 56 },
+      { Probe: [{ name: "value", type: "uint256" }] },
+      { value: 1 },
+    );
+    await expect(p).rejects.toBeInstanceOf(UnsupportedWalletOperation);
   });
 });
 
