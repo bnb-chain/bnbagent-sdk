@@ -218,4 +218,54 @@ describe("reset", () => {
     await mgr.getNonce();
     expect(client.getTransactionCount).toHaveBeenCalledTimes(2);
   });
+
+  it("mutex-orders reset behind an in-flight seed instead of losing it to the seed's write", async () => {
+    // Regression test: reset() used to write `this.nonce = null` outside the
+    // mutex. If a getNonce() seed RPC was already in flight when reset() ran,
+    // the seed's resolution would land *after* the reset and unconditionally
+    // overwrite the cleared cache with the stale fetched value, silently
+    // losing the forced re-seed. reset() must instead be FIFO-ordered on the
+    // same mutex so it is guaranteed to apply after any in-flight seed.
+    let resolveSeed: ((value: number) => void) | undefined;
+    const getTransactionCount = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<number>((resolve) => {
+            resolveSeed = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(42);
+    const client = {
+      transport: { url: "https://fake-rpc.example.com" },
+      getTransactionCount,
+    };
+    const mgr = NonceManager.forAccount(client as never, FAKE_ADDRESS);
+
+    // Kick off the first getNonce() — it awaits the seed RPC, which we won't
+    // resolve yet.
+    const firstNoncePromise = mgr.getNonce();
+
+    // While the seed is still in flight, force a reset. This must be queued
+    // behind the in-flight seed on the mutex, not applied immediately.
+    mgr.reset();
+
+    // Let the seed's mutex task actually start running (it's scheduled as a
+    // microtask by the mutex's promise chain) so `resolveSeed` is captured,
+    // then let the in-flight seed resolve.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resolveSeed).toBeDefined();
+    resolveSeed?.(5);
+
+    // The first getNonce() call sees the seed value it awaited.
+    expect(await firstNoncePromise).toBe(5);
+
+    // The queued reset must run *after* the seed's write, clearing the
+    // cache. The next getNonce() must therefore re-seed from chain (42),
+    // not return the stale local increment (6) that the pre-fix bug would
+    // produce if the seed's assignment clobbered the reset.
+    expect(await mgr.getNonce()).toBe(42);
+    expect(client.getTransactionCount).toHaveBeenCalledTimes(2);
+  });
 });

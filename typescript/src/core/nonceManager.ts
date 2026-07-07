@@ -162,9 +162,19 @@ export class NonceManager {
    * Force re-sync from chain on the next `getNonce()` call.
    *
    * Useful after submitting transactions outside this manager.
+   *
+   * The null-write is enqueued on the same mutex as `getNonce()` /
+   * `handleError()` (fire-and-forget — this method stays synchronous) so it
+   * is FIFO-ordered: if a seed or resync is already in flight, the reset is
+   * applied only after that operation completes, and any `getNonce()` call
+   * made after `reset()` returns is queued behind the reset and is
+   * guaranteed to observe the cleared cache. This prevents an in-flight
+   * seed from clobbering a reset that raced ahead of it.
    */
   reset(): void {
-    this.nonce = null;
+    void this.mutex.run(async () => {
+      this.nonce = null;
+    });
   }
 }
 
