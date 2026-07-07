@@ -23,6 +23,7 @@ import {
   readdirSync,
   renameSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -290,17 +291,23 @@ export class EVMWalletProvider extends WalletProvider {
       `.ks_${Date.now()}_${Math.random().toString(36).slice(2)}.tmp`,
     );
     try {
-      writeFileSync(tmpPath, JSON.stringify(keystore));
+      // Create the temp file restricted from the outset (mode is subject to
+      // umask, so chmod afterwards to make it authoritative regardless of
+      // umask) — the encrypted keystore must never be world/group-readable,
+      // even for the brief window before rename.
+      writeFileSync(tmpPath, JSON.stringify(keystore), { mode: 0o600 });
       chmodSync(tmpPath, 0o600);
       renameSync(tmpPath, ksPath);
     } catch (e) {
       try {
         if (existsSync(tmpPath)) {
-          // best-effort cleanup; ignore secondary failures
-          chmodSync(tmpPath, 0o600);
+          // Clean up the orphaned temp file so stale `.ks_*.tmp` encrypted
+          // keys don't accumulate on disk; never let a cleanup failure mask
+          // the original error.
+          unlinkSync(tmpPath);
         }
       } catch {
-        // ignore
+        // ignore secondary failure; original error takes priority
       }
       throw e;
     }

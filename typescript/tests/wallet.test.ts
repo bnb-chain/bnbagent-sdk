@@ -11,6 +11,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
 } from "node:fs";
@@ -39,6 +40,12 @@ const FIXTURE_PATH = join(
   fileURLToPath(new URL(".", import.meta.url)),
   "fixtures",
   "keystore-interop.json",
+);
+
+const PBKDF2_FIXTURE_PATH = join(
+  fileURLToPath(new URL(".", import.meta.url)),
+  "fixtures",
+  "keystore-pbkdf2-interop.json",
 );
 
 let wdir: string;
@@ -83,6 +90,29 @@ describe("EVMWalletProvider — creation & import", () => {
       statSync(join(wdir, `${wallet.address}.json`)).mode & 0o777;
     expect(dirMode).toBe(0o700);
     expect(fileMode).toBe(0o600);
+  });
+
+  it("cleans up the .ks_*.tmp temp file when the atomic rename fails", () => {
+    // Force renameSync(tmpPath, ksPath) to fail by making the destination
+    // path an existing (non-empty-incompatible) directory instead of a
+    // regular file — rename onto an occupied path of the wrong type throws.
+    const expectedAddress = privateKeyToAccount(PK).address;
+    mkdirSync(wdir, { recursive: true });
+    mkdirSync(join(wdir, `${expectedAddress}.json`));
+
+    expect(
+      () =>
+        new EVMWalletProvider({
+          password: PW,
+          privateKey: PK,
+          walletsDir: wdir,
+        }),
+    ).toThrow();
+
+    const leftovers = readdirSync(wdir).filter(
+      (name) => name.startsWith(".ks_") && name.endsWith(".tmp"),
+    );
+    expect(leftovers).toEqual([]);
   });
 
   it("imports a private key without 0x prefix", () => {
@@ -399,6 +429,26 @@ describe("keystore interop — Python eth_account -> TS", () => {
   it("throws the documented MAC-mismatch error on the wrong password", () => {
     const fixture = JSON.parse(
       readFileSync(FIXTURE_PATH, "utf8"),
+    ) as KeystoreV3;
+    expect(() => decryptKeystoreV3(fixture, "wrong-password")).toThrow(
+      "Failed to decrypt keystore (wrong password?): MAC mismatch",
+    );
+  });
+
+  it("decrypts a pbkdf2-kdf keystore produced by eth_account.Account.encrypt, recovering 0xab..ab", () => {
+    const fixture = JSON.parse(
+      readFileSync(PBKDF2_FIXTURE_PATH, "utf8"),
+    ) as KeystoreV3;
+    // Guard the fixture itself: if it ever got regenerated with scrypt this
+    // test would silently stop exercising the pbkdf2 branch in deriveKey().
+    expect(fixture.crypto.kdf).toBe("pbkdf2");
+    const recovered = decryptKeystoreV3(fixture, "test-password");
+    expect(toHexString(recovered)).toBe("ab".repeat(32));
+  });
+
+  it("throws the documented MAC-mismatch error on the wrong password (pbkdf2)", () => {
+    const fixture = JSON.parse(
+      readFileSync(PBKDF2_FIXTURE_PATH, "utf8"),
     ) as KeystoreV3;
     expect(() => decryptKeystoreV3(fixture, "wrong-password")).toThrow(
       "Failed to decrypt keystore (wrong password?): MAC mismatch",
