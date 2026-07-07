@@ -36,6 +36,12 @@ export interface ContractBaseOpts {
   abi: Abi;
   walletProvider?: WalletProvider | null;
   paymaster?: Paymaster | null;
+  /**
+   * Seconds to wait for a transaction receipt, forwarded to the executor's
+   * {@link ExecutionContext}. `null`/absent (default) lets the executor
+   * resolve the SDK default lazily.
+   */
+  receiptTimeout?: number | null;
 }
 
 /** A decoded event log returned by {@link ContractBase.readEvents}. */
@@ -69,6 +75,7 @@ export class ContractBase {
   protected readonly abi: Abi;
   protected readonly walletProvider: WalletProvider | null;
   protected readonly paymaster: Paymaster | null;
+  protected readonly receiptTimeout: number | null;
   private intentExecutor: IntentExecutor | null = null;
 
   constructor(opts: ContractBaseOpts) {
@@ -77,6 +84,7 @@ export class ContractBase {
     this.abi = opts.abi;
     this.walletProvider = opts.walletProvider ?? null;
     this.paymaster = opts.paymaster ?? null;
+    this.receiptTimeout = opts.receiptTimeout ?? null;
   }
 
   /**
@@ -117,6 +125,7 @@ export class ContractBase {
       this.intentExecutor = this.walletProvider.makeExecutor({
         client: this.client,
         paymaster: this.paymaster,
+        receiptTimeout: this.receiptTimeout,
       });
     }
     return this.intentExecutor.execute(intent);
