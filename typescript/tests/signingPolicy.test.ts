@@ -474,7 +474,41 @@ describe("toDict / fromDict", () => {
   it("rejects a malformed domain entry", () => {
     expect(() =>
       SigningPolicy.fromDict({ domainAllowlist: ["not-a-pair"] }),
-    ).toThrow(/domainAllowlist\[0\]/);
+    ).toThrow(
+      /domain_allowlist\[0\] must be a \[chain_id, address\] pair, got "not-a-pair"/,
+    );
+  });
+
+  it("rejects a hex-string maxValidityWindowSeconds (must not silently coerce like JS Number())", () => {
+    // Number("0x999") === 2457 in JS but Python's int("0x999") raises
+    // ValueError; fromDict must fail closed the same way.
+    expect(() =>
+      SigningPolicy.fromDict({ maxValidityWindowSeconds: "0x999" }),
+    ).toThrow(/invalid literal for int\(\)/);
+  });
+
+  it("rejects an exponent-notation maxFutureValiditySeconds", () => {
+    // Number("1e2") === 100 in JS but Python's int("1e2") raises ValueError.
+    expect(() =>
+      SigningPolicy.fromDict({ maxFutureValiditySeconds: "1e2" }),
+    ).toThrow(/invalid literal for int\(\)/);
+  });
+
+  it("rejects a hex-string chainId in a domain pair", () => {
+    expect(() =>
+      SigningPolicy.fromDict({
+        domainAllowlist: [["0x38", `0x${"9".repeat(40)}`]],
+      }),
+    ).toThrow(/invalid literal for int\(\)/);
+  });
+
+  it("valid round-trip still applies defaults when scalars are absent", () => {
+    const p = SigningPolicy.fromDict({
+      domainAllowlist: [[56, `0x${"9".repeat(40)}`]],
+    });
+    expect(p.maxValidityWindowSeconds).toBe(600);
+    expect(p.maxFutureValiditySeconds).toBe(900);
+    expect(p.domainAllowlist.has(`56:0x${"9".repeat(40)}`)).toBe(true);
   });
 });
 

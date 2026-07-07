@@ -54,18 +54,24 @@ function reprValue(v: unknown): string {
   return String(v);
 }
 
-function toIntStrict(value: unknown): number {
+/**
+ * Coerce `value` to an integer with Python `int()` semantics.
+ *
+ * Mirrors Python's `int(str)` for strings: plain base-10 digits only (with
+ * optional sign) — rejects hex ("0x38"), exponents ("1e2"), and non-numeric
+ * words ("Infinity"/"NaN") that JS's `Number()` would otherwise silently
+ * accept, which would let a malformed chainId / validBefore / validAfter /
+ * policy setting slip past a check meant to fail closed.
+ *
+ * @throws {Error} If `value` is not int-coercible.
+ */
+export function toIntStrict(value: unknown): number {
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new Error(`${value} is not finite`);
     return Math.trunc(value);
   }
   if (typeof value === "bigint") return Number(value);
   if (typeof value === "string") {
-    // Mirror Python's int(str) semantics: plain base-10 digits only (with
-    // optional sign) — reject hex ("0x38"), exponents ("1e2"), and
-    // non-numeric words ("Infinity"/"NaN") that JS's `Number()` would
-    // otherwise silently accept, which would let a malformed chainId /
-    // validBefore / validAfter slip past a check meant to fail closed.
     const trimmed = value.trim();
     if (!/^[+-]?\d+$/.test(trimmed)) {
       throw new Error(`invalid literal for int(): ${reprValue(value)}`);

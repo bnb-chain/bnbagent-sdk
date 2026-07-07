@@ -12,6 +12,7 @@
 
 import { getAddress as toChecksumAddress } from "viem";
 import { knownPaymentTokens } from "../networks/addresses.js";
+import { toIntStrict } from "./checks.js";
 
 // ── Canonical EIP-712 primary types ─────────────────────────────────────
 //
@@ -300,7 +301,9 @@ export class SigningPolicy {
    * window / 900s future / `false` unknown-domain).
    *
    * @throws {Error} On malformed entries (e.g. a domain entry that is not a
-   *   two-element array).
+   *   two-element array), or on a chainId / maxValidityWindowSeconds /
+   *   maxFutureValiditySeconds that isn't strictly integer-coercible (e.g.
+   *   hex "0x38" or exponent "1e2" strings) — mirrors Python's `int()`.
    */
   static fromDict(d: Record<string, unknown>): SigningPolicy {
     const rawDomains = (d.domainAllowlist as unknown[] | undefined) ?? [];
@@ -308,11 +311,11 @@ export class SigningPolicy {
     rawDomains.forEach((entry, i) => {
       if (!Array.isArray(entry) || entry.length !== 2) {
         throw new Error(
-          `domainAllowlist[${i}] must be a [chain_id, address] pair, got ${JSON.stringify(entry)}`,
+          `domain_allowlist[${i}] must be a [chain_id, address] pair, got ${JSON.stringify(entry)}`,
         );
       }
       const [chainIdRaw, addressRaw] = entry;
-      domainKeys.add(domainKey(Number(chainIdRaw), String(addressRaw)));
+      domainKeys.add(domainKey(toIntStrict(chainIdRaw), String(addressRaw)));
     });
     return new SigningPolicy({
       domainAllowlist: domainKeys,
@@ -322,8 +325,8 @@ export class SigningPolicy {
         (d.primaryTypeDenylist as string[] | undefined) ?? [],
       validityRequiredPrimaryTypes:
         (d.validityRequiredPrimaryTypes as string[] | undefined) ?? [],
-      maxValidityWindowSeconds: Number(d.maxValidityWindowSeconds ?? 600),
-      maxFutureValiditySeconds: Number(d.maxFutureValiditySeconds ?? 900),
+      maxValidityWindowSeconds: toIntStrict(d.maxValidityWindowSeconds ?? 600),
+      maxFutureValiditySeconds: toIntStrict(d.maxFutureValiditySeconds ?? 900),
       allowUnknownDomain: Boolean(d.allowUnknownDomain ?? false),
     });
   }
