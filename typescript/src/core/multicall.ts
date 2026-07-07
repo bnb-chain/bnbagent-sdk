@@ -78,14 +78,18 @@ export async function multicallRead(
     allowFailure = true,
   } = opts;
 
+  // Mirrors the Python port's control flow: the empty-list short-circuit is
+  // checked first, so an empty `callArgsList` returns `[]` even for a
+  // `functionName` that isn't on `abi` — only a non-empty list pays for
+  // validation (and, below, batching/RPC).
+  if (callArgsList.length === 0) {
+    return [];
+  }
+
   if (
     !abi.some((item) => item.type === "function" && item.name === functionName)
   ) {
     throw new Error(`Function ${functionName} not found in ABI`);
-  }
-
-  if (callArgsList.length === 0) {
-    return [];
   }
 
   const results: Array<[boolean, unknown]> = [];
