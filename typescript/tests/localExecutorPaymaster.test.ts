@@ -159,6 +159,21 @@ describe("LocalExecutor: no paymaster", () => {
     expect(result.status).toBe(1);
     expect(sendRawCount(mock)).toBe(1);
   });
+
+  it("forwards a non-zero Intent.value into the signed self-pay tx", async () => {
+    // Deliberate TS/Python divergence: TS forwards Intent.value into the
+    // built transaction; Python's local executor port drops it. This locks
+    // the TS behavior in place.
+    const mock = mockPublicClient();
+    const wallet = new StubWallet();
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: wallet,
+    });
+    const result = await executor.execute(makeIntent({ value: 12345n }));
+    expect(result.status).toBe(1);
+    expect(wallet.signedTxs[0]?.value).toBe(12345n);
+  });
 });
 
 describe("LocalExecutor: sponsored path", () => {
@@ -201,6 +216,42 @@ describe("LocalExecutor: sponsored path", () => {
     expect(wallet.signedTxs[0]?.gasPrice).toBe(0n);
     expect(result.transactionHash).toBe(PAYMASTER_TX_HASH);
     expect(result.status).toBe(1);
+  });
+
+  it("forwards a non-zero Intent.value into the signed sponsored tx", async () => {
+    const overrideReceipt: Partial<MockHandlers> = {
+      eth_getTransactionReceipt: () => ({
+        status: "0x1",
+        blockNumber: "0x1",
+        blockHash: `0x${"aa".repeat(32)}`,
+        transactionHash: PAYMASTER_TX_HASH,
+        transactionIndex: "0x0",
+        from: WALLET_ADDRESS,
+        to: CONTRACT_ADDRESS,
+        cumulativeGasUsed: "0x1e8480",
+        gasUsed: "0x186a0",
+        contractAddress: null,
+        logs: [],
+        logsBloom: `0x${"0".repeat(512)}`,
+        effectiveGasPrice: "0x3b9aca00",
+      }),
+    };
+    const mock = mockPublicClient(overrideReceipt);
+    const wallet = new StubWallet();
+    const { paymaster } = makeFakePaymaster({
+      isSponsorable: async () => true,
+    });
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: wallet,
+      paymaster,
+    });
+
+    const result = await executor.execute(makeIntent({ value: 6789n }));
+
+    expect(result.status).toBe(1);
+    expect(wallet.signedTxs[0]?.value).toBe(6789n);
+    expect(wallet.signedTxs[0]?.gasPrice).toBe(0n);
   });
 
   it("falls back to self-pay when the tx is not sponsorable, and logs it", async () => {
@@ -290,6 +341,37 @@ describe("LocalExecutor: sponsored path", () => {
       /Transaction would revert/,
     );
     expect(ethSendRawTransaction).not.toHaveBeenCalled();
+    expect(sendRawCount(mock)).toBe(0);
+  });
+
+  it("propagates a post-sign broadcast failure unmodified and never falls back to self-pay (no double-broadcast)", async () => {
+    // Fund-loss invariant: once a sponsored tx is signed and handed to the
+    // paymaster, a failure on that *send* must never be retried into
+    // self-pay — the paymaster may have already accepted/relayed it, so a
+    // self-pay retry risks a second broadcast of (functionally) the same
+    // operation. trySponsored's docstring calls this out explicitly; this
+    // test is the guardrail that would go red if a future edit wrapped the
+    // `ethSendRawTransaction` call in a catch-and-fallback.
+    const mock = mockPublicClient();
+    const wallet = new StubWallet();
+    const sendError = new Error("paymaster broadcast failed: nonce too low");
+    const { paymaster, ethSendRawTransaction } = makeFakePaymaster({
+      isSponsorable: async () => true,
+      ethSendRawTransaction: async () => {
+        throw sendError;
+      },
+    });
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: wallet,
+      paymaster,
+    });
+
+    // Identity check (not just message match): the error that escapes
+    // execute() must be the exact object the paymaster rejected with, i.e.
+    // truly unmodified — not caught, wrapped, or replaced along the way.
+    await expect(executor.execute(makeIntent())).rejects.toBe(sendError);
+    expect(ethSendRawTransaction).toHaveBeenCalledTimes(1);
     expect(sendRawCount(mock)).toBe(0);
   });
 });

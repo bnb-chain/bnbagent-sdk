@@ -9,9 +9,12 @@
  * gate. EVM/TWAK-specific conformance belongs to later tasks.
  */
 
+import { parseAbi } from "viem";
 import { describe, expect, it } from "vitest";
 import {
   BROADCAST_SELF,
+  EVMWalletProvider,
+  LocalExecutor,
   SIGN_MESSAGE,
   SIGN_TRANSACTION,
   SIGN_TYPED_DATA,
@@ -23,6 +26,7 @@ import type {
   ExecutionContext,
   SignatureResult,
 } from "../src/wallets/index.js";
+import { mockPublicClient } from "./helpers/mockTransport.js";
 
 const DUMMY_SIGNATURE: SignatureResult = {
   messageHash: `0x${"00".repeat(32)}`,
@@ -158,6 +162,57 @@ describe("WalletProvider#makeExecutor", () => {
     const message = (thrown as Error).message;
     expect(message).toContain("makeExecutor()");
     expect(message).not.toContain("make_executor");
+  });
+
+  it("on a sign.transaction-capable wallet, returns a LocalExecutor wired to the context's client and paymaster", async () => {
+    // Success-path counterpart to the signless-throw tests above: a wallet
+    // that *does* implement signTransaction (so it declares sign.transaction)
+    // must get back a real, usable LocalExecutor rather than hitting the
+    // capability gate.
+    const wallet = new EVMWalletProvider({
+      password: "test-password-123",
+      privateKey: `0x${"a".repeat(64)}`,
+      persist: false,
+    });
+    const mock = mockPublicClient();
+    let isSponsorableCalls = 0;
+    const paymaster = {
+      ethGetTransactionCount: async () => 0,
+      isSponsorable: async () => {
+        isSponsorableCalls += 1;
+        return false; // declines, so the executor self-pays via the context's client
+      },
+      ethSendRawTransaction: async () => `0x${"cd".repeat(32)}`,
+    } as unknown as ExecutionContext["paymaster"];
+
+    const executor = wallet.makeExecutor({
+      client: mock.client,
+      paymaster,
+      receiptTimeout: 5,
+    });
+
+    expect(executor).toBeInstanceOf(LocalExecutor);
+    expect(typeof executor.execute).toBe("function");
+
+    // Functional proof of wiring: executing an intent must reach both the
+    // context's paymaster (isSponsorable gets consulted) and the context's
+    // client (self-pay broadcasts through it), since LocalExecutor's fields
+    // are private and can't be inspected directly.
+    const ABI = parseAbi(["function setValue(uint256 x) returns (bool)"]);
+    const result = await executor.execute({
+      name: "test.op",
+      call: {
+        address: `0x${"22".repeat(20)}`,
+        abi: ABI,
+        functionName: "setValue",
+        args: [1n],
+      },
+    });
+    expect(isSponsorableCalls).toBe(1);
+    expect(result.status).toBe(1);
+    expect(mock.calls.some((c) => c.method === "eth_sendRawTransaction")).toBe(
+      true,
+    );
   });
 });
 
