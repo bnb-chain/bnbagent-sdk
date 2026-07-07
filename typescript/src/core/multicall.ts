@@ -108,14 +108,36 @@ export async function multicallRead(
     // this call's `allowFailure` option; the option is applied ourselves
     // below so both branches map to the same `[boolean, unknown]` tuple
     // shape instead of forking on viem's raw-vs-wrapped return type.
-    const batchResults = await callWithRetry(() =>
-      client.multicall({
+    //
+    // Caveat this works around: with `allowFailure: true`, viem's own
+    // `multicall` action never rethrows a transport-level rejection (a
+    // genuine HTTP 429 from the RPC) — it settles each `readContract` call
+    // via `Promise.allSettled` and folds a rejection straight into that
+    // call's `{ status: "failure", error }` entry. Left alone, `callWithRetry`
+    // below would never see the 429 as a thrown error, so a rate-limited
+    // batch would silently turn into up to `batchSize` `[false, null]`
+    // results instead of being retried. So: scan the resolved entries for a
+    // rate-limit signature (walking `.cause` chains, same as
+    // `ContractBase.callWithRetry`'s check) and, if found, throw it from
+    // inside the retried closure — discarding this batch's partial results
+    // and driving the same backoff-and-retry loop a rejected `fn()` would.
+    // Non-rate-limit failures are left alone and still map to `[false,
+    // null]` below.
+    const batchResults = await callWithRetry(async () => {
+      const result = await client.multicall({
         contracts,
         allowFailure: true,
         batchSize: 0,
         multicallAddress: MULTICALL3_ADDRESS,
-      }),
-    );
+      });
+      const rateLimited = result.find(
+        (entry) => entry.status === "failure" && isRateLimitError(entry.error),
+      );
+      if (rateLimited && rateLimited.status === "failure") {
+        throw rateLimited.error;
+      }
+      return result;
+    });
 
     for (const entry of batchResults) {
       if (entry.status === "success") {

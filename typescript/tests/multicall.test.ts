@@ -227,7 +227,7 @@ describe("multicallRead", () => {
       expect(stub.multicall).toHaveBeenCalledTimes(1);
     });
 
-    it("a 429 is retried once (with backoff) and then succeeds", async () => {
+    it("a 429 is retried once (with backoff) and then succeeds — stub-level sanity check", async () => {
       vi.useFakeTimers();
       let attempt = 0;
       const { client, stub } = stubClient(() => {
@@ -256,6 +256,101 @@ describe("multicallRead", () => {
       expect(results).toEqual([[true, "ok"]]);
       expect(attempt).toBe(2);
       expect(stub.multicall).toHaveBeenCalledTimes(2);
+      vi.useRealTimers();
+    });
+  });
+
+  describe("batch exception — through the real viem client (regression for Finding 1)", () => {
+    // The "batch exception" describe block above stubs `client.multicall`
+    // directly, which is structurally incapable of exercising the bug this
+    // test guards against: with `allowFailure: true` (which `multicallRead`
+    // always passes — see the module docstring), viem's real `multicall`
+    // action never rethrows a transport-level rejection. It settles every
+    // chunk's `readContract` call via `Promise.allSettled` and folds a
+    // rejection straight into a `{ status: "failure", error }` entry per
+    // call (see viem's `actions/public/multicall.js`). A stub that throws
+    // synchronously bypasses that translation entirely and would pass even
+    // if `multicallRead` never scanned for rate-limited failure entries.
+    // Routing through a real `PublicClient` + a custom-transport mock
+    // reproduces the actual shape a 429 takes by the time it reaches
+    // `multicallRead`: a resolved batch full of `status: "failure"` entries,
+    // not a rejected promise.
+    it("a transport-level 429 (surfaced as a failure entry, not a rejection) is retried and the batch is discarded, not returned as [false, null]", async () => {
+      vi.useFakeTimers();
+
+      const tokenAddress = getAddress(
+        "0x4444444444444444444444444444444444444444",
+      );
+      const decimalsReturnData = encodeFunctionResult({
+        abi: erc20Abi,
+        functionName: "decimals",
+        result: 18,
+      });
+      const aggregate3Response = encodeFunctionResult({
+        abi: multicall3Abi,
+        functionName: "aggregate3",
+        result: [{ success: true, returnData: decimalsReturnData }],
+      });
+
+      let ethCallCount = 0;
+      const mock = mockPublicClient({
+        eth_call: (params) => {
+          const req = params[0] as { to?: string };
+          if (req.to?.toLowerCase() !== MULTICALL3_ADDRESS.toLowerCase()) {
+            throw new Error(`unexpected eth_call target: ${req.to}`);
+          }
+          ethCallCount++;
+          if (ethCallCount === 1) {
+            throw new Error(
+              "HTTP request failed: 429 Too Many Requests (rate limited by RPC provider)",
+            );
+          }
+          return aggregate3Response;
+        },
+      });
+
+      const promise = multicallRead(mock.client, {
+        address: tokenAddress,
+        abi: erc20Abi,
+        functionName: "decimals",
+        callArgsList: [[]],
+      });
+      let results: Array<[boolean, unknown]> | undefined;
+      let rejection: unknown;
+      promise.then(
+        (r) => {
+          results = r;
+        },
+        (e) => {
+          rejection = e;
+        },
+      );
+
+      // First attempt runs, fails as a "failure" entry, and multicallRead
+      // must recognize it as rate-limited and start the backoff sleep
+      // (RETRY_BASE_DELAY * 2**0 = 1s) rather than returning immediately.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(results).toBeUndefined();
+      expect(rejection).toBeUndefined();
+      expect(ethCallCount).toBe(1); // exactly one sleep window elapsed so far
+
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(rejection).toBeUndefined();
+      // The decoded success, not the [false, null] the pre-fix code would
+      // have produced by mapping the swallowed-429 failure entry straight
+      // through.
+      expect(results).toEqual([[true, 18]]);
+
+      const multicallCalls = mock.calls.filter(
+        (c) =>
+          c.method === "eth_call" &&
+          (c.params[0] as { to?: string }).to?.toLowerCase() ===
+            MULTICALL3_ADDRESS.toLowerCase(),
+      );
+      expect(multicallCalls).toHaveLength(2);
+      expect(ethCallCount).toBe(2);
+
       vi.useRealTimers();
     });
   });
