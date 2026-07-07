@@ -42,18 +42,33 @@ export interface X402PaymentOption {
   description?: string;
 }
 
-/** Map a camelCase CLI `accepts` entry; missing optionals → undefined/false. */
+/** Throws if `entry[field]` is missing/null/undefined; mirrors Python's KeyError. */
+function requireField(entry: Record<string, unknown>, field: string): unknown {
+  const value = entry[field];
+  if (value === undefined || value === null) {
+    throw new Error(`x402 payment option missing required field: ${field}`);
+  }
+  return value;
+}
+
+/**
+ * Map a camelCase CLI `accepts` entry; missing optionals → undefined/false.
+ *
+ * `network`, `asset`, `amount`, and `payTo` are required (mirrors Python's
+ * `entry["..."]` KeyError behavior) — a missing value throws immediately
+ * rather than silently coercing to the string `"undefined"`.
+ */
 export function paymentOptionFromCli(
   entry: Record<string, unknown>,
 ): X402PaymentOption {
   const timeout = entry.maxTimeoutSeconds;
   return {
-    network: String(entry.network),
+    network: String(requireField(entry, "network")),
     scheme: String(entry.scheme ?? "exact"),
-    asset: String(entry.asset),
+    asset: String(requireField(entry, "asset")),
     tokenName: entry.tokenName as string | undefined,
-    amount: BigInt(entry.amount as bigint | number | string),
-    payTo: String(entry.payTo),
+    amount: BigInt(requireField(entry, "amount") as bigint | number | string),
+    payTo: String(requireField(entry, "payTo")),
     transferMethod: entry.transferMethod as string | undefined,
     maxTimeoutSeconds:
       timeout !== undefined && timeout !== null ? Number(timeout) : null,

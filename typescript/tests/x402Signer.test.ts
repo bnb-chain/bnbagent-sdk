@@ -480,6 +480,75 @@ describe("paymentOptionFromCli", () => {
     expect(opt.maxTimeoutSeconds).toBeNull();
     expect(opt.tokenName).toBeUndefined();
   });
+
+  it("throws when network is missing", () => {
+    expect(() =>
+      paymentOptionFromCli({
+        asset: U_MAINNET,
+        amount: 1,
+        payTo: `0x${"b".repeat(40)}`,
+      }),
+    ).toThrow(/network/);
+  });
+
+  it("throws when asset is missing", () => {
+    expect(() =>
+      paymentOptionFromCli({
+        network: "eip155:56",
+        amount: 1,
+        payTo: `0x${"b".repeat(40)}`,
+      }),
+    ).toThrow(/asset/);
+  });
+
+  it("throws when payTo is missing", () => {
+    expect(() =>
+      paymentOptionFromCli({
+        network: "eip155:56",
+        asset: U_MAINNET,
+        amount: 1,
+      }),
+    ).toThrow(/payTo/);
+  });
+
+  it("throws when amount is missing", () => {
+    expect(() =>
+      paymentOptionFromCli({
+        network: "eip155:56",
+        asset: U_MAINNET,
+        payTo: `0x${"b".repeat(40)}`,
+      }),
+    ).toThrow(/amount/);
+  });
+
+  it("still maps a fully-valid entry correctly (round-trip)", () => {
+    const opt = paymentOptionFromCli({
+      network: "eip155:56",
+      scheme: "exact",
+      asset: U_MAINNET,
+      tokenName: "U",
+      amount: "500000",
+      payTo: `0x${"b".repeat(40)}`,
+      transferMethod: "eip3009",
+      maxTimeoutSeconds: 60,
+      preferred: true,
+      requiresApproval: true,
+      description: "test route",
+    });
+    expect(opt).toEqual({
+      network: "eip155:56",
+      scheme: "exact",
+      asset: U_MAINNET,
+      tokenName: "U",
+      amount: 500_000n,
+      payTo: `0x${"b".repeat(40)}`,
+      transferMethod: "eip3009",
+      maxTimeoutSeconds: 60,
+      preferred: true,
+      requiresApproval: true,
+      description: "test route",
+    });
+  });
 });
 
 describe("quoteFromCli", () => {
