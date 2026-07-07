@@ -17,6 +17,7 @@ import {
 } from "./capabilities.js";
 import { UnsupportedWalletOperation } from "./errors.js";
 import type { ExecutionContext, IntentExecutor } from "./intents.js";
+import { LocalExecutor } from "./localExecutor.js";
 
 /** Result of {@link WalletProvider.signTransaction}. */
 export interface SignedTx {
@@ -197,7 +198,6 @@ export abstract class WalletProvider {
    * any intent runs — when it is absent.
    */
   makeExecutor(context: ExecutionContext): IntentExecutor {
-    void context;
     if (!this.supports(SIGN_TRANSACTION)) {
       throw new UnsupportedWalletOperation(SIGN_TRANSACTION, {
         reason: "the default executor signs transactions locally",
@@ -206,8 +206,12 @@ export abstract class WalletProvider {
           "to return their own IntentExecutor",
       });
     }
-    // TODO(Task 14): wire the LocalExecutor here.
-    throw new Error("LocalExecutor not yet wired (Task 14)");
+    return new LocalExecutor({
+      client: context.client,
+      walletProvider: this,
+      paymaster: context.paymaster ?? null,
+      receiptTimeout: context.receiptTimeout ?? null,
+    });
   }
 
   /**
