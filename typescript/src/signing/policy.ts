@@ -102,14 +102,34 @@ export interface SigningPolicyExtendOptions {
  * {@link SigningPolicy.extend} to add new known domains or primary types.
  */
 export class SigningPolicy {
+  // Backing storage is private so nothing outside this class can hold a
+  // reference to the live Set — `Object.freeze(this)` alone does not stop
+  // `set.add(...)` from mutating a Set exposed as a public field (freezing
+  // an object doesn't freeze the collection it points to). The public
+  // getters below hand out a fresh copy on every read instead, so a caller
+  // that casts past `ReadonlySet<string>` only ever mutates a throwaway
+  // copy, never the policy's own state.
+  readonly #domainAllowlist: ReadonlySet<string>;
+  readonly #primaryTypeAllowlist: ReadonlySet<string>;
+  readonly #primaryTypeDenylist: ReadonlySet<string>;
+  readonly #validityRequiredPrimaryTypes: ReadonlySet<string>;
+
   /** `(chainId, checksumAddress)` pairs allowed as the EIP-712 `verifyingContract`, keyed as `"chainId:checksumAddress"`. */
-  readonly domainAllowlist: ReadonlySet<string>;
+  get domainAllowlist(): ReadonlySet<string> {
+    return new Set(this.#domainAllowlist);
+  }
   /** EIP-712 primary type names accepted. */
-  readonly primaryTypeAllowlist: ReadonlySet<string>;
+  get primaryTypeAllowlist(): ReadonlySet<string> {
+    return new Set(this.#primaryTypeAllowlist);
+  }
   /** Names refused unconditionally; takes precedence over the allowlist. */
-  readonly primaryTypeDenylist: ReadonlySet<string>;
+  get primaryTypeDenylist(): ReadonlySet<string> {
+    return new Set(this.#primaryTypeDenylist);
+  }
   /** Primary types that MUST carry valid `validBefore` / `validAfter` fields. */
-  readonly validityRequiredPrimaryTypes: ReadonlySet<string>;
+  get validityRequiredPrimaryTypes(): ReadonlySet<string> {
+    return new Set(this.#validityRequiredPrimaryTypes);
+  }
   /** Upper bound on `validBefore - validAfter`. Defaults to 600s (10 min). */
   readonly maxValidityWindowSeconds: number;
   /** Upper bound on `validBefore - now`. Defaults to 900s (15 min). */
@@ -126,10 +146,10 @@ export class SigningPolicy {
   ]);
 
   constructor(fields: SigningPolicyFields = {}) {
-    this.domainAllowlist = new Set(fields.domainAllowlist ?? []);
-    this.primaryTypeAllowlist = new Set(fields.primaryTypeAllowlist ?? []);
-    this.primaryTypeDenylist = new Set(fields.primaryTypeDenylist ?? []);
-    this.validityRequiredPrimaryTypes = new Set(
+    this.#domainAllowlist = new Set(fields.domainAllowlist ?? []);
+    this.#primaryTypeAllowlist = new Set(fields.primaryTypeAllowlist ?? []);
+    this.#primaryTypeDenylist = new Set(fields.primaryTypeDenylist ?? []);
+    this.#validityRequiredPrimaryTypes = new Set(
       fields.validityRequiredPrimaryTypes ?? [],
     );
     this.maxValidityWindowSeconds = fields.maxValidityWindowSeconds ?? 600;

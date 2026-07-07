@@ -305,6 +305,23 @@ describe("structure checks", () => {
       /multiple non-EIP712Domain/,
     );
   });
+
+  it("rejects a hex-string chainId (must not silently coerce like JS Number())", () => {
+    const p = SigningPolicy.strictDefault();
+    // Number("0x38") === 56 in JS but Python's int("0x38") raises ValueError;
+    // the policy must fail closed the same way rather than accepting a
+    // disguised chain id.
+    expect(() => twaCall(p, { domainOverrides: { chainId: "0x38" } })).toThrow(
+      /not integer-coercible/,
+    );
+  });
+
+  it("rejects an exponent-notation chainId string", () => {
+    const p = SigningPolicy.strictDefault();
+    expect(() => twaCall(p, { domainOverrides: { chainId: "5.6e1" } })).toThrow(
+      /not integer-coercible/,
+    );
+  });
 });
 
 // ── Composition ──────────────────────────────────────────────────────────
@@ -458,6 +475,38 @@ describe("toDict / fromDict", () => {
     expect(() =>
       SigningPolicy.fromDict({ domainAllowlist: ["not-a-pair"] }),
     ).toThrow(/domainAllowlist\[0\]/);
+  });
+});
+
+// ── Immutability ─────────────────────────────────────────────────────────
+
+describe("immutability", () => {
+  it("mutating a returned set does not affect the live policy", () => {
+    const p = SigningPolicy.strictDefault();
+    // A caller reaching past the ReadonlySet<string> type (e.g. via `as`)
+    // must only ever mutate a throwaway copy, never the policy's own state
+    // — otherwise a single bad cast could silently widen what a "strict"
+    // policy accepts for every subsequent check() call.
+    (p.primaryTypeDenylist as Set<string>).delete("Permit");
+    (p.domainAllowlist as Set<string>).add("999:0xdeadbeef");
+    expect(p.primaryTypeDenylist.has("Permit")).toBe(true);
+    expect(p.domainAllowlist.has("999:0xdeadbeef")).toBe(false);
+
+    const domain = {
+      name: "United Stables",
+      version: "1",
+      chainId: BSC_MAINNET_CHAIN_ID,
+      verifyingContract: U_MAINNET,
+    };
+    const types = { EIP712Domain: EIP712DOMAIN_FIELDS, Permit: PERMIT_FIELDS };
+    expect(() => check(p, domain, types, {}, { now: NOW })).toThrow(
+      /denylisted/,
+    );
+  });
+
+  it("rejects reassignment of the instance itself", () => {
+    const p = SigningPolicy.strictDefault();
+    expect(Object.isFrozen(p)).toBe(true);
   });
 });
 

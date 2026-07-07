@@ -61,12 +61,16 @@ function toIntStrict(value: unknown): number {
   }
   if (typeof value === "bigint") return Number(value);
   if (typeof value === "string") {
+    // Mirror Python's int(str) semantics: plain base-10 digits only (with
+    // optional sign) — reject hex ("0x38"), exponents ("1e2"), and
+    // non-numeric words ("Infinity"/"NaN") that JS's `Number()` would
+    // otherwise silently accept, which would let a malformed chainId /
+    // validBefore / validAfter slip past a check meant to fail closed.
     const trimmed = value.trim();
-    const n = Number(trimmed);
-    if (trimmed === "" || Number.isNaN(n)) {
+    if (!/^[+-]?\d+$/.test(trimmed)) {
       throw new Error(`invalid literal for int(): ${reprValue(value)}`);
     }
-    return Math.trunc(n);
+    return Math.trunc(Number(trimmed));
   }
   throw new Error(`${reprValue(value)} is not int-coercible`);
 }
