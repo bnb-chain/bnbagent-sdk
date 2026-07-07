@@ -49,6 +49,42 @@ describe("toRaw", () => {
     expect(() => toRaw("1.2.3", 18)).toThrow();
     expect(() => toRaw("", 18)).toThrow();
   });
+
+  // Regression: String(1e-7) === "1e-7" and String(1e21) === "1e+21" — a
+  // `number` input can surface exponential notation even though the caller
+  // never wrote one. Python's `Decimal(str(amount))` accepts this form, so
+  // the TS parser must too. Cross-checked against:
+  //   python3 -c "from decimal import Decimal; print(int(Decimal(str(1e-07)) * 10**18))"
+  //   -> 100000000000
+  it("accepts scientific notation from a float that stringifies exponentially", () => {
+    expect(toRaw(1e-7, 18)).toBe(100_000_000_000n);
+  });
+
+  it("accepts scientific notation in a string (lowercase e)", () => {
+    expect(toRaw("1e-7", 18)).toBe(100_000_000_000n);
+  });
+
+  it("accepts scientific notation in a string (uppercase E)", () => {
+    expect(toRaw("1E-7", 18)).toBe(100_000_000_000n);
+  });
+
+  it("accepts a large positive exponent", () => {
+    // python3 -c "from decimal import Decimal; print(int(Decimal(str(1e21)) * 10**18))"
+    // -> 1000000000000000000000000000000000000000
+    expect(toRaw(1e21, 18)).toBe(10n ** 39n);
+  });
+
+  it("accepts a fractional mantissa with a positive exponent", () => {
+    // python3 -c "from decimal import Decimal; print(int(Decimal('2.5e3') * 10**6))"
+    // -> 2500000000
+    expect(toRaw("2.5e3", 6)).toBe(2_500_000_000n);
+  });
+
+  it("accepts a negative exponent on a negative amount", () => {
+    // python3 -c "from decimal import Decimal; print(int(Decimal(str(-1e-07)) * 10**18))"
+    // -> -100000000000
+    expect(toRaw(-1e-7, 18)).toBe(-100_000_000_000n);
+  });
 });
 
 describe("fromRaw", () => {
@@ -82,6 +118,10 @@ describe("fromRaw", () => {
 
   it("handles negative raw amounts", () => {
     expect(fromRaw(-1_500_000_000_000_000_000n, 18)).toBe("-1.5");
+  });
+
+  it("round-trips a negative amount through toRaw", () => {
+    expect(fromRaw(toRaw("-1.5", 18), 18)).toBe("-1.5");
   });
 });
 

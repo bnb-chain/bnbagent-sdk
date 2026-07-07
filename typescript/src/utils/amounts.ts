@@ -10,13 +10,20 @@
  * `Decimal`-based implementation.
  */
 
-const AMOUNT_PATTERN = /^(-?)(\d+)(?:\.(\d*))?$/;
+const AMOUNT_PATTERN = /^(-?)(\d+)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/;
 
 /**
  * Convert a human-readable amount (e.g. `"1.5"`) to raw on-chain units.
  *
  * Excess fractional digits beyond `decimals` are truncated (not rounded),
  * matching Python's `int()` truncation semantics.
+ *
+ * Accepts scientific notation (`"1e-7"`, `"2.5e3"`), matching Python's
+ * `Decimal(str(amount))` — `String(1e-7) === "1e-7"` and
+ * `String(1e21) === "1e+21"`, so number inputs can surface exponential
+ * form even though the caller never wrote one. The exponent is folded in
+ * by shifting the decimal point with pure string/bigint arithmetic; no
+ * floating-point math is involved anywhere in this function.
  */
 export function toRaw(
   amount: string | number | bigint,
@@ -27,12 +34,35 @@ export function toRaw(
   if (!match) {
     throw new TypeError(`toRaw: invalid amount string ${JSON.stringify(text)}`);
   }
-  const [, sign, wholeDigits, fracDigits = ""] = match;
+  const [, sign, wholeDigits, fracDigits = "", expText] = match;
 
-  const truncatedFrac = fracDigits.slice(0, decimals);
+  // Concatenate whole + fractional digits into one digit string, and treat
+  // the decimal point as initially sitting right after `wholeDigits`. An
+  // exponent shifts that point right (positive) or left (negative).
+  const digits = wholeDigits + fracDigits;
+  const pointPos = wholeDigits.length + (expText ? Number(expText) : 0);
+
+  let normWhole: string;
+  let normFrac: string;
+  if (pointPos <= 0) {
+    // Point is at or before the start: everything becomes fractional,
+    // padded with leading zeros for the shift.
+    normWhole = "0";
+    normFrac = "0".repeat(-pointPos) + digits;
+  } else if (pointPos >= digits.length) {
+    // Point is at or past the end: everything is whole, padded with
+    // trailing zeros for the shift.
+    normWhole = digits + "0".repeat(pointPos - digits.length);
+    normFrac = "";
+  } else {
+    normWhole = digits.slice(0, pointPos);
+    normFrac = digits.slice(pointPos);
+  }
+
+  const truncatedFrac = normFrac.slice(0, decimals);
   const paddedFrac = truncatedFrac.padEnd(decimals, "0");
 
-  const magnitude = BigInt(wholeDigits + paddedFrac);
+  const magnitude = BigInt(normWhole + paddedFrac);
   return sign === "-" ? -magnitude : magnitude;
 }
 
