@@ -1,0 +1,526 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  BSC_MAINNET_CHAIN_ID,
+  BSC_TESTNET_CHAIN_ID,
+  getAddress,
+} from "../src/networks/index.js";
+import {
+  EIP3009_TYPES,
+  PERMIT_UNBOUNDED_TYPES,
+  PolicyViolation,
+  SigningPolicy,
+  check,
+  inferPrimaryType,
+} from "../src/signing/index.js";
+
+/** Ports python/tests/test_signing_policy.py. */
+
+const U_MAINNET = getAddress(BSC_MAINNET_CHAIN_ID).paymentToken;
+const U_TESTNET = getAddress(BSC_TESTNET_CHAIN_ID).paymentToken;
+
+const EIP712DOMAIN_FIELDS = [
+  { name: "name", type: "string" },
+  { name: "version", type: "string" },
+  { name: "chainId", type: "uint256" },
+  { name: "verifyingContract", type: "address" },
+];
+const TWA_FIELDS = [
+  { name: "from", type: "address" },
+  { name: "to", type: "address" },
+  { name: "value", type: "uint256" },
+  { name: "validAfter", type: "uint256" },
+  { name: "validBefore", type: "uint256" },
+  { name: "nonce", type: "bytes32" },
+];
+const PERMIT_FIELDS = [
+  { name: "owner", type: "address" },
+  { name: "spender", type: "address" },
+  { name: "value", type: "uint256" },
+  { name: "nonce", type: "uint256" },
+  { name: "deadline", type: "uint256" },
+];
+
+const NOW = 1_700_000_000; // frozen time for deterministic validity checks
+
+function twaMsg(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    from: `0x${"a".repeat(40)}`,
+    to: `0x${"b".repeat(40)}`,
+    value: 1_000_000,
+    validAfter: NOW - 60,
+    validBefore: NOW + 300,
+    nonce: `0x${"c".repeat(64)}`,
+    ...overrides,
+  };
+}
+
+function twaCall(
+  policy: SigningPolicy,
+  opts: {
+    domainOverrides?: Record<string, unknown>;
+    messageOverrides?: Record<string, unknown>;
+    now?: number;
+  } = {},
+): string {
+  const domain: Record<string, unknown> = {
+    name: "United Stables",
+    version: "1",
+    chainId: BSC_MAINNET_CHAIN_ID,
+    verifyingContract: U_MAINNET,
+    ...opts.domainOverrides,
+  };
+  const types = {
+    EIP712Domain: EIP712DOMAIN_FIELDS,
+    TransferWithAuthorization: TWA_FIELDS,
+  };
+  const msg = twaMsg(opts.messageOverrides);
+  return check(policy, domain, types, msg, { now: opts.now ?? NOW });
+}
+
+// ── strictDefault behavior ──────────────────────────────────────────────
+
+describe("SigningPolicy.strictDefault", () => {
+  it("allows U-mainnet TransferWithAuthorization", () => {
+    const p = SigningPolicy.strictDefault();
+    expect(twaCall(p)).toBe("TransferWithAuthorization");
+  });
+
+  it("allows U-testnet TransferWithAuthorization", () => {
+    const p = SigningPolicy.strictDefault();
+    const pt = twaCall(p, {
+      domainOverrides: {
+        chainId: BSC_TESTNET_CHAIN_ID,
+        verifyingContract: U_TESTNET,
+      },
+    });
+    expect(pt).toBe("TransferWithAuthorization");
+  });
+
+  it("rejects unknown verifyingContract", () => {
+    const p = SigningPolicy.strictDefault();
+    let caught: PolicyViolation | undefined;
+    try {
+      twaCall(p, {
+        domainOverrides: { verifyingContract: `0x${"1".repeat(40)}` },
+      });
+    } catch (e) {
+      caught = e as PolicyViolation;
+    }
+    expect(caught).toBeInstanceOf(PolicyViolation);
+    expect(caught?.message).toContain("not in allowlist");
+    expect(caught?.primaryType).toBe("TransferWithAuthorization");
+    expect(caught?.chainId).toBe(BSC_MAINNET_CHAIN_ID);
+  });
+
+  it("rejects unknown chainId", () => {
+    const p = SigningPolicy.strictDefault();
+    expect(() => twaCall(p, { domainOverrides: { chainId: 1 } })).toThrow(
+      /not in allowlist/,
+    );
+  });
+
+  it("rejects EIP-2612 Permit (U-token supports it on-chain, denylist must block)", () => {
+    const p = SigningPolicy.strictDefault();
+    const domain = {
+      name: "United Stables",
+      version: "1",
+      chainId: BSC_MAINNET_CHAIN_ID,
+      verifyingContract: U_MAINNET,
+    };
+    const types = { EIP712Domain: EIP712DOMAIN_FIELDS, Permit: PERMIT_FIELDS };
+    const msg = {
+      owner: `0x${"a".repeat(40)}`,
+      spender: `0x${"b".repeat(40)}`,
+      value: 2n ** 256n - 1n,
+      nonce: 0,
+      deadline: 2_000_000_000,
+    };
+    let caught: PolicyViolation | undefined;
+    try {
+      check(p, domain, types, msg, { now: NOW });
+    } catch (e) {
+      caught = e as PolicyViolation;
+    }
+    expect(caught?.message).toContain("denylisted");
+    expect(caught?.primaryType).toBe("Permit");
+  });
+
+  it("rejects Permit2 PermitSingle", () => {
+    const p = SigningPolicy.strictDefault();
+    const domain = {
+      name: "Permit2",
+      version: "1",
+      chainId: BSC_MAINNET_CHAIN_ID,
+      verifyingContract: `0x${"2".repeat(40)}`,
+    };
+    const types = {
+      EIP712Domain: EIP712DOMAIN_FIELDS,
+      PermitSingle: PERMIT_FIELDS,
+    };
+    expect(() => check(p, domain, types, {}, { now: NOW })).toThrow(
+      /denylisted/,
+    );
+  });
+
+  it("denylist takes precedence over allowlist", () => {
+    const p = SigningPolicy.strictDefault().extend({
+      primaryTypeAllowlist: ["Permit"],
+    });
+    expect(p.primaryTypeAllowlist.has("Permit")).toBe(true);
+    expect(p.primaryTypeDenylist.has("Permit")).toBe(true);
+    const domain = {
+      name: "United Stables",
+      version: "1",
+      chainId: BSC_MAINNET_CHAIN_ID,
+      verifyingContract: U_MAINNET,
+    };
+    const types = { EIP712Domain: EIP712DOMAIN_FIELDS, Permit: PERMIT_FIELDS };
+    expect(() => check(p, domain, types, {}, { now: NOW })).toThrow(
+      /denylisted/,
+    );
+  });
+});
+
+// ── Validity window ──────────────────────────────────────────────────────
+
+describe("validity window", () => {
+  it("rejects validity window too long", () => {
+    const p = SigningPolicy.strictDefault();
+    expect(() =>
+      twaCall(p, {
+        messageOverrides: { validAfter: NOW - 600, validBefore: NOW + 600 },
+      }),
+    ).toThrow("validity window 1200s exceeds max 600s");
+  });
+
+  it("rejects validBefore too far in the future", () => {
+    const p = SigningPolicy.strictDefault();
+    // window itself fine (300s) but validBefore is 1500s in the future
+    expect(() =>
+      twaCall(p, {
+        messageOverrides: { validAfter: NOW + 1200, validBefore: NOW + 1500 },
+      }),
+    ).toThrow(/exceeds max 900s/);
+  });
+
+  it("rejects validBefore <= validAfter", () => {
+    const p = SigningPolicy.strictDefault();
+    expect(() =>
+      twaCall(p, {
+        messageOverrides: { validAfter: NOW + 100, validBefore: NOW + 100 },
+      }),
+    ).toThrow(/must be >/);
+  });
+
+  it("rejects already-expired validBefore", () => {
+    const p = SigningPolicy.strictDefault();
+    expect(() =>
+      twaCall(p, {
+        messageOverrides: { validAfter: NOW - 600, validBefore: NOW - 300 },
+      }),
+    ).toThrow(/already expired/);
+  });
+
+  it("rejects missing validity fields when required", () => {
+    const p = SigningPolicy.strictDefault();
+    const domain = {
+      name: "United Stables",
+      version: "1",
+      chainId: BSC_MAINNET_CHAIN_ID,
+      verifyingContract: U_MAINNET,
+    };
+    const types = {
+      EIP712Domain: EIP712DOMAIN_FIELDS,
+      TransferWithAuthorization: TWA_FIELDS,
+    };
+    const msg = {
+      from: `0x${"a".repeat(40)}`,
+      to: `0x${"b".repeat(40)}`,
+      value: 1,
+    };
+    expect(() => check(p, domain, types, msg, { now: NOW })).toThrow(
+      /requires validBefore/,
+    );
+  });
+});
+
+// ── Structure / domain shape ─────────────────────────────────────────────
+
+describe("structure checks", () => {
+  it("rejects null chainId (present but null — treated as missing)", () => {
+    const p = SigningPolicy.strictDefault();
+    expect(() => twaCall(p, { domainOverrides: { chainId: null } })).toThrow(
+      /missing chainId/,
+    );
+  });
+
+  it("rejects missing chainId key entirely", () => {
+    const p = SigningPolicy.strictDefault();
+    const domain = {
+      name: "United Stables",
+      version: "1",
+      verifyingContract: U_MAINNET,
+    };
+    const types = {
+      EIP712Domain: EIP712DOMAIN_FIELDS,
+      TransferWithAuthorization: TWA_FIELDS,
+    };
+    expect(() => check(p, domain, types, twaMsg(), { now: NOW })).toThrow(
+      /missing chainId/,
+    );
+  });
+
+  it("rejects missing verifyingContract", () => {
+    const p = SigningPolicy.strictDefault();
+    const domain = {
+      name: "United Stables",
+      version: "1",
+      chainId: BSC_MAINNET_CHAIN_ID,
+    };
+    const types = {
+      EIP712Domain: EIP712DOMAIN_FIELDS,
+      TransferWithAuthorization: TWA_FIELDS,
+    };
+    expect(() => check(p, domain, types, twaMsg(), { now: NOW })).toThrow(
+      /missing verifyingContract/,
+    );
+  });
+
+  it("rejects multiple non-domain structs", () => {
+    const p = SigningPolicy.strictDefault();
+    const domain = {
+      name: "United Stables",
+      version: "1",
+      chainId: BSC_MAINNET_CHAIN_ID,
+      verifyingContract: U_MAINNET,
+    };
+    const types = {
+      EIP712Domain: EIP712DOMAIN_FIELDS,
+      TransferWithAuthorization: TWA_FIELDS,
+      Permit: PERMIT_FIELDS,
+    };
+    expect(() => check(p, domain, types, twaMsg(), { now: NOW })).toThrow(
+      /multiple non-EIP712Domain/,
+    );
+  });
+});
+
+// ── Composition ──────────────────────────────────────────────────────────
+
+describe("extend", () => {
+  it("unions allowlists and leaves original policy untouched", () => {
+    const p = SigningPolicy.strictDefault();
+    const p2 = p.extend({
+      primaryTypeAllowlist: ["Quote"],
+      domainAllowlist: [[56, `0x${"9".repeat(40)}`]],
+    });
+    expect(p.primaryTypeAllowlist).toEqual(EIP3009_TYPES);
+    expect(p2.primaryTypeAllowlist.has("Quote")).toBe(true);
+    expect(p2.primaryTypeAllowlist.has("TransferWithAuthorization")).toBe(true);
+    expect(p2.domainAllowlist.has(`56:0x${"9".repeat(40)}`)).toBe(true);
+    expect(p2.domainAllowlist.has(`56:${U_MAINNET}`)).toBe(true); // original kept
+  });
+
+  it("overrides scalars without touching untouched scalars", () => {
+    const p = SigningPolicy.strictDefault().extend({
+      maxValidityWindowSeconds: 300,
+    });
+    expect(p.maxValidityWindowSeconds).toBe(300);
+    expect(p.maxFutureValiditySeconds).toBe(900);
+  });
+});
+
+describe("SigningPolicy.permissive", () => {
+  it("passes unknown domain and unknown primary type", () => {
+    const p = SigningPolicy.permissive();
+    const domain = { chainId: 999, verifyingContract: `0x${"f".repeat(40)}` };
+    const types = {
+      EIP712Domain: EIP712DOMAIN_FIELDS,
+      SomethingExotic: [{ name: "x", type: "uint256" }],
+    };
+    const msg = { x: 1 };
+    expect(check(p, domain, types, msg, { now: NOW })).toBe("SomethingExotic");
+  });
+});
+
+// ── Error diagnostics ────────────────────────────────────────────────────
+
+describe("PolicyViolation diagnostics", () => {
+  it("carries structured fields and renders them in the message", () => {
+    const p = SigningPolicy.strictDefault();
+    const badAddr = `0x${"1".repeat(40)}`;
+    let caught: PolicyViolation | undefined;
+    try {
+      twaCall(p, { domainOverrides: { verifyingContract: badAddr } });
+    } catch (e) {
+      caught = e as PolicyViolation;
+    }
+    expect(caught).toBeInstanceOf(PolicyViolation);
+    expect(caught?.primaryType).toBe("TransferWithAuthorization");
+    expect(caught?.chainId).toBe(BSC_MAINNET_CHAIN_ID);
+    expect(caught?.verifyingContract).toBe(badAddr);
+    const s = caught?.message ?? "";
+    expect(s).toContain("TransferWithAuthorization");
+    expect(s).toContain(String(BSC_MAINNET_CHAIN_ID));
+    expect(s).toContain(badAddr);
+  });
+});
+
+// ── inferPrimaryType ──────────────────────────────────────────────────────
+
+describe("inferPrimaryType", () => {
+  it("returns the single non-domain struct name", () => {
+    expect(
+      inferPrimaryType({ EIP712Domain: [], TransferWithAuthorization: [] }),
+    ).toBe("TransferWithAuthorization");
+  });
+
+  it("rejects an empty (domain-only) type set", () => {
+    expect(() => inferPrimaryType({ EIP712Domain: [] })).toThrow(
+      /no non-EIP712Domain/,
+    );
+  });
+
+  it("rejects multiple non-domain structs", () => {
+    expect(() => inferPrimaryType({ EIP712Domain: [], A: [], B: [] })).toThrow(
+      /multiple/,
+    );
+  });
+});
+
+// ── Bundle-level sanity ──────────────────────────────────────────────────
+
+describe("type-set constants", () => {
+  it("EIP3009_TYPES has the expected contents", () => {
+    expect(EIP3009_TYPES).toEqual(
+      new Set(["TransferWithAuthorization", "ReceiveWithAuthorization"]),
+    );
+  });
+
+  it("PERMIT_UNBOUNDED_TYPES has the expected contents", () => {
+    expect(PERMIT_UNBOUNDED_TYPES).toEqual(
+      new Set(["Permit", "PermitSingle", "PermitBatch"]),
+    );
+  });
+});
+
+// ── Serialization ────────────────────────────────────────────────────────
+
+describe("toDict / fromDict", () => {
+  it("returns sorted, deterministic, JSON-friendly output", () => {
+    const p = SigningPolicy.strictDefault();
+    const d = p.toDict() as {
+      domainAllowlist: [number, string][];
+      primaryTypeAllowlist: string[];
+    };
+    expect(d.domainAllowlist).toEqual(
+      [...d.domainAllowlist].sort(
+        (a, b) => a[0] - b[0] || (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0),
+      ),
+    );
+    expect(d.primaryTypeAllowlist).toEqual([...d.primaryTypeAllowlist].sort());
+    expect(Array.isArray(d.domainAllowlist)).toBe(true);
+    expect(Array.isArray(d.primaryTypeAllowlist)).toBe(true);
+    expect(
+      d.domainAllowlist.every(
+        (pair) => Array.isArray(pair) && pair.length === 2,
+      ),
+    ).toBe(true);
+  });
+
+  it("round-trips strictDefault", () => {
+    const p = SigningPolicy.strictDefault();
+    const p2 = SigningPolicy.fromDict(p.toDict());
+    expect(p2.toDict()).toEqual(p.toDict());
+  });
+
+  it("round-trips an extended policy", () => {
+    const p = SigningPolicy.strictDefault().extend({
+      domainAllowlist: [[1, `0x${"9".repeat(40)}`]],
+      primaryTypeAllowlist: ["MyOrder"],
+      maxValidityWindowSeconds: 300,
+    });
+    const p2 = SigningPolicy.fromDict(p.toDict());
+    expect(p2.toDict()).toEqual(p.toDict());
+  });
+
+  it("falls back to defaults for missing keys", () => {
+    const p = SigningPolicy.fromDict({});
+    expect(p.domainAllowlist).toEqual(new Set());
+    expect(p.maxValidityWindowSeconds).toBe(600);
+    expect(p.maxFutureValiditySeconds).toBe(900);
+    expect(p.allowUnknownDomain).toBe(false);
+  });
+
+  it("rejects a malformed domain entry", () => {
+    expect(() =>
+      SigningPolicy.fromDict({ domainAllowlist: ["not-a-pair"] }),
+    ).toThrow(/domainAllowlist\[0\]/);
+  });
+});
+
+// ── toString ───────────────────────────────────────────────────────────
+
+describe("toString", () => {
+  it("contains canonical sections", () => {
+    const p = SigningPolicy.strictDefault();
+    const s = p.toString();
+    expect(s).toContain("SigningPolicy(");
+    expect(s).toContain("domainAllowlist (2 entries)");
+    expect(s).toContain("TransferWithAuthorization");
+    expect(s).toContain("Permit");
+    expect(s).toContain("allowUnknownDomain=false");
+  });
+
+  it("handles an empty policy cleanly", () => {
+    const p = new SigningPolicy({ domainAllowlist: new Set() });
+    const s = p.toString();
+    expect(s).toContain("(none)");
+    // empty primaryTypeAllowlist -> "(any)" marker for "no allowlist applied"
+    expect(s).toContain("(any)");
+  });
+});
+
+// ── permissive() env guard ────────────────────────────────────────────────
+
+describe("SigningPolicy.permissive env guard", () => {
+  beforeEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    "prod",
+    "production",
+    "live",
+    "mainnet-prod",
+    "PROD",
+    " Production ",
+    "LIVE",
+  ])("refuses in production-like ENV=%s", (envValue) => {
+    vi.stubEnv("ENV", envValue);
+    expect(() => SigningPolicy.permissive()).toThrow(/indicates production/);
+  });
+
+  it.each(["", "dev", "development", "test", "staging", "qa"])(
+    "allows non-production ENV=%s",
+    (envValue) => {
+      vi.stubEnv("ENV", envValue);
+      const p = SigningPolicy.permissive();
+      expect(p.allowUnknownDomain).toBe(true);
+    },
+  );
+
+  it("allows break-glass via allowInProduction", () => {
+    vi.stubEnv("ENV", "production");
+    const p = SigningPolicy.permissive({ allowInProduction: true });
+    expect(p.allowUnknownDomain).toBe(true);
+  });
+
+  it("falls back to ENVIRONMENT when ENV is unset", () => {
+    vi.stubEnv("ENV", "");
+    vi.stubEnv("ENVIRONMENT", "prod");
+    expect(() => SigningPolicy.permissive()).toThrow(/indicates production/);
+  });
+});
