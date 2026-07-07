@@ -50,3 +50,26 @@ export {
 } from "./client.js";
 export { ERC8183Config, type ERC8183ConfigOpts } from "./config.js";
 export { ERC8183_ENV_PREFIX, getErc8183Config } from "./constants.js";
+export {
+  DescriptionTooLongError,
+  MAX_DESCRIPTION_BYTES,
+  type MessageSigner,
+  NegotiationHandler,
+  type NegotiationHandlerOpts,
+  type NegotiateOpts,
+  type FromErc8183ClientOpts,
+  NegotiationRequest,
+  type NegotiationRequestOpts,
+  NegotiationResponse,
+  type NegotiationResponseOpts,
+  NegotiationResult,
+  type NegotiationResultOpts,
+  ReasonCode,
+  type ReasonCodeValue,
+  TermSpecification,
+  type TermSpecificationOpts,
+  buildDescriptionContent,
+  buildJobDescription,
+  parseJobDescription,
+  sanitizeForClaim,
+} from "./negotiation.js";
