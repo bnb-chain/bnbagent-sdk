@@ -58,10 +58,21 @@ function unsupportedVersionError(kind: string, version: unknown): Error {
 // DeliverableManifest
 // ---------------------------------------------------------------------------
 
-/** The actual delivery: `{ content, contentType }`. */
+/**
+ * The actual delivery: `{ content, contentType? }`.
+ *
+ * `contentType` is optional to preserve cross-SDK hash fidelity: Python's
+ * `DeliverableManifest.response` is a plain `dict[str, str]` that only
+ * requires a `content` key and is hashed over exactly the keys present. A
+ * manifest produced without `content_type` must round-trip through this SDK
+ * without one being invented, or `manifestHash()` would diverge from the
+ * value computed by the Python SDK (or any external producer) over the same
+ * wire JSON. The common producer path (this SDK's own job pipeline) always
+ * sets `contentType`, so this is additive, not a behavior change for it.
+ */
 export interface DeliverableResponse {
   content: string;
-  contentType: string;
+  contentType?: string;
 }
 
 /** Options accepted by the {@link DeliverableManifest} constructor. */
@@ -127,15 +138,18 @@ export class DeliverableManifest {
   // ------------------------------------------------------------ serialisation
 
   toDict(): Record<string, unknown> {
+    const response: Record<string, unknown> = {
+      content: this.response.content,
+    };
+    if (this.response.contentType !== undefined) {
+      response.content_type = this.response.contentType;
+    }
     return {
       version: this.version,
       job_id: this.jobId,
       chain_id: this.chainId,
       contracts: this.contracts,
-      response: {
-        content: this.response.content,
-        content_type: this.response.contentType,
-      },
+      response,
       metadata: this.metadata,
     };
   }
@@ -163,7 +177,9 @@ export class DeliverableManifest {
       contracts: d.contracts as Record<string, string>,
       response: {
         content: response.content as string,
-        contentType: (response.content_type as string) ?? "",
+        ...("content_type" in response
+          ? { contentType: response.content_type as string }
+          : {}),
       },
       metadata: (d.metadata as Record<string, unknown>) ?? {},
     });

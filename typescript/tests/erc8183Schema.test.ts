@@ -177,6 +177,54 @@ describe("DeliverableManifest", () => {
     const m2 = DeliverableManifest.fromDict(manifestWireDict());
     expect(m1.manifestHash()).toBe(m2.manifestHash());
   });
+
+  describe("content_type absence (cross-SDK hash fidelity)", () => {
+    // Python's DeliverableManifest.response is a plain dict[str, str] that
+    // only requires 'content' and is hashed over exactly the keys present —
+    // it never invents a 'content_type'. A manifest fetched from an
+    // externally-produced (non-JobOps) deliverable that omits content_type
+    // must hash identically in both SDKs, or the verifier round-trip
+    // (fetch -> fromDict -> manifestHash -> compare to on-chain) breaks.
+    function noContentTypeWireDict(): Record<string, unknown> {
+      const d = manifestWireDict();
+      d.response = { content: "hello world" };
+      return d;
+    }
+
+    it("toDict() omits content_type when absent from the source dict", () => {
+      const m = DeliverableManifest.fromDict(noContentTypeWireDict());
+      const response = m.toDict().response as Record<string, unknown>;
+      expect(response).toEqual({ content: "hello world" });
+      expect("content_type" in response).toBe(false);
+    });
+
+    it("fromDict({response:{content}}) round-trips without inventing content_type", () => {
+      const d = { ...noContentTypeWireDict() };
+      const m = DeliverableManifest.fromDict(d);
+      expect(m.response.contentType).toBeUndefined();
+      expect(m.toDict()).toEqual(d);
+    });
+
+    it("pins the no-content_type manifest hash to the value computed by the Python SDK", () => {
+      // Computed via: uv run python3 -c "... DeliverableManifest.from_dict(d).manifest_hash().hex() ..."
+      // with response={"content": "hello world"} (no content_type). See
+      // .superpowers/sdd/task-19-report.md for the full one-liner + output.
+      const EXPECTED_HASH =
+        "0xc365b323d1757a33d4f1481ef65ef9fdfc8f4ee5dc2baf034ef6446b96544b6f";
+      const m = DeliverableManifest.fromDict(noContentTypeWireDict());
+      expect(m.manifestHash()).toBe(EXPECTED_HASH);
+    });
+
+    it("with content_type still round-trips and hashes as before (existing pin unaffected)", () => {
+      const d = manifestWireDict();
+      const m = DeliverableManifest.fromDict(d);
+      const response = m.toDict().response as Record<string, unknown>;
+      expect(response.content_type).toBe("text/plain");
+      const EXPECTED_HASH =
+        "0xe6f21081e9a75c1b2dcd98835c1ef5a351c25bb1fbedca3226e74ff52752b7b6";
+      expect(m.manifestHash()).toBe(EXPECTED_HASH);
+    });
+  });
 });
 
 function descriptionWireDict(task = "write a report"): Record<string, unknown> {
