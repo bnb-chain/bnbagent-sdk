@@ -223,13 +223,19 @@ async function fetchAgentUriHttp(
         DNS_TIMEOUT_MS,
       );
     });
-    const result = await Promise.race([dnsLookup(hostname), timeout]);
-    resolvedIp = result.address;
+    // `{ all: true }` returns every address the resolver reports for this
+    // hostname (a name can have multiple A/AAAA records). Mirrors Python's
+    // `getaddrinfo` iteration, which rejects if ANY returned address is
+    // private/reserved — not just the one we happen to connect to.
+    const results = await Promise.race([
+      dnsLookup(hostname, { all: true }),
+      timeout,
+    ]);
+    if (results.length === 0 || results.some((r) => isBlockedIp(r.address))) {
+      return null;
+    }
+    resolvedIp = results[0].address;
   } catch {
-    return null;
-  }
-
-  if (isBlockedIp(resolvedIp)) {
     return null;
   }
 

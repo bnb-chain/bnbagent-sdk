@@ -32,6 +32,8 @@ const {
   fakeClient,
   createPublicClientMock,
   httpRequestMock,
+  httpsRequestMock,
+  dnsLookupMock,
 } = vi.hoisted(() => {
   const mockContract = {
     address: "0x8004A818BFB912233c491871b3d84c89A494BD9e",
@@ -45,12 +47,21 @@ const {
   const fakeClient = { getChainId: vi.fn().mockResolvedValue(97) };
   const createPublicClientMock = vi.fn().mockReturnValue(fakeClient);
   const httpRequestMock = vi.fn();
+  const httpsRequestMock = vi.fn();
+  // Real `dns.lookup` by default (assigned once the real module is
+  // available inside the `vi.mock("node:dns/promises", ...)` factory
+  // below); individual tests override with `mockResolvedValueOnce`/
+  // `mockImplementationOnce` to control the DNS answer(s) seen by the
+  // SSRF guard, then fall back to the real resolver afterwards.
+  const dnsLookupMock = vi.fn();
   return {
     mockContract,
     ContractInterfaceMock,
     fakeClient,
     createPublicClientMock,
     httpRequestMock,
+    httpsRequestMock,
+    dnsLookupMock,
   };
 });
 
@@ -65,12 +76,28 @@ vi.mock("viem", async (importOriginal) => {
   return { ...actual, createPublicClient: createPublicClientMock };
 });
 
-// `agent.ts` imports `* as http from "node:http"` and calls `http.request`
-// for the SSRF-guarded fetch — full module replacement (rather than
-// `vi.spyOn`) because Node's built-in ESM namespace objects are frozen.
+// `agent.ts` imports `* as http from "node:http"` / `* as https from
+// "node:https"` and calls `.request` for the SSRF-guarded fetch — full
+// module replacement (rather than `vi.spyOn`) because Node's built-in ESM
+// namespace objects are frozen.
 vi.mock("node:http", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:http")>();
   return { ...actual, request: httpRequestMock };
+});
+
+vi.mock("node:https", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:https")>();
+  return { ...actual, request: httpsRequestMock };
+});
+
+// Likewise for `dns.lookup`: default to the real resolver (IP literals
+// like "203.0.113.5" resolve instantly with no network I/O) so tests that
+// don't care about DNS keep working unmodified; SSRF-guard tests below
+// override the answer per-call.
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:dns/promises")>();
+  dnsLookupMock.mockImplementation(actual.lookup);
+  return { ...actual, lookup: dnsLookupMock };
 });
 
 // Import after the mocks are registered.
@@ -120,6 +147,8 @@ beforeEach(() => {
   ContractInterfaceMock.mockClear().mockImplementation(() => mockContract);
   createPublicClientMock.mockClear().mockReturnValue(fakeClient);
   httpRequestMock.mockClear();
+  httpsRequestMock.mockClear();
+  dnsLookupMock.mockClear();
 });
 
 afterEach(() => {
@@ -494,6 +523,56 @@ describe("ERC8004Agent.parseAgentUri: SSRF guard (http/https path)", () => {
     ).resolves.toBeNull();
   });
 
+  /**
+   * Wires `mock` (either `httpRequestMock` or `httpsRequestMock`) to emit a
+   * canned response, and returns the request `options` object the SUT
+   * passed to `.request(...)` so callers can assert on it (host/hostname,
+   * servername, headers, etc).
+   */
+  function mockTransportResponse(
+    mock: typeof httpRequestMock,
+    opts: {
+      status?: number;
+      headers?: Record<string, string>;
+      chunks: string[];
+    },
+  ): { capturedOptions: Record<string, unknown> | undefined } {
+    const captured: { capturedOptions: Record<string, unknown> | undefined } = {
+      capturedOptions: undefined,
+    };
+    mock.mockImplementation(
+      (options: unknown, callback?: (res: unknown) => void) => {
+        captured.capturedOptions = options as Record<string, unknown>;
+        const req = new EventEmitter() as EventEmitter & {
+          destroy: () => void;
+          end: () => void;
+        };
+        req.destroy = vi.fn();
+        req.end = () => {
+          queueMicrotask(() => {
+            const res = new EventEmitter() as EventEmitter & {
+              statusCode: number;
+              headers: Record<string, string>;
+              destroy: () => void;
+            };
+            res.statusCode = opts.status ?? 200;
+            res.headers = opts.headers ?? {};
+            res.destroy = vi.fn();
+            callback?.(res);
+            queueMicrotask(() => {
+              for (const chunk of opts.chunks) {
+                res.emit("data", Buffer.from(chunk));
+              }
+              res.emit("end");
+            });
+          });
+        };
+        return req;
+      },
+    );
+    return captured;
+  }
+
   describe("with a mocked node:http transport", () => {
     beforeEach(() => {
       httpRequestMock.mockReset();
@@ -504,35 +583,7 @@ describe("ERC8004Agent.parseAgentUri: SSRF guard (http/https path)", () => {
       headers?: Record<string, string>;
       chunks: string[];
     }) {
-      httpRequestMock.mockImplementation(
-        (_options: unknown, callback?: (res: unknown) => void) => {
-          const req = new EventEmitter() as EventEmitter & {
-            destroy: () => void;
-            end: () => void;
-          };
-          req.destroy = vi.fn();
-          req.end = () => {
-            queueMicrotask(() => {
-              const res = new EventEmitter() as EventEmitter & {
-                statusCode: number;
-                headers: Record<string, string>;
-                destroy: () => void;
-              };
-              res.statusCode = opts.status ?? 200;
-              res.headers = opts.headers ?? {};
-              res.destroy = vi.fn();
-              callback?.(res);
-              queueMicrotask(() => {
-                for (const chunk of opts.chunks) {
-                  res.emit("data", Buffer.from(chunk));
-                }
-                res.emit("end");
-              });
-            });
-          };
-          return req;
-        },
-      );
+      return mockTransportResponse(httpRequestMock, opts);
     }
 
     it("parses a valid http response from a public (non-blocked) IP", async () => {
@@ -579,6 +630,129 @@ describe("ERC8004Agent.parseAgentUri: SSRF guard (http/https path)", () => {
         "http://203.0.113.5/agent.json",
       );
       expect(data).toBeNull();
+    });
+
+    it("connects to the DNS-resolved IP with the original Host header, and issues no TLS servername", async () => {
+      const captured = mockHttpResponse({
+        chunks: [JSON.stringify({ name: "Test Agent" })],
+      });
+      const data = await ERC8004Agent.parseAgentUri(
+        "http://203.0.113.5/agent.json",
+      );
+      expect(data?.name).toBe("Test Agent");
+      const options = captured.capturedOptions;
+      expect(options).toBeDefined();
+      // For this URI the hostname literally *is* the resolved IP, so this
+      // mainly pins down the shape of the options object (host + Host
+      // header present, no servername) that the HTTPS assertions below
+      // then contrast against.
+      expect(options?.host).toBe("203.0.113.5");
+      expect((options?.headers as Record<string, string>)?.Host).toBe(
+        "203.0.113.5",
+      );
+      expect(options?.servername).toBeUndefined();
+      expect(httpsRequestMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("with a mocked node:https transport", () => {
+    beforeEach(() => {
+      httpsRequestMock.mockReset();
+    });
+
+    function mockHttpsResponse(opts: {
+      status?: number;
+      headers?: Record<string, string>;
+      chunks: string[];
+    }) {
+      return mockTransportResponse(httpsRequestMock, opts);
+    }
+
+    it("connects to the DNS-resolved IP (not the hostname) while sending the original hostname as SNI servername and Host header", async () => {
+      // "agent.example" is a real, non-IP hostname, so `dns.lookup` is
+      // actually consulted (unlike the IP-literal URIs used elsewhere in
+      // this file, where lookup is a no-op identity resolution). Stub it to
+      // return a known-public address so we can assert exactly what socket
+      // target the SSRF guard connects to.
+      dnsLookupMock.mockResolvedValueOnce([
+        { address: "203.0.113.9", family: 4 },
+      ]);
+      const captured = mockHttpsResponse({
+        chunks: [JSON.stringify({ name: "HTTPS Agent" })],
+      });
+
+      const data = await ERC8004Agent.parseAgentUri(
+        "https://agent.example/agent.json",
+      );
+
+      expect(data?.name).toBe("HTTPS Agent");
+      expect(dnsLookupMock).toHaveBeenCalledWith(
+        "agent.example",
+        expect.objectContaining({ all: true }),
+      );
+      const options = captured.capturedOptions;
+      expect(options).toBeDefined();
+      // The socket must dial the resolved IP, never the original hostname
+      // (that's what closes the DNS-rebind window between check and use).
+      expect(options?.host).toBe("203.0.113.9");
+      expect(options?.host).not.toBe("agent.example");
+      // ... but TLS server-name/cert-hostname validation and the HTTP
+      // Host header must still carry the *original* hostname, or the
+      // remote server/cert can't route/validate the request.
+      expect(options?.servername).toBe("agent.example");
+      expect((options?.headers as Record<string, string>)?.Host).toBe(
+        "agent.example",
+      );
+      expect(httpRequestMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("DNS-rebind guard", () => {
+    beforeEach(() => {
+      httpRequestMock.mockReset();
+    });
+
+    it("proceeds to the exact resolved IP when dns.lookup answers with a public address", async () => {
+      dnsLookupMock.mockResolvedValueOnce([
+        { address: "203.0.113.20", family: 4 },
+      ]);
+      const captured = mockTransportResponse(httpRequestMock, {
+        chunks: [JSON.stringify({ name: "Public Agent" })],
+      });
+
+      const data = await ERC8004Agent.parseAgentUri(
+        "http://safe-host.example/agent.json",
+      );
+
+      expect(data?.name).toBe("Public Agent");
+      expect(captured.capturedOptions?.host).toBe("203.0.113.20");
+    });
+
+    it("rejects and makes no request when dns.lookup answers with a private address (rebind attempt)", async () => {
+      dnsLookupMock.mockResolvedValueOnce([{ address: "10.0.0.5", family: 4 }]);
+
+      const data = await ERC8004Agent.parseAgentUri(
+        "http://evil-host.example/agent.json",
+      );
+
+      expect(data).toBeNull();
+      expect(httpRequestMock).not.toHaveBeenCalled();
+      expect(httpsRequestMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects and makes no request when ANY of multiple dns.lookup answers is private (multi-answer defense-in-depth)", async () => {
+      dnsLookupMock.mockResolvedValueOnce([
+        { address: "203.0.113.30", family: 4 },
+        { address: "10.0.0.5", family: 4 },
+      ]);
+
+      const data = await ERC8004Agent.parseAgentUri(
+        "http://multi-answer-host.example/agent.json",
+      );
+
+      expect(data).toBeNull();
+      expect(httpRequestMock).not.toHaveBeenCalled();
+      expect(httpsRequestMock).not.toHaveBeenCalled();
     });
   });
 });
