@@ -159,9 +159,27 @@ export class CommerceClient extends ContractBase {
   // ----------------------------------------------------------------- writes
 
   /** Try to recover the `jobId` assigned by `createJob` from the
-   * `JobCreated` event in the transaction's receipt logs. */
+   * `JobCreated` event in the transaction's receipt logs.
+   *
+   * Mirrors `self.contract.events.JobCreated().process_receipt(receipt)` in
+   * `python/bnbagent/erc8183/commerce.py`, which is bound to this contract
+   * instance and therefore only ever decodes logs (a) emitted by this
+   * contract and (b) matching the `JobCreated` signature. viem's
+   * `decodeEventLog` has neither binding: it happily decodes any log whose
+   * topic0 matches *some* event in the ABI regardless of which contract
+   * emitted it, and — since `eventName` is only a type hint, not a runtime
+   * filter — it will decode e.g. a `JobFunded` log (which also carries a
+   * `jobId`) as itself and hand back matching args instead of throwing. So
+   * we filter by `log.address` first to avoid a same-topic0 log from an
+   * unrelated contract, and check `decoded.eventName` to avoid mistaking a
+   * different event (from this contract) that happens to share a `jobId`
+   * field for `JobCreated`. */
   private parseJobCreatedId(logs: TransactionReceipt["logs"]): bigint | null {
+    const address = this.address.toLowerCase();
     for (const log of logs) {
+      if (log.address.toLowerCase() !== address) {
+        continue;
+      }
       try {
         const decoded = decodeEventLog({
           abi: agenticCommerceAbi,
@@ -169,13 +187,15 @@ export class CommerceClient extends ContractBase {
           data: log.data,
           topics: log.topics,
         });
+        if (decoded.eventName !== "JobCreated") {
+          continue;
+        }
         const jobId = (decoded.args as { jobId?: bigint }).jobId;
         if (jobId !== undefined) {
           return jobId;
         }
       } catch {
-        // Not a JobCreated log (or a different event sharing no topic0
-        // match) — try the next one.
+        // Not a JobCreated log (unrecognized topic0) — try the next one.
       }
     }
     return null;

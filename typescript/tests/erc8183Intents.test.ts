@@ -342,6 +342,78 @@ describe("PolicyClient: write intents", () => {
   });
 });
 
+/** Build a single `JobCreated` receipt log for the given emitter address. */
+function jobCreatedLog(address: `0x${string}`, jobId: bigint, logIndex = 0) {
+  const topics = encodeEventTopics({
+    abi: agenticCommerceAbi,
+    eventName: "JobCreated",
+    args: { jobId, client: WALLET_ADDRESS, provider: PROVIDER },
+  });
+  const data = encodeAbiParameters(
+    [
+      { type: "address", name: "evaluator" },
+      { type: "uint256", name: "expiredAt" },
+      { type: "address", name: "hook" },
+    ],
+    [EVALUATOR, 123n, ZERO_ADDRESS],
+  );
+  return {
+    address,
+    topics,
+    data,
+    blockNumber: 1n,
+    blockHash: `0x${"aa".repeat(32)}`,
+    transactionHash: FAKE_TX_HASH,
+    transactionIndex: 0,
+    logIndex,
+    removed: false,
+  };
+}
+
+/** Build a `JobFunded` receipt log — used as a non-`JobCreated` decoy that
+ * still emits from this contract's address, to exercise the catch/continue
+ * branch of `parseJobCreatedId`. */
+function jobFundedLog(address: `0x${string}`, jobId: bigint, logIndex = 0) {
+  const topics = encodeEventTopics({
+    abi: agenticCommerceAbi,
+    eventName: "JobFunded",
+    args: { jobId, client: WALLET_ADDRESS, provider: PROVIDER },
+  });
+  const data = encodeAbiParameters([{ type: "uint256" }], [500n]);
+  return {
+    address,
+    topics,
+    data,
+    blockNumber: 1n,
+    blockHash: `0x${"aa".repeat(32)}`,
+    transactionHash: FAKE_TX_HASH,
+    transactionIndex: 0,
+    logIndex,
+    removed: false,
+  };
+}
+
+function receiptWithLogs(logs: unknown[]) {
+  return {
+    status: "success",
+    blockNumber: 1n,
+    blockHash: `0x${"aa".repeat(32)}`,
+    transactionHash: FAKE_TX_HASH,
+    transactionIndex: 0,
+    from: WALLET_ADDRESS,
+    to: CONTRACT_ADDRESS,
+    cumulativeGasUsed: 1n,
+    gasUsed: 1n,
+    contractAddress: null,
+    logs,
+    logsBloom: `0x${"0".repeat(512)}`,
+    effectiveGasPrice: 1n,
+    // biome-ignore lint/suspicious/noExplicitAny: minimal test receipt shape
+  } as any;
+}
+
+const UNRELATED_CONTRACT = getAddress(`0x${"bb".repeat(20)}`);
+
 describe("createJob: jobId dual-sourcing", () => {
   it("uses the executor-supplied jobId and skips receipt parsing", async () => {
     const { client } = commerceWithExecutor({
@@ -403,6 +475,44 @@ describe("createJob: jobId dual-sourcing", () => {
       // biome-ignore lint/suspicious/noExplicitAny: minimal test receipt shape
     } as any;
 
+    const { client } = commerceWithExecutor({
+      transactionHash: FAKE_TX_HASH,
+      status: 1,
+      receipt,
+    });
+    const result = await client.createJob({
+      provider: PROVIDER,
+      evaluator: EVALUATOR,
+      expiredAt: 123n,
+      description: "d",
+    });
+    expect(result.jobId).toBe(7n);
+  });
+
+  it("ignores a same-topic0 JobCreated log from an unrelated contract and uses this contract's log", async () => {
+    const receipt = receiptWithLogs([
+      jobCreatedLog(UNRELATED_CONTRACT, 999n, 0),
+      jobCreatedLog(CONTRACT_ADDRESS, 7n, 1),
+    ]);
+    const { client } = commerceWithExecutor({
+      transactionHash: FAKE_TX_HASH,
+      status: 1,
+      receipt,
+    });
+    const result = await client.createJob({
+      provider: PROVIDER,
+      evaluator: EVALUATOR,
+      expiredAt: 123n,
+      description: "d",
+    });
+    expect(result.jobId).toBe(7n);
+  });
+
+  it("skips a non-JobCreated log from this contract before finding the real one", async () => {
+    const receipt = receiptWithLogs([
+      jobFundedLog(CONTRACT_ADDRESS, 1n, 0),
+      jobCreatedLog(CONTRACT_ADDRESS, 7n, 1),
+    ]);
     const { client } = commerceWithExecutor({
       transactionHash: FAKE_TX_HASH,
       status: 1,
