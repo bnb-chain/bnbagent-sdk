@@ -185,7 +185,7 @@ describe("EVMWalletProvider — permissive policy", () => {
       name: "Whatever",
       version: "1",
       chainId: 999,
-      verifyingContract: `0x${"f".repeat(40)}`,
+      verifyingContract: `0x${"f".repeat(40)}` as `0x${string}`,
     };
     const types = {
       EIP712Domain: EIP712DOMAIN_FIELDS,
@@ -209,7 +209,7 @@ describe("EVMWalletProvider — _DANGEROUS_signTypedDataNoPolicy", () => {
       name: "Whatever",
       version: "1",
       chainId: 999,
-      verifyingContract: `0x${"f".repeat(40)}`,
+      verifyingContract: `0x${"f".repeat(40)}` as `0x${string}`,
     };
     const types = {
       EIP712Domain: EIP712DOMAIN_FIELDS,
