@@ -23,6 +23,7 @@
 
 import type { Abi, ContractFunctionParameters, PublicClient } from "viem";
 import { MAX_RETRIES, RETRY_BASE_DELAY } from "./txConfig.js";
+import { describeError, isRateLimitError, sleep } from "./txSender.js";
 
 /** Canonical Multicall3 address — deployed at the same address on every EVM chain. */
 export const MULTICALL3_ADDRESS: `0x${string}` =
@@ -176,24 +177,4 @@ async function callWithRetry<T>(fn: () => Promise<T>): Promise<T> {
     }
   }
   throw lastError;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isRateLimitError(error: unknown): boolean {
-  const text = describeError(error).toLowerCase();
-  return text.includes("429") || text.includes("too many requests");
-}
-
-/** Render an error (and its `.cause` chain, if any) as a single string. */
-function describeError(error: unknown): string {
-  if (error instanceof Error) {
-    const own = error.message;
-    const causeText =
-      error.cause !== undefined ? describeError(error.cause) : "";
-    return causeText && causeText !== own ? `${own}: ${causeText}` : own;
-  }
-  return String(error);
 }
