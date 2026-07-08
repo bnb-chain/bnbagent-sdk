@@ -212,18 +212,19 @@ export function excErrorFields(exc: unknown): Record<string, unknown> {
   return fields;
 }
 
-/** Generic result bag returned by every `ERC8183JobOps` method. Wire keys
- * stay `snake_case` (`error_code`, `tx_hash`, `retryable`, `rpc_error_code`)
- * so the shape survives JSON transport unchanged; everything else is
- * open-ended (`jobs`, `job`, `warnings`, `deliverable`, ...).
+/** Generic result bag returned by every `ERC8183JobOps` method. The
+ * error-envelope wire keys stay `snake_case` (`error_code`, `tx_hash`,
+ * `retryable`, `rpc_error_code`) so the failure shape survives JSON transport
+ * unchanged; everything else is open-ended (`jobs`, `job`, `warnings`,
+ * `deliverable`, ...).
  *
- * `txHash` (camelCase) is the success-path field — set by `submitResult` on
- * a successful `submit`. `tx_hash` (snake_case) is a distinct field: the
- * error-envelope key `excErrorFields` attaches to a `TransactionPendingError`
- * failure (the wire-format field surfaced to callers on that failure path).
- * Both are legal on the same `OpResult` type, on mutually exclusive
- * success/failure branches; neither is declared as an explicit member below
- * so both flow through the index signature. */
+ * Note the two distinct tx-hash fields, on mutually exclusive branches:
+ * `txHash` (camelCase, the declared member below) is the SUCCESS-path field,
+ * set by `submitResult` on a successful `submit`. `tx_hash` (snake_case) is
+ * the error-envelope field `excErrorFields` attaches on a
+ * `TransactionPendingError` FAILURE; it is not a declared member and rides
+ * the index signature. Don't collapse them — they carry different semantics
+ * on different paths. */
 export interface OpResult {
   success?: boolean;
   valid?: boolean;

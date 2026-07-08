@@ -42,13 +42,16 @@ policy's `disputeWindow` plus a safety slack.
 - `voteReject.ts <jobId>` — cast `voteReject` on a disputed job, with
   pre-flight checks (caller is a whitelisted voter, the job is actually
   disputed, the caller hasn't already voted).
-- `watch.ts` — polling loop that detects newly disputed jobs, downloads and
+- `watch.ts` — polling loop that detects disputed jobs, downloads and
   hash-verifies the deliverable manifest, prompts `[r]eject`/`[s]kip`, and
   auto-settles once `rejectVotes >= voteQuorum`. Adapted from the Python
   reference's raw `Disputed`/`VoteCast` event-log subscription: `PolicyClient`
   does not expose a public event-log read (that seam is `ContractBase`-internal),
   so this port polls `commerce.jobCounter()` + `policy.disputed()` /
-  `policy.rejectVotes()` directly instead. Same observable behavior.
+  `policy.rejectVotes()` directly instead — re-polling `disputed()` for each
+  still-undisputed job on every tick. Two differences from the event version:
+  it only watches jobs created after startup (a dispute on a pre-existing job
+  is not caught), and detection lags by up to one poll interval.
 
 Requires `VOTER_PRIVATE_KEY` and `NETWORK` (defaults to `bsc-testnet`); not
 run in CI.

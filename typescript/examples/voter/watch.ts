@@ -19,9 +19,14 @@
  * `PolicyClient`'s public surface in this SDK does not expose raw event-log
  * reads (`readEvents` is a `ContractBase`-internal seam used only by the
  * typed event helpers it already exposes), so this port polls job state
- * directly instead — `commerce.jobCounter()` to discover new jobs,
- * `policy.disputed()` / `policy.rejectVotes()` to track dispute state. Same
- * observable behavior, different transport.
+ * directly instead: `commerce.jobCounter()` discovers jobs created during the
+ * run, then `policy.disputed()` is re-polled for each still-undisputed job on
+ * EVERY tick (a dispute is raised long after creation, so a job cannot be
+ * checked just once), and `policy.rejectVotes()` tracks quorum. Two behavioral
+ * differences from the event-log version: it starts from the current job
+ * counter (like the Python reference starting at the current block head), so a
+ * dispute on a job created before startup is not caught; and detection lags by
+ * up to one poll interval rather than firing on the event.
  *
  * Usage:
  *     cd typescript/examples/voter
@@ -188,23 +193,38 @@ async function main(): Promise<void> {
 
   const seenDisputed = new Set<number>();
   const settled = new Set<number>();
-  let lastCounter = 0n;
+  // Jobs discovered but not yet observed disputed — re-polled EVERY tick, not
+  // just the tick they first appear. A dispute is raised long after a job is
+  // created (create -> fund -> submit -> dispute), so a job scanned once at
+  // creation is `disputed=false`; we must keep polling it until it flips.
+  const watching = new Set<number>();
+  // Start from the current job counter so we only track jobs created during
+  // this run (mirrors the Python reference starting at the current block
+  // head) — this also bounds `watching` to new jobs instead of replaying all
+  // historical ones. A dispute on a job created before startup is not caught.
+  let lastCounter = await client.commerce.jobCounter();
 
   try {
     while (true) {
       const counter = await client.commerce.jobCounter();
       if (counter > lastCounter) {
         for (let id = lastCounter + 1n; id <= counter; id++) {
-          const jobId = Number(id);
-          const isDisputed = await client.policy.disputed(id);
-          if (isDisputed && !seenDisputed.has(jobId)) {
+          watching.add(Number(id));
+        }
+        lastCounter = counter;
+      }
+
+      for (const jobId of [...watching]) {
+        const isDisputed = await client.policy.disputed(BigInt(jobId));
+        if (isDisputed) {
+          watching.delete(jobId);
+          if (!seenDisputed.has(jobId)) {
             const ts = new Date().toLocaleTimeString();
             console.log(`[${ts}] Disputed — jobId=${jobId}`);
             seenDisputed.add(jobId);
             await handleDisputedJob(client, jobId, voter, gateway, rl);
           }
         }
-        lastCounter = counter;
       }
 
       for (const jobId of seenDisputed) {
