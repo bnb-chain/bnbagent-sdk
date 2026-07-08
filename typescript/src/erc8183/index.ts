@@ -51,6 +51,25 @@ export {
 export { ERC8183Config, type ERC8183ConfigOpts } from "./config.js";
 export { ERC8183_ENV_PREFIX, getErc8183Config } from "./constants.js";
 export {
+  ERC8183JobOps,
+  type ERC8183JobOpsCreateOpts,
+  ERR_BUDGET_TOO_LOW,
+  ERR_CHAIN_UNAVAILABLE,
+  ERR_DESCRIPTION_INVALID,
+  ERR_INTERNAL,
+  ERR_JOB_EXPIRED,
+  ERR_NOT_ASSIGNED,
+  ERR_NOT_FOUND,
+  ERR_PAYLOAD_TOO_LARGE,
+  ERR_SUBMIT_DEADLINE_PASSED,
+  ERR_TX_PENDING,
+  ERR_WRONG_STATUS,
+  excErrorFields,
+  fundedJobWatcher,
+  type FundedJobWatcherOpts,
+  type OpResult,
+} from "./jobOps.js";
+export {
   DescriptionTooLongError,
   MAX_DESCRIPTION_BYTES,
   type MessageSigner,
