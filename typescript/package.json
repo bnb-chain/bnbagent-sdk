@@ -1,9 +1,20 @@
 {
   "name": "@bnb-chain/bnbagent",
   "version": "0.1.0",
+  "description": "TypeScript SDK for building on-chain AI agents on BNB Chain (ERC-8004 identity, ERC-8183 agentic commerce, x402 payments).",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bnb-chain/bnbagent-sdk.git",
+    "directory": "typescript"
+  },
   "type": "module",
+  "packageManager": "pnpm@10.24.0",
   "engines": {
     "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "files": [
     "dist"
@@ -63,9 +74,12 @@
     "build": "tsup",
     "test": "vitest run",
     "lint": "biome check src tests",
+    "typecheck": "tsc --noEmit",
     "typecheck:examples": "tsc --noEmit -p examples",
+    "check": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build",
     "example:x402": "tsx examples/x402/buyerDemo.ts",
-    "example:security": "tsx examples/security/e2e.ts"
+    "example:security": "tsx examples/security/e2e.ts",
+    "smoke:testnet": "tsx examples/smoke/readonly.ts"
   },
   "dependencies": {
     "@noble/ciphers": "^1.0.0",
