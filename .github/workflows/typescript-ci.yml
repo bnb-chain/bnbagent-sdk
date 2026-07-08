@@ -1,0 +1,67 @@
+name: TypeScript SDK CI
+
+# Scoped to the TypeScript package: changes under python/ or docs/ do not
+# trigger this workflow, and vice versa. Live-chain smoke tests are
+# deliberately NOT run here — a flaky public RPC must never gate a merge;
+# run `pnpm run smoke:testnet` manually or on a schedule instead.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "typescript/**"
+      - ".github/workflows/typescript-ci.yml"
+  pull_request:
+    paths:
+      - "typescript/**"
+      - ".github/workflows/typescript-ci.yml"
+
+defaults:
+  run:
+    working-directory: typescript
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: typescript/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Regenerate ABIs and verify no drift
+        # The generated src/abis/*.ts must stay in sync with the shared
+        # repo-root abis/*.json. A diff here means someone edited a generated
+        # file by hand or changed an ABI without re-running codegen.
+        run: |
+          pnpm run codegen
+          git diff --exit-code src/abis
+
+      - name: Typecheck (src)
+        run: pnpm run typecheck
+
+      - name: Typecheck (examples)
+        run: pnpm run typecheck:examples
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Test
+        run: pnpm run test
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Offline examples (self-contained, no network)
+        run: |
+          pnpm run example:x402
+          pnpm run example:security
