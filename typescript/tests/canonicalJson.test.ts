@@ -3,7 +3,7 @@ import {
   canonicalJson,
   keccakOfCanonicalJson,
   keccakOfText,
-} from "../src/core/canonicalJson";
+} from "../src/core/canonicalJson.js";
 
 describe("canonicalJson", () => {
   it("sorts keys recursively and compacts", () => {

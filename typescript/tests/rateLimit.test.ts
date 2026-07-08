@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { BNBAgentError } from "../src/errors";
+import { BNBAgentError } from "../src/errors.js";
 import {
   RateLimitExceeded,
   SlidingWindowLimiter,
-} from "../src/utils/rateLimit";
+} from "../src/utils/rateLimit.js";
 
 describe("SlidingWindowLimiter", () => {
   it("allows up to the limit", () => {

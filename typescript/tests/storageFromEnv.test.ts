@@ -6,8 +6,8 @@
 
 import { existsSync, rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { IPFSStorageProvider } from "../src/storage/ipfsStorageProvider";
-import { LocalStorageProvider } from "../src/storage/localStorageProvider";
+import { IPFSStorageProvider } from "../src/storage/ipfsStorageProvider.js";
+import { LocalStorageProvider } from "../src/storage/localStorageProvider.js";
 
 /** Reach into a provider's "private" (TS-only, not `#`) fields for assertions. */
 function internals<T extends object>(provider: T): Record<string, unknown> {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fromRaw, toRaw } from "../src/utils/amounts";
+import { fromRaw, toRaw } from "../src/utils/amounts.js";
 
 describe("toRaw", () => {
   it("converts a string decimal", () => {

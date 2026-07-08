@@ -11,7 +11,7 @@ import {
   RpcRangeLimitError,
   StorageError,
   TransactionPendingError,
-} from "../src/errors";
+} from "../src/errors.js";
 
 describe("Error Hierarchy", () => {
   it("StorageError is instance of BNBAgentError", () => {

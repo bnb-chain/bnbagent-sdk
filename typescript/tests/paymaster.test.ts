@@ -1,6 +1,6 @@
 import { getAddress } from "viem";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Paymaster, toAddressHex, toHex } from "../src/core/paymaster";
+import { Paymaster, toAddressHex, toHex } from "../src/core/paymaster.js";
 
 const PAYMASTER_URL = "https://paymaster.example.com";
 const ADDRESS = "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18";

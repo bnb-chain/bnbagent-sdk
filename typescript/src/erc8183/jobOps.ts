@@ -215,14 +215,22 @@ export function excErrorFields(exc: unknown): Record<string, unknown> {
 /** Generic result bag returned by every `ERC8183JobOps` method. Wire keys
  * stay `snake_case` (`error_code`, `tx_hash`, `retryable`, `rpc_error_code`)
  * so the shape survives JSON transport unchanged; everything else is
- * open-ended (`jobs`, `job`, `warnings`, `deliverable`, ...). */
+ * open-ended (`jobs`, `job`, `warnings`, `deliverable`, ...).
+ *
+ * `txHash` (camelCase) is the success-path field — set by `submitResult` on
+ * a successful `submit`. `tx_hash` (snake_case) is a distinct field: the
+ * error-envelope key `excErrorFields` attaches to a `TransactionPendingError`
+ * failure (the wire-format field surfaced to callers on that failure path).
+ * Both are legal on the same `OpResult` type, on mutually exclusive
+ * success/failure branches; neither is declared as an explicit member below
+ * so both flow through the index signature. */
 export interface OpResult {
   success?: boolean;
   valid?: boolean;
   error?: string;
   error_code?: string;
   retryable?: boolean;
-  tx_hash?: string;
+  txHash?: string;
   [key: string]: unknown;
 }
 

@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { NONCE_ERROR_PATTERNS, NonceManager } from "../src/core/nonceManager";
+import {
+  NONCE_ERROR_PATTERNS,
+  NonceManager,
+} from "../src/core/nonceManager.js";
 
 const FAKE_ADDRESS = "0x1234567890123456789012345678901234567890";
 

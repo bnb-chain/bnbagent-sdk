@@ -6,8 +6,8 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { StorageError } from "../src/errors";
-import { IPFSStorageProvider } from "../src/storage/ipfsStorageProvider";
+import { StorageError } from "../src/errors.js";
+import { IPFSStorageProvider } from "../src/storage/ipfsStorageProvider.js";
 
 // Valid CIDv0 for tests (Qm + 44 base58 chars)
 const VALID_CID = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";

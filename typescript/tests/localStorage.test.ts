@@ -17,8 +17,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { StorageError } from "../src/errors";
-import { LocalStorageProvider } from "../src/storage/localStorageProvider";
+import { StorageError } from "../src/errors.js";
+import { LocalStorageProvider } from "../src/storage/localStorageProvider.js";
 
 let root: string;
 
