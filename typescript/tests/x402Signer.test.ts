@@ -210,7 +210,7 @@ describe("X402Signer — session budget", () => {
   });
 
   it("does not consume budget when the underlying wallet's policy rejects", async () => {
-    const badToken = `0x${"1".repeat(40)}`;
+    const badToken = `0x${"1".repeat(40)}` as `0x${string}`;
     const badSigner = new X402Signer(wallet, {
       maxValuePerCall: { [badToken]: 1_000_000n },
       sessionBudget: { [badToken]: 5_000_000n },

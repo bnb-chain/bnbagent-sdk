@@ -23,6 +23,7 @@
  */
 
 import {
+  type ContractFunctionName,
   type Hex,
   type TransactionRequestLegacy,
   decodeFunctionData,
@@ -126,9 +127,11 @@ function combinedReadHandler(results: Record<string, unknown>): MockHandler {
       optimisticPolicyAbi,
       erc20Abi,
     ]) {
-      let decoded: { functionName: string };
+      let decoded: { functionName: ContractFunctionName<typeof abi> };
       try {
-        decoded = decodeFunctionData({ abi, data }) as { functionName: string };
+        decoded = decodeFunctionData({ abi, data }) as {
+          functionName: ContractFunctionName<typeof abi>;
+        };
       } catch {
         continue;
       }
