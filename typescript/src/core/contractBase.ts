@@ -57,7 +57,7 @@ export interface DecodedEventLog {
   [key: string]: unknown;
 }
 
-const READ_ONLY_MESSAGE =
+export const READ_ONLY_MESSAGE =
   "wallet_provider is required for write operations (client is read-only)";
 
 /**

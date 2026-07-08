@@ -489,6 +489,42 @@ describe("sendTx: retry loop", () => {
     expect(sendRawCount(mock)).toBe(2);
   });
 
+  it("re-seeds the nonce on a 429 retry (no nonce gap)", async () => {
+    vi.useFakeTimers();
+    let attempt = 0;
+    let nonceReads = 0;
+    const { contract } = makeContract({
+      handlers: {
+        eth_getTransactionCount: () => {
+          nonceReads++;
+          return "0x5"; // pending nonce = 5, stable (tx never broadcast on attempt 1)
+        },
+        eth_sendRawTransaction: () => {
+          attempt++;
+          if (attempt === 1) {
+            throw new Error("429 Too Many Requests");
+          }
+          return FAKE_TX_HASH;
+        },
+      },
+    });
+    const promise = contract.callSendTx({
+      functionName: "setValue",
+      args: [1n],
+    });
+    let resolved = false;
+    promise.then(() => {
+      resolved = true;
+    });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(resolved).toBe(true);
+    // The rate-limit branch must reset the NonceManager so the second attempt
+    // re-seeds from chain (getTransactionCount called on BOTH attempts) and
+    // reuses nonce 5 instead of skipping to 6 — otherwise every retry burns a
+    // nonce and strands the account.
+    expect(nonceReads).toBe(2);
+  });
+
   it("an unrelated broadcast error (insufficient funds) throws immediately, once", async () => {
     const { contract, mock } = makeContract({
       handlers: {

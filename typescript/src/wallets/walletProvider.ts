@@ -19,6 +19,19 @@ import { UnsupportedWalletOperation } from "./errors.js";
 import type { ExecutionContext, IntentExecutor } from "./intents.js";
 import { LocalExecutor } from "./localExecutor.js";
 
+/**
+ * Input to {@link WalletProvider.signTransaction}.
+ *
+ * `chainId` is REQUIRED and load-bearing: EIP-155 replay protection depends
+ * on it being folded into the signature. viem's `TransactionRequestLegacy`
+ * types `chainId` as optional, so this intersection makes the requirement
+ * explicit at the interface — an implementer cannot silently omit it and
+ * produce a pre-EIP-155 replayable signature.
+ */
+export type SignableTransaction = TransactionRequestLegacy & {
+  chainId: number;
+};
+
 /** Result of {@link WalletProvider.signTransaction}. */
 export interface SignedTx {
   rawTransaction: `0x${string}`;
@@ -240,7 +253,7 @@ export abstract class WalletProvider {
    * The default throws {@link UnsupportedWalletOperation}; implementing this
    * method declares the `sign.transaction` capability.
    */
-  async signTransaction(tx: TransactionRequestLegacy): Promise<SignedTx> {
+  async signTransaction(tx: SignableTransaction): Promise<SignedTx> {
     void tx;
     throw new UnsupportedWalletOperation(SIGN_TRANSACTION, {
       reason: `the '${this.kind}' wallet does not implement raw-transaction signing`,

@@ -83,6 +83,21 @@ function ensureHexPrefix(h: string): string {
   return h.startsWith("0x") ? h : `0x${h}`;
 }
 
+/**
+ * Read a required string field, throwing if absent/wrong-typed — mirrors
+ * Python's `data["key"]` dict-subscript raising `KeyError`. `negotiate()`
+ * catches this and rejects with `AMBIGUOUS_TERMS`; without it a request
+ * missing `deliverables`/`task_description` would silently carry `undefined`
+ * and could still be quoted and signed over incomplete content.
+ */
+function requireString(data: Record<string, unknown>, key: string): string {
+  const value = data[key];
+  if (typeof value !== "string") {
+    throw new Error(`negotiation request missing required field: ${key}`);
+  }
+  return value;
+}
+
 // ---------------------------------------------------------------------------
 // TermSpecification
 // ---------------------------------------------------------------------------
@@ -148,8 +163,8 @@ export class TermSpecification {
 
   static fromDict(data: Record<string, unknown>): TermSpecification {
     return new TermSpecification({
-      deliverables: data.deliverables as string,
-      qualityStandards: data.quality_standards as string,
+      deliverables: requireString(data, "deliverables"),
+      qualityStandards: requireString(data, "quality_standards"),
       successCriteria: (data.success_criteria as string[] | undefined) ?? null,
       price: (data.price as string | undefined) ?? null,
       currency: (data.currency as string | undefined) ?? null,
@@ -233,7 +248,7 @@ export class NegotiationRequest {
 
   static fromDict(data: Record<string, unknown>): NegotiationRequest {
     return new NegotiationRequest({
-      taskDescription: data.task_description as string,
+      taskDescription: requireString(data, "task_description"),
       terms: TermSpecification.fromDict(data.terms as Record<string, unknown>),
       contextUrls: (data.context_urls as string[] | undefined) ?? null,
       requestId: (data.request_id as string | undefined) ?? null,

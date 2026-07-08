@@ -380,12 +380,18 @@ export async function sendSelfPayTx(
         continue;
       }
 
-      // Rate limit -> backoff and retry.
+      // Rate limit -> backoff and retry. The nonce allocated by getNonce()
+      // above was consumed locally but the tx was not broadcast (the 429
+      // surfaced at gas-price fetch / pre-flight / send), so reset the
+      // cache: the next getNonce() re-seeds from the chain's pending count
+      // and reuses that nonce instead of skipping it — otherwise every retry
+      // burns a nonce and leaves a permanent gap that strands the account.
       if (isRateLimitError(error) && attempt < MAX_RETRIES - 1) {
         const delaySeconds = RETRY_BASE_DELAY * 2 ** attempt;
         console.warn(
           `${logPrefix} Rate limited, retry ${attempt + 1}/${MAX_RETRIES} in ${delaySeconds.toFixed(1)}s`,
         );
+        nonceMgr.reset();
         await sleep(delaySeconds * 1000);
         continue;
       }

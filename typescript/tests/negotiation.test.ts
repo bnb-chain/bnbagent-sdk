@@ -680,6 +680,30 @@ describe("NegotiationHandler", () => {
     expect(result.response.reason_code).toBe(ReasonCode.AMBIGUOUS_TERMS);
   });
 
+  it("rejects a request whose terms omit deliverables (fromDict fails loud, not signed over undefined)", async () => {
+    const wallet = makeMockWallet();
+    const handler = makeHandler({ walletProvider: wallet, chainId: 97 });
+    // deliverables missing entirely — Python raises KeyError -> AMBIGUOUS_TERMS.
+    const result = await handler.negotiate({
+      task_description: "do a thing",
+      terms: { quality_standards: "accurate" },
+    });
+    expect(result.accepted).toBe(false);
+    expect(result.response.reason_code).toBe(ReasonCode.AMBIGUOUS_TERMS);
+    // Must NOT have produced a signature over incomplete content.
+    expect(result.providerSig).toBe("");
+    expect(wallet.signMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects a request missing task_description", async () => {
+    const handler = makeHandler();
+    const result = await handler.negotiate({
+      terms: { deliverables: "summary", quality_standards: "accurate" },
+    });
+    expect(result.accepted).toBe(false);
+    expect(result.response.reason_code).toBe(ReasonCode.AMBIGUOUS_TERMS);
+  });
+
   it("rejects with TASK_TOO_LONG when the description would overflow the cap", async () => {
     const handler = makeHandler();
     const result = await handler.negotiate({

@@ -342,6 +342,27 @@ describe("ERC8183JobOps.submitResult", () => {
     expect(client.submit).not.toHaveBeenCalled();
   });
 
+  it("rejects non-JSON-serializable metadata (bigint) as a PERMANENT error, not retryable", async () => {
+    const storage = new LocalStorageProvider(tmpDir);
+    const ops = await makeOps({
+      storage,
+      agentUrl: "http://agent.example/erc8183",
+    });
+    const client = injectClient(ops);
+    client.getJob.mockResolvedValue(makeJob());
+
+    // A bigint in metadata makes JSON.stringify/canonicalJson throw. It must
+    // be a permanent failure (no `retryable`), or a retry-driven caller loops
+    // forever.
+    const result = await ops.submitResult(1, "ok", {
+      budget: 1_000_000_000_000_000_000n,
+    });
+    expect(result.success).toBe(false);
+    expect(result.error_code).toBe("metadata_invalid");
+    expect(result.retryable).toBeUndefined();
+    expect(client.submit).not.toHaveBeenCalled();
+  });
+
   it("enforces the response_content size cap", async () => {
     process.env.ERC8183_MAX_RESPONSE_BYTES = "1024";
     const ops = await makeOps();
@@ -461,6 +482,24 @@ describe("ERC8183JobOps.submitResult", () => {
     const result = await ops.submitResult(1, "payload");
     expect(result.success).toBe(false);
     expect(result.error).toContain("ERC8183_AGENT_URL");
+  });
+});
+
+describe("ERC8183JobOps: result JSON-serializability", () => {
+  it("getJob result is JSON-serializable (bigint fields stringified, not raw bigint)", async () => {
+    const ops = await makeOps({ providerAddress: ME });
+    const client = injectClient(ops);
+    client.getJob.mockResolvedValue(
+      makeJob({ budget: 1_000_000_000_000_000_000n, expiredAt: 42n }),
+    );
+    const result = await ops.getJob(1);
+    expect(result.success).toBe(true);
+    // A serving layer must be able to JSON.stringify the result — a raw
+    // bigint would throw "Do not know how to serialize a BigInt".
+    expect(() => JSON.stringify(result)).not.toThrow();
+    expect(result.budget).toBe("1000000000000000000");
+    expect(result.expiredAt).toBe("42");
+    expect(typeof result.budget).toBe("string");
   });
 });
 
@@ -650,7 +689,8 @@ describe("ERC8183JobOps.getSubmittedJobs", () => {
     expect(result.success).toBe(true);
     const jobs = result.jobs as OpResult[];
     expect(jobs.map((j) => j.jobId)).toEqual([1]);
-    expect(jobs[0]?.submittedAt).toBe(111n);
+    // bigint fields are stringified for JSON transport.
+    expect(jobs[0]?.submittedAt).toBe("111");
   });
 
   it("carries a structured error envelope on scan failure", async () => {

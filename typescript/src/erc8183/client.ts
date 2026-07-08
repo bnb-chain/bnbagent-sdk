@@ -37,6 +37,7 @@ import { stringToHex } from "viem";
 import { type NetworkConfig, resolveNetwork } from "../config.js";
 import { canonicalJson } from "../core/canonicalJson.js";
 import { createPublicClientFor } from "../core/clients.js";
+import { READ_ONLY_MESSAGE } from "../core/contractBase.js";
 import { Paymaster } from "../core/paymaster.js";
 import { describeError } from "../core/txSender.js";
 import { MinimalERC20Client } from "../erc20/client.js";
@@ -424,7 +425,14 @@ export class ERC8183Client {
       return this.commerce.fund(jobId, amount);
     }
 
-    const owner = this.address ?? "";
+    // Guard the read-only path explicitly: without a wallet, `this.address`
+    // is null and the allowance read below would otherwise fail deep inside
+    // viem with a cryptic `getAddress("")` error instead of this clear
+    // message (the same one every write path raises).
+    if (this.address === null) {
+      throw new Error(READ_ONLY_MESSAGE);
+    }
+    const owner = this.address;
     const current = await this.tokenAllowance(owner, this.commerce.address);
     if (current < amount) {
       let floor: bigint;
