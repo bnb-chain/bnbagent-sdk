@@ -84,6 +84,37 @@ function plainMessage(exc: unknown): string {
  * mirrors Python's two independent lists). */
 const NET_ERR_KEYWORDS = ["timeout", "connection", "network", "rpc"];
 
+/**
+ * Depth-first walk of `exc` and its `.cause` chain (cycle-guarded, mirroring
+ * `isOpaqueRevert` in `txSender.ts`) looking for the first numeric `.code`
+ * property.
+ *
+ * Covers two shapes that both occur in production:
+ *  - a raw RPC-shaped payload thrown directly, `{ code, message }`
+ *    (e.g. web3.py-style `ValueError`s ported as plain objects); and
+ *  - a viem `Error` subclass with `.code` set on the instance itself, or
+ *    nested several `.cause` levels deep — viem wraps RPC failures as
+ *    `ContractFunctionExecutionError -> ... -> RpcRequestError`, and only
+ *    the innermost `RpcRequestError` carries the numeric JSON-RPC code.
+ */
+function findRpcErrorCode(exc: unknown): number | undefined {
+  let current: unknown = exc;
+  const seen = new Set<unknown>();
+  while (
+    current !== null &&
+    typeof current === "object" &&
+    !seen.has(current)
+  ) {
+    seen.add(current);
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === "number") {
+      return code;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
 /** Full transient-keyword list used by {@link excErrorFields}. */
 const TRANSIENT_ERROR_KEYWORDS = [
   "timeout",
@@ -139,7 +170,6 @@ export function excErrorFields(exc: unknown): Record<string, unknown> {
   }
 
   let message: string;
-  let rpcCode: number | undefined;
 
   if (
     exc !== null &&
@@ -152,15 +182,17 @@ export function excErrorFields(exc: unknown): Record<string, unknown> {
     // of a dict-repr / "[object Object]".
     const payload = exc as { code?: unknown; message: unknown };
     message = String(payload.message);
-    if (typeof payload.code === "number") {
-      rpcCode = payload.code;
-    }
   } else {
-    // Mirrors Python's `else: message = str(exc)` — rpc_error_code is only
-    // ever extracted from a dict-shaped payload, never from an arbitrary
-    // Error's own `.code` property.
+    // Mirrors Python's `else: message = str(exc)`.
     message = plainMessage(exc);
   }
+
+  // Unlike `message`, `rpc_error_code` extraction is NOT limited to the
+  // plain-object shape above: viem's `RpcRequestError` sets `.code` on an
+  // `Error` instance (often nested in `.cause`), and `callWithRetry`
+  // rethrows it unmodified — that is how every real RPC failure actually
+  // arrives here.
+  const rpcCode = findRpcErrorCode(exc);
 
   const lower = message.toLowerCase();
   let fields: Record<string, unknown>;

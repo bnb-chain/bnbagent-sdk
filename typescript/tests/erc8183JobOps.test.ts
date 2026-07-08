@@ -836,6 +836,24 @@ describe("excErrorFields", () => {
     expect(fields.rpc_error_code).toBe(-32005);
   });
 
+  it("extracts rpc_error_code from an Error instance's own .code (viem RpcRequestError shape)", () => {
+    const exc = Object.assign(new Error("boom"), { code: -32005 });
+    const fields = excErrorFields(exc);
+    expect(fields.rpc_error_code).toBe(-32005);
+  });
+
+  it("extracts rpc_error_code from a nested .cause chain (viem-style wrapped error)", () => {
+    const inner = Object.assign(new Error("inner"), { code: -32000 });
+    const outer = new Error("outer", { cause: inner });
+    const fields = excErrorFields(outer);
+    expect(fields.rpc_error_code).toBe(-32000);
+  });
+
+  it("omits rpc_error_code when no numeric .code exists anywhere in the chain", () => {
+    const fields = excErrorFields(new Error("plain failure"));
+    expect(fields).not.toHaveProperty("rpc_error_code");
+  });
+
   it("does not leak a URL embedded in a transport error", () => {
     const fields = excErrorFields(
       new Error(
