@@ -31,7 +31,6 @@ import { join } from "node:path";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
 import {
   type Hex,
-  type TransactionRequestLegacy,
   type TransactionSerializableLegacy,
   type TypedDataDomain,
   hashMessage,
@@ -50,7 +49,11 @@ import { SigningPolicy } from "../signing/policy.js";
 import { CALLS_ARBITRARY, PAYMASTER_SPONSOR } from "./capabilities.js";
 import { decryptKeystoreV3, encryptKeystoreV3 } from "./keystore.js";
 import type { KeystoreV3 } from "./keystore.js";
-import type { SignatureResult, SignedTx } from "./walletProvider.js";
+import type {
+  SignableTransaction,
+  SignatureResult,
+  SignedTx,
+} from "./walletProvider.js";
 import { WalletProvider } from "./walletProvider.js";
 
 const DEFAULT_WALLETS_DIR = join(homedir(), ".bnbagent", "wallets");
@@ -330,13 +333,11 @@ export class EVMWalletProvider extends WalletProvider {
   }
 
   /** Sign a legacy (gasPrice) transaction. */
-  override async signTransaction(
-    tx: TransactionRequestLegacy,
-  ): Promise<SignedTx> {
+  override async signTransaction(tx: SignableTransaction): Promise<SignedTx> {
     const account = this.#requireAccount();
-    // `TransactionRequestLegacy` (the base class's declared parameter type)
-    // omits `chainId` — callers pass it anyway for EIP-155 signing, mirroring
-    // `TransactionSerializableLegacy` (viem's actual signing input type).
+    // `SignableTransaction` carries the legacy fields + required chainId;
+    // widen to viem's `TransactionSerializableLegacy` (its signing input
+    // type) — the field shapes line up.
     const transaction = tx as unknown as TransactionSerializableLegacy;
     const rawTransaction = await account.signTransaction(transaction);
     const parsed = parseTransaction(rawTransaction) as {

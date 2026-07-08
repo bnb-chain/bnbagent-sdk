@@ -89,6 +89,14 @@ function getBlockList(): BlockList {
   bl.addSubnet("0.0.0.0", 8, "ipv4");
   bl.addSubnet("240.0.0.0", 4, "ipv4");
   bl.addAddress("255.255.255.255", "ipv4");
+  // IETF protocol assignments / benchmarking / documentation ranges that
+  // Python's `ipaddress.is_private`/`is_reserved` also refuse. Not normally
+  // internally routed, but included for parity with the Python SSRF guard.
+  bl.addSubnet("192.0.0.0", 24, "ipv4"); // IETF protocol assignments (covers 192.0.0.0/29, NAT64 discovery)
+  bl.addSubnet("192.0.2.0", 24, "ipv4"); // TEST-NET-1 (documentation)
+  bl.addSubnet("198.18.0.0", 15, "ipv4"); // network benchmarking
+  bl.addSubnet("198.51.100.0", 24, "ipv4"); // TEST-NET-2 (documentation)
+  bl.addSubnet("203.0.113.0", 24, "ipv4"); // TEST-NET-3 (documentation)
   // IPv6 loopback, unique-local, and link-local.
   bl.addAddress("::1", "ipv6");
   bl.addSubnet("fc00::", 7, "ipv6");
@@ -276,7 +284,9 @@ export interface GenerateAgentUriOpts {
   description: string;
   endpoints: AgentEndpoint[];
   image?: string | null;
-  agentId?: number | null;
+  /** On-chain agent id; accepts `bigint` and is coerced to a number (see
+   * {@link GenerateRegistrationFileOpts.agentId}). */
+  agentId?: number | bigint | null;
   supportedTrust?: string[] | null;
 }
 

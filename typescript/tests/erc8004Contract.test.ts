@@ -198,6 +198,39 @@ describe("registerAgent: agentId recovery", () => {
     );
     expect(result.agentId).toBeNull();
   });
+
+  it("ignores a same-topic0 Registered log from an UNRELATED contract and uses this contract's log", async () => {
+    // A bundled tx (multicall / AA-paymaster relay) whose receipt also
+    // carries a Registered log emitted by a different contract must not
+    // hijack the agentId — parseRegisteredAgentId filters by log.address.
+    const decoy = {
+      ...registeredLog(999n, "data:application/json;base64,eyJ4Ijo5fQ=="),
+      address: `0x${"11".repeat(20)}`, // NOT this contract's address
+    };
+    const real = registeredLog(7n, "data:application/json;base64,eyJ4IjoxfQ==");
+    const { contract } = makeContract({
+      eth_getTransactionReceipt: () => ({
+        status: "0x1",
+        blockNumber: "0x1",
+        blockHash: `0x${"aa".repeat(32)}`,
+        transactionHash: FAKE_TX_HASH,
+        transactionIndex: "0x0",
+        from: WALLET_ADDRESS,
+        to: CONTRACT_ADDRESS,
+        cumulativeGasUsed: "0x1e8480",
+        gasUsed: "0x186a0",
+        contractAddress: null,
+        logs: [decoy, real], // decoy first — must be skipped
+        logsBloom: `0x${"0".repeat(512)}`,
+        effectiveGasPrice: "0x3b9aca00",
+      }),
+    });
+
+    const result = await contract.registerAgent(
+      "data:application/json;base64,eyJ4IjoxfQ==",
+    );
+    expect(result.agentId).toBe(7);
+  });
 });
 
 describe("registerAgent: preflight revert", () => {

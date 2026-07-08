@@ -140,6 +140,7 @@ export const ERR_WRONG_STATUS = "wrong_status"; // job not in the required statu
 export const ERR_DESCRIPTION_INVALID = "description_invalid"; // malformed description (fail closed)
 export const ERR_SUBMIT_DEADLINE_PASSED = "submit_deadline_passed"; // past expiredAt - disputeWindow
 export const ERR_PAYLOAD_TOO_LARGE = "payload_too_large"; // response/metadata size cap hit
+export const ERR_METADATA_INVALID = "metadata_invalid"; // metadata not JSON-serializable (e.g. a bigint) — permanent
 export const ERR_INTERNAL = "internal_error"; // unexpected failure (retryable)
 export const ERR_CHAIN_UNAVAILABLE = "chain_unavailable"; // transient chain/RPC trouble (retryable)
 export const ERR_TX_PENDING = "tx_pending"; // tx broadcast but unconfirmed (NOT retryable)
@@ -407,10 +408,24 @@ export class ERC8183JobOps {
       }
 
       if (metadata !== undefined) {
+        // Validate serializability up front: a bigint (or other non-JSON
+        // value) in caller-supplied metadata makes both this size check and
+        // the manifest hash / storage upload below throw. That is a
+        // deterministic, permanent input error — return it WITHOUT
+        // `retryable` so a retry-driven caller doesn't loop forever (the
+        // catch-all below would otherwise misclassify it as retryable).
+        let metaJson: string;
+        try {
+          metaJson = JSON.stringify(metadata);
+        } catch (error) {
+          return {
+            success: false,
+            error: `metadata is not JSON-serializable (e.g. contains a bigint — stringify values first): ${describeError(error)}`,
+            error_code: ERR_METADATA_INVALID,
+          };
+        }
         const maxMeta = maxMetadataBytes();
-        const actualMeta = new TextEncoder().encode(
-          JSON.stringify(metadata),
-        ).length;
+        const actualMeta = new TextEncoder().encode(metaJson).length;
         if (actualMeta > maxMeta) {
           return {
             success: false,
@@ -481,9 +496,13 @@ export class ERC8183JobOps {
         provider: job.provider,
         evaluator: job.evaluator,
         description: job.description,
-        budget: job.budget,
-        expiredAt: job.expiredAt,
-        submittedAt: job.submittedAt,
+        // bigint fields are stringified so the result is JSON-serializable
+        // for a serving layer (JSON.stringify throws on a raw bigint);
+        // callers doing arithmetic re-parse with BigInt(). Matches the
+        // service_price treatment in verifyJob.
+        budget: job.budget.toString(),
+        expiredAt: job.expiredAt.toString(),
+        submittedAt: job.submittedAt.toString(),
         status: job.status,
         hook: job.hook,
         deliverable: job.deliverable,
@@ -643,7 +662,10 @@ export class ERC8183JobOps {
       }
 
       const now = BigInt(Math.floor(Date.now() / 1000));
-      const expiredAt = (jobResult.expiredAt as bigint | undefined) ?? 0n;
+      // getJob stringifies bigint fields for transport; re-parse for compare.
+      const expiredAt = BigInt(
+        (jobResult.expiredAt as string | undefined) ?? "0",
+      );
       if (expiredAt <= now) {
         return {
           valid: false,
@@ -695,7 +717,7 @@ export class ERC8183JobOps {
       }
 
       if (this.servicePrice > 0n) {
-        const budget = (jobResult.budget as bigint | undefined) ?? 0n;
+        const budget = BigInt((jobResult.budget as string | undefined) ?? "0");
         if (budget < this.servicePrice) {
           const decimals = await client.tokenDecimals();
           return {
@@ -776,8 +798,9 @@ export class ERC8183JobOps {
           provider: job.provider,
           evaluator: job.evaluator,
           description: job.description,
-          budget: job.budget,
-          expiredAt: job.expiredAt,
+          // Stringified for JSON transport (see getJob).
+          budget: job.budget.toString(),
+          expiredAt: job.expiredAt.toString(),
           status: job.status,
           hook: job.hook,
           deliverable: job.deliverable,
@@ -893,9 +916,10 @@ export class ERC8183JobOps {
             provider: j.provider,
             evaluator: j.evaluator,
             description: j.description,
-            budget: j.budget,
-            expiredAt: j.expiredAt,
-            submittedAt: j.submittedAt,
+            // Stringified for JSON transport (see getJob).
+            budget: j.budget.toString(),
+            expiredAt: j.expiredAt.toString(),
+            submittedAt: j.submittedAt.toString(),
             status: j.status,
             hook: j.hook,
             deliverable: j.deliverable,
@@ -1018,7 +1042,10 @@ export async function fundedJobWatcher(
           continue; // transient read error — keep for next tick
         }
         const status = fresh.status as JobStatus;
-        const expiredAt = (fresh.expiredAt as bigint | undefined) ?? 0n;
+        // getJob stringifies bigint fields for transport; re-parse to compare.
+        const expiredAt = BigInt(
+          (fresh.expiredAt as string | undefined) ?? "0",
+        );
         if (
           status !== JobStatus.FUNDED ||
           expiredAt <= BigInt(Math.floor(Date.now() / 1000))

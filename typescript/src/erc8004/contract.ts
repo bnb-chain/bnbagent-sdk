@@ -110,11 +110,23 @@ export class ContractInterface extends ContractBase {
    * Try to recover the `agentId` assigned by a `register` call from the
    * `Registered` event in the transaction's logs. Returns `null` if no log
    * decodes as `Registered`.
+   *
+   * Filters by `log.address` and re-checks `decoded.eventName` for the same
+   * reason `CommerceClient.parseJobCreatedId` does: viem's `decodeEventLog`
+   * is not bound to a contract instance (unlike web3.py's
+   * `process_receipt`), so without the address filter a same-topic0 log
+   * emitted by an UNRELATED contract in the same receipt (e.g. a bundled
+   * multicall or AA-paymaster relay) could be decoded and its `agentId`
+   * returned — silently binding the agent to the wrong on-chain token id.
    */
   private parseRegisteredAgentId(
     logs: TransactionReceipt["logs"],
   ): number | null {
+    const address = this.address.toLowerCase();
     for (const log of logs) {
+      if (log.address.toLowerCase() !== address) {
+        continue;
+      }
       try {
         const decoded = decodeEventLog({
           abi: identityRegistryAbi,
@@ -122,6 +134,9 @@ export class ContractInterface extends ContractBase {
           data: log.data,
           topics: log.topics,
         });
+        if (decoded.eventName !== "Registered") {
+          continue;
+        }
         const agentId = (decoded.args as { agentId?: bigint }).agentId;
         if (agentId !== undefined) {
           return Number(agentId);

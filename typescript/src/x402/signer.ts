@@ -160,13 +160,24 @@ export class X402Signer {
    * @throws {X402BudgetExhaustedError} The session budget would be
    *   exceeded.
    * @throws {X402PolicyError} Wraps an underlying `PolicyViolation` from
-   *   the wallet's `SigningPolicy`.
+   *   the wallet's `SigningPolicy`, or a malformed/missing
+   *   `domain.verifyingContract`.
+   * @throws {X402AmountExceededError} `message.value` is not a valid integer
+   *   amount, or exceeds the per-call `maxValuePerCall` for this token.
    */
   async signPayment(opts: SignPaymentOptions): Promise<SignatureResult> {
     const { domain, types, message, expectedTo } = opts;
-    const verifying = toChecksumAddress(
-      domain.verifyingContract as `0x${string}`,
-    );
+    // A malformed/missing verifyingContract would otherwise throw a raw viem
+    // InvalidAddressError, escaping the documented X402 error contract.
+    let verifying: `0x${string}`;
+    try {
+      verifying = toChecksumAddress(domain.verifyingContract as `0x${string}`);
+    } catch (e) {
+      throw new X402PolicyError(
+        `invalid or missing verifyingContract in EIP-712 domain: ${JSON.stringify(domain.verifyingContract)}`,
+        { cause: e },
+      );
+    }
 
     // ── L0 recipient (cheapest check, fail fast) ────────────────────────
     const msgTo = message.to;
@@ -182,7 +193,17 @@ export class X402Signer {
     }
 
     // ── L1 per-call value cap ────────────────────────────────────────────
-    const value = BigInt((message.value ?? 0) as bigint | number | string);
+    // BigInt() throws a raw RangeError/SyntaxError on a float or non-numeric
+    // value; surface it as a documented X402 error instead.
+    let value: bigint;
+    try {
+      value = BigInt((message.value ?? 0) as bigint | number | string);
+    } catch (e) {
+      throw new X402AmountExceededError(
+        `message.value is not a valid integer amount: ${JSON.stringify(message.value)}`,
+        { cause: e },
+      );
+    }
     const cap = this.#maxValue.get(verifying);
     if (cap !== undefined && value > cap) {
       throw new X402AmountExceededError(

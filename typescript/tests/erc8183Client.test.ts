@@ -243,6 +243,13 @@ describe("ERC8183Client.create", () => {
     expect(client.address).toBeNull();
   });
 
+  it("fund() on a read-only client throws the clear wallet-required message (not a cryptic viem error)", async () => {
+    const { client } = await buildClient({});
+    await expect(client.fund(1n, 5_000n)).rejects.toThrow(
+      /wallet_provider is required for write operations \(client is read-only\)/,
+    );
+  });
+
   it("rejects a network missing a required ERC-8183 contract address", async () => {
     await expect(
       buildClient({ network: fakeNetwork({ commerceContract: "" }) }),

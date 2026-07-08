@@ -16,7 +16,14 @@ export interface GenerateRegistrationFileOpts {
   description: string;
   endpoints: Array<AgentEndpoint | Record<string, unknown>>;
   image?: string | null;
-  agentId?: number | null;
+  /**
+   * On-chain agent id. Accepts `bigint` (viem decodes uint256 token ids as
+   * bigint) and is coerced to a JSON-serializable number — `canonicalJson`
+   * cannot serialize a bigint. ERC-8004 token ids are sequential, so the
+   * `Number()` coercion is safe in practice; a value above 2^53 would lose
+   * precision.
+   */
+  agentId?: number | bigint | null;
   identityRegistry?: string | null;
   chainId?: number | null;
   supportedTrust?: string[] | null;
@@ -84,7 +91,9 @@ export const AgentURIGenerator = {
       chainId !== undefined
     ) {
       registrations.push({
-        agentId,
+        // Coerce bigint → number so the registration file stays
+        // canonicalJson-serializable (JSON.stringify throws on bigint).
+        agentId: typeof agentId === "bigint" ? Number(agentId) : agentId,
         agentRegistry: `eip155:${chainId}:${identityRegistry}`,
       });
     }

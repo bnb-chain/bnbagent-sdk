@@ -91,7 +91,7 @@ vi.mock("node:https", async (importOriginal) => {
 });
 
 // Likewise for `dns.lookup`: default to the real resolver (IP literals
-// like "203.0.113.5" resolve instantly with no network I/O) so tests that
+// like "93.184.216.5" resolve instantly with no network I/O) so tests that
 // don't care about DNS keep working unmodified; SSRF-guard tests below
 // override the answer per-call.
 vi.mock("node:dns/promises", async (importOriginal) => {
@@ -596,7 +596,7 @@ describe("ERC8004Agent.parseAgentUri: SSRF guard (http/https path)", () => {
         ],
       });
       const data = await ERC8004Agent.parseAgentUri(
-        "http://203.0.113.5/agent.json",
+        "http://93.184.216.5/agent.json",
       );
       expect(data?.name).toBe("Test Agent");
       expect(data?.description).toBe("Test Description");
@@ -608,7 +608,7 @@ describe("ERC8004Agent.parseAgentUri: SSRF guard (http/https path)", () => {
         chunks: ["x".repeat(10)],
       });
       const data = await ERC8004Agent.parseAgentUri(
-        "http://203.0.113.5/agent.json",
+        "http://93.184.216.5/agent.json",
       );
       expect(data).toBeNull();
     });
@@ -619,7 +619,7 @@ describe("ERC8004Agent.parseAgentUri: SSRF guard (http/https path)", () => {
         chunks: ["x".repeat(oneMb + 1)],
       });
       const data = await ERC8004Agent.parseAgentUri(
-        "http://203.0.113.5/agent.json",
+        "http://93.184.216.5/agent.json",
       );
       expect(data).toBeNull();
     });
@@ -627,7 +627,7 @@ describe("ERC8004Agent.parseAgentUri: SSRF guard (http/https path)", () => {
     it("returns null on a non-2xx status", async () => {
       mockHttpResponse({ status: 404, chunks: ["not found"] });
       const data = await ERC8004Agent.parseAgentUri(
-        "http://203.0.113.5/agent.json",
+        "http://93.184.216.5/agent.json",
       );
       expect(data).toBeNull();
     });
@@ -637,7 +637,7 @@ describe("ERC8004Agent.parseAgentUri: SSRF guard (http/https path)", () => {
         chunks: [JSON.stringify({ name: "Test Agent" })],
       });
       const data = await ERC8004Agent.parseAgentUri(
-        "http://203.0.113.5/agent.json",
+        "http://93.184.216.5/agent.json",
       );
       expect(data?.name).toBe("Test Agent");
       const options = captured.capturedOptions;
@@ -646,9 +646,9 @@ describe("ERC8004Agent.parseAgentUri: SSRF guard (http/https path)", () => {
       // mainly pins down the shape of the options object (host + Host
       // header present, no servername) that the HTTPS assertions below
       // then contrast against.
-      expect(options?.host).toBe("203.0.113.5");
+      expect(options?.host).toBe("93.184.216.5");
       expect((options?.headers as Record<string, string>)?.Host).toBe(
-        "203.0.113.5",
+        "93.184.216.5",
       );
       expect(options?.servername).toBeUndefined();
       expect(httpsRequestMock).not.toHaveBeenCalled();
@@ -675,7 +675,7 @@ describe("ERC8004Agent.parseAgentUri: SSRF guard (http/https path)", () => {
       // return a known-public address so we can assert exactly what socket
       // target the SSRF guard connects to.
       dnsLookupMock.mockResolvedValueOnce([
-        { address: "203.0.113.9", family: 4 },
+        { address: "93.184.216.9", family: 4 },
       ]);
       const captured = mockHttpsResponse({
         chunks: [JSON.stringify({ name: "HTTPS Agent" })],
@@ -694,7 +694,7 @@ describe("ERC8004Agent.parseAgentUri: SSRF guard (http/https path)", () => {
       expect(options).toBeDefined();
       // The socket must dial the resolved IP, never the original hostname
       // (that's what closes the DNS-rebind window between check and use).
-      expect(options?.host).toBe("203.0.113.9");
+      expect(options?.host).toBe("93.184.216.9");
       expect(options?.host).not.toBe("agent.example");
       // ... but TLS server-name/cert-hostname validation and the HTTP
       // Host header must still carry the *original* hostname, or the
@@ -714,7 +714,7 @@ describe("ERC8004Agent.parseAgentUri: SSRF guard (http/https path)", () => {
 
     it("proceeds to the exact resolved IP when dns.lookup answers with a public address", async () => {
       dnsLookupMock.mockResolvedValueOnce([
-        { address: "203.0.113.20", family: 4 },
+        { address: "93.184.216.20", family: 4 },
       ]);
       const captured = mockTransportResponse(httpRequestMock, {
         chunks: [JSON.stringify({ name: "Public Agent" })],
@@ -725,7 +725,7 @@ describe("ERC8004Agent.parseAgentUri: SSRF guard (http/https path)", () => {
       );
 
       expect(data?.name).toBe("Public Agent");
-      expect(captured.capturedOptions?.host).toBe("203.0.113.20");
+      expect(captured.capturedOptions?.host).toBe("93.184.216.20");
     });
 
     it("rejects and makes no request when dns.lookup answers with a private address (rebind attempt)", async () => {
@@ -742,7 +742,7 @@ describe("ERC8004Agent.parseAgentUri: SSRF guard (http/https path)", () => {
 
     it("rejects and makes no request when ANY of multiple dns.lookup answers is private (multi-answer defense-in-depth)", async () => {
       dnsLookupMock.mockResolvedValueOnce([
-        { address: "203.0.113.30", family: 4 },
+        { address: "93.184.216.30", family: 4 },
         { address: "10.0.0.5", family: 4 },
       ]);
 
@@ -754,5 +754,23 @@ describe("ERC8004Agent.parseAgentUri: SSRF guard (http/https path)", () => {
       expect(httpRequestMock).not.toHaveBeenCalled();
       expect(httpsRequestMock).not.toHaveBeenCalled();
     });
+
+    it.each([
+      ["192.0.2.1", "TEST-NET-1"],
+      ["198.18.0.1", "benchmarking"],
+      ["198.51.100.1", "TEST-NET-2"],
+      ["203.0.113.1", "TEST-NET-3"],
+    ])(
+      "rejects a resolved IP in special-use range %s (%s), matching Python's is_reserved",
+      async (ip) => {
+        dnsLookupMock.mockResolvedValueOnce([{ address: ip, family: 4 }]);
+        const data = await ERC8004Agent.parseAgentUri(
+          "http://reserved-range-host.example/agent.json",
+        );
+        expect(data).toBeNull();
+        expect(httpRequestMock).not.toHaveBeenCalled();
+        expect(httpsRequestMock).not.toHaveBeenCalled();
+      },
+    );
   });
 });

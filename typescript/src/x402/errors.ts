@@ -33,10 +33,14 @@ export class X402RecipientMismatchError extends X402SignerError {
   }
 }
 
-/** `message.value` exceeded the per-call `maxValuePerCall` for this token. */
+/**
+ * `message.value` exceeded the per-call `maxValuePerCall` for this token, or
+ * was not a valid integer amount. Forwards `cause` so a malformed-value
+ * parse error can be chained.
+ */
 export class X402AmountExceededError extends X402SignerError {
-  constructor(message?: string) {
-    super(message);
+  constructor(message?: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = "X402AmountExceededError";
   }
 }
