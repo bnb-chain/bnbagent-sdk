@@ -1,4 +1,4 @@
-# @bnb-chain/bnbagent
+# @bnbagent/sdk
 
 TypeScript toolkit for building on-chain AI agents on BNB Chain: ERC-8004
 identity, the ERC-8183 agentic-commerce protocol (escrow + evaluation +
@@ -14,9 +14,9 @@ README covers the TypeScript-specific surface and quickstart.
 ## Install
 
 ```bash
-pnpm add @bnb-chain/bnbagent
+pnpm add @bnbagent/sdk
 # or
-npm install @bnb-chain/bnbagent
+npm install @bnbagent/sdk
 ```
 
 Requires Node.js >= 20. The package ships both ESM (`import`) and CommonJS
@@ -30,17 +30,17 @@ module's full surface):
 
 ```ts
 // Tier 1 — the essentials
-import { ERC8183Client, EVMWalletProvider, JobStatus } from "@bnb-chain/bnbagent";
+import { ERC8183Client, EVMWalletProvider, JobStatus } from "@bnbagent/sdk";
 
 // Tier 2 — full module surface, imported by subpath
-import { ERC8183JobOps, fundedJobWatcher, CommerceClient } from "@bnb-chain/bnbagent/erc8183";
-import { ERC8004Agent, AgentURIGenerator } from "@bnb-chain/bnbagent/erc8004";
-import { X402Signer, SessionBudgetTracker } from "@bnb-chain/bnbagent/x402";
-import { LocalStorageProvider, IPFSStorageProvider } from "@bnb-chain/bnbagent/storage";
-import { LocalExecutor, UnsupportedWalletOperation } from "@bnb-chain/bnbagent/wallets";
-import { SigningPolicy, check } from "@bnb-chain/bnbagent/signing";
-import { getAddress, BNB_CHAIN_ADDRESSES } from "@bnb-chain/bnbagent/networks";
-import { SlidingWindowLimiter, RateLimitExceeded } from "@bnb-chain/bnbagent/utils";
+import { ERC8183JobOps, fundedJobWatcher, CommerceClient } from "@bnbagent/sdk/erc8183";
+import { ERC8004Agent, AgentURIGenerator } from "@bnbagent/sdk/erc8004";
+import { X402Signer, SessionBudgetTracker } from "@bnbagent/sdk/x402";
+import { LocalStorageProvider, IPFSStorageProvider } from "@bnbagent/sdk/storage";
+import { LocalExecutor, UnsupportedWalletOperation } from "@bnbagent/sdk/wallets";
+import { SigningPolicy, check } from "@bnbagent/sdk/signing";
+import { getAddress, BNB_CHAIN_ADDRESSES } from "@bnbagent/sdk/networks";
+import { SlidingWindowLimiter, RateLimitExceeded } from "@bnbagent/sdk/utils";
 ```
 
 Subpaths available: `./erc8004`, `./erc8183`, `./x402`, `./storage`,
@@ -61,7 +61,7 @@ and — once the provider submits — settles the job (permissionless: it just
 pulls the policy's verdict and applies it on-chain).
 
 ```ts
-import { loadEnv, EVMWalletProvider, ERC8183Client, JobStatus } from "@bnb-chain/bnbagent";
+import { loadEnv, EVMWalletProvider, ERC8183Client, JobStatus } from "@bnbagent/sdk";
 
 loadEnv(); // opt-in .env / .env.local loading
 
@@ -118,9 +118,9 @@ is a signer-free polling loop — it only *detects* funded jobs, so the
 callback decides what to do (including delegating signing elsewhere).
 
 ```ts
-import { EVMWalletProvider } from "@bnb-chain/bnbagent";
-import { ERC8183JobOps, fundedJobWatcher } from "@bnb-chain/bnbagent/erc8183";
-import { LocalStorageProvider } from "@bnb-chain/bnbagent/storage";
+import { EVMWalletProvider } from "@bnbagent/sdk";
+import { ERC8183JobOps, fundedJobWatcher } from "@bnbagent/sdk/erc8183";
+import { LocalStorageProvider } from "@bnbagent/sdk/storage";
 
 const wallet = new EVMWalletProvider({ password: process.env.WALLET_PASSWORD! });
 
@@ -157,7 +157,7 @@ await fundedJobWatcher(
 
 ## Environment variables
 
-None of these are read automatically — call `loadEnv()` (from `@bnb-chain/bnbagent`)
+None of these are read automatically — call `loadEnv()` (from `@bnbagent/sdk`)
 at your entrypoint to load `.env.local` then `.env`, or set them however your
 deployment normally injects environment variables. See [`.env.example`](../.env.example)
 at the repo root for the authoritative, fully-commented reference.

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build `@bnb-chain/bnbagent` under `typescript/` with full feature parity to `python/bnbagent` (TWAK excluded), on viem.
+**Goal:** Build `@bnbagent/sdk` under `typescript/` with full feature parity to `python/bnbagent` (TWAK excluded), on viem.
 
 **Architecture:** Same layering as Python — protocols (erc8004/erc8183/x402/signing) over wallets/storage/core/utils; arrows point downward. Single npm package with subpath exports mirroring Python Tier 1/Tier 2. All chain I/O through viem `PublicClient` (reads) + wallet-provider signing (writes). Tests mock the chain with a custom viem transport — no live RPC in CI.
 
@@ -13,7 +13,7 @@
 
 ## Global Constraints
 
-- Package name `@bnb-chain/bnbagent`; Node `>=20`; ESM + CJS dual output via tsup.
+- Package name `@bnbagent/sdk`; Node `>=20`; ESM + CJS dual output via tsup.
 - Out of scope: TWAK family (`twak_provider`, `twak_custody`, `x402/twak.py`, twak examples), MPC stub, browser support, serving surfaces (`agent-server`/`a2a-agent`), `sync_utils.upload_sync` (TS is async-native).
 - All env var names identical to Python (`RPC_URL`, `RPC_URL_BSC_TESTNET`, `ERC8183_COMMERCE_ADDRESS`, `STORAGE_API_KEY`, `BNBAGENT_MIN_GAS_PRICE_WEI`, ...). Empty-string env values ≡ unset.
 - All network constants, contract addresses, retry counts, timeouts, gas floors copied verbatim from Python (each task lists them).
@@ -59,7 +59,7 @@ Test fixtures mirror `python/tests/conftest.py`: `FAKE_ADDRESS = "0x742d35Cc6634
 
 ```json
 {
-  "name": "@bnb-chain/bnbagent",
+  "name": "@bnbagent/sdk",
   "version": "0.1.0",
   "type": "module",
   "engines": { "node": ">=20" },
@@ -129,7 +129,7 @@ writeFileSync(join(OUT_DIR, "index.ts"),
 
 - [ ] **Step 3: Write failing test** (`tests/abis.test.ts`): imports all five generated ABIs, asserts each is a non-empty array and `agenticCommerceAbi` contains a `createJob` function entry.
 - [ ] **Step 4: Run** `cd typescript && pnpm install && pnpm codegen && pnpm test` → PASS; `pnpm build` → dist emitted.
-- [ ] **Step 5: Commit** `git add typescript && git commit -m "feat(ts): scaffold @bnb-chain/bnbagent package with ABI codegen"`
+- [ ] **Step 5: Commit** `git add typescript && git commit -m "feat(ts): scaffold @bnbagent/sdk package with ABI codegen"`
 
 ---
 

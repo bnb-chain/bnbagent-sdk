@@ -1,7 +1,7 @@
 /**
  * BNBAgent SDK — TypeScript toolkit for building on-chain AI agents on BNB Chain.
  *
- * Tier 1 (public API — available via `import { ... } from "@bnb-chain/bnbagent"`):
+ * Tier 1 (public API — available via `import { ... } from "@bnbagent/sdk"`):
  *     NetworkConfig, NETWORKS, resolveNetwork
  *     BNBAgentError, ContractError, StorageError, ConfigurationError,
  *     ABILoadError, NetworkError, RpcRangeLimitError, JobError,
@@ -16,14 +16,14 @@
  *     Paymaster, NonceManager, SCAN_API_URL
  *
  * Tier 2 (import from subpath — full package surface):
- *     import { CommerceClient, RouterClient, PolicyClient, ERC8183JobOps, fundedJobWatcher } from "@bnb-chain/bnbagent/erc8183";
- *     import { AgentURIGenerator, ContractInterface, getErc8004Config } from "@bnb-chain/bnbagent/erc8004";
- *     import { SessionBudgetTracker, X402SignerError } from "@bnb-chain/bnbagent/x402";
- *     import { LocalStorageProvider, IPFSStorageProvider } from "@bnb-chain/bnbagent/storage";
- *     import { LocalExecutor, UnsupportedWalletOperation } from "@bnb-chain/bnbagent/wallets";
- *     import { check, EIP3009_TYPES } from "@bnb-chain/bnbagent/signing";
- *     import { getAddress, BNB_CHAIN_ADDRESSES } from "@bnb-chain/bnbagent/networks";
- *     import { SlidingWindowLimiter, RateLimitExceeded } from "@bnb-chain/bnbagent/utils";
+ *     import { CommerceClient, RouterClient, PolicyClient, ERC8183JobOps, fundedJobWatcher } from "@bnbagent/sdk/erc8183";
+ *     import { AgentURIGenerator, ContractInterface, getErc8004Config } from "@bnbagent/sdk/erc8004";
+ *     import { SessionBudgetTracker, X402SignerError } from "@bnbagent/sdk/x402";
+ *     import { LocalStorageProvider, IPFSStorageProvider } from "@bnbagent/sdk/storage";
+ *     import { LocalExecutor, UnsupportedWalletOperation } from "@bnbagent/sdk/wallets";
+ *     import { check, EIP3009_TYPES } from "@bnbagent/sdk/signing";
+ *     import { getAddress, BNB_CHAIN_ADDRESSES } from "@bnbagent/sdk/networks";
+ *     import { SlidingWindowLimiter, RateLimitExceeded } from "@bnbagent/sdk/utils";
  *
  * Mirrors `python/bnbagent/__init__.py`'s Tier 1 surface; see
  * `ARCHITECTURE.md` for the full protocol/module reference.

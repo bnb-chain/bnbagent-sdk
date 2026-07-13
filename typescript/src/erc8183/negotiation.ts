@@ -844,7 +844,7 @@ export class NegotiationHandler {
    * contract.
    *
    * ```ts
-   * import { ERC8183Client, EVMWalletProvider, NegotiationHandler } from "@bnb-chain/bnbagent";
+   * import { ERC8183Client, EVMWalletProvider, NegotiationHandler } from "@bnbagent/sdk";
    *
    * const wallet = new EVMWalletProvider({ password: "...", privateKey: process.env.PRIVATE_KEY });
    * const erc8183 = await ERC8183Client.create({ walletProvider: wallet, network: "bsc-testnet" });

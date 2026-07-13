@@ -48,7 +48,7 @@ the Python SDK (`python/bnbagent`), excluding the TWAK wallet family.
 |---|---|---|
 | Runtime | Node.js ≥ 20 | Same positioning as Python SDK: server-side agent runtime |
 | Web3 library | viem | TS-first, strongest type inference from `as const` ABIs, tree-shakeable, ecosystem default |
-| Package shape | Single package `@bnb-chain/bnbagent`, subpath exports | Main entry = Tier 1 (mirrors `bnbagent/__init__.py`); `./erc8183`, `./x402`, `./storage`, … = Tier 2 |
+| Package shape | Single package `@bnbagent/sdk`, subpath exports | Main entry = Tier 1 (mirrors `bnbagent/__init__.py`); `./erc8183`, `./x402`, `./storage`, … = Tier 2 |
 | Module format | ESM + CJS dual output via tsup | Maximize consumer compatibility |
 | Tooling | pnpm, tsup, vitest, biome | biome plays the role ruff plays on the Python side |
 | API shape | Fully async | Idiomatic TS; semantics stay equal to Python's sync methods |
@@ -65,7 +65,7 @@ depend on lower layers, never the reverse:
 
 ```
 typescript/
-├── package.json          # @bnb-chain/bnbagent
+├── package.json          # @bnbagent/sdk
 ├── src/
 │   ├── index.ts          # Tier 1 API
 │   ├── config.ts         # NetworkConfig / NETWORKS / resolveNetwork + env overrides
