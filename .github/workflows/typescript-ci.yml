@@ -4,15 +4,21 @@ name: TypeScript SDK CI
 # trigger this workflow, and vice versa. Live-chain smoke tests are
 # deliberately NOT run here — a flaky public RPC must never gate a merge;
 # run `pnpm run smoke:testnet` manually or on a schedule instead.
+#
+# `abis/**` is included so that editing a shared repo-root ABI (WITHOUT touching
+# typescript/) still triggers the ABI-drift check below — otherwise a stale
+# src/abis/*.ts could slip through unnoticed.
 on:
   push:
     branches: [main]
     paths:
       - "typescript/**"
+      - "abis/**"
       - ".github/workflows/typescript-ci.yml"
   pull_request:
     paths:
       - "typescript/**"
+      - "abis/**"
       - ".github/workflows/typescript-ci.yml"
 
 defaults:
