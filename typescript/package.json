@@ -79,6 +79,9 @@
     "check": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build",
     "example:x402": "tsx examples/x402/buyerDemo.ts",
     "example:security": "tsx examples/security/e2e.ts",
+    "example:agent-server": "tsx examples/agent-server/src/service.ts",
+    "example:a2a-server": "tsx examples/a2a-agent/src/server.ts",
+    "example:a2a-buyer": "tsx examples/a2a-agent/scripts/buyer.ts",
     "smoke:testnet": "tsx examples/smoke/readonly.ts"
   },
   "dependencies": {

@@ -1,8 +1,8 @@
 # Examples
 
 Runnable ports of `python/examples/*` demonstrating the TypeScript SDK's
-public API. `twak/` and the serving examples (`agent-server/`, `a2a-agent/`)
-are application-layer and out of scope for this port.
+public API. `twak/` is out of scope for this port (the TypeScript SDK ships an
+EVM wallet provider only — no TWAK/CLI-delegated signer).
 
 Run everything with the local workspace's `tsx` (already a devDependency):
 
@@ -87,6 +87,27 @@ domain — no transaction is ever sent:
 
 Exits 0 and prints `ALL 6 ASSERTIONS PASSED` on success. Run this after any
 change to the signing layer.
+
+## agent-server/ — ERC-8183 HTTP serving reference (live testnet)
+
+`pnpm -C typescript run example:agent-server`
+
+The SDK's HTTP serving reference: a provider agent that picks up funded jobs
+(`fundedJobWatcher`), searches DuckDuckGo for blockchain news, and submits the
+deliverable on-chain. The whole serving layer is a ~100-line `node:http` router
+(`src/http.ts`) + a factory (`src/erc8183Server.ts`) — example code, not SDK
+API. Includes `scripts/register.ts` (ERC-8004) and `scripts/settle.ts`
+(operator settle). See `agent-server/README.md`.
+
+## a2a-agent/ — A2A-fronted ERC-8183 provider (live testnet)
+
+`pnpm -C typescript run example:a2a-server`
+
+The recommended agent-facing surface: an A2A agent card + JSON-RPC
+`message/send` over `node:http`, backed by `NegotiationHandler` (signed quotes)
+and `ERC8183Client` (job reads). `scripts/register.ts` registers the card URL
+on ERC-8004; `scripts/buyer.ts` discovers → quotes → optionally funds a job
+(`pnpm run example:a2a-buyer`). See `a2a-agent/README.md`.
 
 ## Typechecking
 
