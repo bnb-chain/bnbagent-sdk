@@ -1,0 +1,48 @@
+name: Python SDK CI
+
+# Scoped to the Python package: changes under typescript/ or docs/ do not trigger
+# this workflow. The shared repo-root abis/ is included because the Python SDK
+# loads those ABIs at runtime and vendors them at build time
+# (see bnbagent/core/abis.py + hatch_build.py).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "python/**"
+      - "abis/**"
+      - ".github/workflows/python-ci.yml"
+  pull_request:
+    paths:
+      - "python/**"
+      - "abis/**"
+      - ".github/workflows/python-ci.yml"
+
+defaults:
+  run:
+    working-directory: python
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Install dependencies
+        run: uv sync --extra dev --python ${{ matrix.python-version }}
+
+      - name: Run unit tests
+        run: uv run pytest

@@ -38,11 +38,14 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
+        with:
+          # packageManager lives in typescript/package.json, not the repo root
+          package_json_file: typescript/package.json
 
-      - name: Setup Node 20
+      - name: Setup Node 24
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           registry-url: https://registry.npmjs.org
           cache: pnpm
           cache-dependency-path: typescript/pnpm-lock.yaml
