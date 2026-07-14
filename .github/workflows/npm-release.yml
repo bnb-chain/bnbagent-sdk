@@ -1,0 +1,99 @@
+name: Release (npm)
+
+# Manual, lockstep release for the TypeScript SDK (typescript/ → @bnbagent/sdk),
+# driven by scripts/release.ts. Pick a bump; the workflow versions the package,
+# commits it via the GitHub API so the commit is SIGNED (Verified) — satisfies
+# the org "require signed commits" rule with no GPG/SSH key on the runner —
+# publishes to npm, then creates the tag + GitHub Release. Notes are generated
+# from Conventional Commits. See docs/releasing.md.
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump'
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+        required: true
+
+permissions:
+  contents: write # push the version commit + tag, create the GitHub Release
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: typescript
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + tags for the changelog range
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+          cache-dependency-path: typescript/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Verify ABIs are in sync
+        # Never ship stale generated ABIs: regenerate and fail on any drift from
+        # the committed src/abis (mirrors typescript-ci.yml).
+        run: |
+          pnpm run codegen
+          git diff --exit-code src/abis
+
+      - name: Check (typecheck + lint + test + build)
+        run: pnpm run check
+
+      - name: Prepare or resume version
+        id: v
+        run: pnpm exec tsx scripts/release.ts prepare ${{ inputs.bump }} >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes (from commits since last tag)
+        run: pnpm exec tsx scripts/release.ts changelog > RELEASE_NOTES.md
+
+      # Commit the bump via the GitHub API so the commit is GitHub-SIGNED
+      # (Verified) — satisfies the org "require signed commits" rule with no
+      # GPG/SSH key. A plain `git commit` on the runner is unsigned and would be
+      # rejected. createCommitOnBranch pushes the bumped package.json onto this
+      # branch. The tag is delayed until the npm package is available.
+      - name: Commit version bump (verified, via GitHub API)
+        if: steps.v.outputs.commit == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.v.outputs.version }}
+        run: pnpm exec tsx scripts/release.ts commit "$V"
+
+      - name: Freeze workspace deps for publishing (not committed)
+        run: pnpm exec tsx scripts/release.ts freeze
+
+      - name: Package smoke test
+        run: pnpm exec tsx scripts/release.ts pack
+
+      - name: Configure npm auth
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+
+      - name: Publish (dependency order, skipping versions already on npm)
+        run: pnpm exec tsx scripts/release.ts publish
+
+      - name: Tag and create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.v.outputs.version }}
+        run: gh release create "v$V" --target "${{ github.ref_name }}" --title "v$V" --notes-file RELEASE_NOTES.md
