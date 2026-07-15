@@ -1,7 +1,7 @@
 # TWAK wallet examples
 
 Demos for `TWAKProvider` — the self-broadcasting wallet backed by the
-Trust Wallet Agent Kit (`twak`) CLI, **v0.19.0 minimum**. Each script is a
+Trust Wallet Agent Kit (`twak`) CLI, **v0.20.0 minimum**. Each script is a
 runnable companion to one section of
 [`bnbagent/wallets/README.md`](../../bnbagent/wallets/README.md) (the TWAK
 section is the authoritative reference these scripts demonstrate).

@@ -57,6 +57,9 @@ export { EVMWalletProvider } from "./wallets/evmWalletProvider.js";
 // Self-broadcasting Altana (EIP-7702 session-key) wallet. The backing
 // @altananetwork/sdk peer is optional and loaded lazily on first use.
 export { AltanaWalletProvider } from "./wallets/altana/index.js";
+// Self-broadcasting TWAK (Trust Wallet Agent Kit CLI) wallet — twak is an
+// npm CLI; install @trustwallet/cli and the provider finds the local bin.
+export { TWAKProvider } from "./wallets/twak/index.js";
 
 // ERC-8183 — only essential public API
 export { ERC8183Client } from "./erc8183/client.js";

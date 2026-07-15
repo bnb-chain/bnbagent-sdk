@@ -49,6 +49,10 @@ import { getEnv } from "../core/envUtil.js";
 import { LocalStorageProvider } from "../storage/localStorageProvider.js";
 import type { StorageProvider } from "../storage/storageProvider.js";
 import { EVMWalletProvider } from "../wallets/evmWalletProvider.js";
+import {
+  TWAKProvider,
+  TWAK_CHAIN_FOR_NETWORK,
+} from "../wallets/twak/provider.js";
 import type { WalletProvider } from "../wallets/walletProvider.js";
 import { ERC8183_ENV_PREFIX } from "./constants.js";
 
@@ -115,13 +119,27 @@ export class ERC8183Config {
     let walletPassword = opts.walletPassword ?? "";
     let walletProvider = opts.walletProvider ?? null;
 
-    // Explicit non-EVM wallet kind: TWAK/MPC are out of scope for the
-    // TypeScript SDK (unlike Python, which dispatches to a wallet
-    // factory) — any value other than "" / "evm" is rejected outright,
-    // unless the caller already supplied a wallet_provider (in which case
-    // wallet_kind is advisory metadata only, mirroring AgentConfig).
+    // Explicit wallet kind. "twak" dispatches to the self-broadcasting
+    // TWAKProvider (chain auto-pinned to the network — Python parity);
+    // any other non-EVM value is rejected outright, unless the caller
+    // already supplied a wallet_provider (in which case wallet_kind is
+    // advisory metadata only, mirroring AgentConfig).
     const kind = this.walletKind.trim().toLowerCase();
-    if (kind && kind !== "evm" && !walletProvider) {
+    if (kind === "twak" && !walletProvider) {
+      const chain =
+        typeof this.network === "string"
+          ? TWAK_CHAIN_FOR_NETWORK[this.network]
+          : undefined;
+      if (!chain) {
+        throw new Error(
+          `WALLET_KIND=twak supports BNB Smart Chain networks only (${Object.keys(TWAK_CHAIN_FOR_NETWORK).join(", ")}); got network=${String(this.network)}`,
+        );
+      }
+      walletProvider = new TWAKProvider({
+        chain,
+        ...(this.walletAddress ? { expectedAddress: this.walletAddress } : {}),
+      });
+    } else if (kind && kind !== "evm" && !walletProvider) {
       throw new Error(`Unknown wallet kind: ${this.walletKind}`);
     }
 
@@ -262,9 +280,9 @@ export class ERC8183Config {
     const walletAddress = getEnv("WALLET_ADDRESS") ?? "";
     const walletKind = getEnv("WALLET_KIND") ?? "";
 
-    // The WALLET_PASSWORD requirement is an EVM-kind concern. A non-EVM
-    // kind would own its custody end-to-end — but TWAK/MPC are out of
-    // scope here, so the constructor below rejects any other kind anyway.
+    // The WALLET_PASSWORD requirement is an EVM-kind concern: a non-EVM
+    // kind (twak) owns its custody end-to-end, so no password is needed
+    // here — the constructor dispatches it to TWAKProvider.
     const kind = walletKind.trim().toLowerCase();
     if (kind === "" || kind === "evm") {
       if (!walletPassword) {

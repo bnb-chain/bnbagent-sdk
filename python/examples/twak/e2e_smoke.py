@@ -274,7 +274,7 @@ def main() -> int:  # noqa: PLR0915 - a linear assert chain reads best inline
     recovered = Account.recover_message(encode_defunct(text=hex_shaped), signature=sig)
     if recovered.lower() != twak_addr.lower():
         raise fail("0b", f"ecrecover(text) -> {recovered}, expected {twak_addr} "
-                         "(twak <= v0.19.0 S-11 regression? upgrade to >= v0.19.1)")
+                         "(twak <= v0.19.0 S-11 regression? upgrade to >= v0.20.0)")
     ok("0b", "twak signature recovers under text semantics (EVM-compatible)")
 
     # ── step 1: erc8004.register (atomic --metadata), opt-in ──────────────

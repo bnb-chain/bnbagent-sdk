@@ -6,7 +6,8 @@ TWAK (Trust Wallet Agent Kit) is a self-custody wallet CLI whose encrypted mnemo
 
 - **Minimum twak version: v0.20.0.** (The SDK forwards `--paymaster-url` on every write whenever a paymaster is configured — the default `bsc-testnet` config is — and the flag first shipped in v0.20.0. Without a paymaster v0.19.1 still works; v0.19.0 signed `0x`-shaped messages over the wrong bytes; older CLIs lack the v0.19.0 command surface.)
 - **Networks:** `bsc` (mainnet) and `bsctestnet`. The SDK network name `bsc-testnet` maps to the CLI key `bsctestnet` via `bnbagent.wallets.TWAK_CHAIN_FOR_NETWORK`.
-- **Construct:** `TWAKProvider(chain="bsc")`, or `WALLET_KIND=twak` on any `AgentConfig` / `*Config.from_env()` (chain auto-pinned to the network).
+- **Construct (Python):** `TWAKProvider(chain="bsc")`, or `WALLET_KIND=twak` on any `AgentConfig` / `*Config.from_env()` (chain auto-pinned to the network).
+- **Construct (TypeScript):** `new TWAKProvider({ chain: "bsc" })`, or `walletKind: "twak"` / `WALLET_KIND=twak` on `ERC8183Config` (chain auto-pinned). twak is an npm CLI — install `@trustwallet/cli` as a project dependency and the provider resolves `node_modules/.bin/twak` automatically.
 
 ## Capability model
 

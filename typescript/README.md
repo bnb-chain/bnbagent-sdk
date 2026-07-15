@@ -160,14 +160,14 @@ await fundedJobWatcher(
 Every protocol client signs through the `WalletProvider` seam — swap the
 provider, keep the protocol code:
 
-| | `EVMWalletProvider` | `AltanaWalletProvider` |
-| --- | --- | --- |
-| Custody | local key, Keystore V3 on disk | EIP-7702 wallet == your EOA; [Altana](https://docs.altana.network) relay broadcasts |
-| Capabilities | `sign.message/transaction/typed_data`, `calls.arbitrary`, `paymaster.sponsor` | `broadcast.self`, `calls.arbitrary`, `intents.erc8004`, `intents.erc8183` |
-| Agent containment | `SigningPolicy` (in-process) | on-chain session keys: call whitelist + spend caps + expiry, revocable in one tx |
-| Gas | self-paid or MegaFuel-sponsored | relay fronts gas, recovers it from the wallet (MegaFuel not involved) |
-| x402 payments | ✅ `X402Signer` | ✅ session-key payer (`makeX402Payer()`, SDK >= 0.3.4) after a one-time admin setup: `approveX402SignatureChecker` + bounded `setPermit2Allowance`; **receiving** at the wallet works fine |
-| Extra install | — | `pnpm add @altananetwork/sdk` (optional peer, GPL-3.0-or-later, lazily imported) |
+| | `EVMWalletProvider` | `TWAKProvider` | `AltanaWalletProvider` |
+| --- | --- | --- | --- |
+| Custody | local key, Keystore V3 on disk | [twak CLI](../docs/twak.md) keystore (`~/.twak`) + OS keychain; the key never enters this process | EIP-7702 wallet == your EOA; [Altana](https://docs.altana.network) relay broadcasts |
+| Capabilities | `sign.message/transaction/typed_data`, `calls.arbitrary`, `paymaster.sponsor` | `sign.message`, `broadcast.self`, `intents.erc8004`, `intents.erc8183`, `x402.pay` (no raw signing, no arbitrary calls) | `broadcast.self`, `calls.arbitrary`, `intents.erc8004`, `intents.erc8183` (+ `x402.pay` in session mode) |
+| Agent containment | `SigningPolicy` (in-process) | fixed command menu + out-of-process custody; twak's own `--max-payment` hard cap | on-chain session keys: call whitelist + spend caps + expiry, revocable in one tx |
+| Gas | self-paid or MegaFuel-sponsored | mainnet auto-sponsored by twak; the SDK forwards its paymaster as `--paymaster-url` (twak >= v0.20.0), so sponsored testnet writes work | relay fronts gas, recovers it from the wallet (MegaFuel not involved) |
+| x402 payments | ✅ `X402Signer` | ✅ delegated `TwakX402Payer` (`makeX402Payer()`, five-point quote precheck) | ✅ session-key payer (`makeX402Payer()`, SDK >= 0.3.4) after a one-time admin setup: `approveX402SignatureChecker` + bounded `setPermit2Allowance`; **receiving** at the wallet works fine |
+| Extra install | — | `npm i @trustwallet/cli` (>= 0.20.0; the local `node_modules/.bin/twak` is auto-resolved) | `pnpm add @altananetwork/sdk` (optional peer, GPL-3.0-or-later, lazily imported) |
 
 Session quick start (admin grants once, agent runs with the session):
 

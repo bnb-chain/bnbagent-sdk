@@ -16,7 +16,7 @@ The four stops:
 
 Prerequisites:
     - The twak CLI on PATH (or point TWAK_BIN at one, e.g.
-      ``TWAK_BIN=./node_modules/.bin/twak``), >= v0.19.0.
+      ``TWAK_BIN=./node_modules/.bin/twak``), >= v0.20.0.
     - twak API credentials — the one thing this script cannot fabricate:
       the CLI refuses *every* command (even ``wallet create``)
       without them. Either ``~/.twak/credentials.json`` (from ``twak init``

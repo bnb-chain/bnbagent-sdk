@@ -33,8 +33,9 @@ side manually if omitted), `VOTER_PRIVATE_KEY` (same, for `disputeReject.ts`),
 
 `_helpers.ts` centralizes the shared setup: `loadSettings()` reads `.env`,
 `makePrimaryClient()` builds the client-role `ERC8183Client` from an
-`EVMWalletProvider` (EVM only — the TypeScript SDK has no twak/CLI-delegated
-signer), and `expiryFor(client)` computes an `expiredAt` that clears the
+`EVMWalletProvider` (set `WALLET_KIND=twak` on `ERC8183Config` to run the
+same flows through the self-broadcasting `TWAKProvider` instead — needs a
+configured `@trustwallet/cli` >= 0.20.0), and `expiryFor(client)` computes an `expiredAt` that clears the
 policy's `disputeWindow` plus a safety slack.
 
 ## voter/ — whitelisted-voter workflows (live testnet)
