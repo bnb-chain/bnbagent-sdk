@@ -10,9 +10,14 @@
  * idempotent and free of it. Step 9 additionally escrows and burns-to-fee
  * 0.1 testnet U (skipped when the wallet holds < 0.1 U).
  *
- * Runs against the LEGACY Functor testnet stack (old contracts + old
- * relay) with the local `getKeys→getActiveKeys` shim — see `./testnet.ts`
- * and `./shim.ts` for why. Deliberately NOT part of CI.
+ * Runs against Altana's LEGACY BSC-testnet stack (chain 97, relay
+ * relay.functor.sh) with the local `getKeys→getActiveKeys` shim — see
+ * `./testnet.ts` and `./shim.ts` for why. SDK 0.5.0's official
+ * `BNB_TESTNET` stack (the `network: "bnb-testnet"` preset) is the
+ * intended replacement, but its relay currently serves a mismatched TLS
+ * certificate (reported to Altana) — switch this file to the preset and
+ * drop the shim once execution through it verifies. Deliberately NOT
+ * part of CI.
  *
  * Usage (env in `typescript/.env`, never committed):
  *     PRIVATE_KEY=0x...   # funded BSC-testnet key, DEDICATED TO TESTING

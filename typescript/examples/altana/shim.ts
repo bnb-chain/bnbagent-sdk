@@ -1,10 +1,10 @@
 /**
- * Local RPC shim translating ONE ABI drift on the legacy Altana testnet.
+ * Local RPC shim translating ONE ABI drift on the Altana BSC testnet.
  *
- * ⚠️ LEGACY-TESTNET-ONLY infrastructure — deliberately outside `src/` and
+ * ⚠️ TESTNET-ONLY infrastructure — deliberately outside `src/` and
  * outside the npm package. The current `@altananetwork/sdk` only ships
- * mainnet configs; BSC testnet (97) still runs the pre-rename Functor
- * deployment, whose KeyStore exposes `getActiveKeys(address)` where the
+ * mainnet configs; the KeyStore deployed on Altana's BSC testnet (97)
+ * exposes `getActiveKeys(address)` where the
  * new SDK calls `getKeys(address)` (selector `0x34e80c34` →
  * `0xcacc7866`). Signature and return type are isomorphic
  * (`address → bytes32[]`); the other five KeyStore functions are

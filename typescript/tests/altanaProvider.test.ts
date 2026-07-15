@@ -37,11 +37,20 @@ const sdkMocks = vi.hoisted(() => {
   const revokeSessionMock = vi.fn();
   const createWalletMock = vi.fn();
   const signerFromPrivateKeyMock = vi.fn();
+  const registerSessionKeyMock = vi.fn();
+  const balancesMock = vi.fn();
+  // 0.5.0-surface toggle: tests flip this off to simulate a pre-0.5.0
+  // install (no registerSessionKey/balances on the client, no BNB_TESTNET
+  // on the module).
+  const v050 = { enabled: true };
   const createClientMock = vi.fn(() => ({
     createWallet: createWalletMock,
     execute: executeMock,
     grantSession: grantSessionMock,
     revokeSession: revokeSessionMock,
+    ...(v050.enabled
+      ? { registerSessionKey: registerSessionKeyMock, balances: balancesMock }
+      : {}),
   }));
   return {
     executeMock,
@@ -49,6 +58,9 @@ const sdkMocks = vi.hoisted(() => {
     revokeSessionMock,
     createWalletMock,
     signerFromPrivateKeyMock,
+    registerSessionKeyMock,
+    balancesMock,
+    v050,
     createClientMock,
     factoryRuns: { count: 0 },
   };
@@ -75,6 +87,9 @@ vi.mock("@altananetwork/sdk", async () => {
     createPrivateKeySigner: () =>
       sdkMocks.signerFromPrivateKeyMock(`0x${"77".repeat(32)}`),
     BNB: { chainId: 56 },
+    get BNB_TESTNET() {
+      return sdkMocks.v050.enabled ? { chainId: 97 } : undefined;
+    },
   };
 });
 
@@ -133,12 +148,22 @@ beforeEach(() => {
       signer,
     }),
   );
+  sdkMocks.registerSessionKeyMock.mockClear();
+  sdkMocks.balancesMock.mockClear();
+  sdkMocks.v050.enabled = true;
   sdkMocks.grantSessionMock.mockResolvedValue(fakeSession());
   sdkMocks.revokeSessionMock.mockResolvedValue({
     callsId: CALLS_ID,
     status: "CONFIRMED",
     transactionHash: FAKE_TX_HASH,
   });
+  sdkMocks.registerSessionKeyMock.mockResolvedValue({
+    alreadyRegistered: false,
+    callsId: CALLS_ID,
+    status: "CONFIRMED",
+    transactionHash: FAKE_TX_HASH,
+  });
+  sdkMocks.balancesMock.mockResolvedValue({ native: 0n });
 });
 
 afterEach(() => {
@@ -312,6 +337,89 @@ describe("AltanaWalletProvider — session management", () => {
     // Optional knobs stay absent rather than being forwarded as undefined.
     expect("sessionSigner" in forwarded).toBe(false);
     expect("feeToken" in forwarded).toBe(false);
+    expect("register" in forwarded).toBe(false);
+  });
+
+  it("grantSession forwards register: false on 0.5.0+, and refuses it with upgrade guidance on older SDKs", async () => {
+    const provider = new AltanaWalletProvider({
+      privateKey: ADMIN_PK,
+      nonceRetry: { delayMs: 0 },
+    });
+    await provider.grantSession({
+      permissions: {},
+      expiry: EXPIRY,
+      register: false,
+    });
+    expect(
+      (sdkMocks.grantSessionMock.mock.calls[0]?.[0] as { register?: boolean })
+        .register,
+    ).toBe(false);
+
+    // Pre-0.5.0 install: the SDK would silently ignore the flag, register
+    // the key and charge the fee — the provider must refuse up front.
+    sdkMocks.v050.enabled = false;
+    const old = new AltanaWalletProvider({
+      privateKey: ADMIN_PK,
+      nonceRetry: { delayMs: 0 },
+    });
+    await expect(
+      old.grantSession({ permissions: {}, expiry: EXPIRY, register: false }),
+    ).rejects.toThrow(/requires '@altananetwork\/sdk' >= 0\.5\.0/);
+    expect(sdkMocks.grantSessionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("registerSessionKey forwards wallet/signer/session, passes FAILED through as an error, and is admin-only", async () => {
+    const provider = new AltanaWalletProvider({
+      privateKey: ADMIN_PK,
+      nonceRetry: { delayMs: 0 },
+    });
+    const session = fakeSession();
+    const result = await provider.registerSessionKey(session);
+    expect(result).toEqual({
+      alreadyRegistered: false,
+      callsId: CALLS_ID,
+      status: "CONFIRMED",
+      transactionHash: FAKE_TX_HASH,
+    });
+    const forwarded = sdkMocks.registerSessionKeyMock.mock
+      .calls[0]?.[0] as Record<string, unknown>;
+    expect(forwarded.wallet).toEqual({ address: ADMIN_ADDRESS });
+    expect(forwarded.session).toBe(session);
+    expect("feeToken" in forwarded).toBe(false);
+
+    // Idempotent short-circuit passes through untouched.
+    sdkMocks.registerSessionKeyMock.mockResolvedValueOnce({
+      alreadyRegistered: true,
+    });
+    await expect(provider.registerSessionKey(session)).resolves.toEqual({
+      alreadyRegistered: true,
+    });
+
+    sdkMocks.registerSessionKeyMock.mockResolvedValueOnce({
+      alreadyRegistered: false,
+      callsId: CALLS_ID,
+      status: "FAILED",
+    });
+    await expect(provider.registerSessionKey(session)).rejects.toThrow(
+      new RegExp(`FAILED for registerSessionKey.*${CALLS_ID}`),
+    );
+
+    const sessionMode = new AltanaWalletProvider({ session: fakeSession() });
+    await expect(sessionMode.registerSessionKey(session)).rejects.toThrow(
+      /requires an admin-mode AltanaWalletProvider/,
+    );
+  });
+
+  it("registerSessionKey on a pre-0.5.0 SDK fails with upgrade guidance", async () => {
+    sdkMocks.v050.enabled = false;
+    const provider = new AltanaWalletProvider({
+      privateKey: ADMIN_PK,
+      nonceRetry: { delayMs: 0 },
+    });
+    await expect(provider.registerSessionKey(fakeSession())).rejects.toThrow(
+      /requires '@altananetwork\/sdk' >= 0\.5\.0/,
+    );
+    expect(sdkMocks.registerSessionKeyMock).not.toHaveBeenCalled();
   });
 
   it("rejects past/zero/non-integer/milliseconds expiry before paying the registration fee", async () => {
@@ -357,6 +465,79 @@ describe("AltanaWalletProvider — session management", () => {
     await expect(provider.revokeSession(CALLS_ID)).rejects.toThrow(
       new RegExp(`FAILED for revokeSession.*${CALLS_ID}`),
     );
+  });
+});
+
+describe("AltanaWalletProvider — balances", () => {
+  it("reads balances for the provider address in both modes, forwarding tokens verbatim", async () => {
+    sdkMocks.balancesMock.mockResolvedValue({
+      native: 5n,
+      tokens: [],
+    });
+    const admin = new AltanaWalletProvider({ privateKey: ADMIN_PK });
+    await expect(admin.balances()).resolves.toEqual({
+      native: 5n,
+      tokens: [],
+    });
+    expect(sdkMocks.balancesMock).toHaveBeenCalledWith({
+      wallet: ADMIN_ADDRESS,
+    });
+    // Pure read: no admin wallet handle needed, nothing queued to the relay.
+    expect(sdkMocks.createWalletMock).not.toHaveBeenCalled();
+
+    const token = getAddress(`0x${"33".repeat(20)}`);
+    const session = new AltanaWalletProvider({ session: fakeSession() });
+    await session.balances({ tokens: [token] });
+    expect(sdkMocks.balancesMock).toHaveBeenLastCalledWith({
+      wallet: WALLET,
+      tokens: [token],
+    });
+  });
+
+  it("requires >= 0.4.0 for balances at all and >= 0.5.0 for the tokens option", async () => {
+    sdkMocks.v050.enabled = false;
+    const provider = new AltanaWalletProvider({ privateKey: ADMIN_PK });
+    await expect(provider.balances()).rejects.toThrow(
+      /requires '@altananetwork\/sdk' >= 0\.4\.0/,
+    );
+
+    // A 0.4.0-shaped client: balances exists (native-only), but the 0.5.0
+    // markers are absent — passing tokens must refuse, not silently drop.
+    sdkMocks.createClientMock.mockReturnValueOnce({
+      createWallet: sdkMocks.createWalletMock,
+      execute: sdkMocks.executeMock,
+      grantSession: sdkMocks.grantSessionMock,
+      revokeSession: sdkMocks.revokeSessionMock,
+      balances: sdkMocks.balancesMock,
+    });
+    const v040 = new AltanaWalletProvider({ privateKey: ADMIN_PK });
+    await expect(
+      v040.balances({ tokens: [getAddress(`0x${"33".repeat(20)}`)] }),
+    ).rejects.toThrow(/requires '@altananetwork\/sdk' >= 0\.5\.0/);
+    expect(sdkMocks.balancesMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("AltanaWalletProvider — network presets", () => {
+  it("resolves 'bnb-testnet' to the SDK's BNB_TESTNET config on 0.5.0+, with upgrade guidance on older SDKs", async () => {
+    const provider = new AltanaWalletProvider({
+      privateKey: ADMIN_PK,
+      network: "bnb-testnet",
+    });
+    await provider.balances();
+    expect(sdkMocks.createClientMock).toHaveBeenCalledWith({
+      chains: [{ chainId: 97 }],
+    });
+
+    sdkMocks.v050.enabled = false;
+    const old = new AltanaWalletProvider({
+      privateKey: ADMIN_PK,
+      network: "bnb-testnet",
+    });
+    await expect(old.balances()).rejects.toThrow(
+      /'bnb-testnet' network preset requires '@altananetwork\/sdk' >= 0\.5\.0/,
+    );
+    expect(sdkMocks.createClientMock).toHaveBeenCalledTimes(1);
   });
 });
 

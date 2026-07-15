@@ -1,6 +1,6 @@
 # Altana wallet provider — examples & testnet E2E
 
-[Altana](https://docs.altana.network) (formerly Functor) is non-custodial
+[Altana](https://docs.altana.network) is non-custodial
 agentic-wallet infrastructure on EIP-7702: your EOA **is** the wallet, an
 admin key grants **session keys** whose call whitelist + spend caps +
 expiry are enforced by the on-chain account validator, and authorization
@@ -67,6 +67,8 @@ never commit, never log. Its blast radius is capped by the on-chain grant.
 |---|---|---|
 | register admin key (auto, first execute ever) | ~$0.50 in native BNB | self-paid via relay |
 | register session key (each `grantSession`) | ~$0.50 in native BNB | self-paid |
+| ephemeral session (`grantSession({ register: false })`, SDK >= 0.5.0) | 0 — no registry entry, so no fee; invisible to `verify_authorization` | self-paid |
+| `registerSessionKey` (upgrade an ephemeral key later; idempotent) | ~$0.50 in native BNB (0 if already registered) | self-paid |
 | every `execute` | 0 | self-paid |
 | `revokeSession` / registry reads | 0 | gas / free |
 
@@ -103,6 +105,11 @@ dedicated-EOA balance) and layer the in-process caps (`maxPayment`,
 `sessionBudget`) on top. Kill switches: `revokeX402SignatureChecker`
 (x402 only) or `revokeSession` (everything).
 
+x402 is also the textbook fit for **ephemeral sessions** (SDK >= 0.5.0):
+the facilitator verifies signatures through the account's ERC-1271, never
+the KeyStore registry, so `grantSession({ register: false })` buys the
+same payment power without the registration fee.
+
 **Verification runbook (>= 0.4.0 is on npm):**
 
 1. `pnpm add -D @altananetwork/sdk@latest`, then add the x402 mirrors to
@@ -114,17 +121,25 @@ dedicated-EOA balance) and layer the in-process caps (`maxPayment`,
    setup + one paid request end-to-end.
 3. Receiving is unchanged: point `payTo` at the Altana wallet.
 
-## The testnet shim (`shim.ts` / `testnet.ts`)
+## Testnet: official preset vs the legacy stack (`shim.ts` / `testnet.ts`)
 
-The official Altana stack has **no testnet today**: the SDK exports
-mainnets only and relay.altana.network does not serve chain 97. The
-pre-rename Functor deployment on 97 still works (old contracts + old
-`relay.functor.sh`) with exactly one ABI drift — the new SDK calls
-`getKeys(address)` where the legacy KeyStore has `getActiveKeys(address)`
-(same signature/return, different selector). `startGetKeysShim` runs a
-localhost RPC proxy translating that single selector; everything else
-forwards verbatim. Legacy infrastructure may disappear — these files are
-deliberately outside `src/` and outside the npm package. Mainnet needs no
+SDK 0.5.0 ships Altana's official BSC-testnet deployment as the
+`BNB_TESTNET` export — in this SDK, just `network: "bnb-testnet"` on the
+provider. Its read path is live (see `balances.ts`), but as of 2026-07-15
+the official testnet relay (`relay-testnet.altana.network`) serves a
+mismatched TLS certificate (`*.up.railway.app`), so nothing can execute
+through it yet — reported to Altana.
+
+Until that is fixed, the E2E keeps running against the LEGACY stack:
+chain 97 with the relay at `https://relay.functor.sh`, configured by
+`testnet.ts` as a custom `AltanaNetworkConfig`. One ABI drift exists on
+the legacy KeyStore: the SDK calls `getKeys(address)` where the deployed
+contract has `getActiveKeys(address)` (same signature/return, different
+selector). `startGetKeysShim` runs a localhost RPC proxy translating that
+single selector; everything else forwards verbatim. The official KeyStore
+answers `getKeys` natively (probed on-chain), so `testnet.ts` and
+`shim.ts` both retire once the E2E passes on the official stack. These
+files live outside `src/` and outside the npm package. Mainnet needs no
 shim.
 
 ## Running the E2E

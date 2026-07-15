@@ -10,8 +10,11 @@
  * assignability against the real package (a devDependency) so any drift
  * fails `pnpm typecheck` instead of surfacing at runtime.
  *
- * Mirrored from `@altananetwork/sdk@0.3.3` `dist/*.d.ts` (config, client,
- * internal/{signer,sessions,types,relay}).
+ * Mirrored from `@altananetwork/sdk@0.5.0` `dist/*.d.ts` (config, client,
+ * balances, registerSessionKey, internal/{signer,sessions,types,relay}).
+ * Surfaces newer than the 0.3.3 peer floor are segregated into their own
+ * interfaces (`…X402` for 0.4.0, `…050` for 0.5.0) and duck-checked at
+ * runtime, so older installs keep every pre-existing path working.
  */
 
 import type { Chain } from "viem";
@@ -100,16 +103,21 @@ export interface AltanaNetworkConfig {
   publicRpcUrl: string;
   /** Block explorer base URL. */
   explorer: string;
-  /** Altana relay endpoint. */
-  relayUrl: string;
+  /**
+   * Altana relay endpoint. Optional since 0.5.0 (keystore-only networks
+   * have no relay; executing through one throws inside the SDK).
+   */
+  relayUrl?: string;
 }
 
 /**
  * Network selector accepted by `AltanaWalletProvider`: the `"bnb-mainnet"`
- * preset (resolved to the SDK's own `BNB` export at first use — no address
- * copies to drift) or a fully explicit {@link AltanaNetworkConfig}.
+ * or `"bnb-testnet"` preset (resolved to the SDK's own `BNB` /
+ * `BNB_TESTNET` export at first use — no address copies to drift; the
+ * testnet preset requires `@altananetwork/sdk` >= 0.5.0) or a fully
+ * explicit {@link AltanaNetworkConfig}.
  */
-export type AltanaNetwork = "bnb-mainnet" | AltanaNetworkConfig;
+export type AltanaNetwork = "bnb-mainnet" | "bnb-testnet" | AltanaNetworkConfig;
 
 /** A wallet handle — a pure `{ address }` value. Mirrors the SDK's `Wallet`. */
 export interface AltanaWallet {
@@ -168,6 +176,12 @@ export interface AltanaGrantSessionOptions {
   expiry: number;
   /** Omit to let the SDK generate a fresh secp256k1 session signer. */
   sessionSigner?: AltanaSigner;
+  /**
+   * Register the session's public key in the KeyStore registry (default
+   * true). `false` grants an ephemeral, account-only session (SDK >=
+   * 0.5.0) — see {@link AltanaGrantSessionProviderOpts} in `provider.ts`.
+   */
+  register?: boolean;
   feeToken?: `0x${string}`;
   chainId?: number;
 }
@@ -282,4 +296,86 @@ export interface AltanaSdkModuleX402 {
     session: AltanaSession,
     requirement: Record<string, unknown>,
   ): Promise<AltanaSignX402PaymentResult>;
+}
+
+// ── 0.5.0 surface (`@altananetwork/sdk` >= 0.5.0) ─────────────────────────
+// BNB testnet preset, ERC-20/BEP-677 balances, ephemeral-session lazy
+// registration. Duck-checked at first use (see `provider.ts` `#v050Sdk`).
+
+/**
+ * One per-token entry of a `balances({ tokens })` read. Mirrors the SDK's
+ * `TokenBalance`. `raw` is always the unscaled on-chain `balanceOf` (what
+ * transfers and allowances operate on); for BEP-677 tokens `display` (and
+ * `scaled`) carry the ui-multiplier-scaled value.
+ */
+export type AltanaTokenBalance =
+  | {
+      address: `0x${string}`;
+      ok: true;
+      raw: bigint;
+      decimals: number;
+      /** `""` if `symbol()` is missing/undecodable. */
+      symbol: string;
+      display: string;
+      /** Present iff the token implements BEP-677 IScaledUIAmount. */
+      scaled?: {
+        /** Active multiplier, 1e18 fixed-point (1e18 = 1.0x). */
+        uiMultiplier: bigint;
+        /** `raw * uiMultiplier / 1e18`, truncated — the bigint behind `display`. */
+        scaledRaw: bigint;
+        /** Present iff a scheduled multiplier change is not yet in effect. */
+        pending?: { newUIMultiplier: bigint; effectiveAt: bigint };
+      };
+    }
+  | {
+      address: `0x${string}`;
+      ok: false;
+      /** Why the token could not be read (balanceOf or decimals reverted). */
+      error: string;
+    };
+
+/** Mirror of `BalancesResult`. `tokens` is present iff `tokens` was passed. */
+export interface AltanaBalancesResult {
+  /** Native token balance in wei. */
+  native: bigint;
+  tokens?: AltanaTokenBalance[];
+}
+
+/** Mirror of `ClientBalancesOptions` (0.5.0 adds `tokens`). */
+export interface AltanaBalancesOptions {
+  wallet: AltanaWallet | `0x${string}`;
+  /** ERC-20 tokens to include. BEP-677 display scaling is automatic. */
+  tokens?: readonly `0x${string}`[];
+  chainId?: number;
+}
+
+/** Mirror of `ClientRegisterSessionKeyOptions`. */
+export interface AltanaRegisterSessionKeyOptions {
+  wallet: AltanaWallet;
+  signer: AltanaSigner;
+  session: AltanaSession;
+  feeToken?: `0x${string}`;
+  chainId?: number;
+}
+
+/**
+ * Mirror of `RegisterSessionKeyResult`. `alreadyRegistered: true` means
+ * nothing was submitted and no fee was paid (the call is idempotent).
+ */
+export type AltanaRegisterSessionKeyResult =
+  | { alreadyRegistered: true }
+  | ({ alreadyRegistered: false } & AltanaExecuteResult);
+
+/** The 0.5.0 client methods the provider uses. */
+export interface AltanaSdkClient050 {
+  balances(opts: AltanaBalancesOptions): Promise<AltanaBalancesResult>;
+  registerSessionKey(
+    opts: AltanaRegisterSessionKeyOptions,
+  ): Promise<AltanaRegisterSessionKeyResult>;
+}
+
+/** The 0.5.0 module-level additions the provider uses. */
+export interface AltanaSdkModule050 {
+  /** The SDK's own BNB-testnet (chain 97) deployment config. */
+  BNB_TESTNET: AltanaNetworkConfig;
 }

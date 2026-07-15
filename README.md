@@ -27,7 +27,7 @@ is a construction-time choice. Three backends ship today:
 |--------|---------|-----|-------|
 | `EVMWalletProvider` | local key (Keystore V3 on disk) | Python + TypeScript | full signing surface (`sign.message/transaction/typed_data`), MegaFuel paymaster support |
 | `TWAKProvider` | [Trust Wallet Agent Kit](./docs/twak.md) CLI (`twak` >= v0.20.0) | Python + TypeScript | self-broadcasting; ERC-8004/8183 intents + delegated x402; sponsored testnet writes via `--paymaster-url` |
-| `AltanaWalletProvider` | [Altana](https://docs.altana.network) EIP-7702 wallet, on-chain session keys | TypeScript | self-broadcasting via relay; session-key x402 payer (Altana SDK >= 0.4.0) |
+| `AltanaWalletProvider` | [Altana](https://docs.altana.network) EIP-7702 wallet, on-chain session keys | TypeScript | self-broadcasting via relay; session-key x402 payer (Altana SDK >= 0.4.0); testnet preset, balances + ephemeral sessions (>= 0.5.0) |
 
 Details: [`python/bnbagent/wallets/README.md`](./python/bnbagent/wallets/README.md)
 (EVM + TWAK) and the wallet-provider table in

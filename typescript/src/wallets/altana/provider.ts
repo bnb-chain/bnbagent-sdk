@@ -1,6 +1,6 @@
 /**
  * `AltanaWalletProvider` — a self-broadcasting wallet backed by the Altana
- * (formerly Functor) agentic-wallet relay, plus its `IntentExecutor`.
+ * agentic-wallet relay, plus its `IntentExecutor`.
  *
  * Altana wallets are EIP-7702 accounts: the wallet address IS the admin
  * EOA, upgraded in place on first execute. An **admin** key manages the
@@ -72,12 +72,17 @@ import { WalletProvider } from "../walletProvider.js";
 import { loadAltanaSdk } from "./sdkLoader.js";
 import { deserializeSession } from "./session.js";
 import type {
+  AltanaBalancesResult,
   AltanaCall,
   AltanaExecuteResult,
   AltanaNetwork,
+  AltanaNetworkConfig,
+  AltanaRegisterSessionKeyResult,
   AltanaSdkClient,
+  AltanaSdkClient050,
   AltanaSdkClientX402,
   AltanaSdkModule,
+  AltanaSdkModule050,
   AltanaSdkModuleX402,
   AltanaSession,
   AltanaSessionPermissions,
@@ -107,9 +112,11 @@ const MAX_EXPIRY_SECONDS = 100_000_000_000;
 /** Options accepted by the {@link AltanaWalletProvider} constructor. */
 export interface AltanaWalletProviderOptions {
   /**
-   * Altana deployment to talk to: the `"bnb-mainnet"` preset (resolved to
-   * the SDK's own `BNB` config at first backend use) or a custom
-   * `AltanaNetworkConfig`. Defaults to `"bnb-mainnet"`.
+   * Altana deployment to talk to: the `"bnb-mainnet"` or `"bnb-testnet"`
+   * preset (resolved to the SDK's own `BNB` / `BNB_TESTNET` config at
+   * first backend use; the testnet preset requires `@altananetwork/sdk`
+   * >= 0.5.0) or a custom `AltanaNetworkConfig`. Defaults to
+   * `"bnb-mainnet"`.
    */
   network?: AltanaNetwork;
   /** Admin mode: the admin EOA's private key (hex, with or without `0x`). */
@@ -134,6 +141,17 @@ export interface AltanaGrantSessionProviderOpts {
   expiry: number;
   /** Omit to let the SDK generate a fresh secp256k1 session signer. */
   sessionSigner?: AltanaSigner;
+  /**
+   * Register the session's public key in the KeyStore registry (default
+   * true; the registration is what costs the ~$0.50 fee). `false` grants
+   * an **ephemeral** session (SDK >= 0.5.0): identical enforcement —
+   * permissions/expiry live in the account either way — but invisible to
+   * KeyStore readers such as `verify_authorization`, so third parties
+   * cannot confirm the key's authority on-chain. Right for short-lived
+   * x402 payment keys; wrong wherever a counterparty checks the registry.
+   * Upgrade one later with {@link AltanaWalletProvider.registerSessionKey}.
+   */
+  register?: boolean;
   feeToken?: `0x${string}`;
 }
 
@@ -334,9 +352,12 @@ export class AltanaWalletProvider extends WalletProvider {
   /**
    * Grant an on-chain session key scoped by `permissions` until `expiry`.
    * Admin mode only. Registration costs ~$0.50 in native BNB (charged by
-   * the KeyStoreController) plus gas. Persist the result with
-   * `serializeSession` — a re-created session object with the same values
-   * but different bytes will NOT be honored on-chain.
+   * the KeyStoreController) plus gas — unless `register: false`, which
+   * grants an ephemeral session with no registry entry and no fee (see
+   * {@link AltanaGrantSessionProviderOpts.register} for the visibility
+   * trade-off). Persist the result with `serializeSession` — a re-created
+   * session object with the same values but different bytes will NOT be
+   * honored on-chain.
    *
    * `expiry` is validated up front (integer Unix SECONDS, in the future,
    * not a milliseconds timestamp) because a dead-on-arrival grant still
@@ -364,6 +385,11 @@ export class AltanaWalletProvider extends WalletProvider {
         `grantSession: expiry ${expiry} is not in the future (now ${nowSeconds}); the session would be dead on arrival. Refusing to pay the ~$0.50 registration fee for it.`,
       );
     }
+    if (opts.register === false) {
+      // A pre-0.5.0 SDK would silently ignore the flag and register (and
+      // charge) anyway — fail here with the exact upgrade instead.
+      await this.#v050Sdk("grantSession with register: false");
+    }
     const sdkClient = await this.#sdkClient();
     const { wallet, signer } = await this.#adminWalletAndSigner();
     return this.#enqueue(() =>
@@ -374,10 +400,76 @@ export class AltanaWalletProvider extends WalletProvider {
           permissions: opts.permissions,
           expiry: opts.expiry,
           ...(opts.sessionSigner ? { sessionSigner: opts.sessionSigner } : {}),
+          ...(opts.register !== undefined ? { register: opts.register } : {}),
           ...(opts.feeToken ? { feeToken: opts.feeToken } : {}),
         }),
       ),
     );
+  }
+
+  /**
+   * Register an already-granted **ephemeral** session key in the KeyStore
+   * registry — the lazy counterpart to `grantSession({ register: false })`.
+   * Admin mode only; requires `@altananetwork/sdk` >= 0.5.0. Registration
+   * changes nothing about the session's power (the account already
+   * enforces permissions/expiry); it only makes the key visible to
+   * registry readers such as `verify_authorization`, and costs the usual
+   * ~$0.50 fee. Idempotent: an already-registered key returns
+   * `{ alreadyRegistered: true }` without submitting or paying.
+   */
+  async registerSessionKey(
+    session: AltanaSession,
+    opts?: { feeToken?: `0x${string}` },
+  ): Promise<AltanaRegisterSessionKeyResult> {
+    this.#requireAdmin("registerSessionKey");
+    const { client } = await this.#v050Sdk("registerSessionKey");
+    const { wallet, signer } = await this.#adminWalletAndSigner();
+    const result = await this.#enqueue(() =>
+      this.#withNonceRetry("registerSessionKey", () =>
+        client.registerSessionKey({
+          wallet,
+          signer,
+          session,
+          ...(opts?.feeToken ? { feeToken: opts.feeToken } : {}),
+        }),
+      ),
+    );
+    if (!result.alreadyRegistered && result.status === "FAILED") {
+      throw new Error(
+        `Altana relay reported FAILED for registerSessionKey (callsId ${result.callsId})`,
+      );
+    }
+    return result;
+  }
+
+  /**
+   * On-chain balances for this wallet: native BNB, plus any `tokens`
+   * (ERC-20) requested. BEP-677 scaled-UI-amount tokens are detected via
+   * ERC-165 by the SDK and their `display`/`scaled` values carry the
+   * ui-multiplier; `raw` is always the unscaled `balanceOf` that
+   * transfers and allowances operate on. Works in both modes (pure read —
+   * no relay submission, no queue). Requires `@altananetwork/sdk` >=
+   * 0.4.0; the `tokens` option requires >= 0.5.0.
+   */
+  async balances(opts?: {
+    tokens?: readonly `0x${string}`[];
+  }): Promise<AltanaBalancesResult> {
+    let client: AltanaSdkClient & Partial<AltanaSdkClient050>;
+    if (opts?.tokens !== undefined) {
+      // Older SDKs would return native-only and silently drop `tokens`.
+      ({ client } = await this.#v050Sdk("balances with tokens"));
+    } else {
+      client = await this.#sdkClient();
+      if (typeof client.balances !== "function") {
+        throw new Error(
+          "Altana balances requires '@altananetwork/sdk' >= 0.4.0 (the installed version has no client.balances). Upgrade with: pnpm add @altananetwork/sdk@latest",
+        );
+      }
+    }
+    return (client as AltanaSdkClient & AltanaSdkClient050).balances({
+      wallet: this.#address,
+      ...(opts?.tokens !== undefined ? { tokens: opts.tokens } : {}),
+    });
   }
 
   /**
@@ -613,11 +705,11 @@ export class AltanaWalletProvider extends WalletProvider {
    * @internal Used by {@link AltanaX402Payer}.
    */
   async _x402ChainId(): Promise<number> {
-    if (this.#network !== "bnb-mainnet") {
+    if (typeof this.#network !== "string") {
       return this.#network.chainId;
     }
     const sdk = await loadAltanaSdk();
-    return sdk.BNB.chainId;
+    return this.#resolveNetwork(sdk).chainId;
   }
 
   /** Shared body of approve/revokeX402SignatureChecker (admin, queued). */
@@ -684,6 +776,38 @@ export class AltanaWalletProvider extends WalletProvider {
     };
   }
 
+  /**
+   * The SDK module + client, gated on the 0.5.0 surface (`BNB_TESTNET`,
+   * `registerSessionKey`, ERC-20/BEP-677 `balances`). Same duck-check
+   * pattern as {@link #x402Sdk}: pre-0.5.0 installs keep every older path
+   * working and fail here with the exact upgrade to run.
+   */
+  async #v050Sdk(feature: string): Promise<{
+    client: AltanaSdkClient & AltanaSdkClient050;
+    module: AltanaSdkModule & AltanaSdkModule050;
+  }> {
+    const sdk = (await loadAltanaSdk()) as AltanaSdkModule &
+      Partial<AltanaSdkModule050>;
+    const client = (await this.#sdkClient()) as AltanaSdkClient &
+      Partial<AltanaSdkClient050>;
+    const missing = [
+      typeof client.registerSessionKey === "function"
+        ? null
+        : "registerSessionKey",
+      typeof client.balances === "function" ? null : "balances",
+      sdk.BNB_TESTNET ? null : "BNB_TESTNET",
+    ].filter(Boolean);
+    if (missing.length > 0) {
+      throw new Error(
+        `Altana ${feature} requires '@altananetwork/sdk' >= 0.5.0 (the installed version lacks ${missing.join(", ")}). Upgrade with: pnpm add @altananetwork/sdk@latest`,
+      );
+    }
+    return {
+      client: client as AltanaSdkClient & AltanaSdkClient050,
+      module: sdk as AltanaSdkModule & AltanaSdkModule050,
+    };
+  }
+
   #requireAdmin(operation: string): void {
     if (this.#session) {
       throw new Error(
@@ -692,13 +816,29 @@ export class AltanaWalletProvider extends WalletProvider {
     }
   }
 
+  /** Resolve a network preset to the SDK's own config; pass customs through. */
+  #resolveNetwork(sdk: AltanaSdkModule): AltanaNetworkConfig {
+    if (typeof this.#network !== "string") {
+      return this.#network;
+    }
+    if (this.#network === "bnb-mainnet") {
+      return sdk.BNB;
+    }
+    const testnet = (sdk as AltanaSdkModule & Partial<AltanaSdkModule050>)
+      .BNB_TESTNET;
+    if (!testnet) {
+      throw new Error(
+        "The 'bnb-testnet' network preset requires '@altananetwork/sdk' >= 0.5.0 (the installed version has no BNB_TESTNET export). Upgrade with: pnpm add @altananetwork/sdk@latest",
+      );
+    }
+    return testnet;
+  }
+
   async #sdkClient(): Promise<AltanaSdkClient> {
     if (!this.#sdkClientPromise) {
       const promise = (async () => {
         const sdk = await loadAltanaSdk();
-        const network =
-          this.#network === "bnb-mainnet" ? sdk.BNB : this.#network;
-        return sdk.createClient({ chains: [network] });
+        return sdk.createClient({ chains: [this.#resolveNetwork(sdk)] });
       })();
       this.#sdkClientPromise = promise;
       promise.catch(() => {

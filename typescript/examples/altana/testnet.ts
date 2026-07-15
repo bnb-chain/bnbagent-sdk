@@ -1,14 +1,21 @@
 /**
- * BSC-testnet (97) Altana network config — LEGACY Functor deployment.
+ * Altana BSC-testnet (97) network configs — LEGACY stack.
  *
- * ⚠️ Deliberately outside `src/`: the official Altana stack has no testnet
- * today (the SDK exports mainnets only; relay.altana.network does not
- * serve 97). What still works on 97 is the pre-rename Functor
- * infrastructure — old KeyStore/Controller contracts plus the old
- * relay.functor.sh, all field-verified 2026-07-10 — with exactly one ABI
- * drift handled by `./shim.js`. This may disappear whenever the legacy
- * relay is retired; the mainnet path in `src/` is unaffected. An official
- * new testnet deployment has been requested from the Altana team.
+ * `@altananetwork/sdk` 0.5.0 ships an official testnet deployment as the
+ * `BNB_TESTNET` export (new KeyStore addresses, relay
+ * relay-testnet.altana.network), reachable in `src/` as the
+ * `network: "bnb-testnet"` preset — use that for anything new. This file
+ * keeps the LEGACY deployment (relay.functor.sh, the pre-0.5.0 KeyStore)
+ * that `./e2e.ts` still runs against: as of 2026-07-15 the official
+ * testnet relay serves a mismatched TLS certificate (`*.up.railway.app`),
+ * so no strict TLS client can execute through it — reported to Altana;
+ * the E2E switches to the preset (and this file + `./shim.js` retire)
+ * once that is fixed and 12/12 passes on the official stack. The legacy
+ * KeyStore has one ABI drift (`getKeys` vs `getActiveKeys`), handled by
+ * `./shim.js`; the official deployment answers `getKeys` natively (probed
+ * on-chain 2026-07-15), so the shim dies with the legacy stack.
+ * Field-verified 2026-07-10 and re-verified 2026-07-14 (12/12 E2E on SDK
+ * 0.4.0).
  *
  * Addresses match agent-verify-demo `src/08-altana.js` (the reference run).
  */

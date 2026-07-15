@@ -51,6 +51,12 @@ async function main(): Promise<void> {
 
   const admin = new AltanaWalletProvider({ privateKey });
   console.log(`[1/7] wallet ${admin.address} — granting a 1h session`);
+  // A short-lived x402 payment key is the textbook case for
+  // `register: false` (SDK >= 0.5.0): same on-chain enforcement, no
+  // ~$0.50 KeyStore registration fee — the key is just invisible to
+  // registry readers like verify_authorization, which x402 never uses.
+  // Kept registered here until the flow is re-verified end-to-end
+  // against 0.5.0; flip it after that run.
   const session = await admin.grantSession({
     permissions: defaultAgentPermissions({
       chainId: 56,

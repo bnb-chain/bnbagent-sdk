@@ -42,15 +42,18 @@ export {
 } from "./x402.js";
 export type { AltanaX402PayerOptions } from "./x402.js";
 export type {
+  AltanaBalancesResult,
   AltanaCall,
   AltanaCallPermission,
   AltanaExecuteResult,
   AltanaNetwork,
   AltanaNetworkConfig,
+  AltanaRegisterSessionKeyResult,
   AltanaSession,
   AltanaSessionPermissions,
   AltanaSigner,
   AltanaSignerType,
   AltanaSpendPermission,
+  AltanaTokenBalance,
   AltanaWallet,
 } from "./types.js";

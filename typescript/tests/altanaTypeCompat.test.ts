@@ -14,31 +14,39 @@
 
 import type * as AltanaSdk from "@altananetwork/sdk";
 import type {
+  BalancesResult,
   Call,
   CallPermission,
   Client,
   ExecuteResult,
   NetworkConfig,
+  RegisterSessionKeyResult,
   Session,
   SessionPermissions,
   Signer,
   SpendPermission,
+  TokenBalance,
   Wallet,
 } from "@altananetwork/sdk";
 import { describe, expect, it } from "vitest";
 import type {
+  AltanaBalancesResult,
   AltanaCall,
   AltanaCallPermission,
   AltanaExecuteResult,
   AltanaNetworkConfig,
+  AltanaRegisterSessionKeyResult,
   AltanaSdkClient,
+  AltanaSdkClient050,
   AltanaSdkClientX402,
   AltanaSdkModule,
+  AltanaSdkModule050,
   AltanaSdkModuleX402,
   AltanaSession,
   AltanaSessionPermissions,
   AltanaSigner,
   AltanaSpendPermission,
+  AltanaTokenBalance,
   AltanaWallet,
 } from "../src/wallets/altana/types.js";
 
@@ -85,6 +93,24 @@ const moduleToMirror = (v: typeof AltanaSdk): AltanaSdkModule => v;
 const clientX402ToMirror = (v: Client): AltanaSdkClientX402 => v;
 const moduleX402ToMirror = (v: typeof AltanaSdk): AltanaSdkModuleX402 => v;
 
+// 0.5.0 surface: BNB_TESTNET preset, registerSessionKey, ERC-20/BEP-677
+// balances. Results are data types → mutual; client/module → real → mirror.
+const tokenBalanceToMirror = (v: TokenBalance): AltanaTokenBalance => v;
+const tokenBalanceToReal = (v: AltanaTokenBalance): TokenBalance => v;
+
+const balancesResultToMirror = (v: BalancesResult): AltanaBalancesResult => v;
+const balancesResultToReal = (v: AltanaBalancesResult): BalancesResult => v;
+
+const registerResultToMirror = (
+  v: RegisterSessionKeyResult,
+): AltanaRegisterSessionKeyResult => v;
+const registerResultToReal = (
+  v: AltanaRegisterSessionKeyResult,
+): RegisterSessionKeyResult => v;
+
+const client050ToMirror = (v: Client): AltanaSdkClient050 => v;
+const module050ToMirror = (v: typeof AltanaSdk): AltanaSdkModule050 => v;
+
 describe("altana type mirrors", () => {
   it("stay assignable to and from @altananetwork/sdk (compile-time contract)", () => {
     // The assignability functions above ARE the assertions; tsc rejects
@@ -113,6 +139,14 @@ describe("altana type mirrors", () => {
       moduleToMirror,
       clientX402ToMirror,
       moduleX402ToMirror,
+      tokenBalanceToMirror,
+      tokenBalanceToReal,
+      balancesResultToMirror,
+      balancesResultToReal,
+      registerResultToMirror,
+      registerResultToReal,
+      client050ToMirror,
+      module050ToMirror,
     ];
     for (const witness of witnesses) {
       expect(typeof witness).toBe("function");

@@ -187,6 +187,17 @@ const wallet = await AltanaWalletProvider.sessionFromEnv();
 const jobs = await ERC8183Client.create({ walletProvider: wallet, network: "bsc-mainnet" });
 ```
 
+`@altananetwork/sdk` >= 0.5.0 adds three surfaces the provider exposes:
+the `network: "bnb-testnet"` preset (Altana's official chain-97 stack),
+`balances({ tokens })` (native + ERC-20 reads; `raw` is the on-chain
+value transfers use, `display` is the vendor SDK's human formatting —
+vendor behavior passed through as-is), and **ephemeral sessions** —
+`grantSession({ register: false })` skips the ~$0.50 KeyStore
+registration (enforcement is unchanged; the key is just invisible to
+registry readers like `verify_authorization`) and
+`registerSessionKey(session)` upgrades one to registered later,
+idempotently.
+
 See [`examples/altana/`](examples/altana/README.md) for the full model,
 fee table, the x402 session-payer setup and the testnet E2E.
 
