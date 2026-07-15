@@ -123,15 +123,14 @@ same payment power without the registration fee.
 
 ## Testnet: the official stack
 
-SDK 0.5.0 ships Altana's official BSC-testnet deployment as the
+The Altana SDK ships the official BSC-testnet deployment as the
 `BNB_TESTNET` export — in this SDK, just `network: "bnb-testnet"` on the
 provider. The full lifecycle is E2E-verified against it (12/12,
-2026-07-15). One temporary caveat: the testnet relay was re-homed to
-`testnet-relay.altana.network` on 2026-07-15, and SDK 0.5.0's constant
-still points at the dead old hostname — `e2e.ts` overrides `relayUrl`
-until Altana ships the SDK update, after which the plain preset is all
-you need. (The legacy functor stack and its `getKeys→getActiveKeys` RPC
-shim are retired; `testnet.ts` now only carries shared constants.)
+2026-07-15). Use `@altananetwork/sdk` >= 0.5.1: the testnet relay was
+re-homed to `testnet-relay.altana.network` on 2026-07-15 and 0.5.1 is
+the first release pointing at it (0.5.0 still targets the dead old
+hostname). (The legacy functor stack and its `getKeys→getActiveKeys`
+RPC shim are retired; `testnet.ts` now only carries shared constants.)
 
 ## Running the E2E
 

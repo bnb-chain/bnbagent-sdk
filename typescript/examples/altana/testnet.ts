@@ -1,12 +1,11 @@
 /**
  * Shared BSC-testnet (97) constants for the Altana examples.
  *
- * The examples run on Altana's OFFICIAL testnet stack — SDK 0.5.0's
+ * The examples run on Altana's OFFICIAL testnet stack — the SDK's
  * `BNB_TESTNET` export, i.e. `network: "bnb-testnet"` on the provider
- * (E2E-verified 12/12 on 2026-07-15; see `./e2e.ts` for the one
- * temporary `relayUrl` override). The legacy functor deployment
- * (relay.functor.sh + the `getKeys→getActiveKeys` shim) that used to
- * live here is retired.
+ * (E2E-verified 12/12 on 2026-07-15; relay testnet-relay.altana.network
+ * needs SDK >= 0.5.1). The legacy functor deployment (relay.functor.sh +
+ * the `getKeys→getActiveKeys` shim) that used to live here is retired.
  */
 
 /** United Stables testnet token — the ERC-8183 payment token on 97. */

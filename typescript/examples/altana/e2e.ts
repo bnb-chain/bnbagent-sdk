@@ -10,13 +10,13 @@
  * idempotent and free of it. Step 9 additionally escrows and burns-to-fee
  * 0.1 testnet U (skipped when the wallet holds < 0.1 U).
  *
- * Runs against Altana's OFFICIAL BSC-testnet stack (chain 97, SDK 0.5.0's
- * `BNB_TESTNET`: KeyStore 0x6b83…E94A) with ONE override: the relay was
- * re-homed to testnet-relay.altana.network on 2026-07-15 (the preset's
- * relay-testnet.altana.network died with a failed Railway cert issuance),
- * and SDK 0.5.0 still points at the dead host — drop the override and use
- * the `network: "bnb-testnet"` preset once Altana ships the SDK update.
- * The legacy functor stack and its `getKeys→getActiveKeys` RPC shim are
+ * Runs against Altana's OFFICIAL BSC-testnet stack (chain 97, the SDK's
+ * `BNB_TESTNET`: KeyStore 0x6b83…E94A, relay
+ * testnet-relay.altana.network as of SDK 0.5.1 — the original hostname
+ * died with a failed Railway cert issuance on 2026-07-15). The config is
+ * spread only to honor an `RPC_URL` override for the read path; with the
+ * default RPC it is exactly the `network: "bnb-testnet"` preset. The
+ * legacy functor stack and its `getKeys→getActiveKeys` RPC shim are
  * retired; the official KeyStore answers `getKeys` natively.
  * Deliberately NOT part of CI.
  *
@@ -72,15 +72,6 @@ import {
 } from "../../src/wallets/index.js";
 import { BNB_TESTNET } from "@altananetwork/sdk";
 import { U_TESTNET } from "./testnet.js";
-
-/**
- * The official testnet relay's live hostname (2026-07-15). SDK 0.5.0's
- * `BNB_TESTNET.relayUrl` still points at the dead
- * relay-testnet.altana.network; Altana will ship an SDK update, after
- * which this override (and the spread below) collapses to the
- * `network: "bnb-testnet"` preset.
- */
-const OFFICIAL_TESTNET_RELAY = "https://testnet-relay.altana.network";
 
 // ── Official-contract read ABIs (direct reads bypass the SDK) ────────────
 
@@ -258,7 +249,7 @@ async function main(): Promise<void> {
 
   const realRpc = getEnv("RPC_URL") ?? BNB_TESTNET.publicRpcUrl;
   console.log(
-    `=== Altana testnet E2E (chain 97, official stack) ===\n  rpc: ${realRpc}\n  relay: ${OFFICIAL_TESTNET_RELAY} (override until the SDK ships the re-homed host)\n`,
+    `=== Altana testnet E2E (chain 97, official stack) ===\n  rpc: ${realRpc}\n  relay: ${BNB_TESTNET.relayUrl}\n`,
   );
 
   const publicClient = createPublicClient({
@@ -267,7 +258,6 @@ async function main(): Promise<void> {
   const altanaNetwork = {
     ...BNB_TESTNET,
     publicRpcUrl: realRpc,
-    relayUrl: OFFICIAL_TESTNET_RELAY,
   };
   const bscTestnet = NETWORKS["bsc-testnet"] as NetworkConfig;
   const protocolNetwork: NetworkConfig = {
