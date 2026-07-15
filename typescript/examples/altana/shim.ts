@@ -57,9 +57,7 @@ export async function startGetKeysShim(
     if (rpc.method !== "eth_call" && rpc.method !== "eth_estimateGas") {
       return;
     }
-    const call = rpc.params?.[0] as
-      | { to?: string; data?: string }
-      | undefined;
+    const call = rpc.params?.[0] as { to?: string; data?: string } | undefined;
     if (
       call &&
       typeof call.to === "string" &&

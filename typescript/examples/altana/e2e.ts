@@ -214,7 +214,10 @@ async function fundLifecycle(
     args: [eoa, jobs.commerce.address],
   })) as bigint;
   assertStep(
-    funded.status === 1 && jobFundedSeen && approvalSeen && allowanceAfter === 0n,
+    funded.status === 1 &&
+      jobFundedSeen &&
+      approvalSeen &&
+      allowanceAfter === 0n,
     "9.fund",
     `job ${fundJob.jobId} funded 0.1 U in ONE tx (${funded.transactionHash}): Approval+JobFunded in same receipt; allowance back to 0`,
     `status=${funded.status} jobFunded=${jobFundedSeen} approval=${approvalSeen} allowance=${allowanceAfter}`,
@@ -356,7 +359,11 @@ async function main(): Promise<void> {
       "bootstrap-idempotency",
     );
     if (boot2.transactionHash) {
-      await waitForReceiptAndInterpret(publicClient, boot2.transactionHash, 300);
+      await waitForReceiptAndInterpret(
+        publicClient,
+        boot2.transactionHash,
+        300,
+      );
     }
     const keysAfterRerun = await activeKeys();
     assertStep(
@@ -383,8 +390,9 @@ async function main(): Promise<void> {
     const keyId = keccak256(session.publicKey);
     const keysWithSession = await activeKeys();
     assertStep(
-      keysWithSession.map((k) => k.toLowerCase()).includes(keyId.toLowerCase()) &&
-        shim.hits() > 0,
+      keysWithSession
+        .map((k) => k.toLowerCase())
+        .includes(keyId.toLowerCase()) && shim.hits() > 0,
       "3.grant-session",
       `keccak(session.publicKey)=${keyId.slice(0, 18)}… in registry; shim hits=${shim.hits()}`,
       `session key not in registry (${keysWithSession.length} keys) or shim unused (hits=${shim.hits()})`,

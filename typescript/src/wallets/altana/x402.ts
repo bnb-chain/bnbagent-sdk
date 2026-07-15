@@ -104,7 +104,11 @@ export function parseX402Challenge(
         tokenName: (entry.extra as { name?: string } | undefined)?.name,
         amount: BigInt(amount as string | number | bigint),
         payTo,
-        transferMethod: entry.transferMethod as string | undefined,
+        // Real B402 wire carries the rail in extra.assetTransferMethod
+        // ("permit2-exact" | "eip3009"); the top-level spelling is legacy.
+        transferMethod: (entry.transferMethod ??
+          (entry.extra as { assetTransferMethod?: string } | undefined)
+            ?.assetTransferMethod) as string | undefined,
         maxTimeoutSeconds:
           timeout !== undefined && timeout !== null ? Number(timeout) : null,
         preferred: Boolean(entry.preferred ?? false),
@@ -138,13 +142,17 @@ function isPermit2Route(option: X402PaymentOption): boolean {
 export function selectX402Route(
   routes: readonly ParsedRoute[],
   chainId: number,
+  expectedAsset?: string,
 ): ParsedRoute | null {
-  const onChain = routes.filter(
-    (r) => chainIdFromX402Network(r.option.network) === chainId,
+  const candidates = routes.filter(
+    (r) =>
+      chainIdFromX402Network(r.option.network) === chainId &&
+      (expectedAsset === undefined ||
+        r.option.asset.toLowerCase() === expectedAsset.toLowerCase()),
   );
   const rank = (r: ParsedRoute) =>
     (isPermit2Route(r.option) ? 0 : 2) + (r.option.preferred ? 0 : 1);
-  return [...onChain].sort((a, b) => rank(a) - rank(b))[0] ?? null;
+  return [...candidates].sort((a, b) => rank(a) - rank(b))[0] ?? null;
 }
 
 /** Constructor options for {@link AltanaX402Payer}. */
@@ -155,6 +163,13 @@ export interface AltanaX402PayerOptions {
    * token → no cumulative cap; `request`'s `maxPayment` still applies.
    */
   sessionBudget?: Record<string, bigint>;
+  /**
+   * Pin the payment token: only challenge routes whose `asset` equals
+   * this address are considered, so no other token can leave the wallet
+   * through this payer (same intent as `TwakX402Payer`'s
+   * `expectedAsset`). No match on the chain → `X402NoPayableRouteError`.
+   */
+  expectedAsset?: string;
   /** Fetch implementation override (tests). Defaults to `globalThis.fetch`. */
   fetchImpl?: typeof fetch;
 }
@@ -193,6 +208,7 @@ function transactionFromResponse(response: Response): string | undefined {
 export class AltanaX402Payer implements X402Payer {
   readonly #provider: AltanaWalletProvider;
   readonly #budget: SessionBudgetTracker;
+  readonly #expectedAsset: string | undefined;
   readonly #fetch: typeof fetch;
 
   /** @internal Constructed by {@link AltanaWalletProvider.makeX402Payer}. */
@@ -202,6 +218,7 @@ export class AltanaX402Payer implements X402Payer {
   ) {
     this.#provider = provider;
     this.#budget = new SessionBudgetTracker(opts.sessionBudget);
+    this.#expectedAsset = opts.expectedAsset;
     this.#fetch = opts.fetchImpl ?? globalThis.fetch;
   }
 
@@ -258,11 +275,13 @@ export class AltanaX402Payer implements X402Payer {
     const challengeBody = (await parseBody(first)) as Record<string, unknown>;
     const { routes } = parseX402Challenge(url, challengeBody);
     const chainId = await this.#provider._x402ChainId();
-    const route = selectX402Route(routes, chainId);
+    const route = selectX402Route(routes, chainId, this.#expectedAsset);
     if (!route) {
-      const seen = routes.map((r) => r.option.network).join(", ") || "<none>";
+      const seen =
+        routes.map((r) => `${r.option.network}:${r.option.asset}`).join(", ") ||
+        "<none>";
       throw new X402NoPayableRouteError(
-        `no payable x402 route on chain ${chainId} for ${url} (challenge networks: ${seen})`,
+        `no payable x402 route on chain ${chainId}${this.#expectedAsset ? ` for asset ${this.#expectedAsset}` : ""} for ${url} (challenge routes: ${seen})`,
       );
     }
     const { option } = route;

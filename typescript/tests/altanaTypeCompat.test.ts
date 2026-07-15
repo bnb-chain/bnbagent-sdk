@@ -32,7 +32,9 @@ import type {
   AltanaExecuteResult,
   AltanaNetworkConfig,
   AltanaSdkClient,
+  AltanaSdkClientX402,
   AltanaSdkModule,
+  AltanaSdkModuleX402,
   AltanaSession,
   AltanaSessionPermissions,
   AltanaSigner,
@@ -77,6 +79,12 @@ const executeResultToReal = (v: AltanaExecuteResult): ExecuteResult => v;
 const clientToMirror = (v: Client): AltanaSdkClient => v;
 const moduleToMirror = (v: typeof AltanaSdk): AltanaSdkModule => v;
 
+// x402 surface (SDK >= 0.4.0): signX402Payment is module-level with
+// positional (session, requirement) params; the checker/sign-order
+// methods live on the client. Real → mirror, same as the base shapes.
+const clientX402ToMirror = (v: Client): AltanaSdkClientX402 => v;
+const moduleX402ToMirror = (v: typeof AltanaSdk): AltanaSdkModuleX402 => v;
+
 describe("altana type mirrors", () => {
   it("stay assignable to and from @altananetwork/sdk (compile-time contract)", () => {
     // The assignability functions above ARE the assertions; tsc rejects
@@ -103,6 +111,8 @@ describe("altana type mirrors", () => {
       executeResultToReal,
       clientToMirror,
       moduleToMirror,
+      clientX402ToMirror,
+      moduleX402ToMirror,
     ];
     for (const witness of witnesses) {
       expect(typeof witness).toBe("function");

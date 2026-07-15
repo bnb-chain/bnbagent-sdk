@@ -23,7 +23,7 @@
  * form (Altana executes arbitrary calls; no per-operation handlers).
  *
  * x402: session mode carries `x402.pay` via {@link AltanaX402Payer},
- * backed by `@altananetwork/sdk` >= 0.3.4's `signX402Payment` (an
+ * backed by `@altananetwork/sdk` >= 0.4.0's `signX402Payment` (an
  * ERC-7739-nested ERC-1271 envelope) after a one-time admin setup —
  * `approveX402SignatureChecker` + a bounded `setPermit2Allowance`. The
  * account's ERC-1271 still rejects raw digests (field-tested); the nested
@@ -158,7 +158,7 @@ export interface AltanaSessionFromEnvOpts {
  * Wallet provider for Altana agentic wallets (see module docstring).
  *
  * Capabilities: `broadcast.self`, `calls.arbitrary`, `intents.erc8004`,
- * `intents.erc8183`; session mode adds `x402.pay` (SDK >= 0.3.4). Never
+ * `intents.erc8183`; session mode adds `x402.pay` (SDK >= 0.4.0). Never
  * any `sign.*`.
  */
 export class AltanaWalletProvider extends WalletProvider {
@@ -423,7 +423,7 @@ export class AltanaWalletProvider extends WalletProvider {
    * Delegated x402 payer for this wallet's session (see
    * {@link AltanaX402Payer}). Session mode only: the SDK/relay signs x402
    * payments with session keys exclusively; run the payer where the
-   * session lives. Requires `@altananetwork/sdk` >= 0.3.4 at first use and
+   * session lives. Requires `@altananetwork/sdk` >= 0.4.0 at first use and
    * the one-time admin setup ({@link approveX402SignatureChecker} +
    * {@link setPermit2Allowance}) — without them the facilitator's
    * `isValidSignature`/`transferFrom` fails on-chain, not here.
@@ -451,7 +451,7 @@ export class AltanaWalletProvider extends WalletProvider {
    * self-call to `setSignatureCheckerApproval(sessionKeyHash, checker,
    * true)`. Without it, `isValidSignature` answers the facilitator with a
    * failure and every payment settles as invalid. Once per session per
-   * rail; costs the relay fee + gas. Requires `@altananetwork/sdk` >= 0.3.4.
+   * rail; costs the relay fee + gas. Requires `@altananetwork/sdk` >= 0.4.0.
    */
   async approveX402SignatureChecker(
     session: AltanaSession,
@@ -481,28 +481,27 @@ export class AltanaWalletProvider extends WalletProvider {
    * dedicated-EOA balance; top it up or zero it (amount = 0n) as needed.
    * The relay races nothing here (admin queue applies as usual).
    *
-   * The SDK's own `approveTokenForPermit2` helper is deliberately not
-   * used: it takes no amount.
+   * Delegates to the SDK's `approveTokenForPermit2` with an explicit
+   * `amount` (bounded-allowance support confirmed by the Altana team).
    */
   async setPermit2Allowance(
     token: `0x${string}`,
     amount: bigint,
+    opts?: { feeToken?: `0x${string}` },
   ): Promise<AltanaExecuteResult> {
     this.#requireAdmin("setPermit2Allowance");
-    const { module } = await this.#x402Sdk();
-    const result = await this._relayExecute(
-      [
-        {
-          to: token,
-          value: 0n,
-          data: encodeFunctionData({
-            abi: erc20Abi,
-            functionName: "approve",
-            args: [module.PERMIT2_ADDRESS, amount],
-          }),
-        },
-      ],
-      "setPermit2Allowance",
+    const { client } = await this.#x402Sdk();
+    const { wallet, signer } = await this.#adminWalletAndSigner();
+    const result = await this.#enqueue(() =>
+      this.#withNonceRetry("setPermit2Allowance", () =>
+        client.approveTokenForPermit2({
+          wallet,
+          signer,
+          token,
+          amount,
+          ...(opts?.feeToken ? { feeToken: opts.feeToken } : {}),
+        }),
+      ),
     );
     if (result.status === "FAILED") {
       throw new Error(
@@ -582,9 +581,11 @@ export class AltanaWalletProvider extends WalletProvider {
 
   /**
    * Sign one raw 402 `accepts[]` requirement with this provider's session
-   * via the SDK (`signX402Payment` → complete `X-PAYMENT` header value).
-   * Signing is local to the SDK (no relay submission), so it bypasses the
-   * serial queue and nonce retry.
+   * via the SDK's module-level `signX402Payment(session, requirement)` →
+   * complete `X-PAYMENT` header value. Signing is local to the SDK (no
+   * relay submission), so it bypasses the serial queue and nonce retry;
+   * it is chain-independent (the requirement's `network` carries the
+   * chain).
    *
    * @internal Used by {@link AltanaX402Payer}.
    */
@@ -596,12 +597,8 @@ export class AltanaWalletProvider extends WalletProvider {
         reason: "x402 signing needs the session (session-mode provider)",
       });
     }
-    const { client } = await this.#x402Sdk();
-    const result = await client.signX402Payment({
-      session: this.#session,
-      requirement,
-      chainId: await this._x402ChainId(),
-    });
+    const { module } = await this.#x402Sdk();
+    const result = await module.signX402Payment(this.#session, requirement);
     if (typeof result?.header !== "string" || result.header.length === 0) {
       throw new Error(
         "Altana signX402Payment returned no X-PAYMENT header value; cannot pay",
@@ -652,10 +649,11 @@ export class AltanaWalletProvider extends WalletProvider {
   }
 
   /**
-   * The SDK module + client, gated on the x402 surface announced for
-   * `@altananetwork/sdk` >= 0.3.4. Duck-checked at first x402 use so a
-   * 0.3.3 install keeps every non-x402 path working and fails here with
-   * the exact upgrade to run.
+   * The SDK module + client, gated on the x402 surface shipped in
+   * `@altananetwork/sdk` 0.4.0 (`signX402Payment` is module-level; the
+   * checker methods live on the client). Duck-checked at first x402 use
+   * so a 0.3.3 install keeps every non-x402 path working and fails here
+   * with the exact upgrade to run.
    */
   async #x402Sdk(): Promise<{
     client: AltanaSdkClient & AltanaSdkClientX402;
@@ -666,7 +664,7 @@ export class AltanaWalletProvider extends WalletProvider {
     const client = (await this.#sdkClient()) as AltanaSdkClient &
       Partial<AltanaSdkClientX402>;
     const missing = [
-      typeof client.signX402Payment === "function" ? null : "signX402Payment",
+      typeof sdk.signX402Payment === "function" ? null : "signX402Payment",
       typeof client.signOrderTypedData === "function"
         ? null
         : "signOrderTypedData",
@@ -677,7 +675,7 @@ export class AltanaWalletProvider extends WalletProvider {
     ].filter(Boolean);
     if (missing.length > 0) {
       throw new Error(
-        `Altana x402 support requires '@altananetwork/sdk' >= 0.3.4 (the installed version lacks ${missing.join(", ")}). Upgrade with: pnpm add @altananetwork/sdk@latest`,
+        `Altana x402 support requires '@altananetwork/sdk' >= 0.4.0 (the installed version lacks ${missing.join(", ")}). Upgrade with: pnpm add @altananetwork/sdk@latest`,
       );
     }
     return {

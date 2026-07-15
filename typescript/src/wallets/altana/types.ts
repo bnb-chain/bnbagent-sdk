@@ -204,15 +204,13 @@ export interface AltanaSdkModule {
   BNB: AltanaNetworkConfig;
 }
 
-// ── x402 surface (announced for `@altananetwork/sdk` >= 0.3.4) ────────────
-// Mirrored from docs.altana.network/sdk/{sign-order,approve-signature-checker,
-// x402}, NOT from shipped .d.ts — the 0.3.3 devDependency predates this
-// surface, so these mirrors are deliberately absent from
-// `tests/altanaTypeCompat.test.ts`. VERIFICATION STEP once the release
-// lands: bump the devDependency, add the real → mirror pins there, and let
-// `pnpm typecheck` arbitrate every shape below. At runtime the provider
-// duck-checks this surface and raises an upgrade error on older installs
-// (see `provider.ts` `#x402Sdk`).
+// ── x402 surface (`@altananetwork/sdk` >= 0.4.0) ──────────────────────────
+// Mirrored from the shipped 0.4.0 `dist/{client,x402}.d.ts` and pinned by
+// `tests/altanaTypeCompat.test.ts`. One asymmetry vs the client methods:
+// `signX402Payment` is a MODULE-level function with positional parameters
+// `(session, requirement, opts?)` — chain-independent, no chainId. At
+// runtime the provider duck-checks this surface and raises an upgrade
+// error on pre-0.4.0 installs (see `provider.ts` `#x402Sdk`).
 
 /**
  * Mirror of `ClientApproveSignatureCheckerOptions` (docs). Approving a
@@ -236,32 +234,31 @@ export interface AltanaSignOrderTypedDataOptions {
   typedData: Record<string, unknown>;
 }
 
-/**
- * Options for `signX402Payment` — "sign one requirement → { header,
- * payload }" (docs). `requirement` is one raw `accepts[]` entry from the
- * 402 challenge, passed verbatim so the SDK owns the rail-specific
- * typed-data construction (plain Permit2, B402 witness, EIP-3009).
- */
-export interface AltanaSignX402PaymentOptions {
-  session: AltanaSession;
-  requirement: Record<string, unknown>;
-  chainId?: number;
-}
-
 /** Result of `signX402Payment`: the complete `X-PAYMENT` header value. */
 export interface AltanaSignX402PaymentResult {
   header: string;
   payload?: unknown;
 }
 
-/** The x402 client methods added in `@altananetwork/sdk` >= 0.3.4. */
+/** Mirror of `ClientApproveTokenForPermit2Options` (0.4.0). */
+export interface AltanaApproveTokenForPermit2Options {
+  wallet: AltanaWallet;
+  signer: AltanaSigner;
+  token: `0x${string}`;
+  /** Omit for unlimited; SET IT — the allowance is the on-chain x402 ceiling. */
+  amount?: bigint;
+  feeToken?: `0x${string}`;
+  chainId?: number;
+}
+
+/** The x402 client methods added in `@altananetwork/sdk` >= 0.4.0. */
 export interface AltanaSdkClientX402 {
   signOrderTypedData(
     opts: AltanaSignOrderTypedDataOptions,
   ): Promise<`0x${string}`>;
-  signX402Payment(
-    opts: AltanaSignX402PaymentOptions,
-  ): Promise<AltanaSignX402PaymentResult>;
+  approveTokenForPermit2(
+    opts: AltanaApproveTokenForPermit2Options,
+  ): Promise<AltanaExecuteResult>;
   approveSignatureChecker(
     opts: AltanaApproveSignatureCheckerOptions,
   ): Promise<AltanaExecuteResult>;
@@ -270,8 +267,19 @@ export interface AltanaSdkClientX402 {
   ): Promise<AltanaExecuteResult>;
 }
 
-/** The module-level x402 additions in `@altananetwork/sdk` >= 0.3.4. */
+/** The module-level x402 additions in `@altananetwork/sdk` >= 0.4.0. */
 export interface AltanaSdkModuleX402 {
   /** Canonical Permit2 — the checker for the permit2-exact/B402 rail. */
   PERMIT2_ADDRESS: `0x${string}`;
+  /**
+   * Sign one raw 402 `accepts[]` entry with the session key → the
+   * complete `X-PAYMENT` header value. Positional parameters, chain
+   * independent (the requirement's `network` carries the chain); the SDK
+   * owns the rail-specific typed-data construction (permit2-exact/B402
+   * witness, EIP-3009).
+   */
+  signX402Payment(
+    session: AltanaSession,
+    requirement: Record<string, unknown>,
+  ): Promise<AltanaSignX402PaymentResult>;
 }

@@ -74,11 +74,11 @@ never commit, never log. Its blast radius is capped by the on-chain grant.
 in the same transaction — nothing is sponsored today, and MegaFuel does
 not participate in Altana-routed transactions.
 
-## x402 from the session key (`x402.pay`, SDK >= 0.3.4)
+## x402 from the session key (`x402.pay`, SDK >= 0.4.0)
 
 Raw x402 signatures used to be a dead end here (confirmed on-chain:
 `ecrecover` yields the session key, and the Porto account's ERC-1271
-rejects raw digests). `@altananetwork/sdk` >= 0.3.4 opens the supported
+rejects raw digests). `@altananetwork/sdk` >= 0.4.0 opens the supported
 path around both: `signX402Payment` produces an ERC-7739-nested ERC-1271
 envelope, and `isValidSignature` answers only callers whitelisted via
 `approveSignatureChecker` — so the old dual-account workaround (separate
@@ -103,7 +103,7 @@ dedicated-EOA balance) and layer the in-process caps (`maxPayment`,
 `sessionBudget`) on top. Kill switches: `revokeX402SignatureChecker`
 (x402 only) or `revokeSession` (everything).
 
-**Verification runbook (run once the >= 0.3.4 release is on npm):**
+**Verification runbook (>= 0.4.0 is on npm):**
 
 1. `pnpm add -D @altananetwork/sdk@latest`, then add the x402 mirrors to
    `tests/altanaTypeCompat.test.ts` (see the note in

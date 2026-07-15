@@ -4,10 +4,8 @@
  * Runs the full single-account x402 story end-to-end: admin grants a
  * short-lived session, whitelists Permit2 as its signature checker, funds
  * a BOUNDED Permit2 allowance, then the session pays one x402 challenge
- * through `makeX402Payer()` — and everything is torn back down. Run it
- * once the `@altananetwork/sdk` >= 0.3.4 release is on npm (until then
- * the setup step fails with the upgrade hint); see the runbook in
- * `README.md`.
+ * through `makeX402Payer()` — and everything is torn back down.
+ * Requires `@altananetwork/sdk` >= 0.4.0; see the runbook in `README.md`.
  *
  * There is no Altana testnet yet, so this spends REAL (dust) funds:
  * ~$0.50-equiv BNB session registration + gas for 3 relay calls + the
@@ -45,6 +43,11 @@ async function main(): Promise<void> {
   const token = getAddress((getEnv("X402_TOKEN") ?? USDC_BSC) as `0x${string}`);
   const maxPayment = BigInt(getEnv("X402_MAX_PAYMENT") ?? "100000");
   const allowance = maxPayment * 5n; // the on-chain ceiling for this run
+  // Relay fees charged in this token instead of native BNB (lets a
+  // BNB-less wallet run the whole flow); default: the payment token.
+  const feeToken = getAddress(
+    (getEnv("X402_FEE_TOKEN") ?? token) as `0x${string}`,
+  );
 
   const admin = new AltanaWalletProvider({ privateKey });
   console.log(`[1/7] wallet ${admin.address} — granting a 1h session`);
@@ -54,19 +57,21 @@ async function main(): Promise<void> {
       tokenSpend: { limit: allowance },
     }),
     expiry: Math.floor(Date.now() / 1000) + 3600,
+    feeToken,
   });
 
   console.log("[2/7] approving Permit2 as the session's signature checker");
-  await admin.approveX402SignatureChecker(session);
+  await admin.approveX402SignatureChecker(session, { feeToken });
 
   console.log(
     `[3/7] bounding the Permit2 allowance to ${allowance} of ${token}`,
   );
-  await admin.setPermit2Allowance(token, allowance);
+  await admin.setPermit2Allowance(token, allowance, { feeToken });
 
   const agent = new AltanaWalletProvider({ session });
   const payer = agent.makeX402Payer({
     sessionBudget: { [token]: allowance },
+    expectedAsset: token, // only this token may leave the wallet
   });
 
   console.log(`[4/7] quoting ${endpoint}`);
@@ -89,11 +94,11 @@ async function main(): Promise<void> {
   console.log(`  response: ${JSON.stringify(result.response).slice(0, 200)}`);
 
   console.log("[6/7] cleanup: zeroing the Permit2 allowance");
-  await admin.setPermit2Allowance(token, 0n);
+  await admin.setPermit2Allowance(token, 0n, { feeToken });
 
   console.log("[7/7] cleanup: revoking the signature checker + session");
-  await admin.revokeX402SignatureChecker(session);
-  await admin.revokeSession(session);
+  await admin.revokeX402SignatureChecker(session, { feeToken });
+  await admin.revokeSession(session, { feeToken });
 
   console.log("x402 session-payer verification PASSED");
 }

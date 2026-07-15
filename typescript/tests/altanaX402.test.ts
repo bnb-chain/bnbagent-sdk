@@ -1,7 +1,7 @@
 /**
  * Altana x402 integration (`src/wallets/altana/x402.ts` + the provider's
  * x402 surface): capability gating, the 402 pay loop (route selection,
- * caps, budget rollback, header plumbing), the >= 0.3.4 SDK gate, and the
+ * caps, budget rollback, header plumbing), the >= 0.4.0 SDK gate, and the
  * one-time admin setup (checker approval, bounded Permit2 allowance).
  *
  * `@altananetwork/sdk` is mocked at the module level like the other altana
@@ -31,6 +31,7 @@ const sdkMocks = vi.hoisted(() => {
   const signOrderTypedDataMock = vi.fn();
   const approveSignatureCheckerMock = vi.fn();
   const revokeSignatureCheckerMock = vi.fn();
+  const approveTokenForPermit2Mock = vi.fn();
   // Flipped off to model a pre-x402 (0.3.3) install.
   const x402Surface = { enabled: true };
   const createClientMock = vi.fn(() => ({
@@ -38,12 +39,14 @@ const sdkMocks = vi.hoisted(() => {
     execute: executeMock,
     grantSession: vi.fn(),
     revokeSession: vi.fn(),
+    // signX402Payment is module-level in the real 0.4.0 SDK (positional
+    // params), so it is NOT on the client mock.
     ...(x402Surface.enabled
       ? {
-          signX402Payment: signX402PaymentMock,
           signOrderTypedData: signOrderTypedDataMock,
           approveSignatureChecker: approveSignatureCheckerMock,
           revokeSignatureChecker: revokeSignatureCheckerMock,
+          approveTokenForPermit2: approveTokenForPermit2Mock,
         }
       : {}),
   }));
@@ -55,6 +58,7 @@ const sdkMocks = vi.hoisted(() => {
     signOrderTypedDataMock,
     approveSignatureCheckerMock,
     revokeSignatureCheckerMock,
+    approveTokenForPermit2Mock,
     createClientMock,
     x402Surface,
   };
@@ -78,6 +82,9 @@ vi.mock("@altananetwork/sdk", async () => {
     signerFromPrivateKey: sdkMocks.signerFromPrivateKeyMock,
     BNB: { chainId: 56 },
     PERMIT2_ADDRESS: "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+    // Module-level in 0.4.0: signX402Payment(session, requirement, opts?).
+    signX402Payment: (...args: unknown[]) =>
+      sdkMocks.signX402PaymentMock(...args),
   };
 });
 
@@ -185,6 +192,7 @@ beforeEach(() => {
   sdkMocks.signX402PaymentMock.mockReset();
   sdkMocks.approveSignatureCheckerMock.mockReset();
   sdkMocks.revokeSignatureCheckerMock.mockReset();
+  sdkMocks.approveTokenForPermit2Mock.mockReset();
   sdkMocks.createClientMock.mockClear();
   sdkMocks.x402Surface.enabled = true;
   sdkMocks.createWalletMock.mockImplementation(
@@ -202,6 +210,7 @@ beforeEach(() => {
   sdkMocks.executeMock.mockResolvedValue(confirmed);
   sdkMocks.approveSignatureCheckerMock.mockResolvedValue(confirmed);
   sdkMocks.revokeSignatureCheckerMock.mockResolvedValue(confirmed);
+  sdkMocks.approveTokenForPermit2Mock.mockResolvedValue(confirmed);
 });
 
 describe("x402 capability gating", () => {
@@ -241,11 +250,11 @@ describe("AltanaX402Payer.request", () => {
     expect(result.transaction).toBe(`0x${"ab".repeat(32)}`);
     // The signed requirement is the raw permit2 entry this payer validated
     // (never the cheaper eip3009 decoy, never a re-fetched challenge).
+    // 0.4.0 shape: module-level signX402Payment(session, requirement).
     expect(sdkMocks.signX402PaymentMock).toHaveBeenCalledTimes(1);
-    const signArgs = sdkMocks.signX402PaymentMock.mock.calls[0][0];
-    expect(signArgs.requirement).toEqual(PERMIT2_ENTRY);
-    expect(signArgs.chainId).toBe(56);
-    expect(signArgs.session.walletAddress).toBe(WALLET);
+    const [session, requirement] = sdkMocks.signX402PaymentMock.mock.calls[0];
+    expect(requirement).toEqual(PERMIT2_ENTRY);
+    expect(session.walletAddress).toBe(WALLET);
     // Retry carries the SDK-produced header verbatim.
     expect(calls).toHaveLength(2);
     expect(
@@ -325,7 +334,7 @@ describe("AltanaX402Payer.request", () => {
     const payer = sessionProvider().makeX402Payer({ fetchImpl: impl });
     await expect(
       payer.request("https://api.example/paid", { maxPayment: 10_000n }),
-    ).rejects.toThrow(/@altananetwork\/sdk' >= 0\.3\.4/);
+    ).rejects.toThrow(/@altananetwork\/sdk' >= 0\.4\.0/);
   });
 });
 
@@ -380,16 +389,16 @@ describe("admin x402 setup", () => {
     ).rejects.toThrow(/FAILED.*approveSignatureChecker/);
   });
 
-  it("setPermit2Allowance sends a BOUNDED approve(Permit2, amount) via the relay", async () => {
-    await adminProvider().setPermit2Allowance(USDC, 123_456n);
-    expect(sdkMocks.executeMock).toHaveBeenCalledTimes(1);
-    const { calls } = sdkMocks.executeMock.mock.calls[0][0];
-    expect(calls).toHaveLength(1);
-    expect(calls[0].to).toBe(USDC);
-    const decoded = decodeFunctionData({ abi: erc20Abi, data: calls[0].data });
-    expect(decoded.functionName).toBe("approve");
-    expect(getAddress(decoded.args[0] as string)).toBe(PERMIT2);
-    expect(decoded.args[1]).toBe(123_456n);
+  it("setPermit2Allowance delegates a BOUNDED amount to the SDK's approveTokenForPermit2", async () => {
+    const provider = adminProvider();
+    await provider.setPermit2Allowance(USDC, 123_456n, { feeToken: USDC });
+    expect(sdkMocks.approveTokenForPermit2Mock).toHaveBeenCalledTimes(1);
+    const args = sdkMocks.approveTokenForPermit2Mock.mock.calls[0][0];
+    expect(args.token).toBe(USDC);
+    expect(args.amount).toBe(123_456n); // bounded, never unlimited
+    expect(args.feeToken).toBe(USDC);
+    expect(args.wallet.address).toBe(provider.address);
+    expect(sdkMocks.executeMock).not.toHaveBeenCalled();
   });
 
   it("session-mode providers cannot run the admin setup", async () => {
@@ -399,5 +408,84 @@ describe("admin x402 setup", () => {
     await expect(
       sessionProvider().setPermit2Allowance(USDC, 1n),
     ).rejects.toThrow(/admin/);
+  });
+});
+
+// ── real-wire challenge shape (CMC B402, field-verified 2026-07-14) ──────
+
+const U_BSC = getAddress("0xcE24439F2D9C6a2289F741120FE202248B666666");
+const CMC_CHALLENGE = {
+  x402Version: 2,
+  accepts: [
+    {
+      scheme: "exact",
+      network: "eip155:56",
+      asset: USDC,
+      payTo: PAY_TO,
+      maxTimeoutSeconds: 30,
+      extra: { name: "USD Coin", version: "1", assetTransferMethod: "eip3009" },
+      amount: "20000000000000000",
+    },
+    {
+      scheme: "exact",
+      network: "eip155:56",
+      asset: U_BSC,
+      payTo: PAY_TO,
+      maxTimeoutSeconds: 30,
+      extra: {
+        name: "United Stables",
+        version: "1",
+        assetTransferMethod: "permit2-exact",
+        spenderAddress: `0x${"30".repeat(20)}`,
+      },
+      amount: "10000000000000000",
+    },
+    {
+      scheme: "exact",
+      network: "eip155:8453",
+      asset: `0x${"83".repeat(20)}`,
+      payTo: PAY_TO,
+      maxTimeoutSeconds: 30,
+      extra: { name: "USD Coin", version: "2", assetTransferMethod: "eip3009" },
+      amount: "10000",
+    },
+  ],
+};
+
+describe("real B402 wire shape (extra.assetTransferMethod, expectedAsset pin)", () => {
+  it("ranks the permit2-exact rail via extra.assetTransferMethod and signs that raw entry", async () => {
+    const { impl } = fetchQueue(json402(CMC_CHALLENGE), jsonOk({ ok: true }));
+    const payer = sessionProvider().makeX402Payer({ fetchImpl: impl });
+    const result = await payer.request("https://pro-api.example/x402", {
+      maxPayment: 10n ** 17n,
+    });
+    // The eip3009 route is FIRST in the challenge; the permit2-exact U
+    // route must still win (rail read from extra.assetTransferMethod).
+    expect(result.asset).toBe(U_BSC);
+    const [, requirement] = sdkMocks.signX402PaymentMock.mock.calls[0];
+    expect(requirement).toEqual(CMC_CHALLENGE.accepts[1]);
+  });
+
+  it("expectedAsset pins the token: only matching routes are payable", async () => {
+    const { impl } = fetchQueue(json402(CMC_CHALLENGE), jsonOk({ ok: true }));
+    const pinned = sessionProvider().makeX402Payer({
+      fetchImpl: impl,
+      expectedAsset: USDC,
+    });
+    const result = await pinned.request("https://pro-api.example/x402", {
+      maxPayment: 10n ** 17n,
+    });
+    expect(result.asset).toBe(USDC);
+
+    const { impl: impl2 } = fetchQueue(json402(CMC_CHALLENGE));
+    const impossible = sessionProvider().makeX402Payer({
+      fetchImpl: impl2,
+      expectedAsset: `0x${"99".repeat(20)}`,
+    });
+    await expect(
+      impossible.request("https://pro-api.example/x402", {
+        maxPayment: 10n ** 17n,
+      }),
+    ).rejects.toThrow(X402NoPayableRouteError);
   });
 });
