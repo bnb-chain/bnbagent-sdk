@@ -155,6 +155,41 @@ await fundedJobWatcher(
 );
 ```
 
+## Wallet providers
+
+Every protocol client signs through the `WalletProvider` seam — swap the
+provider, keep the protocol code:
+
+| | `EVMWalletProvider` | `AltanaWalletProvider` |
+| --- | --- | --- |
+| Custody | local key, Keystore V3 on disk | EIP-7702 wallet == your EOA; [Altana](https://docs.altana.network) relay broadcasts |
+| Capabilities | `sign.message/transaction/typed_data`, `calls.arbitrary`, `paymaster.sponsor` | `broadcast.self`, `calls.arbitrary`, `intents.erc8004`, `intents.erc8183` |
+| Agent containment | `SigningPolicy` (in-process) | on-chain session keys: call whitelist + spend caps + expiry, revocable in one tx |
+| Gas | self-paid or MegaFuel-sponsored | relay fronts gas, recovers it from the wallet (MegaFuel not involved) |
+| x402 payments | ✅ `X402Signer` | ❌ structurally impossible for session keys — use a separate small EOA; **receiving** at the wallet works fine |
+| Extra install | — | `pnpm add @altananetwork/sdk` (optional peer, GPL-3.0-or-later, lazily imported) |
+
+Session quick start (admin grants once, agent runs with the session):
+
+```ts
+import { AltanaWalletProvider, defaultAgentPermissions, serializeSession } from "@bnb-chain/bnbagent/wallets";
+
+// admin side — grant a scoped session (~$0.50-equiv BNB registration fee)
+const admin = new AltanaWalletProvider({ privateKey: process.env.PRIVATE_KEY! });
+const session = await admin.grantSession({
+  permissions: defaultAgentPermissions({ chainId: 56, tokenSpend: { limit: 10n ** 18n } }),
+  expiry: Math.floor(Date.now() / 1000) + 86_400,
+});
+writeFileSync(".session.json", serializeSession(session), { mode: 0o600 }); // byte-exact — required
+
+// agent side — ALTANA_SESSION_FILE=.session.json
+const wallet = await AltanaWalletProvider.sessionFromEnv();
+const jobs = await ERC8183Client.create({ walletProvider: wallet, network: "bsc-mainnet" });
+```
+
+See [`examples/altana/`](examples/altana/README.md) for the full model,
+fee table, the x402 dual-account rationale and the testnet E2E.
+
 ## Environment variables
 
 None of these are read automatically — call `loadEnv()` (from `@bnbagent/sdk`)
@@ -177,6 +212,8 @@ at the repo root for the authoritative, fully-commented reference.
 | `ERC8183_FUNDED_POLL_INTERVAL` | agent-server examples | Poll interval (seconds) for the funded-job scan. |
 | `ERC8183_MAX_RESPONSE_BYTES` / `ERC8183_MAX_METADATA_BYTES` | `ERC8183JobOps.submitResult` | Per-deliverable upload size caps. |
 | `ERC8004_REGISTRY_ADDRESS` | `getErc8004Config` | Override the Identity Registry address. |
+| `ALTANA_SESSION` | `AltanaWalletProvider.sessionFromEnv` | Serialized Altana session JSON (contains the session key — handle as a secret). Wins over the file variant. |
+| `ALTANA_SESSION_FILE` | `AltanaWalletProvider.sessionFromEnv` | Path to a file holding the serialized session (mode 0600). |
 | `STORAGE_PROVIDER` | storage factory | `local` (default, zero-config) or `ipfs`. |
 | `STORAGE_LOCAL_PATH` | `LocalStorageProvider` | Base directory when `STORAGE_PROVIDER=local`. |
 | `STORAGE_API_KEY` | `IPFSStorageProvider` | Pinata-compatible JWT; required when `STORAGE_PROVIDER=ipfs`. |

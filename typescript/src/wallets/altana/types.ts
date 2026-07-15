@@ -200,7 +200,6 @@ export interface AltanaSdkModule {
     defaultChainId?: number;
   }): AltanaSdkClient;
   signerFromPrivateKey(privateKey: `0x${string}`): AltanaSigner;
-  createPrivateKeySigner(): AltanaSigner;
   /** The SDK's own BNB-mainnet deployment config. */
   BNB: AltanaNetworkConfig;
 }

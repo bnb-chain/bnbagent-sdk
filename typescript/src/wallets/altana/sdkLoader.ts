@@ -59,14 +59,6 @@ export async function loadAltanaSdk(): Promise<AltanaSdkModule> {
 }
 
 /**
- * Drop the cached module promise so the next `loadAltanaSdk()` re-imports.
- * Test hook only — production code never needs it.
- */
-export function _resetAltanaSdkCacheForTests(): void {
-  cachedModule = null;
-}
-
-/**
  * Swap the dynamic-import implementation (or restore it with `null`).
  * Test hook only — lets the import-failure mapping be exercised without
  * fighting the test runner's module registry. Clears the cache either way.

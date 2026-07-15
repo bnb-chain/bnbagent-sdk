@@ -92,7 +92,8 @@ const ADMIN_ADDRESS = privateKeyToAccount(ADMIN_PK).address;
 const SESSION_PK: `0x${string}` = `0x${"b2".repeat(32)}`;
 const WALLET = getAddress(`0x${"11".repeat(20)}`);
 const CALLS_ID: `0x${string}` = `0x${"ca".repeat(32)}`;
-const EXPIRY = 1_767_225_600;
+// 2100-01-01 — a valid future expiry for grantSession's DOA pre-flight.
+const EXPIRY = 4_102_444_800;
 
 function fakeSession(): AltanaSessionT {
   const account = privateKeyToAccount(SESSION_PK);
@@ -308,6 +309,29 @@ describe("AltanaWalletProvider — session management", () => {
     expect("feeToken" in forwarded).toBe(false);
   });
 
+  it("rejects past/zero/non-integer/milliseconds expiry before paying the registration fee", async () => {
+    const provider = new AltanaWalletProvider({
+      privateKey: ADMIN_PK,
+      nonceRetry: { delayMs: 0 },
+    });
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    await expect(
+      provider.grantSession({ permissions: {}, expiry: nowSeconds - 10 }),
+    ).rejects.toThrow(/not in the future/);
+    await expect(
+      provider.grantSession({ permissions: {}, expiry: Date.now() }),
+    ).rejects.toThrow(/looks like a milliseconds timestamp/);
+    await expect(
+      provider.grantSession({ permissions: {}, expiry: 1.5 }),
+    ).rejects.toThrow(/positive integer/);
+    await expect(
+      provider.grantSession({ permissions: {}, expiry: 0 }),
+    ).rejects.toThrow(/positive integer/);
+    // All refused client-side: nothing reached the SDK, no fee risked.
+    expect(sdkMocks.grantSessionMock).not.toHaveBeenCalled();
+    expect(sdkMocks.createWalletMock).not.toHaveBeenCalled();
+  });
+
   it("revokeSession accepts a session or a bare public key and throws on relay FAILED", async () => {
     const provider = new AltanaWalletProvider({
       privateKey: ADMIN_PK,
@@ -350,16 +374,28 @@ describe("AltanaWalletProvider — entry points", () => {
     expect(provider.mode).toBe("session");
     expect(provider.address).toBe(WALLET);
 
-    // File fallback.
+    // File fallback. A 0600 file loads silently; a group/other-readable
+    // one still loads but warns (the file holds the session private key).
     vi.unstubAllEnvs();
     const dir = mkdtempSync(join(tmpdir(), "altana-session-"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const file = join(dir, "session.json");
       writeFileSync(file, envelope, { mode: 0o600 });
       vi.stubEnv("ALTANA_SESSION_FILE", file);
       const fromFile = await AltanaWalletProvider.sessionFromEnv();
       expect(fromFile.address).toBe(WALLET);
+      expect(warnSpy).not.toHaveBeenCalled();
+
+      const loose = join(dir, "loose.json");
+      writeFileSync(loose, envelope, { mode: 0o644 });
+      vi.stubEnv("ALTANA_SESSION_FILE", loose);
+      await AltanaWalletProvider.sessionFromEnv();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("chmod 600"),
+      );
     } finally {
+      warnSpy.mockRestore();
       rmSync(dir, { recursive: true, force: true });
     }
 

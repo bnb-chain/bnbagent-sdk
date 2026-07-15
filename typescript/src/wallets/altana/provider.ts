@@ -33,7 +33,7 @@
  * `address`/`describe()` never require it.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import type { Abi, PublicClient } from "viem";
 import { encodeFunctionData } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -86,6 +86,14 @@ export const ALTANA_NONCE_RETRY_DELAY_MS = 5_000;
 
 /** The relay's nonce-race error shape (`InvalidNonce`, wrapped variously). */
 const NONCE_ERROR_PATTERN = /InvalidNonce|nonce/i;
+
+/**
+ * Any Unix-seconds value at or above this (~year 5138) is a milliseconds
+ * timestamp passed by mistake — `Date.now()` today is ~1.7e12, and the
+ * on-chain expiry field is uint40 (max ~1.1e12) so it could not even be
+ * stored.
+ */
+const MAX_EXPIRY_SECONDS = 100_000_000_000;
 
 /** Options accepted by the {@link AltanaWalletProvider} constructor. */
 export interface AltanaWalletProviderOptions {
@@ -284,6 +292,17 @@ export class AltanaWalletProvider extends WalletProvider {
     if (inline) {
       serialized = inline;
     } else if (file) {
+      // The file holds the session private key. The SDK never writes it
+      // (that's the granting side's job), so the best it can do here is
+      // refuse to stay silent about a world/group-readable copy.
+      if (process.platform !== "win32") {
+        const mode = statSync(file).mode & 0o777;
+        if ((mode & 0o077) !== 0) {
+          console.warn(
+            `[AltanaWalletProvider] ${file} is group/other-readable (mode ${mode.toString(8)}) but contains the session private key — chmod 600 it.`,
+          );
+        }
+      }
       serialized = readFileSync(file, "utf8");
     } else {
       throw new Error(
@@ -304,11 +323,33 @@ export class AltanaWalletProvider extends WalletProvider {
    * the KeyStoreController) plus gas. Persist the result with
    * `serializeSession` — a re-created session object with the same values
    * but different bytes will NOT be honored on-chain.
+   *
+   * `expiry` is validated up front (integer Unix SECONDS, in the future,
+   * not a milliseconds timestamp) because a dead-on-arrival grant still
+   * pays the registration fee — same rationale as `ERC8183Client.createJob`'s
+   * expiredAt pre-flight.
    */
   async grantSession(
     opts: AltanaGrantSessionProviderOpts,
   ): Promise<AltanaSession> {
     this.#requireAdmin("grantSession");
+    const expiry = opts.expiry;
+    if (!Number.isInteger(expiry) || expiry <= 0) {
+      throw new Error(
+        `grantSession: expiry must be a positive integer of Unix epoch SECONDS; got ${expiry}`,
+      );
+    }
+    if (expiry >= MAX_EXPIRY_SECONDS) {
+      throw new Error(
+        `grantSession: expiry ${expiry} looks like a milliseconds timestamp — pass Unix epoch SECONDS (e.g. Math.floor(Date.now() / 1000) + 3600). Refusing to pay the ~$0.50 registration fee for a broken grant.`,
+      );
+    }
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    if (expiry <= nowSeconds) {
+      throw new Error(
+        `grantSession: expiry ${expiry} is not in the future (now ${nowSeconds}); the session would be dead on arrival. Refusing to pay the ~$0.50 registration fee for it.`,
+      );
+    }
     const sdkClient = await this.#sdkClient();
     const { wallet, signer } = await this.#adminWalletAndSigner();
     return this.#enqueue(() =>
