@@ -5,12 +5,14 @@ testnet and asserts each step on-chain (all 13 erc8183 intents, full
 lifecycle), in the assert-chain style of examples/security/e2e.py. twak
 capability reference: docs/twak.md.
 
-Requires twak >= v0.19.1 (`submit --opt-params`, `fund --expected-budget`;
-an older CLI fails loudly with an upgrade hint).
+Requires twak >= v0.20.0 (`--paymaster-url`, `submit --opt-params`,
+`fund --expected-budget`; an older CLI fails loudly with an upgrade hint).
 
 ⚠️  THIS SCRIPT SPENDS TESTNET FUNDS AND TAKES WALL-CLOCK TIME. ⚠️
-    - testnet BNB for gas on ~15 transactions (on bsctestnet twak pays its
-      own gas — sponsorship is mainnet-only so far, gaps REQ-2)
+    - testnet BNB for gas on ~15 transactions (writes route through the
+      MegaFuel testnet paymaster via --paymaster-url — REQ-2 shipped in
+      twak v0.20.0 — but keep a little BNB as fallback for anything
+      MegaFuel declines to sponsor)
     - 2 × 0.01 test-U escrowed, both of which come back: job A pays out to
       the twak wallet itself (it plays client AND provider), job C is
       refunded at expiry

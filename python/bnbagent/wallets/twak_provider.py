@@ -40,9 +40,11 @@ Security / operational notes:
 - ``--json`` is always appended (it implies ``--yes``, skipping interactive
   confirmation, per the twak spec).
 
-Compatibility notes against ``twak`` v0.19.1 — the minimum supported version
-(v0.19.0 is excluded: its ``sign-message`` hex-decoded ``0x``-shaped messages
-and signed the wrong bytes — fixed in v0.19.1, "input is always text". The
+Compatibility notes against ``twak`` v0.20.0 — the minimum supported version
+(v0.20.0 added ``--paymaster-url``, which this provider emits on every write
+whenever a paymaster is configured — the default bsc-testnet config is.
+v0.19.0 is excluded outright: its ``sign-message`` hex-decoded ``0x``-shaped
+messages and signed the wrong bytes — fixed in v0.19.1, "input is always text". The
 capability reference (supported methods per protocol) is ``docs/twak.md``;
 on an older CLI, flags this provider emits fail loudly with an upgrade
 hint):
@@ -61,8 +63,12 @@ hint):
 - ``sign_typed_data`` raises :class:`UnsupportedWalletOperation` by design
   decision (P0): twak signs ERC-8004/8183/x402 payloads internally via its
   dedicated commands and provides no generic EIP-712 primitive.
-- Gas: on bsc mainnet twak sponsors broadcasts automatically (MegaFuel); on
-  bsctestnet the wallet pays its own gas (REQ-2 pending).
+- Gas: v0.20.0 added ``--paymaster-url`` on every erc8004/erc8183 write
+  (REQ-2 shipped). When the execution context carries a paymaster, its URL is
+  forwarded on each write so twak routes the broadcast through the
+  SDK-configured sponsorship endpoint (MegaFuel) — this makes sponsored
+  bsctestnet writes reachable. Without one, twak keeps its own defaults:
+  mainnet sponsors automatically (Trust gateway), bsctestnet self-pays.
 """
 
 from __future__ import annotations
@@ -236,6 +242,9 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         self._auto_create = auto_create
         self._address: str | None = None
         self._ensured = False  # guards the one-shot lazy auto-create
+        # Captured from the ExecutionContext (make_executor); forwarded to
+        # every write command as --paymaster-url (twak v0.20.0, REQ-2).
+        self._paymaster_url: str | None = None
 
     # ── subprocess plumbing ──
 
@@ -325,7 +334,7 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         if "unknown command" in combined or "unknown option" in combined:
             hint = (
                 "The installed twak CLI does not recognise this command/option "
-                "— upgrade twak to >= v0.19.1 (`npm install -g @trustwallet/cli`)."
+                "— upgrade twak to >= v0.20.0 (`npm install -g @trustwallet/cli`)."
             )
         else:
             hint = _SETUP_HINT
@@ -562,7 +571,7 @@ class TWAKProvider(WalletProvider, IntentExecutor):
                 "signature would fail verification later. Refusing to return it. "
                 "Known cause: twak <= v0.19.0 hex-decodes a 0x-shaped message "
                 "and signs the raw bytes (fixed in v0.19.1). Fix: upgrade "
-                "twak to >= v0.19.1 (`npm install -g @trustwallet/cli`), or "
+                "twak to >= v0.20.0 (`npm install -g @trustwallet/cli`), or "
                 "switch this agent to WALLET_KIND=evm (see docs/twak.md)."
             )
         return {
@@ -652,16 +661,22 @@ class TWAKProvider(WalletProvider, IntentExecutor):
 
     def make_executor(self, context: ExecutionContext) -> IntentExecutor:
         """This wallet broadcasts its own transactions, so it *is* its own
-        executor. The web3 ``context`` is not needed; a paymaster cannot be
-        honoured (gaps REQ-2) and triggers a warning."""
-        if context.paymaster is not None:
+        executor. The web3 ``context`` is not needed, but a paymaster IS
+        honoured (twak v0.20.0, gaps REQ-2 shipped): its URL is captured here
+        and forwarded to every write command as ``--paymaster-url``, so twak
+        routes the broadcast through the SDK-configured sponsorship endpoint.
+        Because the executor is the provider itself, the latest
+        ``make_executor`` context wins — the supported shape is one client
+        per provider (which is how the facades construct them)."""
+        paymaster = context.paymaster
+        url = getattr(paymaster, "paymaster_url", None) if paymaster else None
+        if paymaster is not None and not url:
             logger.warning(
-                "TWAKProvider: the SDK-side paymaster is ignored — twak owns "
-                "its own broadcast. On bsc mainnet twak sponsors gas "
-                "automatically (MegaFuel); on bsctestnet sponsorship is not "
-                "available yet (gaps REQ-2) and gas is paid from the twak "
-                "wallet's BNB balance."
+                "TWAKProvider: context.paymaster has no paymaster_url — "
+                "ignoring it. twak sponsorship needs a URL to forward as "
+                "--paymaster-url (v0.20.0)."
             )
+        self._paymaster_url = url
         return self
 
     def execute(self, intent: Intent) -> dict[str, Any]:
@@ -694,6 +709,18 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         opt_params: bytes = kwargs.get("opt_params") or b""
         return ["--opt-params", "0x" + opt_params.hex()] if opt_params else []
 
+    def _paymaster_args(self) -> list[str]:
+        """``--paymaster-url <url>`` when the execution context carried one.
+
+        v0.20.0 added the flag on every erc8004/erc8183 write (REQ-2): twak
+        uses the URL verbatim as its MegaFuel endpoint, on bsc and bsctestnet
+        alike. Omitted when no paymaster was configured, so twak keeps its
+        own defaults (mainnet: auto-sponsored; testnet: self-pay). On an
+        older CLI the unknown flag fails loudly with the upgrade hint.
+        """
+        url = self._paymaster_url
+        return ["--paymaster-url", url] if url else []
+
     def _tx_result(self, data: dict[str, Any], **extra: Any) -> dict[str, Any]:
         """Canonical executor result envelope for a twak write command."""
         return {
@@ -713,7 +740,7 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         args = ["erc8004", "register", "--uri", agent_uri]
         for entry in metadata:
             args += ["--metadata", f"{entry['key']}={entry['value']}"]
-        data = self._run([*args, "--chain", self._chain])
+        data = self._run([*args, *self._paymaster_args(), "--chain", self._chain])
         return self._tx_result(
             data, agentId=_as_int(data.get("agentId")), owner=data.get("owner")
         )
@@ -723,7 +750,7 @@ class TWAKProvider(WalletProvider, IntentExecutor):
             [
                 "erc8004", "set-metadata", str(kwargs["agent_id"]),
                 "--key", kwargs["key"], "--value", kwargs["value"],
-                "--chain", self._chain,
+                *self._paymaster_args(), "--chain", self._chain,
             ]
         )
         return self._tx_result(data)
@@ -732,7 +759,8 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         data = self._run(
             [
                 "erc8004", "set-uri", str(kwargs["agent_id"]),
-                "--uri", kwargs["agent_uri"], "--chain", self._chain,
+                "--uri", kwargs["agent_uri"],
+                *self._paymaster_args(), "--chain", self._chain,
             ]
         )
         return self._tx_result(data)
@@ -742,7 +770,10 @@ class TWAKProvider(WalletProvider, IntentExecutor):
     def _erc8183(self, command: str, job_id: Any, *extra: str) -> dict[str, Any]:
         """Run ``twak erc8183 <command> <jobId> [extra...] --chain <chain>``."""
         data = self._run(
-            ["erc8183", command, str(job_id), *extra, "--chain", self._chain]
+            [
+                "erc8183", command, str(job_id), *extra,
+                *self._paymaster_args(), "--chain", self._chain,
+            ]
         )
         return self._tx_result(data)
 
@@ -757,7 +788,7 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         hook = kwargs.get("hook")
         if hook and hook.lower() != _ZERO_ADDRESS:
             args += ["--hook", hook]
-        data = self._run([*args, "--chain", self._chain])
+        data = self._run([*args, *self._paymaster_args(), "--chain", self._chain])
         # twak emits numeric ids as JSON strings ("150" — field-verified); the
         # local executor path yields ints from event logs. Normalize so both
         # backends honour the same envelope and downstream web3 calls
@@ -785,7 +816,8 @@ class TWAKProvider(WalletProvider, IntentExecutor):
             [
                 "erc8183", "fund", str(kwargs["job_id"]),
                 "--expected-budget", str(kwargs["expected_budget"]),
-                *self._opt_params(kwargs), "--chain", self._chain,
+                *self._opt_params(kwargs),
+                *self._paymaster_args(), "--chain", self._chain,
             ]
         )
         result = self._tx_result(data)

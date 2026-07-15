@@ -171,17 +171,95 @@ def test_make_executor_returns_self():
     assert twak.make_executor(ExecutionContext(web3=MagicMock())) is twak
 
 
-def test_make_executor_warns_on_paymaster(caplog):
+_PAYMASTER_URL = "https://bsc-megafuel-testnet.nodereal.io"
+
+
+def _paymaster(url=_PAYMASTER_URL):
+    return types.SimpleNamespace(paymaster_url=url)
+
+
+def test_make_executor_captures_paymaster_url_and_writes_carry_flag():
+    # v0.20.0 (REQ-2 shipped): the context's paymaster URL is forwarded to
+    # write commands as --paymaster-url; reads (the status probe) never are.
+    run, calls = _intent_router(_TX_OUT)
     twak = TWAKProvider()
-    context = ExecutionContext(web3=MagicMock(), paymaster=MagicMock())
+    executor = twak.make_executor(
+        ExecutionContext(web3=MagicMock(), paymaster=_paymaster())
+    )
+    assert executor is twak
+    _execute(
+        twak, Intent(name=ERC8183_SETTLE, kwargs={"job_id": 137, "evidence": b""}), run
+    )
+    assert calls[0] == _WALLET_STATUS_CMD
+    assert calls[1] == [
+        "twak", "erc8183", "settle", "137",
+        "--paymaster-url", _PAYMASTER_URL, "--chain", "bsc", "--json",
+    ]
+
+
+def test_erc8004_register_carries_paymaster_flag():
+    run, calls = _router()
+    twak = TWAKProvider()
+    twak.make_executor(ExecutionContext(web3=MagicMock(), paymaster=_paymaster()))
+    _execute(
+        twak,
+        Intent(
+            name=ERC8004_REGISTER,
+            kwargs={"agent_uri": "https://a.example/card.json"},
+        ),
+        run,
+    )
+    register_cmd = next(c for c in calls if "register" in c)
+    i = register_cmd.index("--paymaster-url")
+    assert register_cmd[i + 1] == _PAYMASTER_URL
+
+
+def test_make_executor_paymaster_without_url_warns_and_ignores(caplog):
+    run, calls = _intent_router(_TX_OUT)
+    twak = TWAKProvider()
     with caplog.at_level("WARNING", logger="bnbagent.wallets.twak_provider"):
-        executor = twak.make_executor(context)
-    assert executor is twak  # warned, not rejected: the operation still runs
-    assert "paymaster" in caplog.text
-    # v0.19.0 wording: mainnet gas is auto-sponsored via MegaFuel; testnet
-    # sponsorship is still pending upstream (gaps REQ-2).
-    assert "MegaFuel" in caplog.text
-    assert "REQ-2" in caplog.text
+        executor = twak.make_executor(
+            ExecutionContext(web3=MagicMock(), paymaster=types.SimpleNamespace())
+        )
+    assert executor is twak
+    assert "--paymaster-url" in caplog.text
+    _execute(twak, Intent(name=ERC8183_DISPUTE, kwargs={"job_id": 137}), run)
+    assert calls[1] == ["twak", "erc8183", "dispute", "137", "--chain", "bsc", "--json"]
+
+
+def test_make_executor_without_paymaster_resets_capture():
+    # The executor IS the provider, so the latest make_executor context wins.
+    run, calls = _intent_router(_TX_OUT)
+    twak = TWAKProvider()
+    twak.make_executor(ExecutionContext(web3=MagicMock(), paymaster=_paymaster()))
+    twak.make_executor(ExecutionContext(web3=MagicMock()))
+    _execute(twak, Intent(name=ERC8183_DISPUTE, kwargs={"job_id": 137}), run)
+    assert calls[1] == ["twak", "erc8183", "dispute", "137", "--chain", "bsc", "--json"]
+
+
+def test_contract_paymaster_flows_to_twak_writes():
+    # End-to-end: ContractInterface hands its paymaster to make_executor,
+    # and the resulting twak write carries the URL.
+    run, calls = _router()
+    twak = TWAKProvider()
+    web3 = MagicMock()
+    web3.provider.endpoint_uri = "https://fake-rpc.example.com"
+    with patch.object(ContractInterface, "_get_default_abi", return_value=[]):
+        with patch(
+            "bnbagent.erc8004.contract.Web3.to_checksum_address",
+            side_effect=lambda x: x,
+        ):
+            ci = ContractInterface(
+                web3=web3,
+                contract_address=FAKE_CONTRACT_ADDRESS,
+                wallet_provider=twak,
+                paymaster=_paymaster(),
+            )
+    with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
+        ci.set_agent_uri(agent_id=42, agent_uri="https://new.example/card.json")
+    seturi_cmd = next(c for c in calls if "set-uri" in c)
+    i = seturi_cmd.index("--paymaster-url")
+    assert seturi_cmd[i + 1] == _PAYMASTER_URL
 
 
 # ── erc8004.register: atomic --metadata flags (v0.18.0, no replay) ──
@@ -647,7 +725,7 @@ def test_unknown_command_in_stderr_hints_upgrade():
         )
 
     twak = TWAKProvider()
-    with pytest.raises(RuntimeError, match=r"upgrade twak to >= v0\.19\.1"):
+    with pytest.raises(RuntimeError, match=r"upgrade twak to >= v0\.20\.0"):
         _execute(
             twak,
             Intent(
