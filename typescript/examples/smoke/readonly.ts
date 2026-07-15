@@ -18,9 +18,7 @@
  */
 
 import { getAddress } from "viem";
-import {
-  ERC8183Client,
-} from "../../src/erc8183/index.js";
+import { ERC8183Client } from "../../src/erc8183/index.js";
 import {
   BSC_TESTNET_CHAIN_ID,
   getAddress as getDeployment,
@@ -87,12 +85,27 @@ async function main(): Promise<void> {
   // --- Assertions: decode sanity + registry parity against the real chain ---
   console.log("\nAssertions:");
 
-  assert(typeof jobCounter === "bigint" && jobCounter >= 0n, "jobCounter is a non-negative bigint");
-  assert(getAddress(paymentToken) === paymentToken, "paymentToken is a checksummed address");
-  assert(typeof decimals === "number" && decimals >= 0 && decimals <= 36, "decimals is a plausible uint8");
-  assert(typeof symbol === "string" && symbol.length > 0, "symbol is a non-empty string");
+  assert(
+    typeof jobCounter === "bigint" && jobCounter >= 0n,
+    "jobCounter is a non-negative bigint",
+  );
+  assert(
+    getAddress(paymentToken) === paymentToken,
+    "paymentToken is a checksummed address",
+  );
+  assert(
+    typeof decimals === "number" && decimals >= 0 && decimals <= 36,
+    "decimals is a plausible uint8",
+  );
+  assert(
+    typeof symbol === "string" && symbol.length > 0,
+    "symbol is a non-empty string",
+  );
   assert(disputeWindow > 0n, "disputeWindow is positive");
-  assert(typeof voteQuorum === "number" && voteQuorum >= 0, "voteQuorum decoded as number");
+  assert(
+    typeof voteQuorum === "number" && voteQuorum >= 0,
+    "voteQuorum decoded as number",
+  );
   assert(typeof paused === "boolean", "paused decoded as boolean");
 
   // Registry parity: the payment token the deployed commerce kernel reports
@@ -125,12 +138,23 @@ async function main(): Promise<void> {
     line("job.expiredAt", job.expiredAt);
     line("job.submittedAt", job.submittedAt);
     line("job.deliverable", `${job.deliverable.slice(0, 18)}…`);
-    assert(job.id === 1n, "getJob(1) returns job with id 1 (tuple index 0 correct)");
-    assert(getAddress(job.client) === job.client, "job.client checksummed (tuple decode aligned)");
-    assert(job.deliverable.startsWith("0x") && job.deliverable.length === 66, "deliverable is bytes32 (tuple index 10 correct)");
+    assert(
+      job.id === 1n,
+      "getJob(1) returns job with id 1 (tuple index 0 correct)",
+    );
+    assert(
+      getAddress(job.client) === job.client,
+      "job.client checksummed (tuple decode aligned)",
+    );
+    assert(
+      job.deliverable.startsWith("0x") && job.deliverable.length === 66,
+      "deliverable is bytes32 (tuple index 10 correct)",
+    );
     console.log("  ✓ getJob tuple decoded with correct field alignment");
   } else {
-    console.log("\n(no jobs on chain yet — skipping getJob tuple-decode check)");
+    console.log(
+      "\n(no jobs on chain yet — skipping getJob tuple-decode check)",
+    );
   }
 
   console.log("\n=== ALL SMOKE ASSERTIONS PASSED ===");
@@ -138,6 +162,8 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   console.error("\n=== SMOKE TEST FAILED ===");
-  console.error(err instanceof Error ? `${err.name}: ${err.message}` : String(err));
+  console.error(
+    err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+  );
   process.exitCode = 1;
 });

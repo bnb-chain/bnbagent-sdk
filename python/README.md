@@ -60,7 +60,7 @@ With an `EVMWalletProvider`, the SDK routes writes through the MegaFuel paymaste
 
 - **ERC-8004** — sponsored on both networks.
 - **ERC-8183** — on **BSC Testnet** the SDK routes the protocol writes through MegaFuel and lets it decide per call (e.g. `fund` and `settle` are sponsored today); whatever MegaFuel declines self-pays automatically. **Mainnet is never sponsored** — writes self-pay and the SDK skips the probe entirely there. Two things to note: (1) provider payout has no separate "withdraw" — it happens inside `settle` (→ `complete`); (2) the only ERC-20 `approve` is on the **payment token** (not an ERC-8183 function), sent by `fund()` only when the allowance is insufficient, through the ERC-20 client's own self-pay path — so a fresh testnet buyer needs a little tBNB for that first approve.
-- **twak wallet** — sponsorship is twak-internal and not controlled by the SDK (mainnet auto-sponsored, testnet self-pays); see [`docs/twak.md`](docs/twak.md).
+- **twak wallet** — mainnet is auto-sponsored by twak itself; on testnet the SDK forwards its configured paymaster URL to every write (`--paymaster-url`, twak >= v0.20.0), so sponsored writes work there too — self-pay is only the no-paymaster fallback; see [`docs/twak.md`](docs/twak.md).
 
 ## What is ERC-8183?
 
@@ -353,7 +353,7 @@ Transaction signing is abstracted behind the `WalletProvider` ABC (`address`, `s
 
 - **No raw-transaction or generic EIP-712 signing** (`sign.transaction` / `sign.typed_data` are absent) — twak signs ERC-8004 / ERC-8183 / x402 payloads internally and only exposes high-level operations. Anything that needs direct EIP-712 (e.g. an `X402Signer` you construct yourself) requires `EVMWalletProvider`.
 - **Self-broadcasting** — the SDK holds no key and sends no transaction; twak signs and broadcasts each operation itself. x402 is a *delegated payer* (`make_x402_payer()`), not a signer.
-- **Restricted surface** — BSC only (`bsc` / `bsctestnet`); x402 `request` is mainnet-only so far; on testnet twak pays its own gas (no paymaster). Full method-by-method support matrix, contract addresses, and boundaries: [`docs/twak.md`](docs/twak.md).
+- **Restricted surface** — BSC only (`bsc` / `bsctestnet`); x402 `request` is mainnet-only so far. Full method-by-method support matrix, contract addresses, and boundaries: [`docs/twak.md`](docs/twak.md).
 
 Construct with `TWAKProvider(chain="bsc")` or `WALLET_KIND=twak`. Because every client routes writes through `wallet.make_executor()`, EVM ↔ twak is a one-line swap **for the high-level flows** — but the capability gaps above are not papered over: unsupported calls raise `UnsupportedWalletOperation`.
 

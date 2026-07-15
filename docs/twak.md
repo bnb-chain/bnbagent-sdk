@@ -4,9 +4,10 @@ What the TWAK wallet supports through bnbagent-sdk, method by method, for **ERC-
 
 TWAK (Trust Wallet Agent Kit) is a self-custody wallet CLI whose encrypted mnemonic lives under `~/.twak` (password from the OS keychain or `TWAK_WALLET_PASSWORD`, never on argv). The SDK drives it through `TWAKProvider`, which shells out to a stateless `twak … --json` subprocess. It is **self-broadcasting**: `TWAKProvider.make_executor()` returns the provider itself, so every high-level operation is built, signed, and broadcast inside twak (the SDK holds no key and sends no transaction).
 
-- **Minimum twak version: v0.19.1.** (v0.19.0 signed `0x`-shaped messages over the wrong bytes; older CLIs lack the v0.19.0 command surface.)
+- **Minimum twak version: v0.20.0.** (The SDK forwards `--paymaster-url` on every write whenever a paymaster is configured — the default `bsc-testnet` config is — and the flag first shipped in v0.20.0. Without a paymaster v0.19.1 still works; v0.19.0 signed `0x`-shaped messages over the wrong bytes; older CLIs lack the v0.19.0 command surface.)
 - **Networks:** `bsc` (mainnet) and `bsctestnet`. The SDK network name `bsc-testnet` maps to the CLI key `bsctestnet` via `bnbagent.wallets.TWAK_CHAIN_FOR_NETWORK`.
-- **Construct:** `TWAKProvider(chain="bsc")`, or `WALLET_KIND=twak` on any `AgentConfig` / `*Config.from_env()` (chain auto-pinned to the network).
+- **Construct (Python):** `TWAKProvider(chain="bsc")`, or `WALLET_KIND=twak` on any `AgentConfig` / `*Config.from_env()` (chain auto-pinned to the network).
+- **Construct (TypeScript):** `new TWAKProvider({ chain: "bsc" })`, or `walletKind: "twak"` / `WALLET_KIND=twak` on `ERC8183Config` (chain auto-pinned). twak is an npm CLI — install `@trustwallet/cli` as a project dependency and the provider resolves `node_modules/.bin/twak` automatically.
 
 ## Capability model
 
@@ -104,7 +105,7 @@ An optional `SessionBudgetTracker` reserves the quoted amount before the call an
 ## Current boundaries
 
 - **x402 `request` is mainnet-only** so far — testnet routes are rejected as "no supported route" (`quote` works on both).
-- **Paymaster:** on `bsc` mainnet twak sponsors broadcasts automatically (MegaFuel); on `bsctestnet` the wallet **pays its own gas** — pre-fund it with testnet BNB before any write. As of v0.19.1 twak has **no paymaster override** (no `--paymaster-url` flag, env var, or global option — verified) and no internal testnet sponsorship, so testnet sponsorship is not reachable from the SDK *yet*. A `--paymaster-url` flag is expected upstream and is not a blocker for this release; when it lands the SDK can route twak testnet writes through MegaFuel too. (This is a twak-side gap; the SDK's own EVM-wallet path already routes through a configurable paymaster — see the README, which sponsors ERC-8183 testnet writes today.)
+- **Paymaster:** twak v0.20.0 added `--paymaster-url <url>` on every erc8004/erc8183 write (the URL is used verbatim as the MegaFuel endpoint, on `bsc` and `bsctestnet` alike). When the SDK context carries a paymaster — `ERC8183Client` builds one on sponsored testnet networks, `ERC8004Agent` per its network config — `TWAKProvider` forwards its URL on each write, so **sponsored `bsctestnet` writes now work**. Without one, twak keeps its own defaults: mainnet sponsors automatically (Trust gateway), `bsctestnet` **pays its own gas** — pre-fund it with testnet BNB.
 - **No generic EIP-712 / raw-tx signing** (`sign.typed_data` / `sign.transaction`) — use `WALLET_KIND=evm` for those.
 - **`sign-message`** pins `--chain bsc` (the CLI rejects `bsctestnet` there; EIP-191 is chain-agnostic and the address is identical on both networks) and signs the message as **text** (twak ≥ v0.19.1).
 - **No key import/export:** twak mints its own mnemonic; switching an existing identity into twak means a new address + ERC-8004 re-register.

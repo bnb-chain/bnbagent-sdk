@@ -197,7 +197,7 @@ Constructor behavior:
 ### `TWAKProvider`
 
 Self-broadcasting wallet backed by the Trust Wallet Agent Kit (`twak`) CLI —
-**v0.19.1 minimum** (v0.19.0 is excluded — its `sign-message` hex-decoded `0x`-shaped messages, S-11; an older CLI answers `unknown command`/`unknown option`
+**v0.20.0 minimum** (v0.20.0 added `--paymaster-url`, emitted on every write whenever a paymaster is configured — the default bsc-testnet config is; v0.19.0 is excluded outright — its `sign-message` hex-decoded `0x`-shaped messages, S-11; an older CLI answers `unknown command`/`unknown option`
 on the flags this provider emits, and the raised error says to upgrade rather
 than pointing at setup). Implements both
 `WalletProvider` and `IntentExecutor` (it `make_executor`s to itself). Key
@@ -252,7 +252,7 @@ Notes (all field-verified against twak v0.19.0):
 the wallet for you (auto-create), but never handles API secrets. Before the
 first operation:
 
-1. Install the CLI: `npm install -g @trustwallet/cli` (>= v0.19.1).
+1. Install the CLI: `npm install -g @trustwallet/cli` (>= v0.20.0).
 2. Set API credentials: `twak init --api-key <id> --api-secret <secret>`, or
    export `TWAK_ACCESS_ID` / `TWAK_HMAC_SECRET` (CI). twak reads these itself.
 3. Make the password reachable: `TWAK_WALLET_PASSWORD` env var or
@@ -287,7 +287,7 @@ asked to "sign bytes", only to "do things". What that means per role:
 | ERC-8183 **evaluator / voter** — `complete`, `vote_reject`, `settle` | ✅ | |
 | **x402 buyer** | ✅ (mainnet routes) | Via the delegated `TwakX402Payer` (`make_x402_payer()`). twak rejects testnet routes as "no supported route" (testnet routes are being worked on upstream). |
 | **`X402Signer`** | ❌ | No `sign.typed_data` — `X402Signer(twak_wallet)` is rejected at composition time with a pointer to `make_x402_payer()`. |
-| **Paymaster (sponsored gas)** | ✅ mainnet · ❌ testnet (**REQ-2**) | On `bsc` mainnet twak sponsors broadcasts automatically (MegaFuel, since v0.18.0 — nothing to configure). On `bsctestnet` gas is paid from the twak wallet's BNB — **pre-fund it**. The SDK-side paymaster is never used (twak owns its own broadcast); `make_executor` logs a WARNING when handed one. |
+| **Paymaster (sponsored gas)** | ✅ mainnet · ✅ testnet (**REQ-2** shipped, twak v0.20.0) | When the execution context carries a paymaster (e.g. `ERC8183Client` on a sponsored testnet network), `make_executor` captures its URL and every write forwards it as `--paymaster-url` — twak routes the broadcast through that MegaFuel endpoint. Without one, twak's own defaults apply: `bsc` mainnet sponsors automatically (Trust gateway, since v0.18.0), `bsctestnet` pays gas from the twak wallet's BNB — **pre-fund it**. |
 | **Arbitrary contract calls** | ❌ | Fixed command menu; an unknown intent raises with a pointer to use an EVM wallet (`calls.arbitrary`). |
 
 The capability sets, verbatim from `capabilities()`:

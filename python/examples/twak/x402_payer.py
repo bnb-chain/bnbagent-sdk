@@ -15,7 +15,7 @@ read-only or constructed to be rejected by the payer's precheck before any
 payment could occur. Actual payment hides behind explicit flags.
 
 Prerequisites:
-    - A configured twak wallet (>= v0.19.0 CLI): credentials + wallet +
+    - A configured twak wallet (>= v0.20.0 CLI): credentials + wallet +
       password reachable (TWAK_WALLET_PASSWORD or OS keychain).
     - Internet access (the quote endpoints are live x402 sellers).
     - twak pays mainnet routes only (it rejects testnet routes as

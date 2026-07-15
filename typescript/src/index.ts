@@ -7,7 +7,7 @@
  *     ABILoadError, NetworkError, RpcRangeLimitError, JobError,
  *     NegotiationError, TransactionPendingError, ERC8004PartialRegistrationError
  *     ERC8004Agent, AgentEndpoint
- *     WalletProvider, EVMWalletProvider
+ *     WalletProvider, EVMWalletProvider, AltanaWalletProvider
  *     ERC8183Client, JobStatus, Verdict
  *     SigningPolicy, PolicyViolation
  *     X402Signer
@@ -54,6 +54,12 @@ export { AgentEndpoint } from "./erc8004/models.js";
 // Wallets
 export { WalletProvider } from "./wallets/walletProvider.js";
 export { EVMWalletProvider } from "./wallets/evmWalletProvider.js";
+// Self-broadcasting Altana (EIP-7702 session-key) wallet. The backing
+// @altananetwork/sdk peer is optional and loaded lazily on first use.
+export { AltanaWalletProvider } from "./wallets/altana/index.js";
+// Self-broadcasting TWAK (Trust Wallet Agent Kit CLI) wallet — twak is an
+// npm CLI; install @trustwallet/cli and the provider finds the local bin.
+export { TWAKProvider } from "./wallets/twak/index.js";
 
 // ERC-8183 — only essential public API
 export { ERC8183Client } from "./erc8183/client.js";

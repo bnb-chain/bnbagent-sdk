@@ -64,6 +64,8 @@ describe("Tier 1 public API (src/index.ts)", () => {
   it("exports wallet providers", () => {
     expect(typeof Tier1.WalletProvider).toBe("function");
     expect(typeof Tier1.EVMWalletProvider).toBe("function");
+    expect(typeof Tier1.AltanaWalletProvider).toBe("function");
+    expect(Tier1.AltanaWalletProvider.kind).toBe("altana");
   });
 
   it("exports ERC-8183 essentials", () => {
@@ -181,6 +183,19 @@ describe("Tier 2 subpath: ./wallets", () => {
     expect(typeof Wallets.BROADCAST_SELF).toBe("string");
     expect(typeof Wallets.X402_PAY).toBe("string");
     expect(typeof Wallets.PAYMASTER_SPONSOR).toBe("string");
+  });
+
+  it("exports the altana surface (provider, executor, serde, permissions, constants)", () => {
+    expect(typeof Wallets.AltanaWalletProvider).toBe("function");
+    expect(typeof Wallets.AltanaIntentExecutor).toBe("function");
+    expect(typeof Wallets.serializeSession).toBe("function");
+    expect(typeof Wallets.deserializeSession).toBe("function");
+    expect(typeof Wallets.defaultAgentPermissions).toBe("function");
+    expect(Wallets.ALTANA_SESSION_VERSION).toBe(1);
+    expect(typeof Wallets.DEFAULT_NATIVE_GAS_ALLOWANCE_WEI).toBe("bigint");
+    expect(Wallets.ALTANA_SDK_PACKAGE).toBe("@altananetwork/sdk");
+    expect(typeof Wallets.ALTANA_NONCE_RETRY_TRIES).toBe("number");
+    expect(typeof Wallets.ALTANA_NONCE_RETRY_DELAY_MS).toBe("number");
   });
 });
 

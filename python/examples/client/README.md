@@ -73,7 +73,7 @@ What switches and what doesn't:
 
 Prerequisites (one-time):
 
-1. `npm install -g @trustwallet/cli` (>= 0.19).
+1. `npm install -g @trustwallet/cli` (>= 0.20).
 2. twak API credentials: `twak init --api-key <id> --api-secret <secret>`,
    or `TWAK_ACCESS_ID` / `TWAK_HMAC_SECRET` env vars.
 3. A created twak wallet on the target network, **funded with testnet BNB

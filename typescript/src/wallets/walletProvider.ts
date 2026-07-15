@@ -9,6 +9,7 @@
  */
 
 import type { TransactionRequestLegacy, TypedDataDomain } from "viem";
+import type { X402Payer } from "../x402/payer.js";
 import {
   SIGN_MESSAGE,
   SIGN_TRANSACTION,
@@ -237,7 +238,7 @@ export abstract class WalletProvider {
    * forwarded verbatim to the payer constructor, so payer-specific options
    * never freeze this signature.
    */
-  makeX402Payer(payerKwargs?: Record<string, unknown>): never {
+  makeX402Payer(payerKwargs?: Record<string, unknown>): X402Payer {
     void payerKwargs;
     throw new UnsupportedWalletOperation(X402_PAY, {
       reason: `the '${this.kind}' wallet has no x402 payment backend in the SDK yet`,

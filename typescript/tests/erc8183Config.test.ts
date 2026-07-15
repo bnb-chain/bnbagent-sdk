@@ -1,7 +1,8 @@
 /**
- * Ports `python/tests/test_erc8183_config.py` (skipping the WALLET_KIND=twak
- * cases — TWAK/MPC are out of scope for the TypeScript SDK; any wallet kind
- * other than `""`/`"evm"` throws instead of dispatching to a factory).
+ * Ports `python/tests/test_erc8183_config.py` (WALLET_KIND=twak dispatches
+ * to `TWAKProvider` — full coverage of that path lives in
+ * `twakProvider.test.ts`; any other non-`""`/`"evm"` wallet kind throws
+ * instead of dispatching to a factory).
  *
  * `ERC8183Config` wraps `EVMWalletProvider` for the `privateKey`/
  * `walletPassword` convenience paths, which persists an encrypted keystore
@@ -250,9 +251,9 @@ describe("ERC8183Config: wallet_kind", () => {
     expect(config.walletProvider).not.toBeNull();
   });
 
-  it("rejects an unknown wallet_kind", () => {
-    expect(() => new ERC8183Config({ walletKind: "twak" })).toThrow(
-      /Unknown wallet kind: twak/,
+  it("rejects an unknown wallet_kind (twak now dispatches — see twakProvider.test.ts)", () => {
+    expect(() => new ERC8183Config({ walletKind: "mpc" })).toThrow(
+      /Unknown wallet kind: mpc/,
     );
   });
 });

@@ -94,7 +94,12 @@ export function toAddressHex(
  * transactions (ERC-4337 account abstraction).
  */
 export class Paymaster {
-  private readonly paymasterUrl: string;
+  /**
+   * The paymaster endpoint. Public (mirrors Python's `paymaster_url`):
+   * self-broadcasting wallets forward it to their own broadcast machinery
+   * (e.g. twak's `--paymaster-url`) instead of sending through this client.
+   */
+  readonly paymasterUrl: string;
   private readonly debug: boolean;
 
   /**
