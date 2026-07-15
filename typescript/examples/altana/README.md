@@ -121,26 +121,17 @@ same payment power without the registration fee.
    setup + one paid request end-to-end.
 3. Receiving is unchanged: point `payTo` at the Altana wallet.
 
-## Testnet: official preset vs the legacy stack (`shim.ts` / `testnet.ts`)
+## Testnet: the official stack
 
 SDK 0.5.0 ships Altana's official BSC-testnet deployment as the
 `BNB_TESTNET` export — in this SDK, just `network: "bnb-testnet"` on the
-provider. Its read path is live (see `balances.ts`), but as of 2026-07-15
-the official testnet relay (`relay-testnet.altana.network`) serves a
-mismatched TLS certificate (`*.up.railway.app`), so nothing can execute
-through it yet — reported to Altana.
-
-Until that is fixed, the E2E keeps running against the LEGACY stack:
-chain 97 with the relay at `https://relay.functor.sh`, configured by
-`testnet.ts` as a custom `AltanaNetworkConfig`. One ABI drift exists on
-the legacy KeyStore: the SDK calls `getKeys(address)` where the deployed
-contract has `getActiveKeys(address)` (same signature/return, different
-selector). `startGetKeysShim` runs a localhost RPC proxy translating that
-single selector; everything else forwards verbatim. The official KeyStore
-answers `getKeys` natively (probed on-chain), so `testnet.ts` and
-`shim.ts` both retire once the E2E passes on the official stack. These
-files live outside `src/` and outside the npm package. Mainnet needs no
-shim.
+provider. The full lifecycle is E2E-verified against it (12/12,
+2026-07-15). One temporary caveat: the testnet relay was re-homed to
+`testnet-relay.altana.network` on 2026-07-15, and SDK 0.5.0's constant
+still points at the dead old hostname — `e2e.ts` overrides `relayUrl`
+until Altana ships the SDK update, after which the plain preset is all
+you need. (The legacy functor stack and its `getKeys→getActiveKeys` RPC
+shim are retired; `testnet.ts` now only carries shared constants.)
 
 ## Running the E2E
 

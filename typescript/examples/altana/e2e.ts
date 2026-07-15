@@ -10,14 +10,15 @@
  * idempotent and free of it. Step 9 additionally escrows and burns-to-fee
  * 0.1 testnet U (skipped when the wallet holds < 0.1 U).
  *
- * Runs against Altana's LEGACY BSC-testnet stack (chain 97, relay
- * relay.functor.sh) with the local `getKeys→getActiveKeys` shim — see
- * `./testnet.ts` and `./shim.ts` for why. SDK 0.5.0's official
- * `BNB_TESTNET` stack (the `network: "bnb-testnet"` preset) is the
- * intended replacement, but its relay currently serves a mismatched TLS
- * certificate (reported to Altana) — switch this file to the preset and
- * drop the shim once execution through it verifies. Deliberately NOT
- * part of CI.
+ * Runs against Altana's OFFICIAL BSC-testnet stack (chain 97, SDK 0.5.0's
+ * `BNB_TESTNET`: KeyStore 0x6b83…E94A) with ONE override: the relay was
+ * re-homed to testnet-relay.altana.network on 2026-07-15 (the preset's
+ * relay-testnet.altana.network died with a failed Railway cert issuance),
+ * and SDK 0.5.0 still points at the dead host — drop the override and use
+ * the `network: "bnb-testnet"` preset once Altana ships the SDK update.
+ * The legacy functor stack and its `getKeys→getActiveKeys` RPC shim are
+ * retired; the official KeyStore answers `getKeys` natively.
+ * Deliberately NOT part of CI.
  *
  * Usage (env in `typescript/.env`, never committed):
  *     PRIVATE_KEY=0x...   # funded BSC-testnet key, DEDICATED TO TESTING
@@ -69,17 +70,22 @@ import {
   deserializeSession,
   serializeSession,
 } from "../../src/wallets/index.js";
-import { type GetKeysShim, startGetKeysShim } from "./shim.js";
-import {
-  ALTANA_BSC_TESTNET,
-  U_TESTNET,
-  makeAltanaTestnetConfig,
-} from "./testnet.js";
+import { BNB_TESTNET } from "@altananetwork/sdk";
+import { U_TESTNET } from "./testnet.js";
 
-// ── Legacy-contract read ABIs (direct reads bypass the shim) ─────────────
+/**
+ * The official testnet relay's live hostname (2026-07-15). SDK 0.5.0's
+ * `BNB_TESTNET.relayUrl` still points at the dead
+ * relay-testnet.altana.network; Altana will ship an SDK update, after
+ * which this override (and the spread below) collapses to the
+ * `network: "bnb-testnet"` preset.
+ */
+const OFFICIAL_TESTNET_RELAY = "https://testnet-relay.altana.network";
+
+// ── Official-contract read ABIs (direct reads bypass the SDK) ────────────
 
 const KEYSTORE_READ_ABI = parseAbi([
-  "function getActiveKeys(address user) view returns (bytes32[])",
+  "function getKeys(address user) view returns (bytes32[])",
 ]);
 const FEE_ABI = parseAbi([
   "function getRegistrationFeeInWei() view returns (uint256)",
@@ -250,21 +256,19 @@ async function main(): Promise<void> {
     return;
   }
 
-  const realRpc = getEnv("RPC_URL") ?? ALTANA_BSC_TESTNET.publicRpcUrl;
-  const shim = await startGetKeysShim({
-    upstreamRpcUrl: realRpc,
-    keyStore: ALTANA_BSC_TESTNET.keyStore,
-  });
+  const realRpc = getEnv("RPC_URL") ?? BNB_TESTNET.publicRpcUrl;
   console.log(
-    `=== Altana testnet E2E (chain 97, legacy stack) ===\n  rpc: ${realRpc}\n  shim: ${shim.url} (getKeys→getActiveKeys only)\n`,
+    `=== Altana testnet E2E (chain 97, official stack) ===\n  rpc: ${realRpc}\n  relay: ${OFFICIAL_TESTNET_RELAY} (override until the SDK ships the re-homed host)\n`,
   );
 
   const publicClient = createPublicClient({
     transport: http(realRpc),
   }) as PublicClient;
-  const altanaNetwork = makeAltanaTestnetConfig({ publicRpcUrl: shim.url });
-  // Protocol clients read/verify against the REAL RPC — only the Altana
-  // SDK's own KeyStore reads need the shim.
+  const altanaNetwork = {
+    ...BNB_TESTNET,
+    publicRpcUrl: realRpc,
+    relayUrl: OFFICIAL_TESTNET_RELAY,
+  };
   const bscTestnet = NETWORKS["bsc-testnet"] as NetworkConfig;
   const protocolNetwork: NetworkConfig = {
     ...bscTestnet,
@@ -284,9 +288,9 @@ async function main(): Promise<void> {
   const activeKeys = () =>
     publicClient
       .readContract({
-        address: ALTANA_BSC_TESTNET.keyStore,
+        address: altanaNetwork.keyStore,
         abi: KEYSTORE_READ_ABI,
-        functionName: "getActiveKeys",
+        functionName: "getKeys",
         args: [eoa],
       })
       .catch(() => [] as readonly `0x${string}`[]);
@@ -300,8 +304,8 @@ async function main(): Promise<void> {
   let sessionProvider: AltanaWalletProvider | null = null;
 
   // Everything that can throw — including the pre-flight chain guard and
-  // fee read below — runs inside this try so the finally always closes
-  // the shim and removes the session file.
+  // fee read below — runs inside this try so the finally always removes
+  // the session file.
   try {
     const chainId = await publicClient.getChainId();
     if (chainId !== 97) {
@@ -311,7 +315,7 @@ async function main(): Promise<void> {
       );
     }
     const feeWei = await publicClient.readContract({
-      address: ALTANA_BSC_TESTNET.keyStoreController,
+      address: altanaNetwork.keyStoreController,
       abi: FEE_ABI,
       functionName: "getRegistrationFeeInWei",
     });
@@ -397,10 +401,10 @@ async function main(): Promise<void> {
     assertStep(
       keysWithSession
         .map((k) => k.toLowerCase())
-        .includes(keyId.toLowerCase()) && shim.hits() > 0,
+        .includes(keyId.toLowerCase()),
       "3.grant-session",
-      `keccak(session.publicKey)=${keyId.slice(0, 18)}… in registry; shim hits=${shim.hits()}`,
-      `session key not in registry (${keysWithSession.length} keys) or shim unused (hits=${shim.hits()})`,
+      `keccak(session.publicKey)=${keyId.slice(0, 18)}… in registry`,
+      `session key not in registry (${keysWithSession.length} keys)`,
     );
     await snap("afterGrant");
 
@@ -575,8 +579,7 @@ async function main(): Promise<void> {
     // ── 12. Cleanup (always) ─────────────────────────────────────────────
     try {
       rmSync(SESSION_FILE, { force: true });
-      await shim.close();
-      pass("12.cleanup", "removed .session.json; shim closed");
+      pass("12.cleanup", "removed .session.json");
     } catch (error) {
       console.error(`  ⚠️ [12.cleanup] ${String(error)}`);
     }

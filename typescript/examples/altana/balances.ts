@@ -7,9 +7,8 @@
  * token uses it — this SDK treats that as vendor behavior and passes it
  * through).
  *
- * Pure reads over the public RPC — no relay round-trip, no fees, so it
- * runs today even while the official testnet relay's TLS is broken (see
- * `./testnet.ts`). Any key works; an unfunded one just prints zeros.
+ * Pure reads over the public RPC — no relay round-trip, no fees. Any
+ * key works; an unfunded one just prints zeros.
  *
  * Usage:
  *     PRIVATE_KEY=0x... pnpm -C typescript exec tsx examples/altana/balances.ts
