@@ -22,11 +22,15 @@
  * path. All ERC-8004/8183 writes flow through the mechanical `Intent.call`
  * form (Altana executes arbitrary calls; no per-operation handlers).
  *
- * x402 is deliberately absent from the capability set: EIP-3009
- * `transferWithAuthorization` is verified by the TOKEN contract outside
- * the wallet's execute() path, where a session signature recovers to the
- * session key (not the wallet) and the account's ERC-1271 rejects raw
- * digests by design. Field-tested dead end — see `makeX402Payer`.
+ * x402: session mode carries `x402.pay` via {@link AltanaX402Payer},
+ * backed by `@altananetwork/sdk` >= 0.3.4's `signX402Payment` (an
+ * ERC-7739-nested ERC-1271 envelope) after a one-time admin setup —
+ * `approveX402SignatureChecker` + a bounded `setPermit2Allowance`. The
+ * account's ERC-1271 still rejects raw digests (field-tested); the nested
+ * envelope + checker whitelist is the supported path around that, so the
+ * old dual-account workaround (separate x402 EOA) is no longer needed.
+ * Admin mode has no `x402.pay`: the relay signs payments with session
+ * keys only.
  *
  * The `@altananetwork/sdk` peer is loaded lazily on first backend use
  * (`./sdkLoader.js`); constructing the provider and reading
@@ -72,11 +76,16 @@ import type {
   AltanaExecuteResult,
   AltanaNetwork,
   AltanaSdkClient,
+  AltanaSdkClientX402,
+  AltanaSdkModule,
+  AltanaSdkModuleX402,
   AltanaSession,
   AltanaSessionPermissions,
+  AltanaSignX402PaymentResult,
   AltanaSigner,
   AltanaWallet,
 } from "./types.js";
+import { AltanaX402Payer, type AltanaX402PayerOptions } from "./x402.js";
 
 /** Relay nonce races retry up to this many attempts (field-tested ~4). */
 export const ALTANA_NONCE_RETRY_TRIES = 4;
@@ -149,7 +158,8 @@ export interface AltanaSessionFromEnvOpts {
  * Wallet provider for Altana agentic wallets (see module docstring).
  *
  * Capabilities: `broadcast.self`, `calls.arbitrary`, `intents.erc8004`,
- * `intents.erc8183`. Never any `sign.*`, never `x402.pay`.
+ * `intents.erc8183`; session mode adds `x402.pay` (SDK >= 0.3.4). Never
+ * any `sign.*`.
  */
 export class AltanaWalletProvider extends WalletProvider {
   static override readonly kind = "altana";
@@ -162,12 +172,9 @@ export class AltanaWalletProvider extends WalletProvider {
    */
   override readonly fundBundlesApproval = true;
 
-  protected override readonly extraCapabilities: ReadonlySet<string> = new Set([
-    BROADCAST_SELF,
-    CALLS_ARBITRARY,
-    INTENTS_ERC8004,
-    INTENTS_ERC8183,
-  ]);
+  // Assigned in the constructor: session mode adds x402.pay (payments are
+  // signed by session keys only — the SDK/relay does not pay from admin).
+  protected override readonly extraCapabilities: ReadonlySet<string>;
 
   readonly #network: AltanaNetwork;
   readonly #address: `0x${string}`;
@@ -207,6 +214,13 @@ export class AltanaWalletProvider extends WalletProvider {
     this.#nonceRetryTries = opts.nonceRetry?.tries ?? ALTANA_NONCE_RETRY_TRIES;
     this.#nonceRetryDelayMs =
       opts.nonceRetry?.delayMs ?? ALTANA_NONCE_RETRY_DELAY_MS;
+    this.extraCapabilities = new Set([
+      BROADCAST_SELF,
+      CALLS_ARBITRARY,
+      INTENTS_ERC8004,
+      INTENTS_ERC8183,
+      ...(opts.session ? [X402_PAY] : []),
+    ]);
 
     if (opts.session) {
       this.#session = opts.session;
@@ -406,22 +420,96 @@ export class AltanaWalletProvider extends WalletProvider {
   }
 
   /**
-   * x402 payments are structurally unsupported on Altana wallets — this is
-   * a protocol fact, not a missing feature. EIP-3009
-   * `transferWithAuthorization` is verified by the token contract outside
-   * the wallet's execute() path: `ecrecover` resolves a session signature
-   * to the session key (never the wallet), and the Porto account's
-   * ERC-1271 rejects all raw-digest signatures by anti-replay design.
-   * Field-tested on-chain in both directions.
+   * Delegated x402 payer for this wallet's session (see
+   * {@link AltanaX402Payer}). Session mode only: the SDK/relay signs x402
+   * payments with session keys exclusively; run the payer where the
+   * session lives. Requires `@altananetwork/sdk` >= 0.3.4 at first use and
+   * the one-time admin setup ({@link approveX402SignatureChecker} +
+   * {@link setPermit2Allowance}) — without them the facilitator's
+   * `isValidSignature`/`transferFrom` fails on-chain, not here.
+   *
+   * `payerKwargs`: {@link AltanaX402PayerOptions} (`sessionBudget`,
+   * `fetchImpl`).
    */
-  override makeX402Payer(payerKwargs?: Record<string, unknown>): never {
-    void payerKwargs;
-    throw new UnsupportedWalletOperation(X402_PAY, {
-      reason:
-        "Altana wallets cannot delegate x402/EIP-3009 payment signing to a session key (the token verifies signatures outside the wallet's execute path; the account's ERC-1271 rejects raw digests)",
-      alternative:
-        "use a separate dedicated low-balance EOA for x402 payments (EVMWalletProvider + X402Signer) and keep the Altana wallet for on-chain execution; RECEIVING x402 payments at the Altana wallet address works fine",
-    });
+  override makeX402Payer(
+    payerKwargs?: Record<string, unknown>,
+  ): AltanaX402Payer {
+    if (!this.#session) {
+      throw new UnsupportedWalletOperation(X402_PAY, {
+        reason:
+          "Altana x402 payments are signed by session keys only (the SDK/relay does not pay from the admin key)",
+        alternative:
+          "grantSession(...) here, persist it with serializeSession, and construct a session-mode AltanaWalletProvider for the paying agent",
+      });
+    }
+    return new AltanaX402Payer(this, payerKwargs as AltanaX402PayerOptions);
+  }
+
+  /**
+   * One-time x402 setup, step 1 of 2 (admin): whitelist `checker`
+   * (default: Permit2) for `session`'s ERC-1271 verification — a relay
+   * self-call to `setSignatureCheckerApproval(sessionKeyHash, checker,
+   * true)`. Without it, `isValidSignature` answers the facilitator with a
+   * failure and every payment settles as invalid. Once per session per
+   * rail; costs the relay fee + gas. Requires `@altananetwork/sdk` >= 0.3.4.
+   */
+  async approveX402SignatureChecker(
+    session: AltanaSession,
+    opts?: { checker?: `0x${string}`; feeToken?: `0x${string}` },
+  ): Promise<AltanaExecuteResult> {
+    return this.#setSignatureChecker("approveSignatureChecker", session, opts);
+  }
+
+  /**
+   * Revoke a checker approved via {@link approveX402SignatureChecker}
+   * (admin). Immediate kill switch for the session's x402 signing —
+   * cheaper-grained than revoking the whole session.
+   */
+  async revokeX402SignatureChecker(
+    session: AltanaSession,
+    opts?: { checker?: `0x${string}`; feeToken?: `0x${string}` },
+  ): Promise<AltanaExecuteResult> {
+    return this.#setSignatureChecker("revokeSignatureChecker", session, opts);
+  }
+
+  /**
+   * One-time x402 setup, step 2 of 2 (admin): `approve(Permit2, amount)`
+   * on `token` through the relay. BOUNDED by design — session spend caps
+   * do not apply to Permit2 pulls (the checker gate is independent of
+   * spend permissions), so this allowance is the on-chain ceiling on what
+   * a leaked session key can spend via x402. Size it like the old
+   * dedicated-EOA balance; top it up or zero it (amount = 0n) as needed.
+   * The relay races nothing here (admin queue applies as usual).
+   *
+   * The SDK's own `approveTokenForPermit2` helper is deliberately not
+   * used: it takes no amount.
+   */
+  async setPermit2Allowance(
+    token: `0x${string}`,
+    amount: bigint,
+  ): Promise<AltanaExecuteResult> {
+    this.#requireAdmin("setPermit2Allowance");
+    const { module } = await this.#x402Sdk();
+    const result = await this._relayExecute(
+      [
+        {
+          to: token,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: erc20Abi,
+            functionName: "approve",
+            args: [module.PERMIT2_ADDRESS, amount],
+          }),
+        },
+      ],
+      "setPermit2Allowance",
+    );
+    if (result.status === "FAILED") {
+      throw new Error(
+        `Altana relay reported FAILED for setPermit2Allowance (callsId ${result.callsId})`,
+      );
+    }
+    return result;
   }
 
   // ── Internal plumbing (shared by the executor; not public API) ─────────
@@ -490,6 +578,112 @@ export class AltanaWalletProvider extends WalletProvider {
       this.#paymentTokens.set(key, cached);
     }
     return cached;
+  }
+
+  /**
+   * Sign one raw 402 `accepts[]` requirement with this provider's session
+   * via the SDK (`signX402Payment` → complete `X-PAYMENT` header value).
+   * Signing is local to the SDK (no relay submission), so it bypasses the
+   * serial queue and nonce retry.
+   *
+   * @internal Used by {@link AltanaX402Payer}.
+   */
+  async _signX402Payment(
+    requirement: Record<string, unknown>,
+  ): Promise<AltanaSignX402PaymentResult> {
+    if (!this.#session) {
+      throw new UnsupportedWalletOperation(X402_PAY, {
+        reason: "x402 signing needs the session (session-mode provider)",
+      });
+    }
+    const { client } = await this.#x402Sdk();
+    const result = await client.signX402Payment({
+      session: this.#session,
+      requirement,
+      chainId: await this._x402ChainId(),
+    });
+    if (typeof result?.header !== "string" || result.header.length === 0) {
+      throw new Error(
+        "Altana signX402Payment returned no X-PAYMENT header value; cannot pay",
+      );
+    }
+    return result;
+  }
+
+  /**
+   * The chain this provider pays x402 on (route-selection pin).
+   *
+   * @internal Used by {@link AltanaX402Payer}.
+   */
+  async _x402ChainId(): Promise<number> {
+    if (this.#network !== "bnb-mainnet") {
+      return this.#network.chainId;
+    }
+    const sdk = await loadAltanaSdk();
+    return sdk.BNB.chainId;
+  }
+
+  /** Shared body of approve/revokeX402SignatureChecker (admin, queued). */
+  async #setSignatureChecker(
+    method: "approveSignatureChecker" | "revokeSignatureChecker",
+    session: AltanaSession,
+    opts?: { checker?: `0x${string}`; feeToken?: `0x${string}` },
+  ): Promise<AltanaExecuteResult> {
+    this.#requireAdmin(method);
+    const { client, module } = await this.#x402Sdk();
+    const { wallet, signer } = await this.#adminWalletAndSigner();
+    const result = await this.#enqueue(() =>
+      this.#withNonceRetry(method, () =>
+        client[method]({
+          wallet,
+          signer,
+          session,
+          checker: opts?.checker ?? module.PERMIT2_ADDRESS,
+          ...(opts?.feeToken ? { feeToken: opts.feeToken } : {}),
+        }),
+      ),
+    );
+    if (result.status === "FAILED") {
+      throw new Error(
+        `Altana relay reported FAILED for ${method} (callsId ${result.callsId})`,
+      );
+    }
+    return result;
+  }
+
+  /**
+   * The SDK module + client, gated on the x402 surface announced for
+   * `@altananetwork/sdk` >= 0.3.4. Duck-checked at first x402 use so a
+   * 0.3.3 install keeps every non-x402 path working and fails here with
+   * the exact upgrade to run.
+   */
+  async #x402Sdk(): Promise<{
+    client: AltanaSdkClient & AltanaSdkClientX402;
+    module: AltanaSdkModule & AltanaSdkModuleX402;
+  }> {
+    const sdk = (await loadAltanaSdk()) as AltanaSdkModule &
+      Partial<AltanaSdkModuleX402>;
+    const client = (await this.#sdkClient()) as AltanaSdkClient &
+      Partial<AltanaSdkClientX402>;
+    const missing = [
+      typeof client.signX402Payment === "function" ? null : "signX402Payment",
+      typeof client.signOrderTypedData === "function"
+        ? null
+        : "signOrderTypedData",
+      typeof client.approveSignatureChecker === "function"
+        ? null
+        : "approveSignatureChecker",
+      typeof sdk.PERMIT2_ADDRESS === "string" ? null : "PERMIT2_ADDRESS",
+    ].filter(Boolean);
+    if (missing.length > 0) {
+      throw new Error(
+        `Altana x402 support requires '@altananetwork/sdk' >= 0.3.4 (the installed version lacks ${missing.join(", ")}). Upgrade with: pnpm add @altananetwork/sdk@latest`,
+      );
+    }
+    return {
+      client: client as AltanaSdkClient & AltanaSdkClientX402,
+      module: sdk as AltanaSdkModule & AltanaSdkModuleX402,
+    };
   }
 
   #requireAdmin(operation: string): void {

@@ -166,7 +166,7 @@ provider, keep the protocol code:
 | Capabilities | `sign.message/transaction/typed_data`, `calls.arbitrary`, `paymaster.sponsor` | `broadcast.self`, `calls.arbitrary`, `intents.erc8004`, `intents.erc8183` |
 | Agent containment | `SigningPolicy` (in-process) | on-chain session keys: call whitelist + spend caps + expiry, revocable in one tx |
 | Gas | self-paid or MegaFuel-sponsored | relay fronts gas, recovers it from the wallet (MegaFuel not involved) |
-| x402 payments | ✅ `X402Signer` | ❌ structurally impossible for session keys — use a separate small EOA; **receiving** at the wallet works fine |
+| x402 payments | ✅ `X402Signer` | ✅ session-key payer (`makeX402Payer()`, SDK >= 0.3.4) after a one-time admin setup: `approveX402SignatureChecker` + bounded `setPermit2Allowance`; **receiving** at the wallet works fine |
 | Extra install | — | `pnpm add @altananetwork/sdk` (optional peer, GPL-3.0-or-later, lazily imported) |
 
 Session quick start (admin grants once, agent runs with the session):
@@ -188,7 +188,7 @@ const jobs = await ERC8183Client.create({ walletProvider: wallet, network: "bsc-
 ```
 
 See [`examples/altana/`](examples/altana/README.md) for the full model,
-fee table, the x402 dual-account rationale and the testnet E2E.
+fee table, the x402 session-payer setup and the testnet E2E.
 
 ## Environment variables
 

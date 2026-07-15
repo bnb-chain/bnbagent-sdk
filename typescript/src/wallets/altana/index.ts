@@ -34,6 +34,13 @@ export {
   deserializeSession,
   serializeSession,
 } from "./session.js";
+export {
+  AltanaX402Payer,
+  chainIdFromX402Network,
+  X_PAYMENT_HEADER,
+  X_PAYMENT_RESPONSE_HEADER,
+} from "./x402.js";
+export type { AltanaX402PayerOptions } from "./x402.js";
 export type {
   AltanaCall,
   AltanaCallPermission,

@@ -74,18 +74,45 @@ never commit, never log. Its blast radius is capped by the on-chain grant.
 in the same transaction — nothing is sponsored today, and MegaFuel does
 not participate in Altana-routed transactions.
 
-## Why there is no `x402.pay` capability
+## x402 from the session key (`x402.pay`, SDK >= 0.3.4)
 
-x402/EIP-3009 signatures are verified by the **token contract**, outside
-the wallet's `execute()` path: `ecrecover` on a session signature yields
-the session key (not the wallet), and the Porto account's ERC-1271
-rejects all raw-digest signatures by anti-replay design. Both dead ends
-were confirmed on-chain. So `makeX402Payer()` throws with guidance:
+Raw x402 signatures used to be a dead end here (confirmed on-chain:
+`ecrecover` yields the session key, and the Porto account's ERC-1271
+rejects raw digests). `@altananetwork/sdk` >= 0.3.4 opens the supported
+path around both: `signX402Payment` produces an ERC-7739-nested ERC-1271
+envelope, and `isValidSignature` answers only callers whitelisted via
+`approveSignatureChecker` — so the old dual-account workaround (separate
+x402 EOA) is retired. One-time setup, then the agent pays with the
+session alone:
 
-- **Paying**: use a separate dedicated low-balance EOA
-  (`EVMWalletProvider` + `X402Signer`), the same pattern as before.
-- **Receiving**: works perfectly — point `payTo` at the Altana wallet and
-  income lands under the strongest custody you have.
+```ts
+// admin, once per session
+await admin.approveX402SignatureChecker(session);       // checker = Permit2
+await admin.setPermit2Allowance(USDC, 50_000_000n);      // BOUNDED — see below
+
+// agent (session mode)
+const payer = wallet.makeX402Payer({ sessionBudget: { [USDC]: 10_000_000n } });
+const result = await payer.request(url, { maxPayment: 1_000_000n });
+```
+
+Security model: session **spend caps do not apply to Permit2 pulls** (the
+checker gate is independent of spend permissions), so the wallet→Permit2
+allowance is the only on-chain ceiling on a leaked session key's x402
+spending. Keep it bounded (`setPermit2Allowance`, sized like the old
+dedicated-EOA balance) and layer the in-process caps (`maxPayment`,
+`sessionBudget`) on top. Kill switches: `revokeX402SignatureChecker`
+(x402 only) or `revokeSession` (everything).
+
+**Verification runbook (run once the >= 0.3.4 release is on npm):**
+
+1. `pnpm add -D @altananetwork/sdk@latest`, then add the x402 mirrors to
+   `tests/altanaTypeCompat.test.ts` (see the note in
+   `src/wallets/altana/types.ts`) — `pnpm check` arbitrates every assumed
+   shape.
+2. `pnpm exec tsx examples/altana/x402.ts` (mainnet, dust amounts; env:
+   `PRIVATE_KEY`, `X402_ENDPOINT`, optional `X402_MAX_PAYMENT`) — runs
+   setup + one paid request end-to-end.
+3. Receiving is unchanged: point `payTo` at the Altana wallet.
 
 ## The testnet shim (`shim.ts` / `testnet.ts`)
 

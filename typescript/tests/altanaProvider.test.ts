@@ -158,7 +158,7 @@ describe("AltanaWalletProvider — identity and capabilities", () => {
     expect(sdkMocks.createWalletMock).not.toHaveBeenCalled();
   });
 
-  it("declares exactly {broadcast.self, calls.arbitrary, intents.erc8004, intents.erc8183} — no sign.*, no x402.pay", () => {
+  it("admin mode declares exactly {broadcast.self, calls.arbitrary, intents.erc8004, intents.erc8183} — no sign.*, no x402.pay", () => {
     const provider = new AltanaWalletProvider({ privateKey: ADMIN_PK });
     expect(provider.kind).toBe("altana");
     expect(AltanaWalletProvider.kind).toBe("altana");
@@ -185,19 +185,24 @@ describe("AltanaWalletProvider — identity and capabilities", () => {
     expect(provider.fundBundlesApproval).toBe(true);
   });
 
-  it("makeX402Payer throws UnsupportedWalletOperation with the dual-account guidance", () => {
-    const provider = new AltanaWalletProvider({ session: fakeSession() });
+  it("makeX402Payer: session mode returns a payer (x402.pay declared); admin mode refuses with the session path", () => {
+    // Deeper x402 coverage lives in altanaX402.test.ts; this pins the
+    // capability split at the provider seam.
+    const session = new AltanaWalletProvider({ session: fakeSession() });
+    expect(session.supports(X402_PAY)).toBe(true);
+    expect(typeof session.makeX402Payer().request).toBe("function");
+
+    const admin = new AltanaWalletProvider({ privateKey: ADMIN_PK });
     let thrown: unknown;
     try {
-      provider.makeX402Payer();
+      admin.makeX402Payer();
     } catch (error) {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(UnsupportedWalletOperation);
     const message = (thrown as Error).message;
     expect(message).toContain(X402_PAY);
-    expect(message).toMatch(/separate dedicated low-balance EOA/);
-    expect(message).toMatch(/RECEIVING x402 payments.*works/);
+    expect(message).toMatch(/session/);
   });
 
   it("session mode: address is the session's wallet and describe() leaks no key material", () => {

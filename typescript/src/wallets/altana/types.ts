@@ -203,3 +203,75 @@ export interface AltanaSdkModule {
   /** The SDK's own BNB-mainnet deployment config. */
   BNB: AltanaNetworkConfig;
 }
+
+// ── x402 surface (announced for `@altananetwork/sdk` >= 0.3.4) ────────────
+// Mirrored from docs.altana.network/sdk/{sign-order,approve-signature-checker,
+// x402}, NOT from shipped .d.ts — the 0.3.3 devDependency predates this
+// surface, so these mirrors are deliberately absent from
+// `tests/altanaTypeCompat.test.ts`. VERIFICATION STEP once the release
+// lands: bump the devDependency, add the real → mirror pins there, and let
+// `pnpm typecheck` arbitrate every shape below. At runtime the provider
+// duck-checks this surface and raises an upgrade error on older installs
+// (see `provider.ts` `#x402Sdk`).
+
+/**
+ * Mirror of `ClientApproveSignatureCheckerOptions` (docs). Approving a
+ * checker executes a relay self-call to
+ * `setSignatureCheckerApproval(sessionKeyHash, checker, isApproved)` — the
+ * session's ERC-1271 `isValidSignature` only answers callers approved here.
+ */
+export interface AltanaApproveSignatureCheckerOptions {
+  wallet: AltanaWallet;
+  signer: AltanaSigner;
+  session: AltanaSession;
+  checker: `0x${string}`;
+  feeToken?: `0x${string}`;
+  chainId?: number;
+}
+
+/** Options for the documented `signOrderTypedData` (EIP-712 in, hashed by the SDK). */
+export interface AltanaSignOrderTypedDataOptions {
+  session: AltanaSession;
+  /** viem `TypedDataDefinition`-shaped payload. */
+  typedData: Record<string, unknown>;
+}
+
+/**
+ * Options for `signX402Payment` — "sign one requirement → { header,
+ * payload }" (docs). `requirement` is one raw `accepts[]` entry from the
+ * 402 challenge, passed verbatim so the SDK owns the rail-specific
+ * typed-data construction (plain Permit2, B402 witness, EIP-3009).
+ */
+export interface AltanaSignX402PaymentOptions {
+  session: AltanaSession;
+  requirement: Record<string, unknown>;
+  chainId?: number;
+}
+
+/** Result of `signX402Payment`: the complete `X-PAYMENT` header value. */
+export interface AltanaSignX402PaymentResult {
+  header: string;
+  payload?: unknown;
+}
+
+/** The x402 client methods added in `@altananetwork/sdk` >= 0.3.4. */
+export interface AltanaSdkClientX402 {
+  signOrderTypedData(
+    opts: AltanaSignOrderTypedDataOptions,
+  ): Promise<`0x${string}`>;
+  signX402Payment(
+    opts: AltanaSignX402PaymentOptions,
+  ): Promise<AltanaSignX402PaymentResult>;
+  approveSignatureChecker(
+    opts: AltanaApproveSignatureCheckerOptions,
+  ): Promise<AltanaExecuteResult>;
+  revokeSignatureChecker(
+    opts: AltanaApproveSignatureCheckerOptions,
+  ): Promise<AltanaExecuteResult>;
+}
+
+/** The module-level x402 additions in `@altananetwork/sdk` >= 0.3.4. */
+export interface AltanaSdkModuleX402 {
+  /** Canonical Permit2 — the checker for the permit2-exact/B402 rail. */
+  PERMIT2_ADDRESS: `0x${string}`;
+}
