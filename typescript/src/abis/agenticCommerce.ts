@@ -182,6 +182,11 @@ export const agenticCommerceAbi = [
     "type": "error"
   },
   {
+    "inputs": [],
+    "name": "ZeroBudgetSellerOnly",
+    "type": "error"
+  },
+  {
     "anonymous": false,
     "inputs": [
       {

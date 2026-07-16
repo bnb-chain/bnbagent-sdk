@@ -10,6 +10,7 @@ provider address.
 | Script | Flow | Outcome |
 |--------|------|---------|
 | `happy.py` | create → register → fund → provider submits → `settle` → **COMPLETED** | payment released, no dispute |
+| `zero_price.py` | create → register → **provider** `set_budget(0)` → `fund(0)` → provider submits → `settle` → **COMPLETED** | seller-side zero price: no escrow, nobody paid |
 | `dispute_reject.py` | submit → client `dispute` → whitelisted voters `voteReject` → `settle` → **REJECTED** | refund to client |
 | `stalemate_expire.py` | submit → client `dispute` → quorum not reached → job expires → `claimRefund` → **EXPIRED** | refund via expiry |
 | `never_submit.py` | provider never submits → job expires → `claimRefund` → **EXPIRED** | refund via expiry |
@@ -94,6 +95,12 @@ For a hermetic, no-funds-required twak tour, see `examples/twak/`.
   an out-of-band vote (see `examples/voter/`).
 - Every script is idempotent-ish: it creates a new job each run, so reruns
   don't collide.
+- `zero_price.py` demonstrates **seller-side zero price** (ERC-8183
+  `budget == 0`). Only the provider may set a zero budget — a client-initiated
+  `set_budget(0)` reverts with `ZeroBudgetSellerOnly` — so this flow
+  **requires** `PROVIDER_PRIVATE_KEY` (the provider both sets the budget and
+  submits). `fund(0)` moves no tokens and the SDK skips the ERC-20 approve
+  entirely, so the client needs no payment-token balance or allowance.
 
 ## `create_and_verify.py`
 

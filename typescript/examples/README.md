@@ -21,6 +21,7 @@ run e.g. `pnpm -C typescript exec tsx examples/client/happy.ts`.
 | Script | Flow |
 | --- | --- |
 | `happy.ts` | createJob → registerJob → setBudget → fund → submit → wait past dispute window → settle → `COMPLETED` |
+| `zeroPrice.ts` | createJob → registerJob → **provider** `setBudget(0)` → `fund(0)` → submit → wait past dispute window → settle → `COMPLETED` (seller-side zero price: no escrow, nobody paid) |
 | `disputeReject.ts` | ...fund → submit → client `dispute` → whitelisted voter `voteReject` (quorum met) → settle → `REJECTED` |
 | `stalemateExpire.ts` | ...fund → submit → `dispute` with no quorum ever reached → wait past `expiredAt` → `claimRefund` → `EXPIRED` |
 | `neverSubmit.ts` | ...fund → provider stays silent → wait past `expiredAt` → `claimRefund` → `EXPIRED` |
@@ -30,6 +31,13 @@ Required env vars: `PRIVATE_KEY` (client), `PROVIDER_ADDRESS`. Optional:
 `PROVIDER_PRIVATE_KEY` (the script pauses and asks you to run the provider
 side manually if omitted), `VOTER_PRIVATE_KEY` (same, for `disputeReject.ts`),
 `NETWORK` (defaults to `bsc-testnet`).
+
+`zeroPrice.ts` demonstrates **seller-side zero price** (ERC-8183
+`budget == 0`). Only the provider may set a zero budget — a client-initiated
+`setBudget(0n)` reverts with `ZeroBudgetSellerOnly` — so this flow **requires**
+`PROVIDER_PRIVATE_KEY` (the provider both sets the budget and submits).
+`fund(0n)` moves no tokens and the SDK skips the ERC-20 approve entirely, so
+the client needs no payment-token balance or allowance.
 
 `_helpers.ts` centralizes the shared setup: `loadSettings()` reads `.env`,
 `makePrimaryClient()` builds the client-role `ERC8183Client` from an
