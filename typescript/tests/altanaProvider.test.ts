@@ -651,7 +651,7 @@ describe("altana sdk loader", () => {
   it("maps a missing @altananetwork/sdk install to pnpm-add guidance, without caching the failure", async () => {
     const loader = await import("../src/wallets/altana/sdkLoader.js");
     try {
-      loader._setAltanaSdkImporterForTests(() =>
+      loader.setAltanaSdkImporter(() =>
         Promise.reject(
           Object.assign(
             new Error(
@@ -666,12 +666,12 @@ describe("altana sdk loader", () => {
       );
 
       // Unrelated import failures pass through unmapped.
-      loader._setAltanaSdkImporterForTests(() =>
+      loader.setAltanaSdkImporter(() =>
         Promise.reject(new Error("boom: disk on fire")),
       );
       await expect(loader.loadAltanaSdk()).rejects.toThrow(/disk on fire/);
     } finally {
-      loader._setAltanaSdkImporterForTests(null);
+      loader.setAltanaSdkImporter(null);
     }
 
     // Failures were not cached: the restored importer resolves (to the

@@ -28,7 +28,11 @@ export type {
   AltanaSessionFromEnvOpts,
   AltanaWalletProviderOptions,
 } from "./provider.js";
-export { ALTANA_SDK_PACKAGE } from "./sdkLoader.js";
+export {
+  ALTANA_SDK_PACKAGE,
+  setAltanaSdkImporter,
+} from "./sdkLoader.js";
+export type { AltanaSdkImporter } from "./sdkLoader.js";
 export {
   ALTANA_SESSION_VERSION,
   deserializeSession,

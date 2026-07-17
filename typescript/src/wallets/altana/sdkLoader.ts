@@ -13,7 +13,8 @@ import type { AltanaSdkModule } from "./types.js";
 /** The npm package the Altana provider binds to at runtime. */
 export const ALTANA_SDK_PACKAGE = "@altananetwork/sdk";
 
-type AltanaSdkImporter = () => Promise<unknown>;
+/** Host-supplied loader for the optional ESM-only Altana SDK package. */
+export type AltanaSdkImporter = () => Promise<unknown>;
 
 const realImporter: AltanaSdkImporter = () => import(ALTANA_SDK_PACKAGE);
 
@@ -59,13 +60,18 @@ export async function loadAltanaSdk(): Promise<AltanaSdkModule> {
 }
 
 /**
- * Swap the dynamic-import implementation (or restore it with `null`).
- * Test hook only — lets the import-failure mapping be exercised without
- * fighting the test runner's module registry. Clears the cache either way.
+ * Swap the dynamic-import implementation, or restore the package-relative
+ * default with `null`.
+ *
+ * Hosts such as a globally installed CLI use this seam to resolve the
+ * optional, ESM-only `@altananetwork/sdk` from an agent project's own
+ * `node_modules`. Changing the importer always clears the process cache so
+ * the next Altana operation uses the newly selected module source.
  */
-export function _setAltanaSdkImporterForTests(
-  importer: AltanaSdkImporter | null,
-): void {
+export function setAltanaSdkImporter(importer: AltanaSdkImporter | null): void {
   importAltanaSdkModule = importer ?? realImporter;
   cachedModule = null;
 }
+
+/** @deprecated Use {@link setAltanaSdkImporter}. */
+export const _setAltanaSdkImporterForTests = setAltanaSdkImporter;
