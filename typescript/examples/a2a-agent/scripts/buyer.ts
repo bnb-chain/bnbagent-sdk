@@ -161,7 +161,7 @@ async function fundJob(quote: Quote): Promise<void> {
   const provider = quote.provider_address;
   const price = BigInt(quote.response.terms.price);
   // Anchor the SAME signed terms on-chain so provider_sig stays verifiable:
-  // ecrecover(negotiation_hash, provider_sig) == job.provider.
+  // EOA recovery or ERC-1271 verification resolves to job.provider.
   const description = buildJobDescription(quote);
 
   const created = await client.createJob({

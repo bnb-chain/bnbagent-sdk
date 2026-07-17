@@ -39,7 +39,7 @@
 
 import { readFileSync, statSync } from "node:fs";
 import type { Abi, PublicClient } from "viem";
-import { encodeFunctionData } from "viem";
+import { encodeFunctionData, hashMessage } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { erc20Abi } from "../../abis/erc20.js";
 import { getEnv } from "../../core/envUtil.js";
@@ -49,6 +49,7 @@ import {
   sleep,
   waitForReceiptAndInterpret,
 } from "../../core/txSender.js";
+import type { QuoteSigner } from "../../erc8183/negotiation.js";
 import {
   BROADCAST_SELF,
   CALLS_ARBITRARY,
@@ -83,6 +84,7 @@ import type {
   AltanaSdkClientX402,
   AltanaSdkModule,
   AltanaSdkModule050,
+  AltanaSdkModuleQuoteSigning,
   AltanaSdkModuleX402,
   AltanaSession,
   AltanaSessionPermissions,
@@ -535,6 +537,62 @@ export class AltanaWalletProvider extends WalletProvider {
       });
     }
     return new AltanaX402Payer(this, payerKwargs as AltanaX402PayerOptions);
+  }
+
+  /**
+   * Return a quote-only signer backed by this provider's session key.
+   *
+   * The signer applies the same EIP-191 string hashing as
+   * `EVMWalletProvider.signMessage(negotiationHash)`, then delegates the
+   * digest to Altana's `signOrder`. The result is the complete ERC-1271
+   * envelope verified against {@link address}; the session key address and
+   * admin EOA never enter the quote envelope or generic `sign.*` capability
+   * surface. Session mode only.
+   */
+  sessionQuoteSigner(): QuoteSigner {
+    if (!this.#session) {
+      throw new UnsupportedWalletOperation("erc8183.quote.sign", {
+        reason:
+          "Altana quote signing needs the session (session-mode provider)",
+        alternative:
+          "grantSession(...) in the trusted admin environment, persist it with serializeSession, and construct a session-mode AltanaWalletProvider for the agent",
+      });
+    }
+    const session = this.#session;
+    return {
+      address: this.address,
+      validUntil: session.expiry,
+      signQuote: async (negotiationHash: string): Promise<string> => {
+        const sdk = (await loadAltanaSdk()) as AltanaSdkModule &
+          Partial<AltanaSdkModuleQuoteSigning>;
+        if (typeof sdk.signOrder !== "function") {
+          throw new Error(
+            "Altana quote signing requires '@altananetwork/sdk' >= 0.4.0 (the installed version lacks signOrder). Upgrade with: pnpm add @altananetwork/sdk@latest",
+          );
+        }
+        return sdk.signOrder(session, hashMessage(negotiationHash));
+      },
+    };
+  }
+
+  /**
+   * Trusted setup for quote verification: authorize `checker` (normally the
+   * ERC-8183 Commerce/verifier contract) to call this session's ERC-1271
+   * validation path. Admin mode only; the agent never needs the admin EOA.
+   *
+   * Revoking the session/checker later prevents current-state acceptance but
+   * does not invalidate a quote already verified at its `JobFunded`
+   * acceptance block via `verifyQuoteSignature({ blockNumber })`.
+   */
+  async approveQuoteSignatureChecker(
+    session: AltanaSession,
+    checker: `0x${string}`,
+    opts?: { feeToken?: `0x${string}` },
+  ): Promise<AltanaExecuteResult> {
+    return this.#setSignatureChecker("approveSignatureChecker", session, {
+      checker,
+      ...(opts?.feeToken ? { feeToken: opts.feeToken } : {}),
+    });
   }
 
   /**

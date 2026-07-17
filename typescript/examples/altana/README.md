@@ -61,6 +61,93 @@ Session persistence env vars:
 The serialized payload **contains the session private key** — mode 0600,
 never commit, never log. Its blast radius is capped by the on-chain grant.
 
+## ERC-8183 quotes from the session key
+
+`@altananetwork/sdk` 0.5.1's existing `signOrder` is sufficient for quote
+signing. `sessionQuoteSigner()` hashes the canonical negotiation hash with
+EIP-191 and returns Altana's wallet-level ERC-1271 envelope. The public quote
+still contains only `negotiation_hash` and `provider_sig`: it does not expose
+the session address, add a new signature scheme, or give the agent generic
+message-signing authority.
+
+The trusted environment approves the ERC-8183 Commerce/verifier as the
+session's signature checker once, alongside the session grant:
+
+```ts
+// Trusted admin environment only. Never copy this EOA into the agent.
+await admin.approveQuoteSignatureChecker(session, COMMERCE_ADDRESS);
+```
+
+The agent process loads only the serialized session and passes the narrow
+signer to negotiation:
+
+```ts
+import { ERC8183Client } from "@bnbagent/sdk";
+import { NegotiationHandler } from "@bnbagent/sdk/erc8183";
+import { AltanaWalletProvider } from "@bnbagent/sdk/wallets";
+
+const wallet = await AltanaWalletProvider.sessionFromEnv();
+const erc8183 = await ERC8183Client.create({
+  walletProvider: wallet,
+  network: "bsc-mainnet",
+});
+const negotiation = await NegotiationHandler.fromErc8183Client(erc8183, {
+  servicePrice: "1000000",
+  quoteSigner: wallet.sessionQuoteSigner(),
+});
+```
+
+The quote expiry is automatically clamped to the Altana session expiry. A
+signing failure is fail-closed: the handler does not return an accepted but
+unsigned quote.
+
+The buyer verifies against the provider wallet and the expected Commerce
+contract. Before acceptance, omit `blockNumber` to use current state:
+
+```ts
+import { verifyQuoteSignature } from "@bnbagent/sdk/erc8183";
+
+const verdict = await verifyQuoteSignature({
+  envelope: quote,
+  provider: providerWallet,
+  publicClient,
+  expectedVerifyingContract: COMMERCE_ADDRESS,
+});
+```
+
+Before funding, current-state verification can stop an expired or revoked
+quote. Once funded, verify the description stored on-chain at the
+`JobFunded` economic-acceptance block:
+
+```ts
+const acceptedVerdict = await verifyQuoteSignature({
+  envelope: JSON.parse(job.description),
+  provider: job.provider,
+  publicClient,
+  expectedVerifyingContract: COMMERCE_ADDRESS,
+  blockNumber: jobFundedBlock,
+});
+```
+
+This gives the intended lifecycle: session/checker revocation can stop a
+quote that has not yet been funded, while a later revocation or session
+expiry does not rewrite the verdict anchored at funding. Seller-side
+`ERC8183JobOps.verifyJob()` performs this check by default before any work or
+submission: it locates the indexed `JobFunded(jobId)` event inside the signed
+`negotiated_at..quote_expires_at` window, then verifies content, provider,
+expiry, chain, Commerce binding, and EOA/ERC-1271 signature at that block.
+Removing the signature or replacing the structured description is rejected.
+`allowUnsignedJobs: true` exists only as an unsafe migration escape hatch for
+legacy jobs.
+
+The SDK exposes no quote-revoke operation. Historical ERC-1271 verification
+requires an RPC that retains state for the funding block. Because an off-chain
+`eth_call` sees end-of-block state, exact funding-versus-revocation ordering
+inside one block remains an acknowledged limitation while the Commerce
+contract is unchanged. Strict irrevocability from the instant of off-chain
+signing would instead require an on-chain quote attestation; `signOrder` alone
+cannot provide it.
+
 ## Fees (field-measured, oracle-priced)
 
 | action | protocol fee | gas |

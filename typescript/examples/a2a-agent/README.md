@@ -28,7 +28,7 @@ buyer.ts                                server.ts
   production agent consider the official `@a2a-js/sdk` — clients speaking spec
   A2A interoperate with either.
 - The signed quote round-trips into `createJob` via `buildJobDescription`, so
-  `ecrecover(negotiation_hash, provider_sig)` stays verifiable on-chain.
+  the provider signature stays verifiable by EOA recovery or ERC-1271.
 
 > **EVM only.** Unlike the Python reference there is no `WALLET_KIND` switch —
 > the TypeScript SDK ships an EVM wallet provider only.

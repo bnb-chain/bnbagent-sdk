@@ -359,6 +359,18 @@ describe("AltanaX402Payer.quote", () => {
 });
 
 describe("admin x402 setup", () => {
+  it("approveQuoteSignatureChecker forwards the explicit Commerce checker", async () => {
+    const provider = adminProvider();
+    const session = fakeSession();
+
+    await provider.approveQuoteSignatureChecker(session, USDC);
+
+    const args = sdkMocks.approveSignatureCheckerMock.mock.calls[0][0];
+    expect(args.checker).toBe(USDC);
+    expect(args.session).toBe(session);
+    expect(args.wallet.address).toBe(provider.address);
+  });
+
   it("approveX402SignatureChecker defaults the checker to Permit2", async () => {
     const provider = adminProvider();
     const session = fakeSession();

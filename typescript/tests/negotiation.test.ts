@@ -25,6 +25,7 @@ import {
   NegotiationRequest,
   NegotiationResponse,
   NegotiationResult,
+  type QuoteSigner,
   ReasonCode,
   TermSpecification,
   buildDescriptionContent,
@@ -542,6 +543,16 @@ function makeMockWallet(
   } as MessageSigner & { signMessage: ReturnType<typeof vi.fn> };
 }
 
+function makeMockQuoteSigner(): QuoteSigner & {
+  signQuote: ReturnType<typeof vi.fn>;
+} {
+  const signQuote = vi.fn(async () => `0x${"cd".repeat(98)}`);
+  return {
+    address: "0x0000000000000000000000000000000000dEaD",
+    signQuote,
+  };
+}
+
 describe("NegotiationHandler", () => {
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
@@ -621,6 +632,14 @@ describe("NegotiationHandler", () => {
     expect(result.response.quote_expires_at).toBe(FIXED_NOW + 180);
   });
 
+  it("uses the maximum 15-minute quote lifetime by default", async () => {
+    const handler = makeHandler();
+
+    const result = await handler.negotiate(basicRequest());
+
+    expect(result.response.quote_expires_at).toBe(FIXED_NOW + 900);
+  });
+
   it("enforces the quote TTL cap and floor", () => {
     expect(() => makeHandler({ quoteTtlSeconds: 901 })).toThrow(
       /quote_ttl_seconds/,
@@ -653,6 +672,54 @@ describe("NegotiationHandler", () => {
     expect(result.providerSig.startsWith("0x")).toBe(true);
     expect(wallet.signMessage).toHaveBeenCalledTimes(1);
     expect(wallet.signMessage).toHaveBeenCalledWith(result.negotiationHash);
+  });
+
+  it("signs through a quote-specific signer without requiring sign.message", async () => {
+    const quoteSigner = makeMockQuoteSigner();
+    const handler = makeHandler({ quoteSigner, chainId: 97 });
+
+    const result = await handler.negotiate(basicRequest());
+
+    expect(result.providerSig).toBe(`0x${"cd".repeat(98)}`);
+    expect(quoteSigner.signQuote).toHaveBeenCalledWith(result.negotiationHash);
+  });
+
+  it("clamps quote expiry to the quote signer's authorization expiry", async () => {
+    const quoteSigner = {
+      ...makeMockQuoteSigner(),
+      validUntil: FIXED_NOW + 60,
+    };
+    const handler = makeHandler({
+      quoteSigner,
+      chainId: 97,
+      quoteTtlSeconds: 300,
+    });
+
+    const result = await handler.negotiate(basicRequest());
+
+    expect(result.response.quote_expires_at).toBe(FIXED_NOW + 60);
+  });
+
+  it("fails closed before signing when quote authorization has expired", async () => {
+    const quoteSigner = {
+      ...makeMockQuoteSigner(),
+      validUntil: FIXED_NOW,
+    };
+    const handler = makeHandler({ quoteSigner, chainId: 97 });
+
+    await expect(handler.negotiate(basicRequest())).rejects.toThrow(
+      /quote signer authorization has expired/,
+    );
+    expect(quoteSigner.signQuote).not.toHaveBeenCalled();
+  });
+
+  it("rejects ambiguous configuration with both signing seams", () => {
+    expect(() =>
+      makeHandler({
+        walletProvider: makeMockWallet(),
+        quoteSigner: makeMockQuoteSigner(),
+      }),
+    ).toThrow(/either walletProvider or quoteSigner/);
   });
 
   it("has no signature without a wallet provider", async () => {
@@ -757,6 +824,22 @@ describe("NegotiationHandler", () => {
       { servicePrice: "20000000000000000000", walletProvider: wallet },
     );
     expect(handler._walletProvider).toBe(wallet);
+  });
+
+  it("fromErc8183Client passes through the quote signer", async () => {
+    const mockClient = {
+      paymentToken: vi.fn(async () => "0xTokenAddr"),
+      network: { chainId: 97 },
+      commerce: { address: "0xa206c0517B6371c6638cD9E4A42cC9F02A33B0de" },
+    };
+    const quoteSigner = makeMockQuoteSigner();
+    const handler = await NegotiationHandler.fromErc8183Client(
+      mockClient as unknown as Parameters<
+        typeof NegotiationHandler.fromErc8183Client
+      >[0],
+      { servicePrice: "20000000000000000000", quoteSigner },
+    );
+    expect(handler._quoteSigner).toBe(quoteSigner);
   });
 
   it("warns when a wallet is configured without a chain_id", () => {
@@ -940,5 +1023,26 @@ describe("SigningFailureLogging", () => {
     const warnedText = warnSpy.mock.calls.map((c) => c.join(" ")).join("\n");
     expect(warnedText).toContain("sign_message failed");
     expect(warnedText).toContain("hardware key offline");
+  });
+
+  it("fails closed when the quote-specific signer cannot sign", async () => {
+    const quoteSigner: QuoteSigner = {
+      address: "0x0000000000000000000000000000000000dEaD",
+      signQuote: vi.fn(async () => {
+        throw new Error("session unavailable");
+      }),
+    };
+    const handler = new NegotiationHandler({
+      servicePrice: "20000000000000000000",
+      currency: "0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
+      quoteSigner,
+      chainId: 97,
+      now: () => FIXED_NOW,
+    });
+
+    await expect(handler.negotiate(basicRequest())).rejects.toThrow(
+      /quote signing failed: session unavailable/,
+    );
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 });

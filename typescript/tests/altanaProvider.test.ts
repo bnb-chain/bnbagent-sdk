@@ -39,6 +39,7 @@ const sdkMocks = vi.hoisted(() => {
   const signerFromPrivateKeyMock = vi.fn();
   const registerSessionKeyMock = vi.fn();
   const balancesMock = vi.fn();
+  const signOrderMock = vi.fn();
   // 0.5.0-surface toggle: tests flip this off to simulate a pre-0.5.0
   // install (no registerSessionKey/balances on the client, no BNB_TESTNET
   // on the module).
@@ -60,6 +61,7 @@ const sdkMocks = vi.hoisted(() => {
     signerFromPrivateKeyMock,
     registerSessionKeyMock,
     balancesMock,
+    signOrderMock,
     v050,
     createClientMock,
     factoryRuns: { count: 0 },
@@ -90,6 +92,7 @@ vi.mock("@altananetwork/sdk", async () => {
     get BNB_TESTNET() {
       return sdkMocks.v050.enabled ? { chainId: 97 } : undefined;
     },
+    signOrder: sdkMocks.signOrderMock,
   };
 });
 
@@ -150,6 +153,8 @@ beforeEach(() => {
   );
   sdkMocks.registerSessionKeyMock.mockClear();
   sdkMocks.balancesMock.mockClear();
+  sdkMocks.signOrderMock.mockReset();
+  sdkMocks.signOrderMock.mockResolvedValue(`0x${"cd".repeat(98)}`);
   sdkMocks.v050.enabled = true;
   sdkMocks.grantSessionMock.mockResolvedValue(fakeSession());
   sdkMocks.revokeSessionMock.mockResolvedValue({
@@ -240,6 +245,31 @@ describe("AltanaWalletProvider — identity and capabilities", () => {
     const dumped = JSON.stringify(description);
     expect(dumped).not.toContain(SESSION_PK.slice(2));
     expect(dumped).not.toContain("privateKey");
+  });
+
+  it("sessionQuoteSigner signs the EIP-191 negotiation digest as the wallet account", async () => {
+    const session = fakeSession();
+    const provider = new AltanaWalletProvider({ session });
+
+    const signer = provider.sessionQuoteSigner();
+    const signature = await signer.signQuote(`0x${"22".repeat(32)}`);
+
+    expect(signer.address).toBe(WALLET);
+    expect(signer.validUntil).toBe(session.expiry);
+    expect(signature).toBe(`0x${"cd".repeat(98)}`);
+    expect(sdkMocks.signOrderMock).toHaveBeenCalledWith(
+      session,
+      "0x49d4c1d50ce22680c719e4b76e670399384808e6fb3f649cd025033ce29cbb9a",
+    );
+    expect(provider.supports(SIGN_MESSAGE)).toBe(false);
+  });
+
+  it("sessionQuoteSigner refuses admin mode instead of falling back to the EOA", () => {
+    const admin = new AltanaWalletProvider({ privateKey: ADMIN_PK });
+
+    expect(() => admin.sessionQuoteSigner()).toThrow(
+      /quote signing needs the session/,
+    );
   });
 
   it("makeExecutor returns an AltanaIntentExecutor (not LocalExecutor) despite having no sign.transaction", () => {

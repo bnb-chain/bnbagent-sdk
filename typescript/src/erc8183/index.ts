@@ -45,6 +45,7 @@ export {
   type CreateJobFacadeOpts,
   type ERC8183ClientCreateOpts,
   type FundOpts,
+  type GetJobFundedBlockOpts,
   type GetDeliverableUrlFacadeOpts,
   type SubmitOptParams,
 } from "./client.js";
@@ -61,6 +62,7 @@ export {
   ERR_NOT_ASSIGNED,
   ERR_NOT_FOUND,
   ERR_PAYLOAD_TOO_LARGE,
+  ERR_QUOTE_INVALID,
   ERR_SUBMIT_DEADLINE_PASSED,
   ERR_TX_PENDING,
   ERR_WRONG_STATUS,
@@ -73,6 +75,7 @@ export {
   DescriptionTooLongError,
   MAX_DESCRIPTION_BYTES,
   type MessageSigner,
+  type QuoteSigner,
   NegotiationHandler,
   type NegotiationHandlerOpts,
   type NegotiateOpts,
@@ -92,3 +95,8 @@ export {
   parseJobDescription,
   sanitizeForClaim,
 } from "./negotiation.js";
+export {
+  type QuoteSigVerdict,
+  type VerifyQuoteSignatureOpts,
+  verifyQuoteSignature,
+} from "./quoteVerify.js";

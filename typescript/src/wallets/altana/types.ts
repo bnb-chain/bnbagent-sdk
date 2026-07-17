@@ -298,6 +298,14 @@ export interface AltanaSdkModuleX402 {
   ): Promise<AltanaSignX402PaymentResult>;
 }
 
+/** Public module-level account-signing primitive (`@altananetwork/sdk` >= 0.4.0). */
+export interface AltanaSdkModuleQuoteSigning {
+  signOrder(
+    session: AltanaSession,
+    appDigest: `0x${string}`,
+  ): Promise<`0x${string}`>;
+}
+
 // ── 0.5.0 surface (`@altananetwork/sdk` >= 0.5.0) ─────────────────────────
 // BNB testnet preset, ERC-20/BEP-677 balances, ephemeral-session lazy
 // registration. Duck-checked at first use (see `provider.ts` `#v050Sdk`).

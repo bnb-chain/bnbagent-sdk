@@ -41,6 +41,7 @@ import type {
   AltanaSdkClientX402,
   AltanaSdkModule,
   AltanaSdkModule050,
+  AltanaSdkModuleQuoteSigning,
   AltanaSdkModuleX402,
   AltanaSession,
   AltanaSessionPermissions,
@@ -92,6 +93,9 @@ const moduleToMirror = (v: typeof AltanaSdk): AltanaSdkModule => v;
 // methods live on the client. Real → mirror, same as the base shapes.
 const clientX402ToMirror = (v: Client): AltanaSdkClientX402 => v;
 const moduleX402ToMirror = (v: typeof AltanaSdk): AltanaSdkModuleX402 => v;
+const moduleQuoteSigningToMirror = (
+  v: typeof AltanaSdk,
+): AltanaSdkModuleQuoteSigning => v;
 
 // 0.5.0 surface: BNB_TESTNET preset, registerSessionKey, ERC-20/BEP-677
 // balances. Results are data types → mutual; client/module → real → mirror.
@@ -139,6 +143,7 @@ describe("altana type mirrors", () => {
       moduleToMirror,
       clientX402ToMirror,
       moduleX402ToMirror,
+      moduleQuoteSigningToMirror,
       tokenBalanceToMirror,
       tokenBalanceToReal,
       balancesResultToMirror,

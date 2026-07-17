@@ -470,12 +470,20 @@ export class CommerceClient extends ContractBase {
     fromBlock: bigint,
     toBlock: bigint | "latest" = "latest",
     provider?: string,
+    jobId?: bigint,
   ): Promise<JobFundedEvent[]> {
+    const args: Record<string, unknown> = {};
+    if (provider) {
+      args.provider = getAddress(provider);
+    }
+    if (jobId !== undefined) {
+      args.jobId = jobId;
+    }
     const logs = await this.readEvents({
       eventName: "JobFunded",
       fromBlock,
       toBlock,
-      args: provider ? { provider: getAddress(provider) } : undefined,
+      args: Object.keys(args).length > 0 ? args : undefined,
     });
     return logs.map((log) => ({
       jobId: log.args.jobId as bigint,

@@ -143,6 +143,8 @@ describe("Tier 2 subpath: ./erc8183", () => {
     expect(typeof Erc8183.ReasonCode).toBe("object");
     expect(typeof Erc8183.buildJobDescription).toBe("function");
     expect(typeof Erc8183.parseJobDescription).toBe("function");
+    expect(typeof Erc8183.verifyQuoteSignature).toBe("function");
+    expect(Erc8183.ERR_QUOTE_INVALID).toBe("quote_invalid");
   });
 });
 

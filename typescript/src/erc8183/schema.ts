@@ -218,7 +218,8 @@ export interface JobDescriptionOpts {
  * - `currency`        — Payment token address.
  * - `quoteExpiresAt`  — Optional quote expiry timestamp.
  * - `negotiationHash` — Optional keccak256 of canonical negotiation content (0x-prefixed).
- * - `providerSig`     — Optional EIP-191 provider signature over `negotiationHash`.
+ * - `providerSig`     — Optional provider-account signature over the EIP-191
+ *   digest (65-byte EOA signature or ERC-1271 envelope).
  */
 export class JobDescription {
   readonly version: number;

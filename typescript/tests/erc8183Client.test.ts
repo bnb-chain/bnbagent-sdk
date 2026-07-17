@@ -700,6 +700,35 @@ describe("ERC8183Client: views", () => {
     expect(verdict).toBe(1);
   });
 
+  it("resolves the JobFunded block inside the signed quote time window", async () => {
+    const { client, mock } = await buildClient({});
+    mock.handlers.eth_blockNumber = () => "0x3e8"; // 1000
+    vi.spyOn(client.publicClient, "getBlock").mockImplementation(
+      async ({ blockNumber } = {}) =>
+        ({ timestamp: blockNumber ?? 1000n }) as never,
+    );
+    const scans = vi
+      .spyOn(client.commerce, "getJobFundedEvents")
+      .mockImplementation(async (fromBlock, toBlock) => {
+        if (fromBlock === 100n && toBlock === 200n) {
+          return [{ blockNumber: 150n }] as never;
+        }
+        return [];
+      });
+
+    const blockNumber = await (
+      client as unknown as {
+        getJobFundedBlock(
+          jobId: bigint,
+          window: { negotiatedAt: number; quoteExpiresAt: number },
+        ): Promise<bigint | null>;
+      }
+    ).getJobFundedBlock(7n, { negotiatedAt: 100, quoteExpiresAt: 200 });
+
+    expect(blockNumber).toBe(150n);
+    expect(scans).toHaveBeenCalledWith(100n, 200n, undefined, 7n);
+  });
+
   it("inflightJobCount delegates to router", async () => {
     const results = defaultResults();
     results.inflightJobCount = 4n;

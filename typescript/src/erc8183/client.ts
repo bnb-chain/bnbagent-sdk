@@ -119,6 +119,12 @@ export interface GetDeliverableUrlFacadeOpts {
   hintBlock?: bigint;
 }
 
+/** Signed quote time window used to locate its economic acceptance event. */
+export interface GetJobFundedBlockOpts {
+  negotiatedAt: number;
+  quoteExpiresAt: number;
+}
+
 /**
  * High-level facade over Commerce + Router + Policy.
  *
@@ -520,6 +526,74 @@ export class ERC8183Client {
 
   async getJobStatus(jobId: bigint): Promise<JobStatus> {
     return (await this.commerce.getJob(jobId)).status;
+  }
+
+  /** Public read client used by account-signature verification helpers. */
+  get publicClient(): PublicClient {
+    return this.client;
+  }
+
+  /**
+   * Find the block where `JobFunded` economically committed to a quote.
+   *
+   * Maps the signed quote's timestamp window to block numbers, then makes one
+   * indexed log query over that small range. Returns `null` when the job was
+   * not funded during the signed window; callers must fail closed.
+   */
+  async getJobFundedBlock(
+    jobId: bigint,
+    window: GetJobFundedBlockOpts,
+  ): Promise<bigint | null> {
+    const current = await this.client.getBlockNumber();
+    if (
+      !Number.isSafeInteger(window.negotiatedAt) ||
+      !Number.isSafeInteger(window.quoteExpiresAt) ||
+      window.negotiatedAt < 0 ||
+      window.quoteExpiresAt <= window.negotiatedAt
+    ) {
+      throw new Error("invalid signed quote time window");
+    }
+    const head = await this.client.getBlock({ blockNumber: current });
+    if (head.timestamp < BigInt(window.negotiatedAt)) {
+      return null;
+    }
+    const fromBlock = await this.firstBlockAtOrAfter(
+      BigInt(window.negotiatedAt),
+      current,
+    );
+    const toBlock =
+      head.timestamp < BigInt(window.quoteExpiresAt)
+        ? current
+        : await this.firstBlockAtOrAfter(
+            BigInt(window.quoteExpiresAt),
+            current,
+          );
+    const events = await this.commerce.getJobFundedEvents(
+      fromBlock,
+      toBlock,
+      undefined,
+      jobId,
+    );
+    return events[0]?.blockNumber ?? null;
+  }
+
+  /** Lowest block whose timestamp is greater than or equal to `timestamp`. */
+  private async firstBlockAtOrAfter(
+    timestamp: bigint,
+    head: bigint,
+  ): Promise<bigint> {
+    let low = 0n;
+    let high = head;
+    while (low < high) {
+      const mid = (low + high) / 2n;
+      const block = await this.client.getBlock({ blockNumber: mid });
+      if (block.timestamp < timestamp) {
+        low = mid + 1n;
+      } else {
+        high = mid;
+      }
+    }
+    return low;
   }
 
   /**

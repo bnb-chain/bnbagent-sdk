@@ -17,6 +17,10 @@
  * write already broadcast; a blind retry risks a double-broadcast) but
  * carries `tx_hash` so the caller can check later.
  *
+ * Seller verification is strict by default: a FUNDED job must contain a
+ * provider-signed quote that was still valid at its indexed `JobFunded`
+ * block. Altered or unsigned descriptions never reach fulfillment.
+ *
  * Port of `python/bnbagent/erc8183/job_ops.py`.
  */
 
@@ -30,7 +34,8 @@ import type { StorageProvider } from "../storage/storageProvider.js";
 import type { WalletProvider } from "../wallets/walletProvider.js";
 import { ERC8183Client } from "./client.js";
 import { ERC8183_ENV_PREFIX } from "./constants.js";
-import { parseJobDescription } from "./negotiation.js";
+import { NegotiationHandler, parseJobDescription } from "./negotiation.js";
+import { verifyQuoteSignature } from "./quoteVerify.js";
 import { DeliverableManifest, SCHEMA_VERSION } from "./schema.js";
 import { JobStatus } from "./types.js";
 
@@ -138,6 +143,7 @@ export const ERR_NOT_FOUND = "not_found"; // job / stored response missing
 export const ERR_JOB_EXPIRED = "job_expired"; // past job.expiredAt
 export const ERR_WRONG_STATUS = "wrong_status"; // job not in the required status
 export const ERR_DESCRIPTION_INVALID = "description_invalid"; // malformed description (fail closed)
+export const ERR_QUOTE_INVALID = "quote_invalid"; // missing, altered, expired-at-funding, or invalid provider quote
 export const ERR_SUBMIT_DEADLINE_PASSED = "submit_deadline_passed"; // past expiredAt - disputeWindow
 export const ERR_PAYLOAD_TOO_LARGE = "payload_too_large"; // response/metadata size cap hit
 export const ERR_METADATA_INVALID = "metadata_invalid"; // metadata not JSON-serializable (e.g. a bigint) — permanent
@@ -255,6 +261,12 @@ export interface ERC8183JobOpsCreateOpts {
   /** Public base URL of this agent (required when storage returns a
    * `file://` URL). */
   agentUrl?: string | null;
+  /**
+   * Unsafe compatibility escape hatch for legacy jobs that did not carry a
+   * signed negotiation quote. Defaults to false: seller verification is
+   * fail-closed before any work or submission begins.
+   */
+  allowUnsignedJobs?: boolean;
 }
 
 /**
@@ -272,6 +284,7 @@ export class ERC8183JobOps {
   private readonly storage: StorageProvider | null;
   private readonly servicePrice: bigint;
   private readonly agentUrl: string | null;
+  private readonly allowUnsignedJobs: boolean;
 
   private client: ERC8183Client | null = null;
   private readonly deliverableUrls = new Map<number, string>();
@@ -286,6 +299,7 @@ export class ERC8183JobOps {
     storage: StorageProvider | null;
     servicePrice: bigint;
     agentUrl: string | null;
+    allowUnsignedJobs: boolean;
   }) {
     this.walletProvider = opts.walletProvider;
     this.agentAddressValue = opts.agentAddress;
@@ -293,6 +307,7 @@ export class ERC8183JobOps {
     this.storage = opts.storage;
     this.servicePrice = opts.servicePrice;
     this.agentUrl = opts.agentUrl;
+    this.allowUnsignedJobs = opts.allowUnsignedJobs;
   }
 
   static async create(
@@ -316,6 +331,7 @@ export class ERC8183JobOps {
       storage: opts.storageProvider ?? null,
       servicePrice: opts.servicePrice ?? 0n,
       agentUrl: opts.agentUrl ?? null,
+      allowUnsignedJobs: opts.allowUnsignedJobs ?? false,
     });
   }
 
@@ -697,21 +713,140 @@ export class ERC8183JobOps {
       }
 
       const description = (jobResult.description as string | undefined) ?? "";
+      let quoteEnvelope: Record<string, unknown> | null = null;
+      let hasStructuredDescription = false;
       if (description) {
         try {
-          // Fail closed on a malformed / type-confused description. The
-          // negotiation quote TTL (quoteExpiresAt) is intentionally NOT
-          // enforced here: verifyJob only runs once a job is FUNDED (price
-          // already escrowed on-chain), so re-checking the TTL post-fund
-          // can only strand funds — it cannot undo the commit. The TTL
-          // guards a signed quote pre-commit; after funding the budget
-          // check below is the economic guard that matters.
-          parseJobDescription(description);
+          hasStructuredDescription = parseJobDescription(description) !== null;
+          if (hasStructuredDescription) {
+            quoteEnvelope = JSON.parse(description) as Record<string, unknown>;
+          }
         } catch (error) {
           return {
             valid: false,
             error: `Malformed job description: ${describeError(error)}`,
             error_code: ERR_DESCRIPTION_INVALID,
+          };
+        }
+      }
+
+      const hasSignatureMaterial =
+        quoteEnvelope !== null &&
+        (quoteEnvelope.negotiation_hash !== undefined ||
+          quoteEnvelope.provider_sig !== undefined);
+      if (!this.allowUnsignedJobs || hasSignatureMaterial) {
+        if (!hasStructuredDescription || quoteEnvelope === null) {
+          return {
+            valid: false,
+            error:
+              "Job description does not contain a signed negotiation quote",
+            error_code: ERR_QUOTE_INVALID,
+          };
+        }
+        if (
+          quoteEnvelope.negotiation_hash === undefined ||
+          quoteEnvelope.provider_sig === undefined ||
+          quoteEnvelope.negotiated_at === undefined ||
+          quoteEnvelope.quote_expires_at === undefined ||
+          quoteEnvelope.chain_id === undefined
+        ) {
+          return {
+            valid: false,
+            error:
+              "Signed negotiation quote is missing hash, signature, negotiated time, expiry, or chain binding",
+            error_code: ERR_QUOTE_INVALID,
+          };
+        }
+
+        const negotiatedAt = quoteEnvelope.negotiated_at;
+        const quoteExpiresAt = quoteEnvelope.quote_expires_at;
+        if (
+          typeof negotiatedAt !== "number" ||
+          !Number.isSafeInteger(negotiatedAt) ||
+          negotiatedAt < 0 ||
+          typeof quoteExpiresAt !== "number" ||
+          !Number.isSafeInteger(quoteExpiresAt) ||
+          quoteExpiresAt <= negotiatedAt ||
+          quoteExpiresAt - negotiatedAt >
+            NegotiationHandler.MAX_QUOTE_TTL_SECONDS
+        ) {
+          return {
+            valid: false,
+            error: `Signed negotiation quote window must be at most ${NegotiationHandler.MAX_QUOTE_TTL_SECONDS} seconds`,
+            error_code: ERR_QUOTE_INVALID,
+          };
+        }
+
+        const fundedBlock = await client.getJobFundedBlock(BigInt(jobId), {
+          negotiatedAt,
+          quoteExpiresAt,
+        });
+        if (fundedBlock === null) {
+          return {
+            valid: false,
+            error: `Job ${jobId} was not funded inside the signed quote window`,
+            error_code: ERR_QUOTE_INVALID,
+          };
+        }
+
+        const verdict = await verifyQuoteSignature({
+          envelope: quoteEnvelope,
+          provider: getAddress(String(jobResult.provider)),
+          publicClient: client.publicClient,
+          expectedVerifyingContract: client.commerce.address,
+          blockNumber: fundedBlock,
+        });
+        if (!verdict.valid) {
+          return {
+            valid: false,
+            error: `Provider quote rejected: ${verdict.reason}`,
+            error_code: ERR_QUOTE_INVALID,
+          };
+        }
+
+        const signedPriceRaw = quoteEnvelope.price;
+        if (
+          typeof signedPriceRaw !== "string" ||
+          !/^\d+$/.test(signedPriceRaw)
+        ) {
+          return {
+            valid: false,
+            error: "Signed negotiation quote contains an invalid price",
+            error_code: ERR_QUOTE_INVALID,
+          };
+        }
+        const signedPrice = BigInt(signedPriceRaw);
+        const fundedBudget = BigInt(
+          (jobResult.budget as string | undefined) ?? "0",
+        );
+        if (fundedBudget < signedPrice) {
+          return {
+            valid: false,
+            error: `Job budget (${fundedBudget}) is below signed quote price (${signedPrice})`,
+            error_code: ERR_BUDGET_TOO_LOW,
+          };
+        }
+
+        const signedCurrencyRaw = quoteEnvelope.currency;
+        let signedCurrency: `0x${string}`;
+        try {
+          if (typeof signedCurrencyRaw !== "string") {
+            throw new Error("currency is not a string");
+          }
+          signedCurrency = getAddress(signedCurrencyRaw);
+        } catch {
+          return {
+            valid: false,
+            error: "Signed negotiation quote contains an invalid currency",
+            error_code: ERR_QUOTE_INVALID,
+          };
+        }
+        const paymentToken = await client.paymentToken();
+        if (signedCurrency !== getAddress(paymentToken)) {
+          return {
+            valid: false,
+            error: `Signed quote currency (${signedCurrency}) does not match the Commerce payment token (${paymentToken})`,
+            error_code: ERR_QUOTE_INVALID,
           };
         }
       }
@@ -979,15 +1114,18 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Poll `jobOps.getPendingJobs()` and fire `onFunded(job)` per FUNDED job.
+ * Poll `jobOps.getPendingJobs()`, verify each provider quote, and fire
+ * `onFunded(job)` only for a valid FUNDED job.
  *
  * Signer-free detection loop for keyless services: it NEVER submits or
  * settles — the caller decides what to do (e.g. delegate signing to a
  * separate agent). `onFunded` may be sync or async.
  *
- * Retry contract: a job fires once on success. `onFunded` throwing, or
- * returning `false` / `{ retry: true }`, marks the job for retry on the next
- * tick (after re-checking on-chain that it is still FUNDED and unexpired —
+ * Retry contract: quote verification happens before seller work starts.
+ * Permanent verification failures are dropped; transient verification
+ * failures, `onFunded` throwing, or `onFunded` returning `false` /
+ * `{ retry: true }`, mark the job for retry on the next tick (after
+ * re-checking on-chain that it is still FUNDED and unexpired —
  * `getPendingJobs` reports each job only once, so retries are re-validated
  * via `getJob`). Retries stop naturally when the job leaves FUNDED or
  * expires. Any other return value (incl. `undefined`) keeps fire-once
@@ -1007,6 +1145,29 @@ export async function fundedJobWatcher(
 
   async function fire(job: Record<string, unknown>): Promise<void> {
     const jobId = job.jobId as number;
+    let verification: OpResult;
+    try {
+      verification = await jobOps.verifyJob(jobId);
+    } catch (error) {
+      console.error(
+        `[fundedJobWatcher] verifyJob(${jobId}) failed; will retry: ${describeError(error)}`,
+      );
+      retry.add(jobId);
+      return;
+    }
+    if (!verification.valid) {
+      if (verification.retryable) {
+        retry.add(jobId);
+      } else {
+        retry.delete(jobId);
+        seen.add(jobId);
+      }
+      console.warn(
+        `[fundedJobWatcher] rejected job ${jobId}${verification.retryable ? "; will retry" : ""}: ${String(verification.error ?? "verification failed")}`,
+      );
+      return;
+    }
+
     let result: unknown;
     try {
       result = await onFunded(job);

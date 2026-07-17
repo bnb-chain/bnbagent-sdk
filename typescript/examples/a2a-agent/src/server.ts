@@ -302,7 +302,7 @@ async function main(): Promise<void> {
         return rpcError(res, reqId, -32603, "Negotiation failed");
       }
       // The buyer needs the provider address for createJob (and to verify
-      // ecrecover(negotiation_hash, provider_sig) == provider).
+      // EOA recovery or ERC-1271 verification against job.provider).
       envelope.provider_address = wallet.address;
       return rpcResult(res, reqId, agentMessage(envelope));
     }

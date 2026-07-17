@@ -30,7 +30,7 @@
  *   "price": "<wei>",
  *   "currency": "<token address>",
  *   "negotiation_hash": "0x...",   // keccak256 of above (without hash/sig fields)
- *   "provider_sig": "0x..."        // EIP-191 signature over negotiation_hash
+ *   "provider_sig": "0x..."        // provider-account signature over the EIP-191 digest
  * }
  * ```
  *
@@ -591,9 +591,9 @@ export function buildDescriptionContent(
  * verbatim in the UMA assertion claim so dispute voters can see the agreed
  * terms directly.
  *
- * The `provider_sig` (if present) allows anyone to verify the provider
- * agreed to these exact terms:
- * `ecrecover(negotiation_hash, provider_sig) == job.provider`.
+ * The `provider_sig` (if present) allows anyone to verify that the provider
+ * agreed to these exact terms. EOAs use EIP-191 recovery; account wallets
+ * use ERC-1271 against `job.provider`.
  *
  * @param negotiationResult Dict from `NegotiationResult.toDict()` or the
  *   HTTP `/negotiate` endpoint response.
@@ -674,6 +674,22 @@ export interface MessageSigner {
   signMessage(message: string): Promise<{ signature: string }>;
 }
 
+/**
+ * Quote-specific signing seam for account wallets that deliberately do not
+ * expose generic `sign.message` authority.
+ *
+ * `address` is the provider account address that the resulting signature is
+ * verified against. `signQuote` receives the canonical 32-byte
+ * `negotiation_hash` as a `0x` string and returns the complete signature bytes
+ * consumed by the account's verifier (65-byte EOA or ERC-1271 envelope).
+ */
+export interface QuoteSigner {
+  readonly address: string;
+  /** Hard authorization expiry; quote TTL is clamped to this when present. */
+  readonly validUntil?: number;
+  signQuote(negotiationHash: string): Promise<string>;
+}
+
 /** Constructor options for {@link NegotiationHandler}. */
 export interface NegotiationHandlerOpts {
   /** Price in token smallest unit (e.g. "20000000000000000000" for 20 tokens). */
@@ -685,13 +701,20 @@ export interface NegotiationHandlerOpts {
   /** Whether to require quality_standards in request. Default true. */
   requireQualityStandards?: boolean;
   /**
-   * Wallet for signing negotiation_hash. When set, the NegotiationResult
-   * will include provider_sig allowing clients to verify the agent agreed
-   * to the terms.
+   * Legacy EIP-191 wallet for signing negotiation_hash. When set, the
+   * NegotiationResult includes provider_sig so clients can verify that the
+   * provider agreed to the terms.
    */
   walletProvider?: MessageSigner | null;
   /**
-   * How long the price quote is valid (default: 300s). Capped at
+   * Fail-closed quote signer for account/session wallets. Unlike the legacy
+   * `walletProvider` path, a signing failure rejects negotiation instead of
+   * silently returning an unsigned accepted quote. Mutually exclusive with
+   * `walletProvider`.
+   */
+  quoteSigner?: QuoteSigner | null;
+  /**
+   * How long the price quote is valid (default: 900s). Capped at
    * `MAX_QUOTE_TTL_SECONDS` so leaked / replayed provider_sig values cannot
    * accumulate value over time. Must be an integer in `(0, 900]`.
    */
@@ -721,6 +744,7 @@ export interface FromErc8183ClientOpts {
   estimatedCompletionSeconds?: number;
   requireQualityStandards?: boolean;
   walletProvider?: MessageSigner | null;
+  quoteSigner?: QuoteSigner | null;
   quoteTtlSeconds?: number;
   now?: () => number;
 }
@@ -746,7 +770,7 @@ export interface NegotiateOpts {
  * - Checks service type support
  * - Validates required fields (quality_standards)
  * - Returns properly structured response with hashes
- * - Signs the negotiation hash with the agent's wallet (if walletProvider set)
+ * - Signs the negotiation hash with the configured wallet or quote signer
  *
  * ```ts
  * const handler = new NegotiationHandler({
@@ -754,6 +778,14 @@ export interface NegotiateOpts {
  *   currency: "0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
  *   walletProvider: wallet,               // enables provider_sig
  *   quoteTtlSeconds: 900,                 // quote valid for 15 minutes
+ * });
+ *
+ * // Session/account wallets can expose quote authority without generic
+ * // sign.message authority:
+ * const sessionHandler = new NegotiationHandler({
+ *   servicePrice: "20000000000000000000",
+ *   currency: "0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
+ *   quoteSigner: wallet.sessionQuoteSigner(),
  * });
  *
  * // Or auto-fetch currency from contract:
@@ -775,13 +807,20 @@ export class NegotiationHandler {
   private readonly estimatedCompletion: number;
   private readonly requireQualityStandards: boolean;
   private readonly walletProvider: MessageSigner | null;
+  private readonly quoteSigner: QuoteSigner | null;
   private readonly quoteTtlSeconds: number;
   private readonly chainId: number | null;
   private readonly verifyingContract: string | null;
   private readonly now: () => number;
 
   constructor(opts: NegotiationHandlerOpts) {
-    const quoteTtlSeconds = opts.quoteTtlSeconds ?? 300;
+    if (opts.walletProvider && opts.quoteSigner) {
+      throw new Error(
+        "NegotiationHandler accepts either walletProvider or quoteSigner, not both",
+      );
+    }
+    const quoteTtlSeconds =
+      opts.quoteTtlSeconds ?? NegotiationHandler.MAX_QUOTE_TTL_SECONDS;
     if (
       !Number.isInteger(quoteTtlSeconds) ||
       typeof quoteTtlSeconds === "boolean"
@@ -805,6 +844,7 @@ export class NegotiationHandler {
     this.estimatedCompletion = opts.estimatedCompletionSeconds ?? 120;
     this.requireQualityStandards = opts.requireQualityStandards ?? true;
     this.walletProvider = opts.walletProvider ?? null;
+    this.quoteSigner = opts.quoteSigner ?? null;
     this.quoteTtlSeconds = quoteTtlSeconds;
     this.chainId = opts.chainId ?? null;
     this.verifyingContract = opts.verifyingContract ?? null;
@@ -813,6 +853,13 @@ export class NegotiationHandler {
     if (this.walletProvider !== null && this.chainId === null) {
       console.warn(
         "[NegotiationHandler] wallet_provider is set but chain_id is None; " +
+          "provider_sig will not be bound to a specific chain. " +
+          "Pass chain_id (or use from_erc8183_client) to prevent cross-chain replay.",
+      );
+    }
+    if (this.quoteSigner !== null && this.chainId === null) {
+      console.warn(
+        "[NegotiationHandler] quote_signer is set but chain_id is None; " +
           "provider_sig will not be bound to a specific chain. " +
           "Pass chain_id (or use from_erc8183_client) to prevent cross-chain replay.",
       );
@@ -827,6 +874,11 @@ export class NegotiationHandler {
   /** Test-only accessor mirroring the Python `_wallet_provider` attribute. */
   get _walletProvider(): MessageSigner | null {
     return this.walletProvider;
+  }
+
+  /** Test-only accessor for the quote-specific signing seam. */
+  get _quoteSigner(): QuoteSigner | null {
+    return this.quoteSigner;
   }
 
   /** Test-only accessor mirroring the Python `_chain_id` attribute. */
@@ -865,6 +917,7 @@ export class NegotiationHandler {
       estimatedCompletionSeconds: opts.estimatedCompletionSeconds,
       requireQualityStandards: opts.requireQualityStandards,
       walletProvider: opts.walletProvider,
+      quoteSigner: opts.quoteSigner,
       quoteTtlSeconds: opts.quoteTtlSeconds,
       chainId: erc8183Client.network.chainId,
       verifyingContract: erc8183Client.commerce.address,
@@ -875,9 +928,9 @@ export class NegotiationHandler {
   /**
    * Process a negotiation request and return the result.
    *
-   * If walletProvider is set, the result includes:
+   * If a walletProvider or quoteSigner is set, the result includes:
    *   - negotiationHash: keccak256 of the canonical description content
-   *   - providerSig: EIP-191 signature over negotiationHash
+   *   - providerSig: provider-account signature over the EIP-191 digest
    */
   async negotiate(
     requestData: Record<string, unknown>,
@@ -932,7 +985,19 @@ export class NegotiationHandler {
         : this.estimatedCompletion;
 
     const now = this.now();
-    const quoteExpiresAt = now + this.quoteTtlSeconds;
+    let quoteExpiresAt = now + this.quoteTtlSeconds;
+    const signerExpiry = this.quoteSigner?.validUntil;
+    if (signerExpiry !== undefined) {
+      if (!Number.isSafeInteger(signerExpiry)) {
+        throw new Error(
+          "quote signer validUntil must be an integer unix timestamp",
+        );
+      }
+      if (signerExpiry <= now) {
+        throw new Error("quote signer authorization has expired");
+      }
+      quoteExpiresAt = Math.min(quoteExpiresAt, signerExpiry);
+    }
 
     const responseTerms = new TermSpecification({
       deliverables: req.terms.deliverables,
@@ -964,7 +1029,7 @@ export class NegotiationHandler {
     let negotiationHash = "";
     let providerSig = "";
 
-    if (this.walletProvider) {
+    if (this.walletProvider || this.quoteSigner) {
       try {
         const content = buildDescriptionContent(
           partialDict,
@@ -974,12 +1039,25 @@ export class NegotiationHandler {
         const canonical = canonicalJson(content);
         negotiationHash = ensureHexPrefix(keccakOfText(canonical));
 
-        const sigResult =
-          await this.walletProvider.signMessage(negotiationHash);
-        providerSig = sigResult.signature
-          ? ensureHexPrefix(sigResult.signature)
-          : "";
+        if (this.quoteSigner) {
+          const signature = await this.quoteSigner.signQuote(negotiationHash);
+          if (!signature) {
+            throw new Error("quote signer returned an empty signature");
+          }
+          providerSig = ensureHexPrefix(signature);
+        } else if (this.walletProvider) {
+          const sigResult =
+            await this.walletProvider.signMessage(negotiationHash);
+          providerSig = sigResult.signature
+            ? ensureHexPrefix(sigResult.signature)
+            : "";
+        }
       } catch (e) {
+        if (this.quoteSigner) {
+          throw new Error(`quote signing failed: ${(e as Error).message}`, {
+            cause: e,
+          });
+        }
         // Signing failure is non-fatal: return the quote without a
         // provider_sig, but log so operators can detect wallet issues.
         console.warn(

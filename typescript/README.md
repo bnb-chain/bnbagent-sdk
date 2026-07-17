@@ -170,6 +170,7 @@ provider, keep the protocol code:
 | Capabilities | `sign.message/transaction/typed_data`, `calls.arbitrary`, `paymaster.sponsor` | `sign.message`, `broadcast.self`, `intents.erc8004`, `intents.erc8183`, `x402.pay` (no raw signing, no arbitrary calls) | `broadcast.self`, `calls.arbitrary`, `intents.erc8004`, `intents.erc8183` (+ `x402.pay` in session mode) |
 | Agent containment | `SigningPolicy` (in-process) | fixed command menu + out-of-process custody; twak's own `--max-payment` hard cap | on-chain session keys: call whitelist + spend caps + expiry, revocable in one tx |
 | Gas | self-paid or MegaFuel-sponsored | mainnet auto-sponsored by twak; the SDK forwards its paymaster as `--paymaster-url` (twak >= v0.20.0), so sponsored testnet writes work | relay fronts gas, recovers it from the wallet (MegaFuel not involved) |
+| ERC-8183 quote signing | EIP-191 via `walletProvider` | — | ERC-1271 via `sessionQuoteSigner()`; no admin EOA or generic message-signing authority in the agent |
 | x402 payments | ✅ `X402Signer` | ✅ delegated `TwakX402Payer` (`makeX402Payer()`, five-point quote precheck) | ✅ session-key payer (`makeX402Payer()`, SDK >= 0.4.0) after a one-time admin setup: `approveX402SignatureChecker` + bounded `setPermit2Allowance`; **receiving** at the wallet works fine |
 | Extra install | — | `npm i @trustwallet/cli` (>= 0.20.0; the local `node_modules/.bin/twak` is auto-resolved) | `pnpm add @altananetwork/sdk` (optional peer, GPL-3.0-or-later, lazily imported) |
 
@@ -190,6 +191,20 @@ writeFileSync(".session.json", serializeSession(session), { mode: 0o600 }); // b
 const wallet = await AltanaWalletProvider.sessionFromEnv();
 const jobs = await ERC8183Client.create({ walletProvider: wallet, network: "bsc-mainnet" });
 ```
+
+The same session can sign negotiation quotes through the narrow
+`sessionQuoteSigner()` seam. The agent still has no admin EOA and does not
+gain the generic `sign.message` capability. See the
+[Altana quote-signing example](examples/altana/README.md#erc-8183-quotes-from-the-session-key)
+for trusted checker setup and acceptance-block verification.
+
+Negotiation quotes default to the maximum SDK lifetime of 900 seconds (and
+are shortened further when the wallet/session expires sooner). Provider-side
+`ERC8183JobOps` requires a valid signed quote by default and verifies it at the
+indexed `JobFunded` block before doing work or submitting. Buyer edits,
+signature removal, late funding, and provider/chain/Commerce mismatches are
+permanent `quote_invalid` rejections. `allowUnsignedJobs: true` is an explicit
+unsafe compatibility mode for pre-signature jobs.
 
 `@altananetwork/sdk` >= 0.5.0 adds three surfaces the provider exposes:
 the `network: "bnb-testnet"` preset (Altana's official chain-97 stack),

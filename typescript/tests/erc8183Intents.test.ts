@@ -761,7 +761,7 @@ describe("CommerceClient: event helpers", () => {
       eth_getLogs: () => [rawLog(topics, data)],
     });
     const client = new CommerceClient(mock.client, CONTRACT_ADDRESS);
-    const events = await client.getJobFundedEvents(0n, "latest", PROVIDER);
+    const events = await client.getJobFundedEvents(0n, "latest", PROVIDER, 1n);
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       jobId: 1n,
@@ -769,6 +769,15 @@ describe("CommerceClient: event helpers", () => {
       provider: PROVIDER,
       amount: 500n,
     });
+    const call = mock.calls.find((entry) => entry.method === "eth_getLogs");
+    const params = call?.params[0] as { topics: unknown[] };
+    expect(params.topics).toEqual(
+      encodeEventTopics({
+        abi: agenticCommerceAbi,
+        eventName: "JobFunded",
+        args: { jobId: 1n, provider: PROVIDER },
+      }),
+    );
   });
 
   it("getJobCreatedEvents flattens jobId/client/provider/evaluator/expiredAt", async () => {
