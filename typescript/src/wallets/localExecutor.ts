@@ -122,6 +122,7 @@ export class LocalExecutor implements IntentExecutor {
           this.client,
           sponsoredHash,
           timeoutSeconds,
+          { requireTransactionSeen: true },
         );
       }
     }

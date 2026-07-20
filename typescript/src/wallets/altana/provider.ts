@@ -1073,6 +1073,7 @@ export class AltanaIntentExecutor implements IntentExecutor {
       this.#context.client,
       result.transactionHash,
       timeoutSeconds,
+      { requireTransactionSeen: true },
     );
     return { ...txResult, callsId: result.callsId };
   }

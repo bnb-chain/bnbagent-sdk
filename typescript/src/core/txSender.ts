@@ -16,7 +16,10 @@ import type {
   TransactionReceipt,
   TransactionRequestLegacy,
 } from "viem";
-import { TransactionPendingError } from "../errors.js";
+import {
+  RelaySubmissionUnverifiedError,
+  TransactionPendingError,
+} from "../errors.js";
 import type { TxResult } from "../wallets/intents.js";
 import type { WalletProvider } from "../wallets/walletProvider.js";
 import { NonceManager, type NonceManagerClient } from "./nonceManager.js";
@@ -41,7 +44,11 @@ export const PREFLIGHT_TIMEOUT_MS = 10_000;
 export const RECEIPT_POLL_INTERVAL_MS = 250;
 
 /** Internal sentinel distinguishing "receipt wait timed out" from any other rejection. */
-export class ReceiptWaitTimeout extends Error {}
+export class ReceiptWaitTimeout extends Error {
+  constructor(public readonly transactionSeen: boolean) {
+    super();
+  }
+}
 
 export type PreflightResult =
   | { kind: "ok" }
@@ -163,22 +170,64 @@ export async function estimateGasLimit(
  * under fake timers. A direct poll loop mirrors the Python mixin's own
  * explicit timeout wrapper around `wait_for_transaction_receipt` and keeps
  * the only two timers involved fully under this function's control.
+ *
+ * When `trackTransactionPresence` is enabled, the poller also records whether
+ * `eth_getTransactionByHash` ever observes the transaction. Relay callers use
+ * that signal to distinguish a real pending transaction from an unverified
+ * relay response.
  */
 export async function waitForReceipt(
   client: PublicClient,
   hash: `0x${string}`,
   timeoutSeconds: number,
+  opts: { trackTransactionPresence?: boolean } = {},
 ): Promise<TransactionReceipt> {
   return new Promise((resolve, reject) => {
     let settled = false;
+    let transactionSeen = false;
+    let transactionPresenceTimer: ReturnType<typeof setTimeout> | undefined;
     const timer = setTimeout(() => {
       if (!settled) {
         settled = true;
-        reject(new ReceiptWaitTimeout());
+        if (transactionPresenceTimer) {
+          clearTimeout(transactionPresenceTimer);
+        }
+        reject(new ReceiptWaitTimeout(transactionSeen));
       }
     }, timeoutSeconds * 1000);
 
-    const poll = () => {
+    const scheduleNextReceiptPoll = () => {
+      if (!settled) {
+        setTimeout(poll, RECEIPT_POLL_INTERVAL_MS);
+      }
+    };
+
+    const scheduleNextTransactionPresencePoll = () => {
+      if (!settled && !transactionSeen) {
+        transactionPresenceTimer = setTimeout(
+          pollTransactionPresence,
+          RECEIPT_POLL_INTERVAL_MS * 4,
+        );
+      }
+    };
+
+    const pollTransactionPresence = (): void => {
+      if (settled || transactionSeen) {
+        return;
+      }
+      client.getTransaction({ hash }).then(
+        () => {
+          if (!settled) {
+            transactionSeen = true;
+          }
+        },
+        () => {
+          scheduleNextTransactionPresencePoll();
+        },
+      );
+    };
+
+    const poll = (): void => {
       if (settled) {
         return;
       }
@@ -189,38 +238,50 @@ export async function waitForReceipt(
           }
           settled = true;
           clearTimeout(timer);
+          if (transactionPresenceTimer) {
+            clearTimeout(transactionPresenceTimer);
+          }
           resolve(receipt);
         },
         () => {
-          // Not mined yet (or transiently unavailable) — keep polling
-          // until the timeout above fires.
-          if (!settled) {
-            setTimeout(poll, RECEIPT_POLL_INTERVAL_MS);
-          }
+          scheduleNextReceiptPoll();
         },
       );
     };
     poll();
+    if (opts.trackTransactionPresence) {
+      // A relay returning a hash does not prove that the transaction reached
+      // the network. Keep this probe independent from receipt polling so a
+      // slow request on either RPC method cannot suppress the other.
+      pollTransactionPresence();
+    }
   });
 }
 
 /**
  * Wait for `hash`'s receipt and translate the outcome into the shared
  * write-path result contract: a timeout becomes {@link TransactionPendingError}
- * (broadcast succeeded, nonce consumed — never treated as a fatal/retryable
- * failure), a reverted receipt becomes a plain `Error`, and a successful
- * receipt becomes a {@link TxResult}.
+ * unless `requireTransactionSeen` was requested and the chain RPC never saw
+ * the hash, in which case it becomes {@link RelaySubmissionUnverifiedError}.
+ * A reverted receipt becomes a plain `Error`, and a successful receipt becomes
+ * a {@link TxResult}.
  */
 export async function waitForReceiptAndInterpret(
   client: PublicClient,
   hash: `0x${string}`,
   timeoutSeconds: number,
+  opts: { requireTransactionSeen?: boolean } = {},
 ): Promise<TxResult> {
   let receipt: TransactionReceipt;
   try {
-    receipt = await waitForReceipt(client, hash, timeoutSeconds);
+    receipt = await waitForReceipt(client, hash, timeoutSeconds, {
+      trackTransactionPresence: opts.requireTransactionSeen,
+    });
   } catch (error) {
     if (error instanceof ReceiptWaitTimeout) {
+      if (opts.requireTransactionSeen && !error.transactionSeen) {
+        throw new RelaySubmissionUnverifiedError(hash, timeoutSeconds);
+      }
       throw new TransactionPendingError(hash, timeoutSeconds);
     }
     throw error;

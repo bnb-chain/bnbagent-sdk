@@ -65,6 +65,7 @@ export {
   ERR_QUOTE_INVALID,
   ERR_SUBMIT_DEADLINE_PASSED,
   ERR_TX_PENDING,
+  ERR_TX_UNVERIFIED,
   ERR_WRONG_STATUS,
   excErrorFields,
   fundedJobWatcher,

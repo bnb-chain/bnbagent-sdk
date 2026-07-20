@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentEndpoint } from "../src/erc8004/models.js";
 import {
   ERC8004PartialRegistrationError,
+  RelaySubmissionUnverifiedError,
   TransactionPendingError,
 } from "../src/errors.js";
 import { WalletProvider } from "../src/wallets/walletProvider.js";
@@ -340,6 +341,30 @@ describe("registerAgent", () => {
     const err = caught as ERC8004PartialRegistrationError;
     expect(err.agentId).toBe(1);
     expect(err.txHash).toBe(pendingHash);
+  });
+
+  it("marks an unverified setAgentUri relay submission as non-retryable without claiming it is pending", async () => {
+    const agent = await createTestAgent();
+    const uri = agent.generateAgentUri({
+      name: "Partial Agent",
+      description: "d",
+      endpoints: A2A_ENDPOINT,
+    });
+    const relayHash = `0x${"cd".repeat(32)}`;
+    mockContract.setAgentUri.mockRejectedValueOnce(
+      new RelaySubmissionUnverifiedError(relayHash, 300),
+    );
+
+    const caught = await agent.registerAgent(uri).catch((error) => error);
+
+    expect(caught).toBeInstanceOf(ERC8004PartialRegistrationError);
+    const err = caught as ERC8004PartialRegistrationError;
+    expect(err.txHash).toBeNull();
+    expect(err.retryable).toBe(false);
+    expect(err.cause).toBeInstanceOf(RelaySubmissionUnverifiedError);
+    expect((err.cause as RelaySubmissionUnverifiedError).txHash).toBe(
+      relayHash,
+    );
   });
 });
 

@@ -7,6 +7,7 @@ import {
   setDefaultReceiptTimeout,
 } from "../src/core/txConfig.js";
 import { TransactionPendingError } from "../src/errors.js";
+import { RelaySubmissionUnverifiedError } from "../src/index.js";
 import type { ContractCall, Intent } from "../src/wallets/intents.js";
 import { LocalExecutor } from "../src/wallets/localExecutor.js";
 import {
@@ -373,6 +374,144 @@ describe("LocalExecutor: sponsored path", () => {
     await expect(executor.execute(makeIntent())).rejects.toBe(sendError);
     expect(ethSendRawTransaction).toHaveBeenCalledTimes(1);
     expect(sendRawCount(mock)).toBe(0);
+  });
+
+  it("reports a relay hash that the chain never observed as unverified, not pending", async () => {
+    vi.useFakeTimers();
+    const mock = mockPublicClient({
+      eth_getTransactionReceipt: () => {
+        throw new Error("not found");
+      },
+    });
+    const { paymaster } = makeFakePaymaster();
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: new StubWallet(),
+      paymaster,
+      receiptTimeout: 1,
+    });
+
+    const errorPromise = executor.execute(makeIntent()).catch((error) => error);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    const error = await errorPromise;
+    expect(error).toBeInstanceOf(RelaySubmissionUnverifiedError);
+    expect(error).toMatchObject({
+      name: "RelaySubmissionUnverifiedError",
+      txHash: PAYMASTER_TX_HASH,
+      timeoutSeconds: 1,
+    });
+  });
+
+  it("keeps a chain-visible relay transaction pending while its receipt is unavailable", async () => {
+    vi.useFakeTimers();
+    const mock = mockPublicClient({
+      eth_getTransactionReceipt: () => {
+        throw new Error("not found");
+      },
+      eth_getTransactionByHash: () => ({
+        blockHash: null,
+        blockNumber: null,
+        from: WALLET_ADDRESS,
+        gas: "0x186a0",
+        gasPrice: "0x0",
+        hash: PAYMASTER_TX_HASH,
+        input: "0x",
+        nonce: "0x7",
+        r: `0x${"00".repeat(32)}`,
+        s: `0x${"00".repeat(32)}`,
+        to: CONTRACT_ADDRESS,
+        transactionIndex: null,
+        type: "0x0",
+        v: "0x1b",
+        value: "0x0",
+      }),
+    });
+    const { paymaster } = makeFakePaymaster();
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: new StubWallet(),
+      paymaster,
+      receiptTimeout: 1,
+    });
+
+    const errorPromise = executor.execute(makeIntent()).catch((error) => error);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(errorPromise).resolves.toMatchObject({
+      name: "TransactionPendingError",
+      txHash: PAYMASTER_TX_HASH,
+      timeoutSeconds: 1,
+    });
+  });
+
+  it("checks transaction visibility even when the receipt RPC never settles", async () => {
+    vi.useFakeTimers();
+    const mock = mockPublicClient({
+      eth_getTransactionReceipt: () => new Promise(() => {}),
+      eth_getTransactionByHash: () => ({
+        blockHash: null,
+        blockNumber: null,
+        from: WALLET_ADDRESS,
+        gas: "0x186a0",
+        gasPrice: "0x0",
+        hash: PAYMASTER_TX_HASH,
+        input: "0x",
+        nonce: "0x7",
+        r: `0x${"00".repeat(32)}`,
+        s: `0x${"00".repeat(32)}`,
+        to: CONTRACT_ADDRESS,
+        transactionIndex: null,
+        type: "0x0",
+        v: "0x1b",
+        value: "0x0",
+      }),
+    });
+    const { paymaster } = makeFakePaymaster();
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: new StubWallet(),
+      paymaster,
+      receiptTimeout: 1,
+    });
+
+    const errorPromise = executor.execute(makeIntent()).catch((error) => error);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(errorPromise).resolves.toMatchObject({
+      name: "TransactionPendingError",
+      txHash: PAYMASTER_TX_HASH,
+      timeoutSeconds: 1,
+    });
+    expect(
+      mock.calls.some((call) => call.method === "eth_getTransactionByHash"),
+    ).toBe(true);
+  });
+
+  it("does not claim pending when the visibility RPC is still inconclusive", async () => {
+    vi.useFakeTimers();
+    const mock = mockPublicClient({
+      eth_getTransactionReceipt: () => {
+        throw new Error("not found");
+      },
+      eth_getTransactionByHash: () => new Promise(() => {}),
+    });
+    const { paymaster } = makeFakePaymaster();
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: new StubWallet(),
+      paymaster,
+      receiptTimeout: 1,
+    });
+
+    const errorPromise = executor.execute(makeIntent()).catch((error) => error);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(errorPromise).resolves.toMatchObject({
+      name: "RelaySubmissionUnverifiedError",
+      txHash: PAYMASTER_TX_HASH,
+      timeoutSeconds: 1,
+    });
   });
 });
 

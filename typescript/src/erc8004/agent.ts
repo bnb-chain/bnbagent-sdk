@@ -23,6 +23,7 @@ import { Paymaster } from "../core/paymaster.js";
 import { describeError } from "../core/txSender.js";
 import {
   ERC8004PartialRegistrationError,
+  RelaySubmissionUnverifiedError,
   TransactionPendingError,
 } from "../errors.js";
 import type { WalletProvider } from "../wallets/walletProvider.js";
@@ -538,16 +539,18 @@ export class ERC8004Agent {
         }
       } catch (error) {
         // register confirmed (agentId assigned) but the URI-completion
-        // step failed (revert) or is broadcast-yet-unconfirmed (pending) —
-        // either way, still a partial success: the agent exists.
+        // step failed (revert), is broadcast-yet-unconfirmed (pending), or
+        // returned a relay hash the chain never observed. Either way, the
+        // agent exists; only the URI completion is partial.
         const txHash =
           error instanceof TransactionPendingError ? error.txHash : null;
+        const retryable = !(error instanceof RelaySubmissionUnverifiedError);
         throw new ERC8004PartialRegistrationError(
           agentId,
           finalAgentUri,
           error,
           txHash,
-          true,
+          retryable,
         );
       }
     }

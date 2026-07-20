@@ -157,14 +157,37 @@ export class TransactionPendingError extends BNBAgentError {
 }
 
 /**
+ * A relay returned a transaction hash, but the configured chain RPC never
+ * observed that transaction before the receipt timeout expired.
+ *
+ * Unlike {@link TransactionPendingError}, this does not prove that the
+ * transaction reached the network. Callers must not persist the hash as a
+ * known-pending transaction.
+ */
+export class RelaySubmissionUnverifiedError extends BNBAgentError {
+  constructor(
+    public readonly txHash: string,
+    public readonly timeoutSeconds: number,
+    message?: string,
+  ) {
+    super(
+      message ||
+        `Relay returned transaction ${txHash}, but the chain RPC never observed it within ${timeoutSeconds}s.`,
+    );
+    this.name = "RelaySubmissionUnverifiedError";
+  }
+}
+
+/**
  * An ERC-8004 agent was registered on-chain (``agent_id`` assigned) but the
  * follow-up ``setAgentURI`` that populates the ``registrations[]`` field did
  * not complete.
  *
  * The agent exists and is owned by the wallet; only URI completion is
- * outstanding. Retry via ``setAgentURI`` / ``bag erc8004 update-endpoint``.
- * ``txHash`` is set only when the completion tx was broadcast but left
- * pending (the cause is a {@link TransactionPendingError}).
+ * outstanding. ``txHash`` is set only when the completion tx was broadcast
+ * but left pending (the cause is a {@link TransactionPendingError}). A relay
+ * hash that was never observed is retained on ``cause`` and sets
+ * ``retryable=false`` so callers do not blindly resubmit it.
  */
 export class ERC8004PartialRegistrationError extends BNBAgentError {
   constructor(
@@ -174,7 +197,10 @@ export class ERC8004PartialRegistrationError extends BNBAgentError {
     public readonly txHash: string | null = null,
     public readonly retryable: boolean = true,
   ) {
-    let msg = `agent registered (agent_id=${agentId}) but agent_uri/registrations completion failed: ${cause}. Retry setAgentURI / \`bag erc8004 update-endpoint\`.`;
+    let msg = `agent registered (agent_id=${agentId}) but agent_uri/registrations completion failed: ${cause}.`;
+    msg += retryable
+      ? " Retry setAgentURI / `bag erc8004 update-endpoint`."
+      : " Reconcile the relay transaction before retrying setAgentURI / `bag erc8004 update-endpoint`.";
     if (txHash) {
       msg += ` pending tx_hash=${txHash}`;
     }

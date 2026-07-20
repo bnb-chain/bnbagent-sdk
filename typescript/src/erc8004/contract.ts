@@ -21,7 +21,10 @@ import { identityRegistryAbi } from "../abis/identityRegistry.js";
 import { ContractBase } from "../core/contractBase.js";
 import type { Paymaster } from "../core/paymaster.js";
 import { describeError } from "../core/txSender.js";
-import { TransactionPendingError } from "../errors.js";
+import {
+  RelaySubmissionUnverifiedError,
+  TransactionPendingError,
+} from "../errors.js";
 import {
   ERC8004_REGISTER,
   ERC8004_SET_AGENT_URI,
@@ -186,9 +189,12 @@ export class ContractInterface extends ContractBase {
         receipt: result.receipt,
       };
     } catch (error) {
-      if (error instanceof TransactionPendingError) {
-        // Tx broadcast but not yet confirmed — propagate the pending signal
-        // (with txHash) instead of masking it as a fatal failure.
+      if (
+        error instanceof TransactionPendingError ||
+        error instanceof RelaySubmissionUnverifiedError
+      ) {
+        // Preserve transaction-state signals (and their txHash) so callers
+        // can reconcile instead of blindly retrying the registration.
         throw error;
       }
       throw new Error(`Agent registration failed: ${describeError(error)}`, {
@@ -285,6 +291,9 @@ export class ContractInterface extends ContractBase {
         receipt: result.receipt,
       };
     } catch (error) {
+      if (error instanceof RelaySubmissionUnverifiedError) {
+        throw error;
+      }
       // NOTE: unlike registerAgent/setAgentUri, the Python reference does
       // NOT special-case TransactionPendingError here — it wraps every
       // failure (including a pending receipt) into a plain error. Ported
@@ -319,7 +328,10 @@ export class ContractInterface extends ContractBase {
         receipt: result.receipt,
       };
     } catch (error) {
-      if (error instanceof TransactionPendingError) {
+      if (
+        error instanceof TransactionPendingError ||
+        error instanceof RelaySubmissionUnverifiedError
+      ) {
         throw error;
       }
       throw new Error(`Failed to set agent URI: ${describeError(error)}`, {

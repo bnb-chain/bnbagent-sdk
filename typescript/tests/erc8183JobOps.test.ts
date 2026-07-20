@@ -38,7 +38,11 @@ import {
   buildJobDescription,
 } from "../src/erc8183/negotiation.js";
 import { type Job, JobStatus } from "../src/erc8183/types.js";
-import { RpcRangeLimitError, TransactionPendingError } from "../src/errors.js";
+import {
+  RelaySubmissionUnverifiedError,
+  RpcRangeLimitError,
+  TransactionPendingError,
+} from "../src/errors.js";
 import { LocalStorageProvider } from "../src/storage/localStorageProvider.js";
 import type { StorageProvider } from "../src/storage/storageProvider.js";
 import { AltanaWalletProvider } from "../src/wallets/altana/provider.js";
@@ -1450,5 +1454,13 @@ describe("ERC8183JobOps: retryable contract", () => {
     expect(fields.error_code).toBe("tx_pending");
     expect(fields.retryable).toBe(false);
     expect(fields.tx_hash).toBe(`0x${"ab".repeat(32)}`);
+  });
+
+  it("an unverified relay submission is not blindly retryable and carries tx_hash", () => {
+    const exc = new RelaySubmissionUnverifiedError(`0x${"cd".repeat(32)}`, 300);
+    const fields = excErrorFields(exc);
+    expect(fields.error_code).toBe("tx_unverified");
+    expect(fields.retryable).toBe(false);
+    expect(fields.tx_hash).toBe(`0x${"cd".repeat(32)}`);
   });
 });

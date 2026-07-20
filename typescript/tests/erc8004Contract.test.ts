@@ -23,12 +23,16 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { identityRegistryAbi } from "../src/abis/identityRegistry.js";
 import { NonceManager } from "../src/core/nonceManager.js";
+import type { Paymaster } from "../src/core/paymaster.js";
 import {
   _resetTxConfigOverrides,
   setDefaultReceiptTimeout,
 } from "../src/core/txConfig.js";
 import { ContractInterface } from "../src/erc8004/contract.js";
-import { TransactionPendingError } from "../src/errors.js";
+import {
+  RelaySubmissionUnverifiedError,
+  TransactionPendingError,
+} from "../src/errors.js";
 import {
   type SignedTx,
   WalletProvider,
@@ -106,15 +110,41 @@ function registeredLog(agentId: bigint, agentUri: string) {
   };
 }
 
-function makeContract(overrides: Partial<MockHandlers> = {}) {
+function makeContract(
+  overrides: Partial<MockHandlers> = {},
+  paymaster?: Paymaster,
+  receiptTimeout?: number,
+) {
   const mock = mockPublicClient(overrides);
   const wallet = new StubWallet();
   const contract = new ContractInterface({
     client: mock.client,
     contractAddress: CONTRACT_ADDRESS,
     walletProvider: wallet,
+    paymaster,
+    receiptTimeout,
   });
   return { mock, wallet, contract };
+}
+
+function makeUnverifiedRelayContract() {
+  const paymaster = {
+    ethGetTransactionCount: async () => 0,
+    isSponsorable: async () => true,
+    ethSendRawTransaction: async () => FAKE_TX_HASH,
+  } as unknown as Paymaster;
+  return makeContract(
+    {
+      eth_getTransactionReceipt: () => {
+        throw new Error("not found");
+      },
+      eth_getTransactionByHash: () => {
+        throw new Error("not found");
+      },
+    },
+    paymaster,
+    0.01,
+  );
 }
 
 beforeEach(() => {
@@ -266,6 +296,25 @@ describe("registerAgent: receipt timeout is pending, not fatal", () => {
       caught = error;
     }
     expect(caught).toBeInstanceOf(TransactionPendingError);
+  });
+});
+
+describe("relay submission visibility", () => {
+  it("preserves RelaySubmissionUnverifiedError through every ERC-8004 write wrapper", async () => {
+    const operations = [
+      (contract: ContractInterface) =>
+        contract.registerAgent("data:application/json;base64,eyJ4IjoxfQ=="),
+      (contract: ContractInterface) => contract.setMetadata(1, "name", "value"),
+      (contract: ContractInterface) =>
+        contract.setAgentUri(1, "data:application/json;base64,eyJ4IjoxfQ=="),
+    ];
+
+    for (const execute of operations) {
+      const { contract } = makeUnverifiedRelayContract();
+      const error = await execute(contract).catch((caught) => caught);
+      expect(error).toBeInstanceOf(RelaySubmissionUnverifiedError);
+      expect(error).toMatchObject({ txHash: FAKE_TX_HASH });
+    }
   });
 });
 

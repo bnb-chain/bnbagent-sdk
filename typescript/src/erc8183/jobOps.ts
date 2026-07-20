@@ -13,9 +13,9 @@
  * Retry contract: an error envelope carries `retryable: true` only for
  * transient failures (`chain_unavailable`, `internal_error`); its absence
  * means the failure is permanent and retrying cannot succeed.
- * `TransactionPendingError` is the one exception: it is NOT retryable (the
- * write already broadcast; a blind retry risks a double-broadcast) but
- * carries `tx_hash` so the caller can check later.
+ * Transaction-state exceptions are NOT retryable: a blind retry could
+ * double-broadcast. They carry `tx_hash` so the caller can reconcile the
+ * transaction explicitly.
  *
  * Seller verification is strict by default: a FUNDED job must contain a
  * provider-signed quote that was still valid at its indexed `JobFunded`
@@ -28,7 +28,11 @@ import { getAddress } from "viem";
 import type { NetworkConfig } from "../config.js";
 import { getEnv } from "../core/envUtil.js";
 import { describeError } from "../core/txSender.js";
-import { RpcRangeLimitError, TransactionPendingError } from "../errors.js";
+import {
+  RelaySubmissionUnverifiedError,
+  RpcRangeLimitError,
+  TransactionPendingError,
+} from "../errors.js";
 import { LocalStorageProvider } from "../storage/localStorageProvider.js";
 import type { StorageProvider } from "../storage/storageProvider.js";
 import type { WalletProvider } from "../wallets/walletProvider.js";
@@ -150,6 +154,7 @@ export const ERR_METADATA_INVALID = "metadata_invalid"; // metadata not JSON-ser
 export const ERR_INTERNAL = "internal_error"; // unexpected failure (retryable)
 export const ERR_CHAIN_UNAVAILABLE = "chain_unavailable"; // transient chain/RPC trouble (retryable)
 export const ERR_TX_PENDING = "tx_pending"; // tx broadcast but unconfirmed (NOT retryable)
+export const ERR_TX_UNVERIFIED = "tx_unverified"; // relay hash not observed (NOT blindly retryable)
 
 /**
  * Safe `{ error, error_code }` fields for an exception.
@@ -162,15 +167,25 @@ export const ERR_TX_PENDING = "tx_pending"; // tx broadcast but unconfirmed (NOT
  * when present, rides along separately as `rpc_error_code` — never mixed
  * into `error_code`.
  *
- * A {@link TransactionPendingError} is reported as `tx_pending` and is NOT
- * retryable: the write was already broadcast, so a blind retry would risk a
- * double-broadcast — the caller should check `tx_hash` later.
+ * Transaction-state exceptions are NOT retryable: a blind retry could risk a
+ * double-broadcast. {@link TransactionPendingError} is reported as
+ * `tx_pending`; {@link RelaySubmissionUnverifiedError} as `tx_unverified`.
+ * Both carry `tx_hash` for explicit reconciliation.
  */
 export function excErrorFields(exc: unknown): Record<string, unknown> {
   if (exc instanceof TransactionPendingError) {
     return {
       error: exc.message,
       error_code: ERR_TX_PENDING,
+      retryable: false,
+      tx_hash: exc.txHash,
+    };
+  }
+
+  if (exc instanceof RelaySubmissionUnverifiedError) {
+    return {
+      error: exc.message,
+      error_code: ERR_TX_UNVERIFIED,
       retryable: false,
       tx_hash: exc.txHash,
     };

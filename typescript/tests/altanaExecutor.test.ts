@@ -23,7 +23,10 @@ import { privateKeyToAccount } from "viem/accounts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { agenticCommerceAbi } from "../src/abis/agenticCommerce.js";
 import { erc20Abi } from "../src/abis/erc20.js";
-import { TransactionPendingError } from "../src/errors.js";
+import {
+  RelaySubmissionUnverifiedError,
+  TransactionPendingError,
+} from "../src/errors.js";
 import {
   ERC8183_CREATE_JOB,
   ERC8183_FUND,
@@ -298,9 +301,37 @@ describe("AltanaIntentExecutor — relay result interpretation", () => {
     mock.handlers.eth_getTransactionReceipt = () => {
       throw new Error("not found");
     };
+    mock.handlers.eth_getTransactionByHash = () => ({
+      blockHash: null,
+      blockNumber: null,
+      from: WALLET,
+      gas: "0x186a0",
+      gasPrice: "0x0",
+      hash: FAKE_TX_HASH,
+      input: "0x",
+      nonce: "0x7",
+      r: `0x${"00".repeat(32)}`,
+      s: `0x${"00".repeat(32)}`,
+      to: TARGET,
+      transactionIndex: null,
+      type: "0x0",
+      v: "0x1b",
+      value: "0x0",
+    });
     const { executor } = makeExecutor(makeAdminProvider(), mock, 0.2);
     await expect(executor.execute(setValueIntent())).rejects.toBeInstanceOf(
       TransactionPendingError,
+    );
+  });
+
+  it("reports a relay hash the chain never observed as unverified", async () => {
+    const mock = mockPublicClient({ eth_call: paymentTokenHandler() });
+    mock.handlers.eth_getTransactionReceipt = () => {
+      throw new Error("not found");
+    };
+    const { executor } = makeExecutor(makeAdminProvider(), mock, 0.01);
+    await expect(executor.execute(setValueIntent())).rejects.toBeInstanceOf(
+      RelaySubmissionUnverifiedError,
     );
   });
 });

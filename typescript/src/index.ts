@@ -5,7 +5,8 @@
  *     NetworkConfig, NETWORKS, resolveNetwork
  *     BNBAgentError, ContractError, StorageError, ConfigurationError,
  *     ABILoadError, NetworkError, RpcRangeLimitError, JobError,
- *     NegotiationError, TransactionPendingError, ERC8004PartialRegistrationError
+ *     NegotiationError, TransactionPendingError, RelaySubmissionUnverifiedError,
+ *     ERC8004PartialRegistrationError
  *     ERC8004Agent, AgentEndpoint
  *     WalletProvider, EVMWalletProvider, AltanaWalletProvider
  *     ERC8183Client, JobStatus, Verdict
@@ -44,6 +45,7 @@ export {
   JobError,
   NegotiationError,
   TransactionPendingError,
+  RelaySubmissionUnverifiedError,
   ERC8004PartialRegistrationError,
 } from "./errors.js";
 
