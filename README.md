@@ -589,12 +589,7 @@ Full design rationale and threat model: see ADR #30 in the
 
 ## Related
 
-- [bnbagent-studio-evals](https://github.com/bnb-chain/bnbagent-studio-evals) —
-  security evaluation suite for BNB Agent Studio (EMNLP 2026 System Demonstrations
-  artifact). Studio-provisioned agents build their signing layer on this SDK
-  (`bnbagent.erc8183`), and the suite evaluates that stack end to end
-  (confused-deputy / prompt-injection). Originally proposed here as
-  [#48](https://github.com/bnb-chain/bnbagent-sdk/pull/48), then migrated.
+- [bnbagent-studio-evals](https://github.com/bnb-chain/bnbagent-studio-evals) — security evaluation suite for BNB Agent Studio (EMNLP 2026 System Demonstrations artifact). Studio-provisioned agents build their signing layer on this SDK (`bnbagent.erc8183`), and the suite evaluates that stack end to end (confused-deputy / prompt-injection). Originally proposed here as [#48](https://github.com/bnb-chain/bnbagent-sdk/pull/48), then migrated.
 
 ---
 
