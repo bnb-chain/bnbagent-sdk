@@ -1,17 +1,18 @@
-"""Flow F — seller-side zero price.
+"""Flow F — zero price.
 
-A provider offers a job for free (``budget == 0``). The escrow state machine
-is unchanged (Open → Funded → Submitted → Completed), but no tokens ever
+A job agreed at price 0 (``budget == 0``). The escrow state machine is
+unchanged (Open → Funded → Submitted → Completed), but no tokens ever
 move: ``fund(0)`` deposits nothing (and the SDK skips the ERC-20 approve
 entirely), and ``settle`` pays nobody.
 
-createJob → registerJob → PROVIDER set_budget(0) → fund(0) → submit → wait
+createJob → registerJob → set_budget(0) → fund(0) → submit → wait
 past dispute window → settle → COMPLETED, with the provider's token balance
 unchanged.
 
-Zero price is **seller-side**: only the provider may set ``budget == 0`` (the
-kernel reverts a client-initiated zero budget with ``ZeroBudgetSellerOnly``).
-This demo therefore REQUIRES ``PROVIDER_PRIVATE_KEY``.
+``set_budget(0)`` may be sent by either the client or the provider — same
+rule as any other amount. This demo drives the buyer flow (the CLIENT sets
+the budget) and still REQUIRES ``PROVIDER_PRIVATE_KEY`` for the
+provider-only ``submit``.
 """
 
 from __future__ import annotations
@@ -27,8 +28,8 @@ def main() -> None:
     s = load_settings()
     if not s.provider_pk:
         raise RuntimeError(
-            "PROVIDER_PRIVATE_KEY is required for the zero-price flow: only "
-            "the provider (seller) may set budget == 0."
+            "PROVIDER_PRIVATE_KEY is required for the zero-price flow: "
+            "submit is provider-only."
         )
     client = make_primary_client(s)  # EVM or twak, per WALLET_KIND
     provider = make_client(s.provider_pk, s.network)
@@ -47,10 +48,10 @@ def main() -> None:
     client.register_job(job_id)
     print("[client] registerJob -> OptimisticPolicy")
 
-    # Seller-side: the PROVIDER sets the zero budget. A client-initiated
-    # set_budget(0) would revert with ZeroBudgetSellerOnly.
-    provider.set_budget(job_id, 0)
-    print("[provider] setBudget 0 (seller-side zero price)")
+    # The client sets the zero budget — set_budget(0) is symmetric, the
+    # provider could equally send it.
+    client.set_budget(job_id, 0)
+    print("[client] setBudget 0 (zero price)")
 
     provider_balance_before = client.token_balance(s.provider_address)
 
