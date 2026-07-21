@@ -22,7 +22,7 @@
  */
 
 import type { PublicClient, TransactionRequestLegacy } from "viem";
-import { encodeFunctionData } from "viem";
+import { encodeFunctionData, keccak256 } from "viem";
 import type { Paymaster } from "../core/paymaster.js";
 import { getDefaultReceiptTimeout, minGasPriceWei } from "../core/txConfig.js";
 import {
@@ -240,11 +240,26 @@ export class LocalExecutor implements IntentExecutor {
       gasPrice: 0n,
     };
     const signed = await this.walletProvider.signTransaction(sponsoredTx);
+    // The on-chain hash of a signed tx is keccak256 of its raw bytes — a
+    // mathematical fact independent of anything the relay replies. If the
+    // relay's response differs, its hash is untrustworthy: track the signed
+    // hash instead, so receipt/presence polling watches the transaction that
+    // was actually handed over (a lying relay then surfaces as
+    // RelaySubmissionUnverifiedError rather than an eternal wait on a
+    // hash that cannot exist).
+    const signedTxHash = keccak256(normalizeHash(signed.rawTransaction));
     const rawHash = await paymaster.ethSendRawTransaction(
       signed.rawTransaction,
       { ...USER_AGENT_HEADERS },
     );
-    return normalizeHash(rawHash);
+    const relayHash = normalizeHash(rawHash);
+    if (relayHash.toLowerCase() !== signedTxHash.toLowerCase()) {
+      console.warn(
+        `[LocalExecutor] paymaster returned tx hash ${relayHash}, which does not match the signed transaction hash ${signedTxHash}; tracking the signed hash`,
+      );
+      return signedTxHash;
+    }
+    return relayHash;
   }
 }
 

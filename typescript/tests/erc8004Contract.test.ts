@@ -18,6 +18,7 @@ import {
   encodeEventTopics,
   encodeFunctionResult,
   getAddress,
+  keccak256,
   stringToHex,
 } from "viem";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -49,6 +50,10 @@ const CONTRACT_ADDRESS = getAddress(
 const WALLET_ADDRESS = getAddress("0x1111111111111111111111111111111111111111");
 const OWNER_ADDRESS = getAddress("0x2222222222222222222222222222222222222222");
 const FAKE_RAW_TX = "0xdeadbeef";
+// The on-chain hash of the stub wallet's signed tx — what an honest relay
+// echoes back, and the hash LocalExecutor tracks regardless of the relay's
+// answer.
+const SIGNED_TX_HASH = keccak256(FAKE_RAW_TX);
 
 /** A minimal signing wallet — drives the default LocalExecutor write path. */
 class StubWallet extends WalletProvider {
@@ -131,7 +136,7 @@ function makeUnverifiedRelayContract() {
   const paymaster = {
     ethGetTransactionCount: async () => 0,
     isSponsorable: async () => true,
-    ethSendRawTransaction: async () => FAKE_TX_HASH,
+    ethSendRawTransaction: async () => SIGNED_TX_HASH,
   } as unknown as Paymaster;
   return makeContract(
     {
@@ -313,7 +318,7 @@ describe("relay submission visibility", () => {
       const { contract } = makeUnverifiedRelayContract();
       const error = await execute(contract).catch((caught) => caught);
       expect(error).toBeInstanceOf(RelaySubmissionUnverifiedError);
-      expect(error).toMatchObject({ txHash: FAKE_TX_HASH });
+      expect(error).toMatchObject({ txHash: SIGNED_TX_HASH });
     }
   });
 });

@@ -43,9 +43,22 @@ export const PREFLIGHT_TIMEOUT_MS = 10_000;
 /** Interval (ms) between `eth_getTransactionReceipt` polls while waiting. */
 export const RECEIPT_POLL_INTERVAL_MS = 250;
 
+/**
+ * Seconds a relay-returned tx hash may stay invisible to the chain RPC before
+ * the receipt wait aborts early with {@link RelaySubmissionUnverifiedError},
+ * instead of holding the caller for the full receipt timeout. Presence is
+ * probed every `RECEIPT_POLL_INTERVAL_MS * 4`, so this window allows ~30
+ * probes — ample for relay broadcast + mempool propagation; a relay that
+ * silently dropped the tx is detected in seconds rather than minutes.
+ */
+export const RELAY_UNSEEN_ABORT_SECONDS = 30;
+
 /** Internal sentinel distinguishing "receipt wait timed out" from any other rejection. */
 export class ReceiptWaitTimeout extends Error {
-  constructor(public readonly transactionSeen: boolean) {
+  constructor(
+    public readonly transactionSeen: boolean,
+    public readonly waitedSeconds: number,
+  ) {
     super();
   }
 }
@@ -174,25 +187,38 @@ export async function estimateGasLimit(
  * When `trackTransactionPresence` is enabled, the poller also records whether
  * `eth_getTransactionByHash` ever observes the transaction. Relay callers use
  * that signal to distinguish a real pending transaction from an unverified
- * relay response.
+ * relay response. `unseenAbortSeconds` (only meaningful with tracking, and
+ * only when shorter than `timeoutSeconds`) aborts the wait early if the
+ * transaction has never been seen by then — the fail-fast for a relay that
+ * returned a hash it never broadcast.
  */
 export async function waitForReceipt(
   client: PublicClient,
   hash: `0x${string}`,
   timeoutSeconds: number,
-  opts: { trackTransactionPresence?: boolean } = {},
+  opts: {
+    trackTransactionPresence?: boolean;
+    unseenAbortSeconds?: number;
+  } = {},
 ): Promise<TransactionReceipt> {
   return new Promise((resolve, reject) => {
     let settled = false;
     let transactionSeen = false;
     let transactionPresenceTimer: ReturnType<typeof setTimeout> | undefined;
+    let unseenAbortTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearAuxTimers = () => {
+      if (transactionPresenceTimer) {
+        clearTimeout(transactionPresenceTimer);
+      }
+      if (unseenAbortTimer) {
+        clearTimeout(unseenAbortTimer);
+      }
+    };
     const timer = setTimeout(() => {
       if (!settled) {
         settled = true;
-        if (transactionPresenceTimer) {
-          clearTimeout(transactionPresenceTimer);
-        }
-        reject(new ReceiptWaitTimeout(transactionSeen));
+        clearAuxTimers();
+        reject(new ReceiptWaitTimeout(transactionSeen, timeoutSeconds));
       }
     }, timeoutSeconds * 1000);
 
@@ -219,6 +245,9 @@ export async function waitForReceipt(
         () => {
           if (!settled) {
             transactionSeen = true;
+            if (unseenAbortTimer) {
+              clearTimeout(unseenAbortTimer);
+            }
           }
         },
         () => {
@@ -238,9 +267,7 @@ export async function waitForReceipt(
           }
           settled = true;
           clearTimeout(timer);
-          if (transactionPresenceTimer) {
-            clearTimeout(transactionPresenceTimer);
-          }
+          clearAuxTimers();
           resolve(receipt);
         },
         () => {
@@ -254,6 +281,23 @@ export async function waitForReceipt(
       // the network. Keep this probe independent from receipt polling so a
       // slow request on either RPC method cannot suppress the other.
       pollTransactionPresence();
+      const abortSeconds = opts.unseenAbortSeconds;
+      if (
+        abortSeconds !== undefined &&
+        abortSeconds > 0 &&
+        abortSeconds < timeoutSeconds
+      ) {
+        unseenAbortTimer = setTimeout(() => {
+          if (!settled && !transactionSeen) {
+            settled = true;
+            clearTimeout(timer);
+            if (transactionPresenceTimer) {
+              clearTimeout(transactionPresenceTimer);
+            }
+            reject(new ReceiptWaitTimeout(false, abortSeconds));
+          }
+        }, abortSeconds * 1000);
+      }
     }
   });
 }
@@ -265,22 +309,30 @@ export async function waitForReceipt(
  * the hash, in which case it becomes {@link RelaySubmissionUnverifiedError}.
  * A reverted receipt becomes a plain `Error`, and a successful receipt becomes
  * a {@link TxResult}.
+ *
+ * With `requireTransactionSeen`, an unseen hash fails fast after
+ * `unseenAbortSeconds` (default {@link RELAY_UNSEEN_ABORT_SECONDS}) instead of
+ * holding the caller for the full receipt timeout; a hash the RPC has seen
+ * always waits out `timeoutSeconds` for its receipt.
  */
 export async function waitForReceiptAndInterpret(
   client: PublicClient,
   hash: `0x${string}`,
   timeoutSeconds: number,
-  opts: { requireTransactionSeen?: boolean } = {},
+  opts: { requireTransactionSeen?: boolean; unseenAbortSeconds?: number } = {},
 ): Promise<TxResult> {
   let receipt: TransactionReceipt;
   try {
     receipt = await waitForReceipt(client, hash, timeoutSeconds, {
       trackTransactionPresence: opts.requireTransactionSeen,
+      unseenAbortSeconds: opts.requireTransactionSeen
+        ? (opts.unseenAbortSeconds ?? RELAY_UNSEEN_ABORT_SECONDS)
+        : undefined,
     });
   } catch (error) {
     if (error instanceof ReceiptWaitTimeout) {
       if (opts.requireTransactionSeen && !error.transactionSeen) {
-        throw new RelaySubmissionUnverifiedError(hash, timeoutSeconds);
+        throw new RelaySubmissionUnverifiedError(hash, error.waitedSeconds);
       }
       throw new TransactionPendingError(hash, timeoutSeconds);
     }

@@ -1,4 +1,9 @@
-import { type TransactionRequestLegacy, getAddress, parseAbi } from "viem";
+import {
+  type TransactionRequestLegacy,
+  getAddress,
+  keccak256,
+  parseAbi,
+} from "viem";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NonceManager } from "../src/core/nonceManager.js";
 import type { Paymaster } from "../src/core/paymaster.js";
@@ -33,7 +38,11 @@ const CONTRACT_ADDRESS = getAddress(
 );
 const WALLET_ADDRESS = getAddress("0x1111111111111111111111111111111111111111");
 const FAKE_RAW_TX = "0xdeadbeef";
-const PAYMASTER_TX_HASH: `0x${string}` = `0x${"cd".repeat(32)}`;
+// What an HONEST relay returns from eth_sendRawTransaction: the keccak256 of
+// the signed raw tx it was handed. LocalExecutor cross-checks the relay's
+// answer against this, so the default fake paymaster must echo the
+// mathematically correct hash.
+const PAYMASTER_TX_HASH: `0x${string}` = keccak256(FAKE_RAW_TX);
 
 const ABI = parseAbi(["function setValue(uint256 x) returns (bool)"]);
 
@@ -511,6 +520,173 @@ describe("LocalExecutor: sponsored path", () => {
       name: "RelaySubmissionUnverifiedError",
       txHash: PAYMASTER_TX_HASH,
       timeoutSeconds: 1,
+    });
+  });
+});
+
+describe("LocalExecutor: relay hash consistency", () => {
+  const DIVERGENT_HASH: `0x${string}` = `0x${"ef".repeat(32)}`;
+
+  it("warns and tracks the signed-tx hash when the relay returns a different hash", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mock = mockPublicClient();
+    const { paymaster } = makeFakePaymaster({
+      ethSendRawTransaction: async () => DIVERGENT_HASH,
+    });
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: new StubWallet(),
+      paymaster,
+    });
+
+    const result = await executor.execute(makeIntent());
+
+    expect(result.status).toBe(1);
+    expect(
+      warnSpy.mock.calls.some((args) =>
+        String(args[0]).includes("does not match the signed transaction hash"),
+      ),
+    ).toBe(true);
+    // Receipt polling watched the mathematically true hash, not the relay's.
+    const receiptCalls = mock.calls.filter(
+      (call) => call.method === "eth_getTransactionReceipt",
+    );
+    expect(receiptCalls.length).toBeGreaterThan(0);
+    expect(
+      receiptCalls.every((call) => call.params[0] === PAYMASTER_TX_HASH),
+    ).toBe(true);
+    expect(mock.calls.some((call) => call.params[0] === DIVERGENT_HASH)).toBe(
+      false,
+    );
+  });
+
+  it("an unverified divergent relay hash surfaces the signed-tx hash", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mock = mockPublicClient({
+      eth_getTransactionReceipt: () => {
+        throw new Error("not found");
+      },
+    });
+    const { paymaster } = makeFakePaymaster({
+      ethSendRawTransaction: async () => DIVERGENT_HASH,
+    });
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: new StubWallet(),
+      paymaster,
+      receiptTimeout: 1,
+    });
+
+    const errorPromise = executor.execute(makeIntent()).catch((error) => error);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(errorPromise).resolves.toMatchObject({
+      name: "RelaySubmissionUnverifiedError",
+      txHash: PAYMASTER_TX_HASH,
+    });
+  });
+
+  it("a matching relay hash does not warn", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mock = mockPublicClient();
+    const { paymaster } = makeFakePaymaster();
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: new StubWallet(),
+      paymaster,
+    });
+
+    const result = await executor.execute(makeIntent());
+
+    expect(result.status).toBe(1);
+    expect(
+      warnSpy.mock.calls.some((args) =>
+        String(args[0]).includes("does not match"),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("LocalExecutor: unseen relay hash fail-fast", () => {
+  it("aborts after the fail-fast window instead of the full receipt timeout", async () => {
+    vi.useFakeTimers();
+    const mock = mockPublicClient({
+      eth_getTransactionReceipt: () => {
+        throw new Error("not found");
+      },
+    });
+    const { paymaster } = makeFakePaymaster();
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: new StubWallet(),
+      paymaster,
+      receiptTimeout: 300,
+    });
+
+    const errorPromise = executor.execute(makeIntent()).catch((error) => error);
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    const error = await errorPromise;
+    expect(error).toBeInstanceOf(RelaySubmissionUnverifiedError);
+    expect(error).toMatchObject({
+      txHash: PAYMASTER_TX_HASH,
+      timeoutSeconds: 30,
+    });
+  });
+
+  it("a chain-visible relay tx is exempt from the fail-fast window and waits the full timeout", async () => {
+    vi.useFakeTimers();
+    const mock = mockPublicClient({
+      eth_getTransactionReceipt: () => {
+        throw new Error("not found");
+      },
+      eth_getTransactionByHash: () => ({
+        blockHash: null,
+        blockNumber: null,
+        from: WALLET_ADDRESS,
+        gas: "0x186a0",
+        gasPrice: "0x0",
+        hash: PAYMASTER_TX_HASH,
+        input: "0x",
+        nonce: "0x7",
+        r: `0x${"00".repeat(32)}`,
+        s: `0x${"00".repeat(32)}`,
+        to: CONTRACT_ADDRESS,
+        transactionIndex: null,
+        type: "0x0",
+        v: "0x1b",
+        value: "0x0",
+      }),
+    });
+    const { paymaster } = makeFakePaymaster();
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: new StubWallet(),
+      paymaster,
+      receiptTimeout: 60,
+    });
+
+    let outcome: unknown = "unsettled";
+    const errorPromise = executor.execute(makeIntent()).then(
+      (value) => {
+        outcome = value;
+        return value;
+      },
+      (error) => {
+        outcome = error;
+        return error;
+      },
+    );
+    // Past the 30s fail-fast window: still waiting (the tx was seen).
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(outcome).toBe("unsettled");
+
+    await vi.advanceTimersByTimeAsync(29_000);
+    await expect(errorPromise).resolves.toMatchObject({
+      name: "TransactionPendingError",
+      txHash: PAYMASTER_TX_HASH,
+      timeoutSeconds: 60,
     });
   });
 });
