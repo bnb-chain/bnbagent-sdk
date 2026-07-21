@@ -97,10 +97,9 @@ console.log(`[client] createJob jobId=${jobId}`);
 await client.registerJob(jobId!);
 
 // Escrow the budget — auto-approves the payment token if the allowance is short.
-// Seller-side zero price: for a free job the provider calls
-// `client.setBudget(jobId, 0n)` (client-initiated zero reverts with
-// `ZeroBudgetSellerOnly`), then `fund(jobId, 0n)` moves no tokens and skips the
-// ERC-20 approve entirely. See examples/client/zeroPrice.ts.
+// Zero price: for a free job either party calls `setBudget(jobId, 0n)`,
+// then `fund(jobId, 0n)` moves no tokens and skips the ERC-20 approve
+// entirely. See examples/client/zeroPrice.ts.
 await client.fund(jobId!, budget);
 console.log("[client] fund OK (Open -> Funded)");
 

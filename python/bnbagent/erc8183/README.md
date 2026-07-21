@@ -170,7 +170,7 @@ High-level facade. Most useful methods:
 |--------|---------|
 | `create_job(...)` | Create a job; defaults `evaluator` and `hook` to the Router. Returns `{jobId, transactionHash, receipt}`. |
 | `register_job(job_id, policy=None)` | Bind the configured policy (or override) to a job on the Router. |
-| `set_budget(job_id, amount)` | Set the escrow amount. Client **or** provider for `amount > 0`; **provider-only for `amount == 0`** (seller-side zero price — a client-initiated zero budget reverts with `ZeroBudgetSellerOnly`). |
+| `set_budget(job_id, amount)` | Set the escrow amount. Client **or** provider, any amount — `amount == 0` is a zero-price (free) job: `fund(0)` moves no tokens and the provider verifies the funded budget against its signed quote before working. |
 | `fund(job_id, amount, *, approve_floor=None)` | Approves (if needed) and funds. See floor strategy above. `amount == 0` (a zero-price job) moves no tokens and skips the ERC-20 approve entirely. |
 | `submit(job_id, deliverable, opt_params)` | Provider submits 32-byte `deliverable` (`DeliverableManifest.manifest_hash()`, keccak256 of canonical manifest JSON); `opt_params` dict (must contain `deliverable_url`) is serialized to JSON and forwarded as `optParams`. |
 | `cancel_open(job_id, reason=...)` | Client cancels while OPEN; no escrow moved. |
