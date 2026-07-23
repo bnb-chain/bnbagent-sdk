@@ -536,6 +536,17 @@ export function isRateLimitError(error: unknown): boolean {
   return text.includes("429") || text.includes("too many requests");
 }
 
+/**
+ * Whether `error` reports the account lacking gas funds — the geth/BSC
+ * `insufficient funds for gas * price + value` shape and viem's
+ * `InsufficientFundsError`. Used by the self-pay fallback to distinguish
+ * "wallet has no BNB" (unrecoverable without funding) from a transient
+ * broadcast failure.
+ */
+export function isInsufficientFundsError(error: unknown): boolean {
+  return describeError(error).toLowerCase().includes("insufficient funds");
+}
+
 /** Render an error (and its `.cause` chain, if any) as a single string. */
 export function describeError(error: unknown): string {
   if (error instanceof Error) {

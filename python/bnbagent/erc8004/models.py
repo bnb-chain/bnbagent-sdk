@@ -7,6 +7,7 @@ Defines data structures for agent registration and endpoint configurations.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit, urlunsplit
 
 
 @dataclass
@@ -100,20 +101,44 @@ class AgentEndpoint:
         Appends the spec-defined agent-card discovery path
         (``/.well-known/agent-card.json``) unless ``base_url`` already ends
         with it, so the registered endpoint is always the discovery document
-        a buyer can fetch directly.
+        a buyer can fetch directly. The append is query-string-aware: an
+        AgentCore invoke URL carries ``?qualifier=DEFAULT``, and naive
+        concatenation would wedge the path after the query
+        (``…/invocations?qualifier=DEFAULT/.well-known/…``) and yield an
+        invalid URL — the path is inserted before the query/fragment instead.
 
         Example:
             >>> AgentEndpoint.a2a("https://agent.example")
             AgentEndpoint(name='A2A', endpoint='https://agent.example/.well-known/agent-card.json', ...)
         """
-        url = base_url.rstrip("/")
-        if not url.endswith(cls.A2A_WELL_KNOWN_PATH):
-            url += cls.A2A_WELL_KNOWN_PATH
         return cls(
             name="A2A",
-            endpoint=url,
+            endpoint=cls._append_agent_card_path(base_url),
             version=version,
             capabilities=list(capabilities or []),
+        )
+
+    @classmethod
+    def _append_agent_card_path(cls, base_url: str) -> str:
+        """Append the A2A discovery path, preserving any query/fragment.
+
+        Absolute URLs are parsed so the path lands before the query; inputs
+        that are not absolute URLs fall back to trailing-slash-trimmed
+        concatenation. A URL already ending in the discovery path is returned
+        unchanged in both forms.
+        """
+        raw = (base_url or "").strip()
+        parts = urlsplit(raw)
+        if not parts.scheme or not parts.netloc:
+            url = raw.rstrip("/")
+            if not url.endswith(cls.A2A_WELL_KNOWN_PATH):
+                url += cls.A2A_WELL_KNOWN_PATH
+            return url
+        path = parts.path.rstrip("/")
+        if not path.endswith(cls.A2A_WELL_KNOWN_PATH):
+            path += cls.A2A_WELL_KNOWN_PATH
+        return urlunsplit(
+            (parts.scheme, parts.netloc, path, parts.query, parts.fragment)
         )
 
     @classmethod

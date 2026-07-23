@@ -93,6 +93,12 @@ export interface ExecutionContext {
   client: PublicClient;
   paymaster?: Paymaster | null;
   receiptTimeout?: number | null;
+  /**
+   * Seconds a relay-returned hash may stay unseen before the sponsored wait
+   * aborts as unverified (and the self-pay fallback engages). Absent uses the
+   * SDK default. Self-broadcasting wallets ignore it.
+   */
+  relayUnseenTimeout?: number | null;
 }
 
 /**

@@ -8,6 +8,8 @@ import {
   JobError,
   NegotiationError,
   NetworkError,
+  RelayFallbackFailedError,
+  RelaySubmissionUnverifiedError,
   RpcRangeLimitError,
   StorageError,
   TransactionPendingError,
@@ -160,5 +162,49 @@ describe("ERC8004PartialRegistrationError", () => {
       cause,
     );
     expect(error.name).toBe("ERC8004PartialRegistrationError");
+  });
+});
+
+describe("RelaySubmissionUnverifiedError", () => {
+  it("default message carries the escape-hatch hint", () => {
+    const error = new RelaySubmissionUnverifiedError("0xabc123", 30);
+    expect(error.message).toContain("0xabc123");
+    expect(error.message).toContain("BNBAGENT_USE_PAYMASTER=0");
+    expect(error.message).toContain("usePaymaster: false");
+  });
+
+  it("uses a provided message verbatim", () => {
+    const error = new RelaySubmissionUnverifiedError("0xabc", 30, "custom");
+    expect(error.message).toBe("custom");
+  });
+});
+
+describe("RelayFallbackFailedError", () => {
+  it("extends RelaySubmissionUnverifiedError so classification is inherited", () => {
+    const error = new RelayFallbackFailedError("0xabc", 30, "no gas");
+    expect(error).toBeInstanceOf(RelaySubmissionUnverifiedError);
+    expect(error).toBeInstanceOf(BNBAgentError);
+    expect(error.name).toBe("RelayFallbackFailedError");
+  });
+
+  it("surfaces the fallback reason and funding guidance", () => {
+    const error = new RelayFallbackFailedError(
+      "0xabc",
+      30,
+      "wallet 0xdead has insufficient BNB for gas",
+    );
+    expect(error.fallbackReason).toBe(
+      "wallet 0xdead has insufficient BNB for gas",
+    );
+    expect(error.message).toContain("insufficient BNB");
+    expect(error.message).toContain("tBNB faucet");
+  });
+
+  it("retains the underlying cause when provided", () => {
+    const cause = new Error("insufficient funds for gas * price + value");
+    const error = new RelayFallbackFailedError("0xabc", 30, "no gas", {
+      cause,
+    });
+    expect(error.cause).toBe(cause);
   });
 });

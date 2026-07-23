@@ -225,6 +225,7 @@ export abstract class WalletProvider {
       walletProvider: this,
       paymaster: context.paymaster ?? null,
       receiptTimeout: context.receiptTimeout ?? null,
+      relayUnseenTimeout: context.relayUnseenTimeout ?? null,
     });
   }
 

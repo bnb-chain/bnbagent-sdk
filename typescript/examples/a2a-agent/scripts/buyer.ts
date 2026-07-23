@@ -1,15 +1,22 @@
 /**
  * Buyer counterpart: discover the agent, fetch its A2A card, get a signed quote.
  *
- * Three stages — each gated by what you configure:
+ * Stages — each gated by what you configure:
  *   1. Discover (optional): when AGENT_ID is set, resolve the provider's A2A
  *      endpoint from the ERC-8004 registry (the inverse of register.ts).
  *      Otherwise fall back to A2A_BASE_URL directly.
- *   2. Quote: fetch /.well-known/agent-card.json, then JSON-RPC message/send
- *      with negotiation terms → wallet-signed quote.
- *   3. On-chain (optional): when BUYER_PRIVATE_KEY is set, anchor the quoted
- *      description with createJob → registerJob → setBudget → fund. Without it,
- *      stops after printing the quote — a chain-free first run.
+ *   2. Resolve message URL: GET /.well-known/agent-card.json and use the card's
+ *      advertised url; if discovery fails (e.g. a POST-only AgentCore invoke
+ *      endpoint serves no GET-able card), POST skills straight to the base.
+ *   3. Quote: JSON-RPC message/send with negotiation terms → wallet-signed quote.
+ *   4. On-chain (optional): when BUYER_PRIVATE_KEY is set, anchor the quoted
+ *      description with createJob → registerJob → setBudget → fund, then read
+ *      the job's status once. Without the key, stops after the quote.
+ *
+ * Delivery models differ by seller: this example server is negotiate +
+ * status-read only. A studio-style seller instead delivers on a PUSH signal —
+ * after funding, send an A2A `{"skill":"notify_funded","job_id":<int>}` message
+ * to trigger delivery, then poll the CHAIN for SUBMITTED. See `checkStatus`.
  *
  * TypeScript port of `python/examples/a2a-agent/scripts/buyer.py`.
  *
@@ -32,8 +39,8 @@ loadEnv(ROOT);
 
 const NETWORK = process.env.NETWORK ?? "bsc-testnet";
 
-/** ERC-8004 discovery when AGENT_ID is set; A2A_BASE_URL fallback otherwise. */
-async function discoverCardUrl(): Promise<string> {
+/** Seller base URL: ERC-8004 discovery when AGENT_ID is set; A2A_BASE_URL otherwise. */
+async function discoverBaseUrl(): Promise<string> {
   const agentId = process.env.AGENT_ID;
   if (agentId) {
     const key = process.env.BUYER_PRIVATE_KEY ?? process.env.PRIVATE_KEY;
@@ -65,11 +72,65 @@ async function discoverCardUrl(): Promise<string> {
     }
     throw new Error(`agent ${agentId} has no A2A endpoint registered`);
   }
-  const base = (process.env.A2A_BASE_URL ?? "http://localhost:8010").replace(
+  return (process.env.A2A_BASE_URL ?? "http://localhost:8010").replace(
     /\/+$/,
     "",
   );
-  return `${base}/.well-known/agent-card.json`;
+}
+
+/**
+ * Agent-card discovery URL for `base`, inserting the well-known path BEFORE
+ * any query string. Naive `${base}/.well-known/agent-card.json` breaks on an
+ * AgentCore invoke URL (`…/invocations?qualifier=DEFAULT`): the path would land
+ * after the query and the URL becomes unreachable (BUG-025). A URL object keeps
+ * the query where it belongs and is idempotent when the path is already there.
+ */
+function agentCardUrl(base: string): string {
+  const u = new URL(base);
+  const path = u.pathname.replace(/\/+$/, "");
+  if (!path.endsWith("/.well-known/agent-card.json")) {
+    u.pathname = `${path}/.well-known/agent-card.json`;
+  }
+  return u.toString();
+}
+
+/**
+ * Resolve the URL to POST JSON-RPC `message/send` to.
+ *
+ * Tries A2A discovery first (GET the agent card, use its advertised `url`).
+ * AgentCore invoke endpoints are POST-only and serve no GET-able card, so a
+ * failed discovery is expected there — fall back to POSTing skill payloads
+ * straight to the base invoke URL instead of hard-failing (BUG-025).
+ */
+async function resolveMessageUrl(base: string): Promise<string> {
+  const cardUrl = agentCardUrl(base);
+  try {
+    const resp = await fetch(cardUrl, { signal: AbortSignal.timeout(10_000) });
+    if (resp.ok) {
+      const card = (await resp.json()) as {
+        name: string;
+        url: string;
+        skills: { id: string }[];
+      };
+      console.log(
+        `[card] ${card.name} — skills: ${card.skills.map((s) => s.id).join(", ")}`,
+      );
+      return card.url ?? base;
+    }
+    console.warn(
+      `[discover] agent-card GET → HTTP ${resp.status}; skipping discovery`,
+    );
+  } catch (error) {
+    console.warn(
+      `[discover] agent-card GET failed (${
+        error instanceof Error ? error.message : String(error)
+      }); skipping discovery`,
+    );
+  }
+  console.log(
+    `[discover] POSTing skills directly to ${base} (POST-only endpoint, no GET-able card)`,
+  );
+  return base;
 }
 
 interface Quote {
@@ -80,30 +141,16 @@ interface Quote {
   [key: string]: unknown;
 }
 
-async function getQuote(cardUrl: string): Promise<Quote> {
-  const cardResp = await fetch(cardUrl, {
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!cardResp.ok) {
-    throw new Error(`card fetch failed: HTTP ${cardResp.status}`);
-  }
-  const card = (await cardResp.json()) as {
-    name: string;
-    url: string;
-    skills: { id: string }[];
-  };
-  console.log(
-    `[card] ${card.name} — skills: ${card.skills.map((s) => s.id).join(", ")}`,
-  );
+interface RpcReply {
+  error?: { message: string };
+  result?: { parts: { data: Record<string, unknown> }[] };
+}
 
-  const inquiry = {
-    skill: "negotiate-erc8183-job",
-    task_description: "Summarize the latest BNB Chain ecosystem news",
-    terms: {
-      deliverables: "One markdown summary of the latest BNB Chain news",
-      quality_standards: "At least 5 sourced items, no older than 48h",
-    },
-  };
+/** POST a single-skill A2A `message/send` and return the parsed JSON-RPC reply. */
+async function sendSkill(
+  messageUrl: string,
+  data: Record<string, unknown>,
+): Promise<RpcReply> {
   const rpc = {
     jsonrpc: "2.0",
     id: 1,
@@ -113,21 +160,28 @@ async function getQuote(cardUrl: string): Promise<Quote> {
         kind: "message",
         role: "user",
         messageId: randomUUID(),
-        parts: [{ kind: "data", data: inquiry }],
+        parts: [{ kind: "data", data }],
       },
     },
   };
-  const reply = (await (
-    await fetch(card.url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(rpc),
-      signal: AbortSignal.timeout(30_000),
-    })
-  ).json()) as {
-    error?: { message: string };
-    result?: { parts: { data: Quote }[] };
-  };
+  const resp = await fetch(messageUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(rpc),
+    signal: AbortSignal.timeout(30_000),
+  });
+  return (await resp.json()) as RpcReply;
+}
+
+async function negotiate(messageUrl: string): Promise<Quote> {
+  const reply = await sendSkill(messageUrl, {
+    skill: "negotiate-erc8183-job",
+    task_description: "Summarize the latest BNB Chain ecosystem news",
+    terms: {
+      deliverables: "One markdown summary of the latest BNB Chain news",
+      quality_standards: "At least 5 sourced items, no older than 48h",
+    },
+  });
   if (reply.error) {
     throw new Error(`A2A error: ${reply.error.message}`);
   }
@@ -141,13 +195,13 @@ async function getQuote(cardUrl: string): Promise<Quote> {
   return quote;
 }
 
-async function fundJob(quote: Quote): Promise<void> {
+async function fundJob(quote: Quote): Promise<bigint | null> {
   const buyerKey = process.env.BUYER_PRIVATE_KEY;
   if (!buyerKey) {
     console.log(
       "[on-chain] BUYER_PRIVATE_KEY not set — stopping after quote (chain-free run)",
     );
-    return;
+    return null;
   }
   const wallet = new EVMWalletProvider({
     password: process.env.BUYER_WALLET_PASSWORD ?? "demo-password",
@@ -180,11 +234,42 @@ async function fundJob(quote: Quote): Promise<void> {
   await client.setBudget(jobId, price);
   await client.fund(jobId, price);
   console.log(`[on-chain] job ${jobId} FUNDED with ${price} raw units`);
+  return jobId;
+}
+
+/**
+ * Read the funded job's on-chain status once, via this example server's
+ * `erc8183-job-status` skill.
+ *
+ * Two delivery models — mind the difference:
+ *   • THIS example server negotiates and reads status but performs NO
+ *     delivery, so the job stays FUNDED; a single read shows the lifecycle
+ *     without spinning forever.
+ *   • A studio-style seller delivers on a PUSH signal instead: after funding,
+ *     the buyer sends an A2A `{"skill":"notify_funded","job_id":<int>}` message
+ *     to trigger delivery, then polls the CHAIN for the job reaching SUBMITTED
+ *     to read the deliverable_url. There is no server-side job-query endpoint.
+ */
+async function checkStatus(messageUrl: string, jobId: bigint): Promise<void> {
+  const reply = await sendSkill(messageUrl, {
+    skill: "erc8183-job-status",
+    job_id: Number(jobId),
+  });
+  if (reply.error) {
+    console.warn(`[status] lookup failed: ${reply.error.message}`);
+    return;
+  }
+  const status = reply.result?.parts[0]?.data ?? {};
+  console.log(`[status] job ${jobId} → ${JSON.stringify(status)}`);
 }
 
 async function main(): Promise<void> {
-  const quote = await getQuote(await discoverCardUrl());
-  await fundJob(quote);
+  const messageUrl = await resolveMessageUrl(await discoverBaseUrl());
+  const quote = await negotiate(messageUrl);
+  const jobId = await fundJob(quote);
+  if (jobId !== null) {
+    await checkStatus(messageUrl, jobId);
+  }
 }
 
 main().catch((error) => {

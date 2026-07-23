@@ -12,7 +12,10 @@ import {
   setDefaultReceiptTimeout,
 } from "../src/core/txConfig.js";
 import { TransactionPendingError } from "../src/errors.js";
-import { RelaySubmissionUnverifiedError } from "../src/index.js";
+import {
+  RelayFallbackFailedError,
+  RelaySubmissionUnverifiedError,
+} from "../src/index.js";
 import type { ContractCall, Intent } from "../src/wallets/intents.js";
 import { LocalExecutor } from "../src/wallets/localExecutor.js";
 import {
@@ -398,6 +401,7 @@ describe("LocalExecutor: sponsored path", () => {
       walletProvider: new StubWallet(),
       paymaster,
       receiptTimeout: 1,
+      selfPayFallback: false,
     });
 
     const errorPromise = executor.execute(makeIntent()).catch((error) => error);
@@ -511,6 +515,7 @@ describe("LocalExecutor: sponsored path", () => {
       walletProvider: new StubWallet(),
       paymaster,
       receiptTimeout: 1,
+      selfPayFallback: false,
     });
 
     const errorPromise = executor.execute(makeIntent()).catch((error) => error);
@@ -576,6 +581,7 @@ describe("LocalExecutor: relay hash consistency", () => {
       walletProvider: new StubWallet(),
       paymaster,
       receiptTimeout: 1,
+      selfPayFallback: false,
     });
 
     const errorPromise = executor.execute(makeIntent()).catch((error) => error);
@@ -622,6 +628,7 @@ describe("LocalExecutor: unseen relay hash fail-fast", () => {
       walletProvider: new StubWallet(),
       paymaster,
       receiptTimeout: 300,
+      selfPayFallback: false,
     });
 
     const errorPromise = executor.execute(makeIntent()).catch((error) => error);
@@ -737,5 +744,250 @@ describe("LocalExecutor: receipt timeout resolution", () => {
     });
     await vi.advanceTimersByTimeAsync(42_000);
     expect((caught as TransactionPendingError).timeoutSeconds).toBe(42);
+  });
+});
+
+describe("LocalExecutor: self-pay fallback after unverified relay", () => {
+  /** A mined-and-successful receipt for `hash`. */
+  function receiptFor(hash: `0x${string}`) {
+    return {
+      status: "0x1",
+      blockNumber: "0x1",
+      blockHash: `0x${"aa".repeat(32)}`,
+      transactionHash: hash,
+      transactionIndex: "0x0",
+      from: WALLET_ADDRESS,
+      to: CONTRACT_ADDRESS,
+      cumulativeGasUsed: "0x1e8480",
+      gasUsed: "0x186a0",
+      contractAddress: null,
+      logs: [],
+      logsBloom: `0x${"0".repeat(512)}`,
+      effectiveGasPrice: "0x3b9aca00",
+    };
+  }
+
+  it("re-signs the same nonce and self-pays when the relay never lands", async () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mock = mockPublicClient({
+      // Relay hash never lands; the direct self-pay hash (FAKE_TX_HASH) does.
+      eth_getTransactionReceipt: (params) => {
+        if (params[0] === FAKE_TX_HASH) return receiptFor(FAKE_TX_HASH);
+        throw new Error("not found");
+      },
+    });
+    const wallet = new StubWallet();
+    const { paymaster } = makeFakePaymaster();
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: wallet,
+      paymaster,
+      receiptTimeout: 1,
+    });
+
+    const promise = executor.execute(makeIntent());
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await promise;
+
+    expect(result.status).toBe(1);
+    expect(result.transactionHash).toBe(FAKE_TX_HASH);
+    // Exactly one direct (self-pay) broadcast through the client.
+    expect(sendRawCount(mock)).toBe(1);
+    // The self-pay tx reused the sponsored nonce (7) with a real gas price.
+    const selfPayTx = wallet.signedTxs.at(-1);
+    expect(selfPayTx?.nonce).toBe(7);
+    expect(selfPayTx?.gasPrice).toBe(1_200_000_000n);
+    expect(
+      warnSpy.mock.calls.some((args) => String(args[0]).includes("SELF-PAID")),
+    ).toBe(true);
+  });
+
+  it("skips re-broadcast if the relay tx has already landed at the re-check", async () => {
+    // The relay tx surfaces the moment the fallback re-checks (before any
+    // self-pay broadcast): the relay result is returned and nothing is sent.
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    let broadcastAttempted = false;
+    const mock = mockPublicClient({
+      eth_getTransactionReceipt: (params) => {
+        if (params[0] === PAYMASTER_TX_HASH && broadcastAttempted) {
+          return receiptFor(PAYMASTER_TX_HASH);
+        }
+        throw new Error("not found");
+      },
+      // A nonce conflict routes back through the relay re-check; the relay tx
+      // is found there, so no re-nonce ever happens.
+      eth_sendRawTransaction: () => {
+        broadcastAttempted = true;
+        throw new Error("nonce too low");
+      },
+    });
+    const { paymaster } = makeFakePaymaster();
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: new StubWallet(),
+      paymaster,
+      receiptTimeout: 1,
+    });
+
+    const promise = executor.execute(makeIntent());
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await promise;
+
+    expect(result.status).toBe(1);
+    expect(result.transactionHash).toBe(PAYMASTER_TX_HASH);
+  });
+
+  it("throws RelayFallbackFailedError when the wallet cannot self-pay", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mock = mockPublicClient({
+      eth_getTransactionReceipt: () => {
+        throw new Error("not found");
+      },
+      eth_sendRawTransaction: () => {
+        throw new Error(
+          "insufficient funds for gas * price + value: balance 0",
+        );
+      },
+    });
+    const { paymaster } = makeFakePaymaster();
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: new StubWallet(),
+      paymaster,
+      receiptTimeout: 1,
+    });
+
+    const promise = executor.execute(makeIntent()).catch((e) => e);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const error = await promise;
+
+    expect(error).toBeInstanceOf(RelayFallbackFailedError);
+    expect(error).toBeInstanceOf(RelaySubmissionUnverifiedError);
+    expect(String((error as Error).message)).toMatch(/insufficient BNB/);
+    expect(String((error as Error).message)).toMatch(/tBNB faucet/);
+  });
+
+  it("rethrows the original unverified error on a nonce conflict when the relay tx is still absent", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mock = mockPublicClient({
+      eth_getTransactionReceipt: () => {
+        throw new Error("not found");
+      },
+      eth_sendRawTransaction: () => {
+        throw new Error("nonce too low");
+      },
+    });
+    const { paymaster } = makeFakePaymaster();
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: new StubWallet(),
+      paymaster,
+      receiptTimeout: 1,
+    });
+
+    const promise = executor.execute(makeIntent()).catch((e) => e);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const error = await promise;
+
+    expect(error).toBeInstanceOf(RelaySubmissionUnverifiedError);
+    expect(error).not.toBeInstanceOf(RelayFallbackFailedError);
+    expect(String((error as Error).message)).toMatch(
+      /BNBAGENT_USE_PAYMASTER=0/,
+    );
+  });
+
+  it("returns the relay result if the self-pay stays pending but the relay tx wins the race", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    let broadcastAttempted = false;
+    const mock = mockPublicClient({
+      eth_getTransactionReceipt: (params) => {
+        // Relay tx lands only after the self-pay broadcast; the self-pay hash
+        // itself never confirms.
+        if (params[0] === PAYMASTER_TX_HASH && broadcastAttempted) {
+          return receiptFor(PAYMASTER_TX_HASH);
+        }
+        throw new Error("not found");
+      },
+      eth_sendRawTransaction: () => {
+        broadcastAttempted = true;
+        return FAKE_TX_HASH;
+      },
+    });
+    const { paymaster } = makeFakePaymaster();
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: new StubWallet(),
+      paymaster,
+      receiptTimeout: 1,
+    });
+
+    const promise = executor.execute(makeIntent());
+    await vi.advanceTimersByTimeAsync(1_000); // sponsored wait -> fallback broadcasts
+    await vi.advanceTimersByTimeAsync(1_000); // self-pay wait times out -> re-check relay
+    const result = await promise;
+
+    expect(result.status).toBe(1);
+    expect(result.transactionHash).toBe(PAYMASTER_TX_HASH);
+  });
+
+  it("engages the fallback at relayUnseenTimeout, not the full receipt timeout", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mock = mockPublicClient({
+      eth_getTransactionReceipt: (params) => {
+        if (params[0] === FAKE_TX_HASH) return receiptFor(FAKE_TX_HASH);
+        throw new Error("not found");
+      },
+    });
+    const { paymaster } = makeFakePaymaster();
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: new StubWallet(),
+      paymaster,
+      receiptTimeout: 300,
+      relayUnseenTimeout: 5,
+    });
+
+    let outcome: unknown = "unsettled";
+    const promise = executor.execute(makeIntent()).then((v) => {
+      outcome = v;
+      return v;
+    });
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(outcome).toBe("unsettled"); // 5s window not yet reached
+    await vi.advanceTimersByTimeAsync(1_500);
+    const result = await promise;
+    expect((result as { transactionHash: string }).transactionHash).toBe(
+      FAKE_TX_HASH,
+    ); // self-paid well before the 300s receipt timeout
+  });
+
+  it("leaves the pre-send guardrail intact: selfPayFallback=false still surfaces the raw unverified error", async () => {
+    vi.useFakeTimers();
+    const mock = mockPublicClient({
+      eth_getTransactionReceipt: () => {
+        throw new Error("not found");
+      },
+    });
+    const { paymaster } = makeFakePaymaster();
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: new StubWallet(),
+      paymaster,
+      receiptTimeout: 1,
+      selfPayFallback: false,
+    });
+
+    const promise = executor.execute(makeIntent()).catch((e) => e);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const error = await promise;
+
+    expect(error).toBeInstanceOf(RelaySubmissionUnverifiedError);
+    expect(sendRawCount(mock)).toBe(0); // no self-pay broadcast
   });
 });

@@ -134,6 +134,23 @@ describe("AgentEndpoint.a2a", () => {
     );
   });
 
+  it("inserts the path before a query string (AgentCore invoke URL)", () => {
+    // Regression for BUG-025: naive concatenation wedged the discovery path
+    // after `?qualifier=DEFAULT`, producing an unreachable URL.
+    const ep = AgentEndpoint.a2a(
+      "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/rt%2Fabc/invocations?qualifier=DEFAULT",
+    );
+    expect(ep.endpoint).toBe(
+      "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/rt%2Fabc/invocations/.well-known/agent-card.json?qualifier=DEFAULT",
+    );
+  });
+
+  it("does not double the path when already present with a query string", () => {
+    const url =
+      "https://host.example/invocations/.well-known/agent-card.json?qualifier=DEFAULT";
+    expect(AgentEndpoint.a2a(url).endpoint).toBe(url);
+  });
+
   it("passes version and capabilities through", () => {
     const ep = AgentEndpoint.a2a("https://agent.example", {
       version: "0.3.0",

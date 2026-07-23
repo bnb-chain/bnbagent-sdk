@@ -138,6 +138,11 @@ function makeUnverifiedRelayContract() {
     isSponsorable: async () => true,
     ethSendRawTransaction: async () => SIGNED_TX_HASH,
   } as unknown as Paymaster;
+  // The relay accepts the hash but the chain never sees it; the self-pay
+  // fallback then also cannot broadcast (wallet out of gas), so the executor
+  // surfaces a RelayFallbackFailedError — a RelaySubmissionUnverifiedError
+  // subclass that still carries the relay hash. That is the error shape the
+  // ERC-8004 write wrappers must propagate untouched.
   return makeContract(
     {
       eth_getTransactionReceipt: () => {
@@ -145,6 +150,11 @@ function makeUnverifiedRelayContract() {
       },
       eth_getTransactionByHash: () => {
         throw new Error("not found");
+      },
+      eth_sendRawTransaction: () => {
+        throw new Error(
+          "insufficient funds for gas * price + value: balance 0",
+        );
       },
     },
     paymaster,

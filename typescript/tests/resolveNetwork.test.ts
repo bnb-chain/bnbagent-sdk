@@ -54,6 +54,71 @@ describe("resolveNetwork precedence", () => {
     expect(nc.usePaymaster).toBe(false);
   });
 
+  it("loopback overrides disable the paymaster regardless of scheme/host", () => {
+    for (const url of [
+      "https://localhost:8545",
+      "http://127.0.0.1:8545",
+      "http://[::1]:8545",
+      "ws://localhost:8545",
+    ]) {
+      vi.stubEnv("RPC_URL_BSC_TESTNET", url);
+      expect(resolveNetwork("bsc-testnet").usePaymaster).toBe(false);
+    }
+  });
+
+  it("a remote RPC override inherits the preset's usePaymaster", () => {
+    // Regression for BUG-023: a non-localhost override must NOT force the
+    // paymaster on — it inherits whatever the preset declared.
+    vi.stubEnv("RPC_URL_BSC_TESTNET", "https://bsc-testnet.publicnode.com");
+    const nc = resolveNetwork("bsc-testnet");
+    expect(nc.usePaymaster).toBe(NETWORKS["bsc-testnet"].usePaymaster);
+    expect(nc.rpcUrl).toBe("https://bsc-testnet.publicnode.com");
+  });
+
+  it("BNBAGENT_USE_PAYMASTER=0 disables the paymaster with no RPC override", () => {
+    vi.stubEnv("BNBAGENT_USE_PAYMASTER", "0");
+    expect(resolveNetwork("bsc-testnet").usePaymaster).toBe(false);
+  });
+
+  it("BNBAGENT_USE_PAYMASTER=1 beats the localhost inference", () => {
+    vi.stubEnv("RPC_URL_BSC_TESTNET", "http://localhost:8545");
+    vi.stubEnv("BNBAGENT_USE_PAYMASTER", "1");
+    expect(resolveNetwork("bsc-testnet").usePaymaster).toBe(true);
+  });
+
+  it("BNBAGENT_USE_PAYMASTER=0 wins even under a remote override", () => {
+    vi.stubEnv("RPC_URL_BSC_TESTNET", "https://bsc-testnet.publicnode.com");
+    vi.stubEnv("BNBAGENT_USE_PAYMASTER", "0");
+    expect(resolveNetwork("bsc-testnet").usePaymaster).toBe(false);
+  });
+
+  it("an invalid BNBAGENT_USE_PAYMASTER is ignored (inherits preset)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubEnv("BNBAGENT_USE_PAYMASTER", "yes");
+    expect(resolveNetwork("bsc-testnet").usePaymaster).toBe(
+      NETWORKS["bsc-testnet"].usePaymaster,
+    );
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
+  it("BNBAGENT_USE_PAYMASTER is ignored for an explicit NetworkConfig object", () => {
+    vi.stubEnv("BNBAGENT_USE_PAYMASTER", "1");
+    const explicit: NetworkConfig = {
+      name: "bsc-testnet",
+      chainId: 97,
+      rpcUrl: "https://mine.example.com",
+      usePaymaster: false,
+      registryContract: "",
+      commerceContract: "",
+      routerContract: "",
+      policyContract: "",
+    };
+    const nc = resolveNetwork(explicit);
+    expect(nc).toBe(explicit);
+    expect(nc.usePaymaster).toBe(false);
+  });
+
   it("preserves chain metadata under an override", () => {
     vi.stubEnv("RPC_URL_BSC_TESTNET", "https://testnet.example.com");
     const nc = resolveNetwork("bsc-testnet");

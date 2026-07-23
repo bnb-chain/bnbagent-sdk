@@ -90,19 +90,18 @@ export class AgentEndpoint {
    * Appends the spec-defined agent-card discovery path
    * (`/.well-known/agent-card.json`) unless `baseUrl` already ends with it,
    * so the registered endpoint is always the discovery document a buyer can
-   * fetch directly.
+   * fetch directly. The append is query-string-aware: an AgentCore invoke URL
+   * carries `?qualifier=DEFAULT`, and naive concatenation would wedge the path
+   * after the query (`…/invocations?qualifier=DEFAULT/.well-known/…`) and yield
+   * an invalid URL — the path is inserted before the query/fragment instead.
    */
   static a2a(
     baseUrl: string,
     opts: { version?: string | null; capabilities?: string[] | null } = {},
   ): AgentEndpoint {
-    let url = baseUrl.replace(/\/+$/, "");
-    if (!url.endsWith(AgentEndpoint.A2A_WELL_KNOWN_PATH)) {
-      url += AgentEndpoint.A2A_WELL_KNOWN_PATH;
-    }
     return new AgentEndpoint({
       name: "A2A",
-      endpoint: url,
+      endpoint: appendAgentCardPath(baseUrl),
       version: opts.version ?? null,
       capabilities: opts.capabilities ?? [],
     });
@@ -127,4 +126,30 @@ export class AgentEndpoint {
       capabilities: opts.capabilities ?? [],
     });
   }
+}
+
+/**
+ * Append the A2A agent-card discovery path to `baseUrl`, preserving any query
+ * string and fragment. Absolute URLs are parsed so the path is inserted before
+ * the query (`…/invocations?qualifier=DEFAULT` →
+ * `…/invocations/.well-known/agent-card.json?qualifier=DEFAULT`); inputs that
+ * do not parse as absolute URLs fall back to trailing-slash-trimmed
+ * concatenation. In both forms a URL already ending in the discovery path is
+ * returned unchanged.
+ */
+function appendAgentCardPath(baseUrl: string): string {
+  const wellKnown = AgentEndpoint.A2A_WELL_KNOWN_PATH;
+  const raw = String(baseUrl ?? "").trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    const trimmed = raw.replace(/\/+$/, "");
+    return trimmed.endsWith(wellKnown) ? trimmed : `${trimmed}${wellKnown}`;
+  }
+  let path = parsed.pathname.replace(/\/+$/, "");
+  if (!path.endsWith(wellKnown)) {
+    path = path ? `${path}${wellKnown}` : wellKnown;
+  }
+  return `${parsed.protocol}//${parsed.host}${path}${parsed.search}${parsed.hash}`;
 }

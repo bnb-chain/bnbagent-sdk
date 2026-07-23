@@ -126,6 +126,20 @@ class TestA2AConstructor:
         ep = AgentEndpoint.a2a("https://host.example/agents/foo")
         assert ep.endpoint == "https://host.example/agents/foo/.well-known/agent-card.json"
 
+    def test_inserts_path_before_query_string(self):
+        # Regression for BUG-025: the discovery path must land before
+        # ?qualifier=DEFAULT, not after it.
+        ep = AgentEndpoint.a2a(
+            "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/rt%2Fabc/invocations?qualifier=DEFAULT"
+        )
+        assert ep.endpoint == (
+            "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/rt%2Fabc/invocations/.well-known/agent-card.json?qualifier=DEFAULT"
+        )
+
+    def test_no_double_path_with_query_string(self):
+        url = "https://host.example/invocations/.well-known/agent-card.json?qualifier=DEFAULT"
+        assert AgentEndpoint.a2a(url).endpoint == url
+
     def test_version_and_capabilities_passthrough(self):
         ep = AgentEndpoint.a2a("https://agent.example", version="0.3.0", capabilities=["chat"])
         assert ep.version == "0.3.0"

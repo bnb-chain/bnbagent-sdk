@@ -11,9 +11,11 @@
  *
  * Env var surface
  * ---------------
- * `resolveNetwork` is intentionally narrow: it only reads `RPC_URL`.
- * Module-scoped env vars are owned by the corresponding module config. The
- * project-root `.env.example` is the authoritative reference.
+ * `resolveNetwork` reads only two env families: the `RPC_URL` overrides
+ * (`RPC_URL` / `RPC_URL_<NETWORK>`) and the tri-state paymaster toggle
+ * `BNBAGENT_USE_PAYMASTER` (`"1"` force on, `"0"` force off, unset = inherit
+ * the preset). Module-scoped env vars are owned by the corresponding module
+ * config. The project-root `.env.example` is the authoritative reference.
  */
 
 import { getEnv } from "./core/envUtil.js";
@@ -85,6 +87,15 @@ export const NETWORKS: Record<string, NetworkConfig> = {
  *    `RPC_URL_BSC_MAINNET` (preset name uppercased, `-` → `_`).
  * 2. `RPC_URL` — global, network-agnostic.
  * 3. The preset default.
+ *
+ * `usePaymaster` precedence, independent of the RPC one:
+ *
+ * 1. `BNBAGENT_USE_PAYMASTER` — explicit tri-state escape hatch, wins over
+ *    everything (the way to bypass a flaky relay without editing code).
+ * 2. A loopback RPC override (`localhost` / `127.0.0.1` / `[::1]`) forces it
+ *    off — a local dev node is never behind the MegaFuel relay.
+ * 3. The preset's own value — a remote RPC override inherits it rather than
+ *    silently re-enabling a paymaster the preset opted out of.
  */
 export function resolveNetwork(
   network: string | NetworkConfig = "bsc-testnet",
@@ -100,13 +111,54 @@ export function resolveNetwork(
 
   const perNetworkKey = `RPC_URL_${nc.name.toUpperCase().replace(/-/g, "_")}`;
   const rpcOverride = getEnv(perNetworkKey) ?? getEnv("RPC_URL");
+  const envPaymaster = paymasterEnvOverride();
+
   if (rpcOverride) {
-    const usePaymaster = !rpcOverride.startsWith("http://localhost");
-    return {
-      ...nc,
-      rpcUrl: rpcOverride,
-      usePaymaster,
-    };
+    const usePaymaster =
+      envPaymaster ?? (isLocalRpcUrl(rpcOverride) ? false : nc.usePaymaster);
+    return { ...nc, rpcUrl: rpcOverride, usePaymaster };
+  }
+
+  // No RPC override, but an explicit env toggle must still apply — otherwise
+  // `BNBAGENT_USE_PAYMASTER=0` could not disable a flaky relay on the default
+  // preset RPC. When the env is unset the preset is returned identity-same.
+  if (envPaymaster !== undefined && envPaymaster !== nc.usePaymaster) {
+    return { ...nc, usePaymaster: envPaymaster };
   }
   return nc;
+}
+
+/**
+ * Tri-state read of `BNBAGENT_USE_PAYMASTER`: `"1"` → `true`, `"0"` → `false`,
+ * unset/empty → `undefined` (inherit). Any other value is ignored with a
+ * warning so a typo never silently flips gas sponsorship.
+ */
+function paymasterEnvOverride(): boolean | undefined {
+  const raw = getEnv("BNBAGENT_USE_PAYMASTER");
+  if (raw === undefined) return undefined;
+  if (raw === "1") return true;
+  if (raw === "0") return false;
+  console.warn(
+    `[resolveNetwork] ignoring BNBAGENT_USE_PAYMASTER='${raw}' — expected '0' or '1'.`,
+  );
+  return undefined;
+}
+
+/**
+ * True when `url`'s host is loopback (any scheme/port). Unparseable URLs are
+ * treated as non-local.
+ */
+function isLocalRpcUrl(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return false;
+  }
+  return (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "[::1]" ||
+    host === "::1"
+  );
 }

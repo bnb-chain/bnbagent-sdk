@@ -172,9 +172,38 @@ export class RelaySubmissionUnverifiedError extends BNBAgentError {
   ) {
     super(
       message ||
-        `Relay returned transaction ${txHash}, but the chain RPC never observed it within ${timeoutSeconds}s.`,
+        `Relay returned transaction ${txHash}, but the chain RPC never observed it within ${timeoutSeconds}s. This matches a known MegaFuel relay failure mode (a hash is returned but the tx is never broadcast, seen most often on testnet). To bypass sponsorship and self-pay gas, set BNBAGENT_USE_PAYMASTER=0 or pass resolveNetwork a NetworkConfig with usePaymaster: false.`,
     );
     this.name = "RelaySubmissionUnverifiedError";
+  }
+}
+
+/**
+ * The relay accepted a transaction but never broadcast it, AND the automatic
+ * self-pay fallback could not be sent — the wallet has no BNB for gas, or the
+ * self-pay broadcast failed for a non-nonce reason.
+ *
+ * Extends {@link RelaySubmissionUnverifiedError} so every existing
+ * classification site (retryable=false, `tx_unverified` mapping) treats it
+ * exactly like an unverified relay submission: the nonce state is ambiguous,
+ * so blind resubmission is unsafe.
+ */
+export class RelayFallbackFailedError extends RelaySubmissionUnverifiedError {
+  constructor(
+    txHash: string,
+    timeoutSeconds: number,
+    public readonly fallbackReason: string,
+    options?: { cause?: unknown },
+  ) {
+    super(
+      txHash,
+      timeoutSeconds,
+      `Relay returned transaction ${txHash} but never broadcast it, and the self-pay fallback could not be sent: ${fallbackReason}. Fund the wallet (tBNB faucet on testnet) and retry, or wait for the relay to recover.`,
+    );
+    this.name = "RelayFallbackFailedError";
+    if (options?.cause !== undefined) {
+      this.cause = options.cause;
+    }
   }
 }
 

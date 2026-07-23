@@ -46,6 +46,7 @@ export {
   NegotiationError,
   TransactionPendingError,
   RelaySubmissionUnverifiedError,
+  RelayFallbackFailedError,
   ERC8004PartialRegistrationError,
 } from "./errors.js";
 
