@@ -13,6 +13,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Paymaster } from "../src/core/paymaster.js";
 import { ERC8183Config } from "../src/erc8183/config.js";
 import {
+  RelaySubmissionUnverifiedError,
+  TransactionPendingError,
+} from "../src/errors.js";
+import {
   BROADCAST_SELF,
   CALLS_ARBITRARY,
   INTENTS_ERC8004,
@@ -218,9 +222,12 @@ describe("TWAKProvider — address and identity", () => {
 
 // ── intent dispatch: exact argv ──
 
-function ctx(paymaster?: Paymaster): ExecutionContext {
+function ctx(
+  paymaster?: Paymaster,
+  client: ExecutionContext["client"] = {} as ExecutionContext["client"],
+): ExecutionContext {
   return {
-    client: {} as ExecutionContext["client"],
+    client,
     ...(paymaster ? { paymaster } : {}),
   };
 }
@@ -484,6 +491,69 @@ describe("TWAKProvider — --paymaster-url forwarding", () => {
     );
     await twak.execute({ name: ERC8183_DISPUTE, kwargs: { jobId: 137n } });
     expect(calls[1]).not.toContain("--paymaster-url");
+  });
+});
+
+describe("TWAKProvider — sponsored receipt-timeout classification", () => {
+  const hash = `0x${"ab".repeat(32)}` as const;
+  const timeoutResult = {
+    code: 1,
+    stdout: JSON.stringify({
+      error: `Timed out waiting for receipt ${hash} on bsctestnet`,
+      errorCode: "NETWORK_ERROR",
+    }),
+  };
+
+  it("marks a relay hash unseen by the public RPC as unverified", async () => {
+    installRouter((args) => (args[0] === "wallet" ? STATUS_OK : timeoutResult));
+    const getTransaction = vi.fn().mockRejectedValue(new Error("not found"));
+    const twak = new TWAKProvider({ chain: "bsctestnet" });
+    twak.makeExecutor(
+      ctx(new Paymaster(PM_URL), {
+        getTransaction,
+      } as unknown as ExecutionContext["client"]),
+    );
+
+    let caught: unknown;
+    try {
+      await twak.execute({
+        name: ERC8183_DISPUTE,
+        kwargs: { jobId: 1n },
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(RelaySubmissionUnverifiedError);
+    expect(caught).toMatchObject({ txHash: hash });
+    expect(String(caught)).toContain("Do not retry blindly");
+    expect(getTransaction).toHaveBeenCalledWith({ hash });
+  });
+
+  it("marks a public-chain-visible hash as pending", async () => {
+    installRouter((args) => (args[0] === "wallet" ? STATUS_OK : timeoutResult));
+    const getTransaction = vi.fn().mockResolvedValue({ hash });
+    const twak = new TWAKProvider({ chain: "bsctestnet" });
+    twak.makeExecutor(
+      ctx(new Paymaster(PM_URL), {
+        getTransaction,
+      } as unknown as ExecutionContext["client"]),
+    );
+
+    let caught: unknown;
+    try {
+      await twak.execute({
+        name: ERC8183_DISPUTE,
+        kwargs: { jobId: 1n },
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(TransactionPendingError);
+    expect(caught).toMatchObject({ txHash: hash });
+    expect(String(caught)).toContain("Do not retry");
+    expect(getTransaction).toHaveBeenCalledWith({ hash });
   });
 });
 

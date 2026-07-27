@@ -86,8 +86,8 @@ export interface Intent {
  *
  * A pure-signing wallet has no chain connection of its own, so to broadcast
  * it must be handed one. This carries that connection (and an optional
- * paymaster) to {@link WalletProvider.makeExecutor}. Self-broadcasting
- * wallets ignore it.
+ * paymaster) to {@link WalletProvider.makeExecutor}. A self-broadcasting
+ * wallet may still use the public client to reconcile its backend's result.
  */
 export interface ExecutionContext {
   client: PublicClient;

@@ -39,6 +39,10 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { hashMessage, recoverMessageAddress } from "viem";
 import {
+  RelaySubmissionUnverifiedError,
+  TransactionPendingError,
+} from "../../errors.js";
+import {
   BROADCAST_SELF,
   INTENTS_ERC8004,
   INTENTS_ERC8183,
@@ -76,6 +80,9 @@ import { TwakX402Payer, type TwakX402PayerOptions } from "./x402.js";
 
 /** Default per-CLI-invocation timeout. */
 export const DEFAULT_TWAK_TIMEOUT_MS = 120_000;
+
+/** twak v0.20.0's default public-receipt wait before it emits NETWORK_ERROR. */
+const TWAK_RECEIPT_TIMEOUT_SECONDS = 60;
 
 /** twak chain keys for BNB Smart Chain (the CLI rejects `bsc-testnet`). */
 const DEFAULT_CHAIN = "bsc";
@@ -125,6 +132,38 @@ interface TwakExecResult {
   code: number;
   stdout: string;
   stderr: string;
+}
+
+interface TwakReceiptTimeout {
+  txHash: `0x${string}`;
+  chain: string;
+}
+
+function parseReceiptTimeout(
+  result: TwakExecResult,
+): TwakReceiptTimeout | null {
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(result.stdout) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  if (
+    payload.errorCode !== "NETWORK_ERROR" ||
+    typeof payload.error !== "string"
+  ) {
+    return null;
+  }
+  const match =
+    /^Timed out waiting for receipt (0x[0-9a-fA-F]{64}) on (\S+)$/.exec(
+      payload.error.trim(),
+    );
+  return match
+    ? {
+        txHash: match[1] as `0x${string}`,
+        chain: match[2] as string,
+      }
+    : null;
 }
 
 type TwakExec = (
@@ -312,6 +351,8 @@ export class TWAKProvider extends WalletProvider implements IntentExecutor {
    * write command as `--paymaster-url` (twak v0.20.0, REQ-2).
    */
   #paymasterUrl: string | null = null;
+  /** Public RPC client used only to reconcile sponsored receipt timeouts. */
+  #publicClient: ExecutionContext["client"] | null = null;
 
   constructor(opts: TWAKProviderOptions = {}) {
     super();
@@ -391,7 +432,38 @@ export class TWAKProvider extends WalletProvider implements IntentExecutor {
     } catch (error) {
       throw this.#spawnError(cmd, error);
     }
+    const receiptTimeout =
+      this.#paymasterUrl === null ? null : parseReceiptTimeout(result);
+    if (receiptTimeout?.chain === this.#chain) {
+      throw await this.#classifySponsoredReceiptTimeout(receiptTimeout);
+    }
     return this.#interpret(cmd, result);
+  }
+
+  async #classifySponsoredReceiptTimeout(
+    timeout: TwakReceiptTimeout,
+  ): Promise<Error> {
+    let publicTxVisible = false;
+    try {
+      const transaction = await this.#publicClient?.getTransaction({
+        hash: timeout.txHash,
+      });
+      publicTxVisible = transaction !== null && transaction !== undefined;
+    } catch {
+      publicTxVisible = false;
+    }
+    if (publicTxVisible) {
+      return new TransactionPendingError(
+        timeout.txHash,
+        TWAK_RECEIPT_TIMEOUT_SECONDS,
+        `TWAK sponsored transaction ${timeout.txHash} is visible on the public chain, but TWAK timed out waiting for its receipt. Do not retry until the transaction or job state is reconciled.`,
+      );
+    }
+    return new RelaySubmissionUnverifiedError(
+      timeout.txHash,
+      TWAK_RECEIPT_TIMEOUT_SECONDS,
+      `TWAK sponsored relay returned transaction ${timeout.txHash}, but the SDK could not verify it on the public chain after TWAK timed out waiting for its receipt. Do not retry blindly; reconcile the relay transaction and wallet nonce before issuing another write.`,
+    );
   }
 
   /** Sync variant for the base-class `address` getter / `exists()` only. */
@@ -746,12 +818,13 @@ export class TWAKProvider extends WalletProvider implements IntentExecutor {
 
   /**
    * This wallet broadcasts its own transactions, so it *is* its own
-   * executor. The web3 `context` client is not needed; a paymaster IS
-   * honoured (twak v0.20.0, REQ-2): its URL is captured here and
-   * forwarded to every write command as `--paymaster-url`. Because the
-   * executor is the provider itself, the latest `makeExecutor` context
-   * wins — the supported shape is one client per provider (which is how
-   * the facades construct them).
+   * executor. It does not use the web3 `context` client to broadcast, but
+   * retains it to reconcile a relay hash after twak's receipt timeout. A
+   * paymaster IS honoured (twak v0.20.0, REQ-2): its URL is forwarded to
+   * every write command as `--paymaster-url`. Because the executor is the
+   * provider itself, the latest `makeExecutor` context wins — the supported
+   * shape is one client per provider (which is how the facades construct
+   * them).
    */
   override makeExecutor(context: ExecutionContext): IntentExecutor {
     const paymaster = context.paymaster;
@@ -764,6 +837,7 @@ export class TWAKProvider extends WalletProvider implements IntentExecutor {
       );
     }
     this.#paymasterUrl = url ?? null;
+    this.#publicClient = context.client;
     return this;
   }
 
