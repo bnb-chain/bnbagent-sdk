@@ -75,18 +75,15 @@ describe("resolveNetwork precedence", () => {
     expect(nc.rpcUrl).toBe("https://bsc-testnet.publicnode.com");
   });
 
-  it("bsc-testnet preset defaults to self-pay while bsc-mainnet keeps the paymaster", () => {
-    // BUG-022: the MegaFuel testnet relay can accept a tx and never broadcast
-    // it, so buyer-facing defaults must not route through it. The URL stays in
-    // the preset so an explicit opt-in needs no extra wiring.
-    expect(NETWORKS["bsc-testnet"].usePaymaster).toBe(false);
+  it("both presets stay sponsored by default (the paymaster IS the product)", () => {
+    // Product decision (BUG-022, reversed once and reverted): gasless-by-
+    // default is the point of the paymaster — 0-tBNB onboarding. Flaky-relay
+    // protection lives in the executor's self-pay fallback, relay broadcast
+    // verification, and BNBAGENT_USE_PAYMASTER=0 — never in this default.
+    expect(NETWORKS["bsc-testnet"].usePaymaster).toBe(true);
     expect(NETWORKS["bsc-testnet"].paymasterUrl).toBeTruthy();
     expect(NETWORKS["bsc-mainnet"].usePaymaster).toBe(true);
-  });
-
-  it("BNBAGENT_USE_PAYMASTER=1 opts the plain bsc-testnet preset back into sponsorship", () => {
-    vi.stubEnv("BNBAGENT_USE_PAYMASTER", "1");
-    expect(resolveNetwork("bsc-testnet").usePaymaster).toBe(true);
+    expect(NETWORKS["bsc-mainnet"].paymasterUrl).toBeTruthy();
   });
 
   it("BNBAGENT_USE_PAYMASTER=0 disables the paymaster with no RPC override", () => {

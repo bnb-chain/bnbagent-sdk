@@ -86,7 +86,7 @@ const USER_AGENT_HEADERS = { UserAgent: "bnbagent/v1.0.0" } as const;
  * falls back to self-pay rather than failing. This lets the per-(protocol,
  * network) sponsorship matrix be resolved at runtime by MegaFuel's
  * `pm_isSponsorable` — e.g. ERC-8183 mainnet writes (never sponsored)
- * self-pay automatically while opted-in testnet writes are sponsored — with no
+ * self-pay automatically while testnet writes are sponsored — with no
  * sponsorship policy hard-coded into the executor.
  */
 export class LocalExecutor implements IntentExecutor {

@@ -48,11 +48,12 @@ export const NETWORKS: Record<string, NetworkConfig> = {
     chainId: 97,
     rpcUrl: "https://data-seed-prebsc-2-s2.binance.org:8545",
     paymasterUrl: "https://bsc-megafuel-testnet.nodereal.io",
-    // Self-pay by default (BUG-022): the MegaFuel testnet relay can accept a
-    // tx and never broadcast it. Sponsorship is opt-in — BNBAGENT_USE_PAYMASTER=1
-    // or an explicit `usePaymaster: true` NetworkConfig; the URL stays so
-    // opting in needs no extra wiring.
-    usePaymaster: false,
+    // Sponsored by default: gasless UX is the paymaster's purpose (0-tBNB
+    // onboarding). The MegaFuel testnet relay can be flaky (BUG-022/029);
+    // that is handled by the executor's self-pay fallback, relay broadcast
+    // verification (RelaySubmissionUnverifiedError), and the
+    // BNBAGENT_USE_PAYMASTER=0 escape hatch — NOT by flipping this default.
+    usePaymaster: true,
     registryContract: "0x8004A818BFB912233c491871b3d84c89A494BD9e",
     commerceContract: "0xa206c0517b6371c6638cd9e4a42cc9f02a33b0de",
     routerContract: "0xd7d36d66d2f1b608a0f943f722d27e3744f66f25",

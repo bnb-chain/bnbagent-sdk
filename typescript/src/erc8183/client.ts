@@ -64,9 +64,7 @@ export const DEFAULT_APPROVE_FLOOR_UNITS = 100n;
 
 /**
  * Chain IDs where MegaFuel sponsors ERC-8183 writes, so `ERC8183Client`
- * wires a paymaster into the write path. bsc-testnet (97) is sponsorable —
- * though its preset now defaults to self-pay, so wiring needs an explicit
- * `usePaymaster` opt-in (BUG-022);
+ * wires a paymaster into the write path. bsc-testnet (97) is sponsored;
  * bsc-mainnet (56) is **never** sponsored for ERC-8183 — its writes self-pay,
  * and we don't even probe `isSponsorable` there (the hot production path).
  * If mainnet sponsorship ever lands, add 56 here — that single edit flips it.
@@ -220,10 +218,9 @@ export class ERC8183Client {
       );
     }
 
-    // Gas sponsorship: wire a paymaster into the write path only when the
-    // network opts in (usePaymaster) AND MegaFuel sponsors ERC-8183 on that
-    // chain (testnet only; mainnet never — see ERC8183_PAYMASTER_CHAIN_IDS).
-    // The executor still gates
+    // Gas sponsorship: wire a paymaster into the write path only on
+    // networks where MegaFuel sponsors ERC-8183 (testnet today; mainnet
+    // never — see ERC8183_PAYMASTER_CHAIN_IDS). The executor still gates
     // each write on isSponsorable and self-pays when it cannot sponsor, so
     // this only decides whether to *attempt* sponsorship at all.
     const paymaster = ERC8183Client.buildPaymaster(nc, debug);
