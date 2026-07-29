@@ -15,6 +15,10 @@ on:
         required: true
         default: "0.5.0"
         type: string
+      existing_version:
+        description: "Existing alpha version to repair without republishing (optional)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -59,6 +63,7 @@ jobs:
         id: version
         env:
           TARGET_VERSION: ${{ inputs.target_version }}
+          EXISTING_VERSION: ${{ inputs.existing_version }}
         run: |
           set -euo pipefail
           if [[ ! "$TARGET_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -71,19 +76,32 @@ jobs:
             exit 1
           fi
           SOURCE_SHA="$(git rev-parse HEAD)"
-          REGISTRY_ERROR="$RUNNER_TEMP/npm-view-versions.err"
-          if ! VERSIONS_JSON="$(
-            npm view "$PACKAGE_NAME" versions --json 2>"$REGISTRY_ERROR"
-          )"; then
-            if grep -q 'E404' "$REGISTRY_ERROR"; then
-              VERSIONS_JSON='[]'
-            else
-              cat "$REGISTRY_ERROR" >&2
+          if [[ -n "$EXISTING_VERSION" ]]; then
+            if [[ ! "$EXISTING_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]] ||
+              [[ "$EXISTING_VERSION" != "${TARGET_VERSION}-alpha."* ]]; then
+              echo "existing_version must match $TARGET_VERSION-alpha.N" >&2
               exit 1
             fi
-          fi
-          ALPHA_NUMBER="$(
-            TARGET_VERSION="$TARGET_VERSION" VERSIONS_JSON="$VERSIONS_JSON" node <<'NODE'
+            PUBLISHED="$(npm view "$PACKAGE_NAME@$EXISTING_VERSION" version 2>/dev/null || true)"
+            if [[ "$PUBLISHED" != "$EXISTING_VERSION" ]]; then
+              echo "existing_version is not published: $EXISTING_VERSION" >&2
+              exit 1
+            fi
+            ALPHA_VERSION="$EXISTING_VERSION"
+          else
+            REGISTRY_ERROR="$RUNNER_TEMP/npm-view-versions.err"
+            if ! VERSIONS_JSON="$(
+              npm view "$PACKAGE_NAME" versions --json 2>"$REGISTRY_ERROR"
+            )"; then
+              if grep -q 'E404' "$REGISTRY_ERROR"; then
+                VERSIONS_JSON='[]'
+              else
+                cat "$REGISTRY_ERROR" >&2
+                exit 1
+              fi
+            fi
+            ALPHA_NUMBER="$(
+              TARGET_VERSION="$TARGET_VERSION" VERSIONS_JSON="$VERSIONS_JSON" node <<'NODE'
           const parsed = JSON.parse(process.env.VERSIONS_JSON || "[]");
           const versions = Array.isArray(parsed)
             ? parsed
@@ -98,8 +116,9 @@ jobs:
             .map(Number);
           process.stdout.write(String(Math.max(0, ...numbers) + 1));
           NODE
-          )"
-          ALPHA_VERSION="${TARGET_VERSION}-alpha.${ALPHA_NUMBER}"
+            )"
+            ALPHA_VERSION="${TARGET_VERSION}-alpha.${ALPHA_NUMBER}"
+          fi
           npm pkg set "version=$ALPHA_VERSION"
           echo "ALPHA_VERSION=$ALPHA_VERSION" >> "$GITHUB_ENV"
           echo "alpha_version=$ALPHA_VERSION" >> "$GITHUB_OUTPUT"
@@ -223,8 +242,9 @@ jobs:
           npm dist-tag add "@bnbagent/sdk@$ALPHA_VERSION" alpha
 
           LATEST_TAG="$(npm view "@bnbagent/sdk" dist-tags.latest 2>/dev/null || true)"
-          if [[ "$LATEST_TAG" == *-* ]]; then
-            npm dist-tag rm "@bnbagent/sdk" latest
+          if [[ "$LATEST_TAG" == "$ALPHA_VERSION" ]]; then
+            echo "Refusing to leave alpha version under latest: $LATEST_TAG" >&2
+            exit 1
           fi
 
           LEGACY_QA_TAG="$(npm view "@bnbagent/sdk" dist-tags.qa 2>/dev/null || true)"
@@ -244,7 +264,7 @@ jobs:
             QA_TAG="$(npm view "@bnbagent/sdk" dist-tags.qa 2>/dev/null || true)"
             if [[ "$EXACT" == "$ALPHA_VERSION" &&
               "$ALPHA_TAG" == "$ALPHA_VERSION" &&
-              "$LATEST_TAG" != *-* &&
+              "$LATEST_TAG" != "$ALPHA_VERSION" &&
               -z "$QA_TAG" ]]; then
               exit 0
             fi
