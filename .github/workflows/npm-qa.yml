@@ -1,0 +1,246 @@
+name: Publish QA (npm)
+run-name: Publish @bnbagent/sdk ${{ inputs.target_version }} QA from ${{ inputs.source_ref }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Branch or commit SHA to publish"
+        required: true
+        type: string
+      target_version:
+        description: "Intended stable version (X.Y.Z)"
+        required: true
+        default: "0.5.0"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-qa-publish
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Verify and pack
+    runs-on: ubuntu-latest
+    outputs:
+      qa_version: ${{ steps.version.outputs.qa_version }}
+      source_sha: ${{ steps.version.outputs.source_sha }}
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: typescript/package.json
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: typescript/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Allocate the next QA version
+        id: version
+        env:
+          TARGET_VERSION: ${{ inputs.target_version }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TARGET_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "target_version must be X.Y.Z, got: $TARGET_VERSION" >&2
+            exit 1
+          fi
+          PACKAGE_NAME="$(node -p "require('./package.json').name")"
+          if [[ "$PACKAGE_NAME" != "@bnbagent/sdk" ]]; then
+            echo "Refusing to publish unexpected package: $PACKAGE_NAME" >&2
+            exit 1
+          fi
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          REGISTRY_ERROR="$RUNNER_TEMP/npm-view-versions.err"
+          if ! VERSIONS_JSON="$(
+            npm view "$PACKAGE_NAME" versions --json 2>"$REGISTRY_ERROR"
+          )"; then
+            if grep -q 'E404' "$REGISTRY_ERROR"; then
+              VERSIONS_JSON='[]'
+            else
+              cat "$REGISTRY_ERROR" >&2
+              exit 1
+            fi
+          fi
+          QA_NUMBER="$(
+            TARGET_VERSION="$TARGET_VERSION" VERSIONS_JSON="$VERSIONS_JSON" node <<'NODE'
+          const parsed = JSON.parse(process.env.VERSIONS_JSON || "[]");
+          const versions = Array.isArray(parsed)
+            ? parsed
+            : typeof parsed === "string"
+              ? [parsed]
+              : [];
+          const prefix = `${process.env.TARGET_VERSION}-qa.`;
+          const numbers = versions
+            .filter((version) => version.startsWith(prefix))
+            .map((version) => version.slice(prefix.length))
+            .filter((suffix) => /^\d+$/.test(suffix))
+            .map(Number);
+          process.stdout.write(String(Math.max(0, ...numbers) + 1));
+          NODE
+          )"
+          QA_VERSION="${TARGET_VERSION}-qa.${QA_NUMBER}"
+          npm pkg set "version=$QA_VERSION"
+          echo "QA_VERSION=$QA_VERSION" >> "$GITHUB_ENV"
+          echo "qa_version=$QA_VERSION" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Verify ABIs are in sync
+        run: |
+          pnpm run codegen
+          git diff --exit-code src/abis
+
+      - name: Check source and build
+        run: |
+          pnpm run typecheck
+          pnpm run typecheck:examples
+          pnpm run lint
+          pnpm run test
+          pnpm run build
+
+      - name: Run offline examples
+        run: |
+          pnpm run example:x402
+          pnpm run example:security
+
+      - name: Pack and verify the installable tarball
+        id: pack
+        run: |
+          set -euo pipefail
+          PACK_DIR="$RUNNER_TEMP/npm-pack"
+          CONSUMER_DIR="$(mktemp -d)"
+          mkdir -p "$PACK_DIR"
+          npm pack --json --pack-destination "$PACK_DIR" > "$RUNNER_TEMP/npm-pack.json"
+          TARBALL_NAME="$(jq -r '.[0].filename' "$RUNNER_TEMP/npm-pack.json")"
+          TARBALL_PATH="$PACK_DIR/$TARBALL_NAME"
+          test -f "$TARBALL_PATH"
+          tar -xOf "$TARBALL_PATH" package/package.json |
+            jq -e --arg version "$QA_VERSION" \
+              '.name == "@bnbagent/sdk" and .version == $version' >/dev/null
+          cd "$CONSUMER_DIR"
+          npm init -y >/dev/null
+          npm install --ignore-scripts "$TARBALL_PATH"
+          node --input-type=module -e \
+            "await import('@bnbagent/sdk'); const { getBuiltWithValue } = await import('@bnbagent/sdk/erc8004'); const expected = 'https://github.com/bnb-chain/bnbagent-sdk#v' + process.env.QA_VERSION; if (getBuiltWithValue() !== expected) throw new Error('unexpected built_with version')"
+          node -e \
+            "require('@bnbagent/sdk'); require('@bnbagent/sdk/erc8004')"
+
+      - name: Upload verified tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: bnbagent-sdk-${{ steps.version.outputs.qa_version }}
+          path: ${{ runner.temp }}/npm-pack/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish to npm
+    needs: build
+    runs-on: ubuntu-latest
+    environment: npm-qa
+    permissions:
+      contents: read
+    steps:
+      - name: Download verified tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: bnbagent-sdk-${{ needs.build.outputs.qa_version }}
+          path: package
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+
+      - name: Verify artifact identity
+        id: artifact
+        env:
+          QA_VERSION: ${{ needs.build.outputs.qa_version }}
+        run: |
+          set -euo pipefail
+          mapfile -t TARBALLS < <(find package -maxdepth 1 -type f -name '*.tgz')
+          if [[ "${#TARBALLS[@]}" -ne 1 ]]; then
+            echo "Expected exactly one tarball, found ${#TARBALLS[@]}" >&2
+            exit 1
+          fi
+          TARBALL="${TARBALLS[0]}"
+          tar -xOf "$TARBALL" package/package.json |
+            jq -e --arg version "$QA_VERSION" \
+              '.name == "@bnbagent/sdk" and .version == $version' >/dev/null
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether the exact version already exists
+        id: registry
+        env:
+          QA_VERSION: ${{ needs.build.outputs.qa_version }}
+        run: |
+          if EXISTING="$(npm view "@bnbagent/sdk@$QA_VERSION" version 2>/dev/null)" &&
+            [[ "$EXISTING" == "$QA_VERSION" ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish under the qa dist-tag
+        if: steps.registry.outputs.exists != 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: >-
+          npm publish "${{ steps.artifact.outputs.tarball }}"
+          --access public
+          --tag qa
+          --ignore-scripts
+
+      - name: Verify registry visibility and qa dist-tag
+        env:
+          QA_VERSION: ${{ needs.build.outputs.qa_version }}
+        run: |
+          set -euo pipefail
+          for attempt in {1..12}; do
+            EXACT="$(npm view "@bnbagent/sdk@$QA_VERSION" version 2>/dev/null || true)"
+            QA_TAG="$(npm view "@bnbagent/sdk" dist-tags.qa 2>/dev/null || true)"
+            if [[ "$EXACT" == "$QA_VERSION" && "$QA_TAG" == "$QA_VERSION" ]]; then
+              exit 0
+            fi
+            if [[ "$attempt" -lt 12 ]]; then
+              echo "Waiting for npm metadata ($attempt/12)"
+              sleep 5
+            fi
+          done
+          echo "npm did not expose $QA_VERSION under the qa dist-tag" >&2
+          exit 1
+
+      - name: Write install summary
+        env:
+          QA_VERSION: ${{ needs.build.outputs.qa_version }}
+          SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+        run: |
+          {
+            echo "## @bnbagent/sdk QA package"
+            echo
+            echo "- Version: \`$QA_VERSION\`"
+            echo "- Source commit: \`$SOURCE_SHA\`"
+            echo
+            echo '```bash'
+            echo "pnpm add -E @bnbagent/sdk@$QA_VERSION"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

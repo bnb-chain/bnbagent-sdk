@@ -44,7 +44,7 @@
  * TypeScript port yet).
  */
 
-import { type NetworkConfig, resolveNetwork } from "../config.js";
+import type { NetworkConfig } from "../config.js";
 import { getEnv } from "../core/envUtil.js";
 import { LocalStorageProvider } from "../storage/localStorageProvider.js";
 import type { StorageProvider } from "../storage/storageProvider.js";
@@ -54,7 +54,7 @@ import {
   TWAK_CHAIN_FOR_NETWORK,
 } from "../wallets/twak/provider.js";
 import type { WalletProvider } from "../wallets/walletProvider.js";
-import { ERC8183_ENV_PREFIX } from "./constants.js";
+import { ERC8183_ENV_PREFIX, resolveErc8183Network } from "./constants.js";
 
 /** Constructor options for {@link ERC8183Config}. */
 export interface ERC8183ConfigOpts {
@@ -213,31 +213,7 @@ export class ERC8183Config {
    * full control — env overrides are not applied.
    */
   get effectiveNetwork(): NetworkConfig {
-    const base = resolveNetwork(this.network);
-    if (typeof this.network !== "string") {
-      return base;
-    }
-    const commerceOverride = getEnv(
-      "COMMERCE_ADDRESS",
-      undefined,
-      ERC8183_ENV_PREFIX,
-    );
-    const routerOverride = getEnv(
-      "ROUTER_ADDRESS",
-      undefined,
-      ERC8183_ENV_PREFIX,
-    );
-    const policyOverride = getEnv(
-      "POLICY_ADDRESS",
-      undefined,
-      ERC8183_ENV_PREFIX,
-    );
-    return {
-      ...base,
-      commerceContract: commerceOverride ?? base.commerceContract,
-      routerContract: routerOverride ?? base.routerContract,
-      policyContract: policyOverride ?? base.policyContract,
-    };
+    return resolveErc8183Network(this.network);
   }
 
   get effectiveRpcUrl(): string {
