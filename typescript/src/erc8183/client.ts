@@ -34,7 +34,7 @@
 
 import type { PublicClient } from "viem";
 import { stringToHex } from "viem";
-import { type NetworkConfig, resolveNetwork } from "../config.js";
+import type { NetworkConfig } from "../config.js";
 import { canonicalJson } from "../core/canonicalJson.js";
 import { createPublicClientFor } from "../core/clients.js";
 import { READ_ONLY_MESSAGE } from "../core/contractBase.js";
@@ -44,6 +44,7 @@ import { MinimalERC20Client } from "../erc20/client.js";
 import type { TxResult } from "../wallets/intents.js";
 import type { WalletProvider } from "../wallets/walletProvider.js";
 import { CommerceClient, type CreateJobResult } from "./commerce.js";
+import { resolveErc8183Network } from "./constants.js";
 import { PolicyClient } from "./policy.js";
 import { RouterClient } from "./router.js";
 import {
@@ -172,6 +173,10 @@ export class ERC8183Client {
   /**
    * Create an `ERC8183Client`.
    *
+   * A string `network` resolves through the ERC-8183 env overlay
+   * (`ERC8183_*_ADDRESS` overrides apply — how a QA/staging stack is
+   * targeted); a concrete `NetworkConfig` is used as-is.
+   *
    * Connects to the network's RPC and asserts its `chain_id` matches the
    * resolved network config (defense-in-depth against a misconfigured or
    * maliciously redirected RPC URL) before returning.
@@ -187,7 +192,7 @@ export class ERC8183Client {
     const network = opts.network ?? "bsc-testnet";
     const debug = opts.debug ?? false;
 
-    const nc = resolveNetwork(network);
+    const nc = resolveErc8183Network(network);
     for (const [fieldName, key] of REQUIRED_NETWORK_FIELDS) {
       if (!nc[key]) {
         throw new Error(

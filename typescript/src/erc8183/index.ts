@@ -50,7 +50,11 @@ export {
   type SubmitOptParams,
 } from "./client.js";
 export { ERC8183Config, type ERC8183ConfigOpts } from "./config.js";
-export { ERC8183_ENV_PREFIX, getErc8183Config } from "./constants.js";
+export {
+  ERC8183_ENV_PREFIX,
+  getErc8183Config,
+  resolveErc8183Network,
+} from "./constants.js";
 export {
   ERC8183JobOps,
   type ERC8183JobOpsCreateOpts,
