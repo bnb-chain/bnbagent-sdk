@@ -217,19 +217,31 @@ jobs:
           QA_VERSION: ${{ needs.build.outputs.qa_version }}
         run: |
           set -euo pipefail
-          for attempt in {1..12}; do
-            EXACT="$(npm view "@bnbagent/sdk@$QA_VERSION" version 2>/dev/null || true)"
-            QA_TAG="$(npm view "@bnbagent/sdk" dist-tags.qa 2>/dev/null || true)"
-            if [[ "$EXACT" == "$QA_VERSION" && "$QA_TAG" == "$QA_VERSION" ]]; then
-              exit 0
+          # Poll the version document, not the packument: every `npm view` of a
+          # not-yet-published package leaves a 404 in the registry CDN, and
+          # that negative entry outlived a 60s window on the first publish
+          # (run 30444482337 went red minutes after a successful upload).
+          # The per-version document has no such history and goes live at once.
+          for attempt in {1..20}; do
+            if curl -fsS -o /dev/null \
+              "https://registry.npmjs.org/@bnbagent%2Fsdk/$QA_VERSION?cb=$attempt"
+            then
+              echo "$QA_VERSION is live on the registry"
+              break
             fi
-            if [[ "$attempt" -lt 12 ]]; then
-              echo "Waiting for npm metadata ($attempt/12)"
-              sleep 5
+            if [[ "$attempt" -eq 20 ]]; then
+              echo "::error::$QA_VERSION is still absent 5 minutes after publish" >&2
+              exit 1
             fi
+            echo "Waiting for $QA_VERSION ($attempt/20)"
+            sleep 15
           done
-          echo "npm did not expose $QA_VERSION under the qa dist-tag" >&2
-          exit 1
+          # Advisory only — the upload is done and irreversible, so packument
+          # lag must not turn a completed publish into a red run.
+          QA_TAG="$(npm view "@bnbagent/sdk" dist-tags.qa 2>/dev/null || true)"
+          if [[ "$QA_TAG" != "$QA_VERSION" ]]; then
+            echo "::warning::qa dist-tag reads '${QA_TAG:-<unset>}', expected $QA_VERSION (packument CDN lag) — recheck with 'npm view @bnbagent/sdk dist-tags'"
+          fi
 
       - name: Write install summary
         env:
