@@ -44,3 +44,32 @@ export function getErc8183Config(
       nc.policyContract,
   };
 }
+
+/**
+ * Resolve `network` to a `NetworkConfig` with the ERC-8183 env overlay.
+ *
+ * String preset → the `ERC8183_*_ADDRESS` env overrides are applied on top
+ * of the resolved preset (how a QA/staging contract stack is targeted
+ * without code changes). Concrete `NetworkConfig` object → returned as
+ * resolved; the caller takes full control and env overrides are ignored.
+ */
+export function resolveErc8183Network(
+  network: string | NetworkConfig = "bsc-testnet",
+): NetworkConfig {
+  const nc = resolveNetwork(network);
+  if (typeof network !== "string") {
+    return nc;
+  }
+  return {
+    ...nc,
+    commerceContract:
+      getEnv("COMMERCE_ADDRESS", undefined, ERC8183_ENV_PREFIX) ??
+      nc.commerceContract,
+    routerContract:
+      getEnv("ROUTER_ADDRESS", undefined, ERC8183_ENV_PREFIX) ??
+      nc.routerContract,
+    policyContract:
+      getEnv("POLICY_ADDRESS", undefined, ERC8183_ENV_PREFIX) ??
+      nc.policyContract,
+  };
+}

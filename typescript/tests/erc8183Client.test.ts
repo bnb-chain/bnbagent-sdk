@@ -277,6 +277,49 @@ describe("ERC8183Client.create", () => {
     expect(client.address).toBe(WALLET_ADDRESS);
     expect(client.network.name).toBe("test-net");
   });
+
+  it("applies ERC8183_*_ADDRESS env overrides to a string preset (QA stack)", async () => {
+    // Digit-only addresses are checksum-invariant, so they compare verbatim.
+    const overrides = {
+      ERC8183_COMMERCE_ADDRESS: `0x${"44".repeat(20)}`,
+      ERC8183_ROUTER_ADDRESS: `0x${"55".repeat(20)}`,
+      ERC8183_POLICY_ADDRESS: `0x${"66".repeat(20)}`,
+    };
+    Object.assign(process.env, overrides);
+    try {
+      const mock = mockPublicClient({
+        eth_chainId: () => toChainIdHex(97),
+        eth_call: combinedReadHandler(defaultResults()),
+      });
+      createPublicClientForMock.mockReset().mockReturnValue(mock.client);
+      const client = await ERC8183Client.create({ network: "bsc-testnet" });
+      expect(client.network.commerceContract).toBe(
+        overrides.ERC8183_COMMERCE_ADDRESS,
+      );
+      expect(client.network.routerContract).toBe(
+        overrides.ERC8183_ROUTER_ADDRESS,
+      );
+      expect(client.network.policyContract).toBe(
+        overrides.ERC8183_POLICY_ADDRESS,
+      );
+      expect(client.commerce.address).toBe(overrides.ERC8183_COMMERCE_ADDRESS);
+      expect(client.router.address).toBe(overrides.ERC8183_ROUTER_ADDRESS);
+      expect(client.policy.address).toBe(overrides.ERC8183_POLICY_ADDRESS);
+    } finally {
+      for (const key of Object.keys(overrides)) delete process.env[key];
+    }
+  });
+
+  it("ignores ERC8183_* env when network is a concrete NetworkConfig (caller takes full control)", async () => {
+    const overrides = { ERC8183_COMMERCE_ADDRESS: `0x${"44".repeat(20)}` };
+    Object.assign(process.env, overrides);
+    try {
+      const { client } = await buildClient({});
+      expect(client.network.commerceContract).toBe(FAKE_COMMERCE);
+    } finally {
+      for (const key of Object.keys(overrides)) delete process.env[key];
+    }
+  });
 });
 
 describe("ERC8183Client: paymaster wiring", () => {
