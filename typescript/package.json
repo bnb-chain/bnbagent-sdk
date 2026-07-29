@@ -1,6 +1,6 @@
 {
   "name": "@bnbagent/sdk",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "description": "TypeScript SDK for building on-chain AI agents on BNB Chain (ERC-8004 identity, ERC-8183 agentic commerce, x402 payments).",
   "license": "MIT",
   "repository": {
