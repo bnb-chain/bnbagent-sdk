@@ -177,7 +177,9 @@ jobs:
           QA_VERSION: ${{ needs.build.outputs.qa_version }}
         run: |
           set -euo pipefail
-          mapfile -t TARBALLS < <(find package -maxdepth 1 -type f -name '*.tgz')
+          # Absolute path: npm parses a bare "package/x.tgz" argument as a
+          # GitHub owner/repo shorthand, not a file.
+          mapfile -t TARBALLS < <(find "$PWD/package" -maxdepth 1 -type f -name '*.tgz')
           if [[ "${#TARBALLS[@]}" -ne 1 ]]; then
             echo "Expected exactly one tarball, found ${#TARBALLS[@]}" >&2
             exit 1
