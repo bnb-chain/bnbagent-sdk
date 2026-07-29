@@ -1,5 +1,3 @@
-# The legacy filename keeps workflow_dispatch available before this change
-# reaches the default branch. Rename it to npm-alpha.yml after the first run.
 name: Publish Alpha (npm)
 run-name: Publish @bnbagent/sdk ${{ inputs.target_version }} alpha from ${{ inputs.source_ref }}
 
