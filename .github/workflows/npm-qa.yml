@@ -1,5 +1,7 @@
-name: Publish QA (npm)
-run-name: Publish @bnbagent/sdk ${{ inputs.target_version }} QA from ${{ inputs.source_ref }}
+# The legacy filename keeps workflow_dispatch available before this change
+# reaches the default branch. Rename it to npm-alpha.yml after the first run.
+name: Publish Alpha (npm)
+run-name: Publish @bnbagent/sdk ${{ inputs.target_version }} alpha from ${{ inputs.source_ref }}
 
 on:
   workflow_dispatch:
@@ -18,7 +20,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: npm-qa-publish
+  group: npm-alpha-publish
   cancel-in-progress: false
 
 jobs:
@@ -26,7 +28,7 @@ jobs:
     name: Verify and pack
     runs-on: ubuntu-latest
     outputs:
-      qa_version: ${{ steps.version.outputs.qa_version }}
+      alpha_version: ${{ steps.version.outputs.alpha_version }}
       source_sha: ${{ steps.version.outputs.source_sha }}
     defaults:
       run:
@@ -53,7 +55,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Allocate the next QA version
+      - name: Allocate the next alpha version
         id: version
         env:
           TARGET_VERSION: ${{ inputs.target_version }}
@@ -80,7 +82,7 @@ jobs:
               exit 1
             fi
           fi
-          QA_NUMBER="$(
+          ALPHA_NUMBER="$(
             TARGET_VERSION="$TARGET_VERSION" VERSIONS_JSON="$VERSIONS_JSON" node <<'NODE'
           const parsed = JSON.parse(process.env.VERSIONS_JSON || "[]");
           const versions = Array.isArray(parsed)
@@ -88,7 +90,7 @@ jobs:
             : typeof parsed === "string"
               ? [parsed]
               : [];
-          const prefix = `${process.env.TARGET_VERSION}-qa.`;
+          const prefix = `${process.env.TARGET_VERSION}-alpha.`;
           const numbers = versions
             .filter((version) => version.startsWith(prefix))
             .map((version) => version.slice(prefix.length))
@@ -97,10 +99,10 @@ jobs:
           process.stdout.write(String(Math.max(0, ...numbers) + 1));
           NODE
           )"
-          QA_VERSION="${TARGET_VERSION}-qa.${QA_NUMBER}"
-          npm pkg set "version=$QA_VERSION"
-          echo "QA_VERSION=$QA_VERSION" >> "$GITHUB_ENV"
-          echo "qa_version=$QA_VERSION" >> "$GITHUB_OUTPUT"
+          ALPHA_VERSION="${TARGET_VERSION}-alpha.${ALPHA_NUMBER}"
+          npm pkg set "version=$ALPHA_VERSION"
+          echo "ALPHA_VERSION=$ALPHA_VERSION" >> "$GITHUB_ENV"
+          echo "alpha_version=$ALPHA_VERSION" >> "$GITHUB_OUTPUT"
           echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Verify ABIs are in sync
@@ -133,20 +135,20 @@ jobs:
           TARBALL_PATH="$PACK_DIR/$TARBALL_NAME"
           test -f "$TARBALL_PATH"
           tar -xOf "$TARBALL_PATH" package/package.json |
-            jq -e --arg version "$QA_VERSION" \
+            jq -e --arg version "$ALPHA_VERSION" \
               '.name == "@bnbagent/sdk" and .version == $version' >/dev/null
           cd "$CONSUMER_DIR"
           npm init -y >/dev/null
           npm install --ignore-scripts "$TARBALL_PATH"
           node --input-type=module -e \
-            "await import('@bnbagent/sdk'); const { getBuiltWithValue } = await import('@bnbagent/sdk/erc8004'); const expected = 'https://github.com/bnb-chain/bnbagent-sdk#v' + process.env.QA_VERSION; if (getBuiltWithValue() !== expected) throw new Error('unexpected built_with version')"
+            "await import('@bnbagent/sdk'); const { getBuiltWithValue } = await import('@bnbagent/sdk/erc8004'); const expected = 'https://github.com/bnb-chain/bnbagent-sdk#v' + process.env.ALPHA_VERSION; if (getBuiltWithValue() !== expected) throw new Error('unexpected built_with version')"
           node -e \
             "require('@bnbagent/sdk'); require('@bnbagent/sdk/erc8004')"
 
       - name: Upload verified tarball
         uses: actions/upload-artifact@v4
         with:
-          name: bnbagent-sdk-${{ steps.version.outputs.qa_version }}
+          name: bnbagent-sdk-${{ steps.version.outputs.alpha_version }}
           path: ${{ runner.temp }}/npm-pack/*.tgz
           if-no-files-found: error
           retention-days: 7
@@ -155,14 +157,14 @@ jobs:
     name: Publish to npm
     needs: build
     runs-on: ubuntu-latest
-    environment: npm-qa
+    environment: npm-alpha
     permissions:
       contents: read
     steps:
       - name: Download verified tarball
         uses: actions/download-artifact@v4
         with:
-          name: bnbagent-sdk-${{ needs.build.outputs.qa_version }}
+          name: bnbagent-sdk-${{ needs.build.outputs.alpha_version }}
           path: package
 
       - name: Setup Node 24
@@ -174,7 +176,7 @@ jobs:
       - name: Verify artifact identity
         id: artifact
         env:
-          QA_VERSION: ${{ needs.build.outputs.qa_version }}
+          ALPHA_VERSION: ${{ needs.build.outputs.alpha_version }}
         run: |
           set -euo pipefail
           # Absolute path: npm parses a bare "package/x.tgz" argument as a
@@ -186,41 +188,64 @@ jobs:
           fi
           TARBALL="${TARBALLS[0]}"
           tar -xOf "$TARBALL" package/package.json |
-            jq -e --arg version "$QA_VERSION" \
+            jq -e --arg version "$ALPHA_VERSION" \
               '.name == "@bnbagent/sdk" and .version == $version' >/dev/null
           echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
 
       - name: Check whether the exact version already exists
         id: registry
         env:
-          QA_VERSION: ${{ needs.build.outputs.qa_version }}
+          ALPHA_VERSION: ${{ needs.build.outputs.alpha_version }}
         run: |
-          if EXISTING="$(npm view "@bnbagent/sdk@$QA_VERSION" version 2>/dev/null)" &&
-            [[ "$EXISTING" == "$QA_VERSION" ]]; then
+          if EXISTING="$(npm view "@bnbagent/sdk@$ALPHA_VERSION" version 2>/dev/null)" &&
+            [[ "$EXISTING" == "$ALPHA_VERSION" ]]; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Publish under the qa dist-tag
+      - name: Publish under the alpha dist-tag
         if: steps.registry.outputs.exists != 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: >-
           npm publish "${{ steps.artifact.outputs.tarball }}"
           --access public
-          --tag qa
+          --tag alpha
           --ignore-scripts
 
-      - name: Verify registry visibility and qa dist-tag
+      - name: Normalize prerelease dist-tags
         env:
-          QA_VERSION: ${{ needs.build.outputs.qa_version }}
+          ALPHA_VERSION: ${{ needs.build.outputs.alpha_version }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          npm dist-tag add "@bnbagent/sdk@$ALPHA_VERSION" alpha
+
+          LATEST_TAG="$(npm view "@bnbagent/sdk" dist-tags.latest 2>/dev/null || true)"
+          if [[ "$LATEST_TAG" == *-* ]]; then
+            npm dist-tag rm "@bnbagent/sdk" latest
+          fi
+
+          LEGACY_QA_TAG="$(npm view "@bnbagent/sdk" dist-tags.qa 2>/dev/null || true)"
+          if [[ -n "$LEGACY_QA_TAG" ]]; then
+            npm dist-tag rm "@bnbagent/sdk" qa
+          fi
+
+      - name: Verify registry visibility and prerelease dist-tags
+        env:
+          ALPHA_VERSION: ${{ needs.build.outputs.alpha_version }}
         run: |
           set -euo pipefail
           for attempt in {1..12}; do
-            EXACT="$(npm view "@bnbagent/sdk@$QA_VERSION" version 2>/dev/null || true)"
+            EXACT="$(npm view "@bnbagent/sdk@$ALPHA_VERSION" version 2>/dev/null || true)"
+            ALPHA_TAG="$(npm view "@bnbagent/sdk" dist-tags.alpha 2>/dev/null || true)"
+            LATEST_TAG="$(npm view "@bnbagent/sdk" dist-tags.latest 2>/dev/null || true)"
             QA_TAG="$(npm view "@bnbagent/sdk" dist-tags.qa 2>/dev/null || true)"
-            if [[ "$EXACT" == "$QA_VERSION" && "$QA_TAG" == "$QA_VERSION" ]]; then
+            if [[ "$EXACT" == "$ALPHA_VERSION" &&
+              "$ALPHA_TAG" == "$ALPHA_VERSION" &&
+              "$LATEST_TAG" != *-* &&
+              -z "$QA_TAG" ]]; then
               exit 0
             fi
             if [[ "$attempt" -lt 12 ]]; then
@@ -228,21 +253,21 @@ jobs:
               sleep 5
             fi
           done
-          echo "npm did not expose $QA_VERSION under the qa dist-tag" >&2
+          echo "npm prerelease tags are invalid: alpha=$ALPHA_TAG latest=$LATEST_TAG qa=$QA_TAG" >&2
           exit 1
 
       - name: Write install summary
         env:
-          QA_VERSION: ${{ needs.build.outputs.qa_version }}
+          ALPHA_VERSION: ${{ needs.build.outputs.alpha_version }}
           SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
         run: |
           {
-            echo "## @bnbagent/sdk QA package"
+            echo "## @bnbagent/sdk alpha package"
             echo
-            echo "- Version: \`$QA_VERSION\`"
+            echo "- Version: \`$ALPHA_VERSION\`"
             echo "- Source commit: \`$SOURCE_SHA\`"
             echo
             echo '```bash'
-            echo "pnpm add -E @bnbagent/sdk@$QA_VERSION"
+            echo "pnpm add -E @bnbagent/sdk@$ALPHA_VERSION"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
