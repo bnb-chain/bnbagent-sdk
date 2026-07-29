@@ -61,6 +61,12 @@ wallet providers, and examples.
 - Issues: https://github.com/bnb-chain/bnbagent-sdk/issues
 - Standards: [ERC-8004](https://eips.ethereum.org/EIPS/eip-8004) · ERC-8183 (Agentic Commerce)
 
+## Related
+
+- [bnbagent-studio-evals](https://github.com/bnb-chain/bnbagent-studio-evals) — security evaluation suite for BNB Agent Studio (EMNLP 2026 System Demonstrations artifact). Studio-provisioned agents build their signing layer on this SDK (`bnbagent.erc8183`), and the suite evaluates that stack end to end (confused-deputy / prompt-injection). Originally proposed here as [#48](https://github.com/bnb-chain/bnbagent-sdk/pull/48), then migrated.
+
+---
+
 ## License
 
 [MIT](./LICENSE)
