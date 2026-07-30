@@ -19,6 +19,7 @@ import pytest
 from eth_account import Account
 from eth_account.messages import encode_defunct
 
+from bnbagent.config import NETWORKS
 from bnbagent.erc8004.contract import ContractInterface
 from bnbagent.wallets import (
     ExecutionContext,
@@ -685,6 +686,117 @@ def test_unnamed_intent_rejected():
         with pytest.raises(UnsupportedWalletOperation, match="arbitrary contract calls"):
             twak.execute(Intent(call=MagicMock()))
     run.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("name", "canonical_target"),
+    [
+        (ERC8183_CREATE_JOB, NETWORKS["bsc-mainnet"].commerce_contract),
+        (ERC8183_SET_PROVIDER, NETWORKS["bsc-mainnet"].commerce_contract),
+        (ERC8183_SET_BUDGET, NETWORKS["bsc-mainnet"].commerce_contract),
+        (ERC8183_FUND, NETWORKS["bsc-mainnet"].commerce_contract),
+        (ERC8183_SUBMIT, NETWORKS["bsc-mainnet"].commerce_contract),
+        (ERC8183_COMPLETE, NETWORKS["bsc-mainnet"].commerce_contract),
+        (ERC8183_REJECT, NETWORKS["bsc-mainnet"].commerce_contract),
+        (ERC8183_CLAIM_REFUND, NETWORKS["bsc-mainnet"].commerce_contract),
+        (ERC8183_REGISTER_JOB, NETWORKS["bsc-mainnet"].router_contract),
+        (ERC8183_SETTLE, NETWORKS["bsc-mainnet"].router_contract),
+        (ERC8183_MARK_EXPIRED, NETWORKS["bsc-mainnet"].router_contract),
+        (ERC8183_DISPUTE, NETWORKS["bsc-mainnet"].policy_contract),
+        (ERC8183_VOTE_REJECT, NETWORKS["bsc-mainnet"].policy_contract),
+    ],
+)
+def test_custom_contract_intent_rejected_before_any_cli_call(
+    name, canonical_target
+):
+    twak = TWAKProvider()
+    call = types.SimpleNamespace(address="0x" + "99" * 20)
+    with patch("bnbagent.wallets.twak_provider.subprocess.run") as run:
+        with pytest.raises(UnsupportedWalletOperation) as exc:
+            twak.execute(Intent(name=name, call=call))
+    message = str(exc.value)
+    assert "custom contract" in message
+    assert canonical_target.lower() in message.lower()
+    run.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "name",
+    [ERC8004_REGISTER, ERC8004_SET_METADATA, ERC8004_SET_AGENT_URI],
+)
+def test_custom_erc8004_target_requires_matching_env_override(name):
+    twak = TWAKProvider()
+    call = types.SimpleNamespace(address="0x" + "99" * 20)
+    with patch("bnbagent.wallets.twak_provider.subprocess.run") as run:
+        with pytest.raises(
+            UnsupportedWalletOperation,
+            match="ERC8004_REGISTRY_ADDRESS",
+        ):
+            twak.execute(Intent(name=name, call=call))
+    run.assert_not_called()
+
+
+def test_custom_erc8004_target_allowed_with_matching_env_override(monkeypatch):
+    custom_registry = "0x" + "99" * 20
+    monkeypatch.setenv("ERC8004_REGISTRY_ADDRESS", custom_registry)
+    run, calls = _intent_router(
+        {"success": True, "hash": "0xreg", "agentId": "1362"}
+    )
+    twak = TWAKProvider()
+    result = _execute(
+        twak,
+        Intent(
+            name=ERC8004_REGISTER,
+            kwargs={"agent_uri": "https://a/c.json"},
+            call=types.SimpleNamespace(address=custom_registry),
+        ),
+        run,
+    )
+    assert result["agentId"] == 1362
+    assert "erc8004" in calls[1]
+
+
+def test_erc8004_env_override_cannot_redirect_canonical_intent(monkeypatch):
+    monkeypatch.setenv("ERC8004_REGISTRY_ADDRESS", "0x" + "99" * 20)
+    twak = TWAKProvider()
+    call = types.SimpleNamespace(
+        address=NETWORKS["bsc-mainnet"].registry_contract
+    )
+    with patch("bnbagent.wallets.twak_provider.subprocess.run") as run:
+        with pytest.raises(
+            UnsupportedWalletOperation,
+            match="SDK intent targets",
+        ):
+            twak.execute(Intent(name=ERC8004_REGISTER, call=call))
+    run.assert_not_called()
+
+
+def test_canonical_contract_target_allowed():
+    run, calls = _intent_router(_TX_OUT)
+    twak = TWAKProvider()
+    intent = Intent(
+        name=ERC8183_DISPUTE,
+        kwargs={"job_id": 137},
+        call=types.SimpleNamespace(
+            address=NETWORKS["bsc-mainnet"].policy_contract,
+        ),
+    )
+    _execute(twak, intent, run)
+    assert len(calls) == 2
+
+
+def test_testnet_canonical_contract_target_allowed():
+    run, calls = _intent_router(_TX_OUT)
+    twak = TWAKProvider(chain="bsctestnet")
+    intent = Intent(
+        name=ERC8183_DISPUTE,
+        kwargs={"job_id": 137},
+        call=types.SimpleNamespace(
+            address=NETWORKS["bsc-testnet"].policy_contract,
+        ),
+    )
+    _execute(twak, intent, run)
+    assert len(calls) == 2
 
 
 # ── output parse hardening (gaps REQ-3 + error-envelope variants) ──

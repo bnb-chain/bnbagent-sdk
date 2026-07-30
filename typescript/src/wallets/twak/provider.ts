@@ -38,6 +38,7 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { hashMessage, recoverMessageAddress } from "viem";
+import { NETWORKS, type NetworkConfig } from "../../config.js";
 import {
   RelaySubmissionUnverifiedError,
   TransactionPendingError,
@@ -109,6 +110,36 @@ export const TWAK_CHAIN_FOR_NETWORK: Readonly<Record<string, string>> = {
 
 const ZERO_ADDRESS = `0x${"00".repeat(20)}`;
 const ZERO_REASON = `0x${"00".repeat(32)}`;
+
+type CanonicalContractKey =
+  | "registryContract"
+  | "commerceContract"
+  | "routerContract"
+  | "policyContract";
+
+const NETWORK_FOR_TWAK_CHAIN = {
+  bsc: "bsc-mainnet",
+  bsctestnet: "bsc-testnet",
+} as const;
+
+const CONTRACT_KEY_BY_INTENT: Readonly<Record<string, CanonicalContractKey>> = {
+  [ERC8004_REGISTER]: "registryContract",
+  [ERC8004_SET_METADATA]: "registryContract",
+  [ERC8004_SET_AGENT_URI]: "registryContract",
+  [ERC8183_CREATE_JOB]: "commerceContract",
+  [ERC8183_SET_PROVIDER]: "commerceContract",
+  [ERC8183_SET_BUDGET]: "commerceContract",
+  [ERC8183_FUND]: "commerceContract",
+  [ERC8183_SUBMIT]: "commerceContract",
+  [ERC8183_COMPLETE]: "commerceContract",
+  [ERC8183_REJECT]: "commerceContract",
+  [ERC8183_CLAIM_REFUND]: "commerceContract",
+  [ERC8183_REGISTER_JOB]: "routerContract",
+  [ERC8183_SETTLE]: "routerContract",
+  [ERC8183_MARK_EXPIRED]: "routerContract",
+  [ERC8183_DISPUTE]: "policyContract",
+  [ERC8183_VOTE_REJECT]: "policyContract",
+};
 
 // Appended to command-failure errors: the failure is most often a missing
 // one-time setup step, so point the caller at the fix without claiming the
@@ -855,6 +886,38 @@ export class TWAKProvider extends WalletProvider implements IntentExecutor {
           alternative: "use an EVM wallet for arbitrary contract calls",
         },
       );
+    }
+    const actualTarget = intent.call?.address;
+    const contractKey = CONTRACT_KEY_BY_INTENT[intent.name ?? ""];
+    if (actualTarget && contractKey) {
+      const networkName =
+        NETWORK_FOR_TWAK_CHAIN[
+          this.#chain as keyof typeof NETWORK_FOR_TWAK_CHAIN
+        ];
+      const canonicalTarget = NETWORKS[networkName][
+        contractKey
+      ] as NetworkConfig[CanonicalContractKey];
+      const registryOverride =
+        contractKey === "registryContract"
+          ? process.env.ERC8004_REGISTRY_ADDRESS?.trim()
+          : undefined;
+      const twakTarget = registryOverride || canonicalTarget;
+      if (actualTarget.toLowerCase() !== twakTarget.toLowerCase()) {
+        const targetReason =
+          contractKey === "registryContract"
+            ? `twak v0.20.0 will target ${twakTarget} on ${networkName} (${registryOverride ? "ERC8004_REGISTRY_ADDRESS override" : "canonical registry"}); the SDK intent targets ${actualTarget}`
+            : `twak v0.20.0 targets only the canonical ${contractKey} ${canonicalTarget} on ${networkName}; silently using it would execute against the wrong deployment`;
+        throw new UnsupportedWalletOperation(
+          `intent ${JSON.stringify(intent.name)} on custom contract ${actualTarget}`,
+          {
+            reason: targetReason,
+            alternative:
+              contractKey === "registryContract"
+                ? "set ERC8004_REGISTRY_ADDRESS to the intended registry, or make the SDK intent use the configured registry"
+                : "use an EVM wallet for custom ERC-8183 contracts, or use the canonical contract stack",
+          },
+        );
+      }
     }
     await this.#ensure();
     return handler(this, intent.kwargs ?? {});

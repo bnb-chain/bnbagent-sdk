@@ -17,13 +17,15 @@ TWAK (Trust Wallet Agent Kit) is a self-custody wallet CLI whose encrypted mnemo
 |---|---|
 | `sign.message` | `twak wallet sign-message` (EIP-191) |
 | `broadcast.self` | self-broadcasting executor (CLI → RPC) |
-| `intents.erc8004` | the 3 ERC-8004 write intents below |
-| `intents.erc8183` | the 13 ERC-8183 write intents below |
+| `intents.erc8004` | the 3 ERC-8004 write intents below, on the canonical registry or matching `ERC8004_REGISTRY_ADDRESS` override |
+| `intents.erc8183` | the 13 ERC-8183 write intents below, on the canonical contract stack |
 | `x402.pay` | the delegated `TwakX402Payer` (`make_x402_payer()`) |
 
 **Not supported:** `sign.transaction` and `sign.typed_data` — twak exposes no raw-transaction or generic EIP-712 primitive (it signs ERC-8004/8183/x402 payloads internally via its own commands). Calls raise `UnsupportedWalletOperation`; use `WALLET_KIND=evm` when you need them.
 
-Callers never special-case the wallet kind. `ERC8183Client` / `ERC8004Agent` route every write through `wallet.make_executor()`, and x402 goes through `wallet.make_x402_payer()` — so swapping EVM ↔ twak is a construction-time choice with no flow changes. `fund_bundles_approval = True`: twak's `erc8183 fund` does `approve` + `deposit` itself, so the SDK skips its own allowance top-up.
+For canonical deployments, callers never special-case the wallet kind. `ERC8183Client` / `ERC8004Agent` route every write through `wallet.make_executor()`, and x402 goes through `wallet.make_x402_payer()` — so swapping EVM ↔ twak is a construction-time choice with no flow changes. `fund_bundles_approval = True`: twak's `erc8183 fund` does `approve` + `deposit` itself, so the SDK skips its own allowance top-up.
+
+twak v0.20.0 honors `ERC8004_REGISTRY_ADDRESS`; `TWAKProvider` allows a custom ERC-8004 intent only when its target matches that environment override. It also rejects a canonical intent when a stale override would redirect it. ERC-8183 has no equivalent override: non-canonical Commerce, Router, or Policy intents fail before the wallet is probed or the CLI is invoked. Use an EVM wallet for custom ERC-8183 contracts until twak exposes an explicit target option.
 
 ## ERC-8004 — identity registry
 
@@ -47,7 +49,7 @@ create-job → set-budget → register-job → fund → submit → settle
 
 Constraints: (1) `register-job` must precede `fund` or the Router-as-hook reverts `PolicyNotSet()`; (2) `--evaluator` and `--hook` must both be the Router (`RouterNotEvaluator()` / `HookRequired()`); (3) `submit` requires `now ≤ expiredAt − disputeWindow` (`SubmissionTooLate()`) — pick ~30 days.
 
-All 13 write intents dispatch to twak. Every kernel write carries a trailing `bytes optParams`, passed through raw via `--opt-params` (v0.19.0); on `submit` the SDK encodes `{"deliverable_url": …}` there, which the policy re-emits in `JobInitialised` for off-chain evaluators — so the **provider role works end-to-end**.
+All 13 write intents dispatch to twak on the canonical contract stack. Every kernel write carries a trailing `bytes optParams`, passed through raw via `--opt-params` (v0.19.0); on `submit` the SDK encodes `{"deliverable_url": …}` there, which the policy re-emits in `JobInitialised` for off-chain evaluators.
 
 | SDK intent | twak command | Solidity |
 |---|---|---|
@@ -105,7 +107,8 @@ An optional `SessionBudgetTracker` reserves the quoted amount before the call an
 ## Current boundaries
 
 - **x402 `request` is mainnet-only** so far — testnet routes are rejected as "no supported route" (`quote` works on both).
-- **Paymaster:** twak v0.20.0 added `--paymaster-url <url>` on every erc8004/erc8183 write (the URL is used verbatim as the MegaFuel endpoint, on `bsc` and `bsctestnet` alike). When the SDK context carries a paymaster — `ERC8183Client` builds one on sponsored testnet networks, `ERC8004Agent` per its network config — `TWAKProvider` forwards its URL on each write, so **sponsored `bsctestnet` writes now work**. Without one, twak keeps its own defaults: mainnet sponsors automatically (Trust gateway), `bsctestnet` **pays its own gas** — pre-fund it with testnet BNB.
+- **Custom targets:** ERC-8004 supports a registry override through `ERC8004_REGISTRY_ADDRESS`, and the SDK requires it to match the intent target. Custom ERC-8183 contracts remain unsupported because twak v0.20.0 has no Commerce/Router/Policy target option; those intents fail closed.
+- **Paymaster:** twak v0.20.0 added `--paymaster-url <url>` on every erc8004/erc8183 write (the URL is used verbatim as the MegaFuel endpoint, on `bsc` and `bsctestnet` alike). When the SDK context carries a paymaster — `ERC8183Client` builds one on sponsored testnet networks, `ERC8004Agent` per its network config — `TWAKProvider` forwards its URL and twak attempts sponsorship. The paymaster still decides eligibility per sender, target, and method; rejection or RPC failure falls back to self-paid gas. Without an explicit endpoint, twak keeps its own defaults: mainnet uses the Trust gateway, while `bsctestnet` has no default paymaster — pre-fund it with testnet BNB.
 - **No generic EIP-712 / raw-tx signing** (`sign.typed_data` / `sign.transaction`) — use `WALLET_KIND=evm` for those.
 - **`sign-message`** pins `--chain bsc` (the CLI rejects `bsctestnet` there; EIP-191 is chain-agnostic and the address is identical on both networks) and signs the message as **text** (twak ≥ v0.19.1).
 - **No key import/export:** twak mints its own mnemonic; switching an existing identity into twak means a new address + ERC-8004 re-register.
@@ -119,4 +122,4 @@ An optional `SessionBudgetTracker` reserves the quoted amount before the call an
 | ERC-8183 | EvaluatorRouter | `0x51895229e12f9876011789b04f8698af06ccd6da` | `0xd7d36d66d2f1b608a0f943f722d27e3744f66f25` |
 | ERC-8183 | OptimisticPolicy | `0x9c01845705b3078aa2e8cff7520a6376fd766de5` | `0x4f4678d4439fec812ac7674bb3efb4c8f5fb78a6` |
 
-Payment token `AgenticCommerce.paymentToken()`: **U** (United Stables, `0xce24439f2d9c6a2289f741120fe202248b666666`, 18 dp) on mainnet; `0xc70b8741b8b07a6d61e54fd4b20f22fa648e5565` on testnet. x402 has no contract of ours — it pays through the asset's own EIP-3009 / Permit2 methods. Override the registry with `ERC8004_REGISTRY_ADDRESS` for custom deployments.
+Payment token `AgenticCommerce.paymentToken()`: **U** (United Stables, `0xce24439f2d9c6a2289f741120fe202248b666666`, 18 dp) on mainnet; `0xc70b8741b8b07a6d61e54fd4b20f22fa648e5565` on testnet. x402 has no contract of ours — it pays through the asset's own EIP-3009 / Permit2 methods. EVM wallets may override all module-specific contract addresses; TWAK v0.20.0 supports only the ERC-8004 registry override and rejects custom ERC-8183 targets as described above.

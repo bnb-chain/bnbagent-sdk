@@ -10,6 +10,7 @@
 import { hashMessage } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { NETWORKS } from "../src/config.js";
 import { Paymaster } from "../src/core/paymaster.js";
 import { ERC8183Config } from "../src/erc8183/config.js";
 import {
@@ -33,6 +34,8 @@ import {
 import type { ExecutionContext } from "../src/wallets/intents.js";
 import {
   ERC8004_REGISTER,
+  ERC8004_SET_AGENT_URI,
+  ERC8004_SET_METADATA,
   ERC8183_CLAIM_REFUND,
   ERC8183_COMPLETE,
   ERC8183_CREATE_JOB,
@@ -122,6 +125,7 @@ function standardRouter(out: Record<string, unknown> = TX_OUT): string[][] {
 
 afterEach(() => {
   _setTwakExecForTests(null);
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
@@ -435,6 +439,137 @@ describe("TWAKProvider — erc8183 intent argv", () => {
       twak.execute({ name: "erc20.transfer", kwargs: {} }),
     ).rejects.toThrow(/fixed command menu/);
     expect(calls).toHaveLength(0);
+  });
+
+  const customErc8183ContractCases = [
+    [ERC8183_CREATE_JOB, NETWORKS["bsc-mainnet"].commerceContract],
+    [ERC8183_SET_PROVIDER, NETWORKS["bsc-mainnet"].commerceContract],
+    [ERC8183_SET_BUDGET, NETWORKS["bsc-mainnet"].commerceContract],
+    [ERC8183_FUND, NETWORKS["bsc-mainnet"].commerceContract],
+    [ERC8183_SUBMIT, NETWORKS["bsc-mainnet"].commerceContract],
+    [ERC8183_COMPLETE, NETWORKS["bsc-mainnet"].commerceContract],
+    [ERC8183_REJECT, NETWORKS["bsc-mainnet"].commerceContract],
+    [ERC8183_CLAIM_REFUND, NETWORKS["bsc-mainnet"].commerceContract],
+    [ERC8183_REGISTER_JOB, NETWORKS["bsc-mainnet"].routerContract],
+    [ERC8183_SETTLE, NETWORKS["bsc-mainnet"].routerContract],
+    [ERC8183_MARK_EXPIRED, NETWORKS["bsc-mainnet"].routerContract],
+    [ERC8183_DISPUTE, NETWORKS["bsc-mainnet"].policyContract],
+    [ERC8183_VOTE_REJECT, NETWORKS["bsc-mainnet"].policyContract],
+  ] as const;
+
+  it.each(customErc8183ContractCases)(
+    "rejects %s on a custom contract before any CLI call",
+    async (name, canonicalTarget) => {
+      const calls = standardRouter();
+      const twak = new TWAKProvider();
+      await expect(
+        twak.execute({
+          name,
+          call: {
+            address: `0x${"99".repeat(20)}`,
+            abi: [],
+            functionName: "unused",
+            args: [],
+          },
+        }),
+      ).rejects.toThrow(
+        new RegExp(
+          `custom contract.*${canonicalTarget.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
+          "i",
+        ),
+      );
+      expect(calls).toHaveLength(0);
+    },
+  );
+
+  it.each([ERC8004_REGISTER, ERC8004_SET_METADATA, ERC8004_SET_AGENT_URI])(
+    "rejects %s when its target does not match the effective registry",
+    async (name) => {
+      const calls = standardRouter();
+      const customRegistry = `0x${"99".repeat(20)}` as `0x${string}`;
+      await expect(
+        new TWAKProvider().execute({
+          name,
+          call: {
+            address: customRegistry,
+            abi: [],
+            functionName: "unused",
+            args: [],
+          },
+        }),
+      ).rejects.toThrow(/ERC8004_REGISTRY_ADDRESS/);
+      expect(calls).toHaveLength(0);
+    },
+  );
+
+  it("allows a custom ERC-8004 registry when the env override matches", async () => {
+    const customRegistry = `0x${"99".repeat(20)}` as `0x${string}`;
+    vi.stubEnv("ERC8004_REGISTRY_ADDRESS", customRegistry);
+    const calls = installRouter((args) =>
+      args[0] === "wallet"
+        ? STATUS_OK
+        : { success: true, hash: "0xreg", agentId: "42", owner: WALLET },
+    );
+    await new TWAKProvider().execute({
+      name: ERC8004_REGISTER,
+      kwargs: { agentUri: "https://a.example/card.json" },
+      call: {
+        address: customRegistry,
+        abi: [],
+        functionName: "register",
+        args: [],
+      },
+    });
+    expect(calls[1]?.slice(0, 2)).toEqual(["erc8004", "register"]);
+  });
+
+  it("rejects a canonical ERC-8004 intent when an env override would redirect it", async () => {
+    vi.stubEnv("ERC8004_REGISTRY_ADDRESS", `0x${"99".repeat(20)}`);
+    const calls = standardRouter();
+    await expect(
+      new TWAKProvider().execute({
+        name: ERC8004_REGISTER,
+        call: {
+          address: NETWORKS["bsc-mainnet"].registryContract as `0x${string}`,
+          abi: [],
+          functionName: "register",
+          args: [],
+        },
+      }),
+    ).rejects.toThrow(/SDK intent targets/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("allows a canonical contract target", async () => {
+    const calls = standardRouter();
+    const twak = new TWAKProvider();
+    await twak.execute({
+      name: ERC8183_DISPUTE,
+      kwargs: { jobId: 137n },
+      call: {
+        address: NETWORKS["bsc-mainnet"].policyContract as `0x${string}`,
+        abi: [],
+        functionName: "dispute",
+        args: [137n],
+      },
+    });
+    expect(calls).toHaveLength(2);
+  });
+
+  it("uses the testnet canonical target when configured for bsctestnet", async () => {
+    const calls = standardRouter();
+    const twak = new TWAKProvider({ chain: "bsctestnet" });
+    await twak.execute({
+      name: ERC8183_DISPUTE,
+      kwargs: { jobId: 137n },
+      call: {
+        address: NETWORKS["bsc-testnet"].policyContract as `0x${string}`,
+        abi: [],
+        functionName: "dispute",
+        args: [137n],
+      },
+    });
+    expect(calls).toHaveLength(2);
   });
 });
 

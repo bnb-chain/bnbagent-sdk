@@ -83,6 +83,7 @@ from typing import Any
 from eth_account import Account
 from eth_account.messages import defunct_hash_message, encode_defunct
 
+from ..config import NETWORKS
 from .capabilities import (
     BROADCAST_SELF,
     INTENTS_ERC8004,
@@ -156,6 +157,30 @@ TWAK_CHAIN_FOR_NETWORK = {
 
 _ZERO_ADDRESS = "0x" + "00" * 20
 _ZERO_REASON = b"\x00" * 32
+
+_NETWORK_FOR_TWAK_CHAIN = {
+    "bsc": "bsc-mainnet",
+    "bsctestnet": "bsc-testnet",
+}
+
+_CONTRACT_FIELD_BY_INTENT = {
+    ERC8004_REGISTER: "registry_contract",
+    ERC8004_SET_METADATA: "registry_contract",
+    ERC8004_SET_AGENT_URI: "registry_contract",
+    ERC8183_CREATE_JOB: "commerce_contract",
+    ERC8183_SET_PROVIDER: "commerce_contract",
+    ERC8183_SET_BUDGET: "commerce_contract",
+    ERC8183_FUND: "commerce_contract",
+    ERC8183_SUBMIT: "commerce_contract",
+    ERC8183_COMPLETE: "commerce_contract",
+    ERC8183_REJECT: "commerce_contract",
+    ERC8183_CLAIM_REFUND: "commerce_contract",
+    ERC8183_REGISTER_JOB: "router_contract",
+    ERC8183_SETTLE: "router_contract",
+    ERC8183_MARK_EXPIRED: "router_contract",
+    ERC8183_DISPUTE: "policy_contract",
+    ERC8183_VOTE_REJECT: "policy_contract",
+}
 
 
 class TWAKProvider(WalletProvider, IntentExecutor):
@@ -694,6 +719,49 @@ class TWAKProvider(WalletProvider, IntentExecutor):
                 ),
                 alternative="use an EVM wallet for arbitrary contract calls",
             )
+        actual_target = getattr(intent.call, "address", None)
+        contract_field = _CONTRACT_FIELD_BY_INTENT.get(intent.name)
+        if isinstance(actual_target, str) and actual_target and contract_field:
+            network_name = _NETWORK_FOR_TWAK_CHAIN[self._chain]
+            canonical_target = getattr(NETWORKS[network_name], contract_field)
+            registry_override = (
+                os.environ.get("ERC8004_REGISTRY_ADDRESS", "").strip()
+                if contract_field == "registry_contract"
+                else ""
+            )
+            twak_target = registry_override or canonical_target
+            if actual_target.lower() != twak_target.lower():
+                if contract_field == "registry_contract":
+                    source = (
+                        "ERC8004_REGISTRY_ADDRESS override"
+                        if registry_override
+                        else "canonical registry"
+                    )
+                    reason = (
+                        f"twak v0.20.0 will target {twak_target} on "
+                        f"{network_name} ({source}); the SDK intent targets "
+                        f"{actual_target}"
+                    )
+                    alternative = (
+                        "set ERC8004_REGISTRY_ADDRESS to the intended registry, "
+                        "or make the SDK intent use the configured registry"
+                    )
+                else:
+                    reason = (
+                        f"twak v0.20.0 targets only the canonical "
+                        f"{contract_field} {canonical_target} on {network_name}; "
+                        "silently using it would execute against the wrong "
+                        "deployment"
+                    )
+                    alternative = (
+                        "use an EVM wallet for custom ERC-8183 contracts, or "
+                        "use the canonical contract stack"
+                    )
+                raise UnsupportedWalletOperation(
+                    f"intent {intent.name!r} on custom contract {actual_target}",
+                    reason=reason,
+                    alternative=alternative,
+                )
         self._ensure_wallet()
         return handler(self, intent.kwargs)
 
