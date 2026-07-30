@@ -59,7 +59,14 @@ def _twa_msg(*, valid_after=None, valid_before=None):
     }
 
 
-def _twa_call(policy, *, domain_overrides=None, message_overrides=None, now=NOW):
+def _twa_call(
+    policy,
+    *,
+    domain_overrides=None,
+    message_overrides=None,
+    twa_fields=None,
+    now=NOW,
+):
     domain = {
         "name": "United Stables",
         "version": "1",
@@ -68,7 +75,10 @@ def _twa_call(policy, *, domain_overrides=None, message_overrides=None, now=NOW)
     }
     if domain_overrides:
         domain.update(domain_overrides)
-    types = {"EIP712Domain": EIP712DOMAIN_FIELDS, "TransferWithAuthorization": TWA_FIELDS}
+    types = {
+        "EIP712Domain": EIP712DOMAIN_FIELDS,
+        "TransferWithAuthorization": TWA_FIELDS if twa_fields is None else twa_fields,
+    }
     msg = _twa_msg()
     if message_overrides:
         msg.update(message_overrides)
@@ -203,6 +213,113 @@ def test_rejects_missing_validity_fields_when_required():
     msg = {"from": "0x" + "a" * 40, "to": "0x" + "b" * 40, "value": 1}
     with pytest.raises(PolicyViolation, match="requires validBefore"):
         check(p, domain, types, msg, now=NOW)
+
+
+# ── EIP-3009 field-shape pinning (SRC-1314) ──────────────────────────────
+# The allowlist is name-scoped and `types` is caller-supplied (for x402 it
+# comes straight out of an untrusted 402 response body). Keeping the
+# allowlisted name while rewriting the field shape changes what the encoder
+# accepts, which is how a value-domain guard got silently removed.
+
+
+def _twa_fields_with(name, key, new_value):
+    return [
+        {**f, key: new_value} if f["name"] == name else f for f in TWA_FIELDS
+    ]
+
+
+def test_rejects_value_declared_as_int256():
+    """The exploit primitive: int256 makes a negative `value` encodable.
+
+    Note the message here carries a perfectly ordinary positive value — this
+    is rejected on field shape alone, so the guard stands on its own rather
+    than depending on the amount checks downstream.
+    """
+    p = SigningPolicy.strict_default()
+    with pytest.raises(PolicyViolation, match="canonical EIP-3009 field shape"):
+        _twa_call(p, twa_fields=_twa_fields_with("value", "type", "int256"))
+
+
+def test_rejects_narrowed_value_type():
+    p = SigningPolicy.strict_default()
+    with pytest.raises(PolicyViolation, match="canonical EIP-3009 field shape"):
+        _twa_call(p, twa_fields=_twa_fields_with("value", "type", "uint128"))
+
+
+def test_rejects_reordered_fields():
+    """Order feeds the typeHash, so a reorder is a different struct."""
+    p = SigningPolicy.strict_default()
+    swapped = [TWA_FIELDS[1], TWA_FIELDS[0], *TWA_FIELDS[2:]]
+    with pytest.raises(PolicyViolation, match="canonical EIP-3009 field shape"):
+        _twa_call(p, twa_fields=swapped)
+
+
+def test_rejects_extra_field():
+    p = SigningPolicy.strict_default()
+    with pytest.raises(PolicyViolation, match="canonical EIP-3009 field shape"):
+        _twa_call(p, twa_fields=[*TWA_FIELDS, {"name": "memo", "type": "bytes32"}])
+
+
+def test_rejects_missing_field():
+    p = SigningPolicy.strict_default()
+    with pytest.raises(PolicyViolation, match="canonical EIP-3009 field shape"):
+        _twa_call(p, twa_fields=TWA_FIELDS[:-1])
+
+
+def test_rejects_renamed_field():
+    p = SigningPolicy.strict_default()
+    with pytest.raises(PolicyViolation, match="canonical EIP-3009 field shape"):
+        _twa_call(p, twa_fields=_twa_fields_with("value", "name", "amount"))
+
+
+def test_rejects_non_list_field_descriptor():
+    p = SigningPolicy.strict_default()
+    with pytest.raises(PolicyViolation, match="must be a list of field descriptors"):
+        _twa_call(p, twa_fields={"from": "address"})
+
+
+def test_field_shape_violation_carries_diagnostics():
+    p = SigningPolicy.strict_default()
+    with pytest.raises(PolicyViolation) as exc:
+        _twa_call(p, twa_fields=_twa_fields_with("value", "type", "int256"))
+    assert exc.value.primary_type == "TransferWithAuthorization"
+    assert exc.value.chain_id == BSC_MAINNET_CHAIN_ID
+    assert exc.value.verifying_contract == U_MAINNET
+
+
+def test_canonical_shape_still_accepted():
+    """Guard against the pin being too tight to sign the real thing."""
+    p = SigningPolicy.strict_default()
+    assert _twa_call(p) == "TransferWithAuthorization"
+
+
+def test_receive_with_authorization_shares_the_canonical_shape():
+    p = SigningPolicy.strict_default()
+    domain = {
+        "name": "United Stables", "version": "1",
+        "chainId": BSC_MAINNET_CHAIN_ID, "verifyingContract": U_MAINNET,
+    }
+    types = {
+        "EIP712Domain": EIP712DOMAIN_FIELDS,
+        "ReceiveWithAuthorization": TWA_FIELDS,
+    }
+    assert check(p, domain, types, _twa_msg(), now=NOW) == "ReceiveWithAuthorization"
+
+
+def test_unknown_primary_type_is_not_shape_pinned():
+    """Shape pinning applies only to the structs we know canonically —
+    permissive()/extend() callers signing custom types keep working.
+    """
+    p = SigningPolicy.permissive(allow_in_production=True)
+    domain = {
+        "name": "Custom", "version": "1",
+        "chainId": BSC_MAINNET_CHAIN_ID, "verifyingContract": U_MAINNET,
+    }
+    types = {
+        "EIP712Domain": EIP712DOMAIN_FIELDS,
+        "MyCustomStruct": [{"name": "whatever", "type": "int256"}],
+    }
+    assert check(p, domain, types, {"whatever": -5}, now=NOW) == "MyCustomStruct"
 
 
 # ── Structure / domain shape ─────────────────────────────────────────────
