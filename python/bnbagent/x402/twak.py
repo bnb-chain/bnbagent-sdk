@@ -132,6 +132,17 @@ class TwakX402Payer:
                 "verifyingContract for EIP-3009 routes)"
             )
         # 3. amount: per-call cap (re-enforced below by twak --max-payment).
+        #    Both bounds. The quoted amount comes straight out of an untrusted
+        #    402 challenge (payer.py's int(entry["amount"])), and the reserve()
+        #    below feeds it to the session counter — a negative would shrink
+        #    the counter instead of growing it. reserve() refuses negatives
+        #    too, but this is the surface that owns the amount, so it should
+        #    say so with the amount error rather than a budget error, and it
+        #    still has to hold when no session_budget is configured at all.
+        if option.amount < 0:
+            raise X402AmountExceededError(
+                f"quoted amount {option.amount} is negative for {option.asset}"
+            )
         if option.amount > max_payment:
             raise X402AmountExceededError(
                 f"quoted amount {option.amount} exceeds max_payment "
@@ -140,6 +151,10 @@ class TwakX402Payer:
         # 4. claimed validity window (when the option carries one).
         #    Default 3600s, NOT SigningPolicy's 600s (design F-2): twak sets
         #    the actual signing window internally; we only bound the claim.
+        if option.max_timeout_seconds is not None and option.max_timeout_seconds < 0:
+            raise X402PolicyError(
+                f"quoted maxTimeoutSeconds {option.max_timeout_seconds} is negative"
+            )
         if (
             option.max_timeout_seconds is not None
             and option.max_timeout_seconds > self._max_timeout_seconds

@@ -282,6 +282,24 @@ describe("AltanaX402Payer.request", () => {
     expect(sdkMocks.signX402PaymentMock).not.toHaveBeenCalled();
   });
 
+  it("rejects a negative quoted amount before signing (SRC-1314 class)", async () => {
+    // The quoted amount is untrusted and is handed to budget.reserve(). This
+    // path has no ABI encoder downstream, so a negative that got past the
+    // precheck would poison the session counter for good — the payment
+    // succeeds, so nothing rolls it back.
+    const negative = {
+      ...CHALLENGE,
+      accepts: [{ ...PERMIT2_ENTRY, maxAmountRequired: "-1000000000000" }],
+    };
+    const { impl } = fetchQueue(json402(negative));
+    const provider = sessionProvider();
+    const payer = provider.makeX402Payer({ fetchImpl: impl });
+    await expect(
+      payer.request("https://api.example/paid", { maxPayment: 10_000n }),
+    ).rejects.toThrow(X402AmountExceededError);
+    expect(sdkMocks.signX402PaymentMock).not.toHaveBeenCalled();
+  });
+
   it("throws NoPayableRoute when no accepts entry is on this chain", async () => {
     const offChain = {
       ...CHALLENGE,

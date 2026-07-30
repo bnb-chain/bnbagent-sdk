@@ -174,6 +174,53 @@ def test_amount_above_max_payment_rejected():
     provider.x402_request.assert_not_called()
 
 
+def _stub_provider_with(**option_overrides):
+    """Stub whose quoted option carries hostile values (guard-class sweep)."""
+    quote = _fixture("quote_bsc_u.json")
+    quote["accepts"][0].update(option_overrides)
+    provider = types.SimpleNamespace()
+    provider.x402_quote = MagicMock(return_value=quote)
+    provider.x402_request = MagicMock(
+        return_value=_fixture("request_success_pieverse.json")
+    )
+    return provider
+
+
+def test_negative_quoted_amount_rejected():
+    """SRC-1314 class: the quoted amount is untrusted and reaches reserve().
+
+    This path has no ABI encoder downstream, so a negative amount that got past
+    the precheck would poison the session counter permanently — the CLI call
+    succeeds, so nothing rolls it back.
+    """
+    provider = _stub_provider_with(amount="-1000000000000000000000000000000")
+    budget = SessionBudgetTracker({U_BSC: 10**18})
+    payer = TwakX402Payer(provider, session_budget=budget)
+    with pytest.raises(X402AmountExceededError, match="negative"):
+        payer.request(URL, max_payment=10**18)
+    provider.x402_request.assert_not_called()
+    assert budget.spent(U_BSC) == 0
+
+
+def test_negative_quoted_amount_rejected_without_a_session_budget():
+    """The guard must hold when no tracker is configured — there is then
+    nothing else in the path that would look at the amount at all.
+    """
+    provider = _stub_provider_with(amount="-1")
+    payer = TwakX402Payer(provider)
+    with pytest.raises(X402AmountExceededError, match="negative"):
+        payer.request(URL, max_payment=10**18)
+    provider.x402_request.assert_not_called()
+
+
+def test_negative_quoted_timeout_rejected():
+    provider = _stub_provider_with(maxTimeoutSeconds=-1)
+    payer = TwakX402Payer(provider)
+    with pytest.raises(X402PolicyError, match="negative"):
+        payer.request(URL, max_payment=10**18)
+    provider.x402_request.assert_not_called()
+
+
 def test_timeout_above_configured_cap_rejected():
     # pieverse claims a 300s window; a 200s cap must refuse it
     provider = _stub_provider()

@@ -285,6 +285,16 @@ export class AltanaX402Payer implements X402Payer {
       );
     }
     const { option } = route;
+    // Both bounds. The amount comes out of an untrusted 402 challenge and is
+    // handed to reserve() below; a negative would shrink the session counter
+    // instead of growing it, so the cap would stop binding for the rest of the
+    // session. reserve() refuses negatives too — this is defence in depth on
+    // the surface that owns the amount.
+    if (option.amount < 0n) {
+      throw new X402AmountExceededError(
+        `x402 route asks a negative amount ${option.amount} ${option.tokenName ?? option.asset}`,
+      );
+    }
     if (option.amount > opts.maxPayment) {
       throw new X402AmountExceededError(
         `x402 route asks ${option.amount} ${option.tokenName ?? option.asset}, above maxPayment ${opts.maxPayment}`,

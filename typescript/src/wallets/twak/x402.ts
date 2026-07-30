@@ -146,12 +146,28 @@ export class TwakX402Payer implements X402Payer {
       );
     }
     // 3. amount: per-call cap (re-enforced below by twak --max-payment).
+    //    Both bounds. The quoted amount comes straight out of an untrusted 402
+    //    challenge, and the reserve() below feeds it to the session counter — a
+    //    negative would shrink the counter instead of growing it. reserve()
+    //    refuses negatives too, but this is the surface that owns the amount,
+    //    so it should say so with the amount error rather than a budget error,
+    //    and it still has to hold when no budget is configured at all.
+    if (option.amount < 0n) {
+      throw new X402AmountExceededError(
+        `quoted amount ${option.amount} is negative for ${option.asset}`,
+      );
+    }
     if (option.amount > opts.maxPayment) {
       throw new X402AmountExceededError(
         `quoted amount ${option.amount} exceeds maxPayment ${opts.maxPayment} for ${option.asset}`,
       );
     }
     // 4. claimed validity window (when the option carries one).
+    if (option.maxTimeoutSeconds !== null && option.maxTimeoutSeconds < 0) {
+      throw new X402PolicyError(
+        `quoted maxTimeoutSeconds ${option.maxTimeoutSeconds} is negative`,
+      );
+    }
     if (
       option.maxTimeoutSeconds !== null &&
       option.maxTimeoutSeconds > this.#maxTimeoutSeconds
