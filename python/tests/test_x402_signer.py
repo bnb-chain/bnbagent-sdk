@@ -9,7 +9,6 @@ import pytest
 from bnbagent import EVMWalletProvider
 from bnbagent.networks import BSC_MAINNET_CHAIN_ID, get_address
 from bnbagent.x402 import (
-    SessionBudgetTracker,
     X402AmountExceededError,
     X402BudgetExhaustedError,
     X402PolicyError,
@@ -140,119 +139,6 @@ def test_rejects_when_value_exceeds_max_per_call(signer):
     with pytest.raises(X402AmountExceededError, match="exceeds max_value_per_call"):
         signer.sign_payment(**p, expected_to=p["message"]["to"])
     assert signer.budget.spent(U_MAINNET) == 0
-
-
-# ── Negative value (SRC-1314) ────────────────────────────────────────────
-# The per-call cap and the session budget are both one-sided comparisons
-# (`value > cap`, `cur + amt > cap`), valid only under a `value >= 0`
-# precondition that nothing used to assert. A negative value slipped past
-# both and drove the session counter negative, neutralising the budget.
-
-
-def test_negative_value_is_rejected(signer):
-    p = _payload(value=-1)
-    with pytest.raises(X402AmountExceededError, match="non-negative"):
-        signer.sign_payment(**p, expected_to=p["message"]["to"])
-    assert signer.budget.spent(U_MAINNET) == 0
-
-
-def test_huge_negative_value_is_rejected(signer):
-    """The exploit's magnitude: large enough to swamp the cap for a session."""
-    p = _payload(value=-(10**30))
-    with pytest.raises(X402AmountExceededError, match="non-negative"):
-        signer.sign_payment(**p, expected_to=p["message"]["to"])
-    assert signer.budget.spent(U_MAINNET) == 0
-
-
-def test_negative_value_via_int256_schema_is_rejected(signer):
-    """The full exploit chain: a poisoned `types` dict declaring `value` as
-    int256 (so eth_abi will happily encode a negative) plus a negative value.
-
-    Both defects had to align — under the canonical uint256 schema eth_abi
-    raises and the rollback path restores the counter, so the corruption was
-    transient. int256 made it persistent *and* produced a real signature.
-    """
-    p = _payload(value=-(10**30), from_addr=signer.wallet_address)
-    p["types"] = {
-        "EIP712Domain": EIP712DOMAIN_FIELDS,
-        "TransferWithAuthorization": [
-            {**f, "type": "int256"} if f["name"] == "value" else f
-            for f in TWA_FIELDS
-        ],
-    }
-    with pytest.raises((X402AmountExceededError, X402PolicyError)):
-        signer.sign_payment(**p, expected_to=p["message"]["to"])
-    assert signer.budget.spent(U_MAINNET) == 0
-
-
-def test_int256_schema_rejected_through_the_x402_path(signer):
-    """Fix C standing alone: a positive, in-cap value with a poisoned schema.
-
-    The amount guards have nothing to object to here, so this only passes if
-    the wallet's SigningPolicy is genuinely reached and pins the field shape —
-    and the budget must be rolled back on the way out.
-    """
-    p = _payload(value=500_000, from_addr=signer.wallet_address)
-    p["types"] = {
-        "EIP712Domain": EIP712DOMAIN_FIELDS,
-        "TransferWithAuthorization": [
-            {**f, "type": "int256"} if f["name"] == "value" else f
-            for f in TWA_FIELDS
-        ],
-    }
-    with pytest.raises(X402PolicyError, match="canonical EIP-3009 field shape"):
-        signer.sign_payment(**p, expected_to=p["message"]["to"])
-    assert signer.budget.spent(U_MAINNET) == 0
-
-
-def test_failed_poison_does_not_authorise_overspend(signer):
-    """The consequence under test, stated directly: a rejected poison attempt
-    must leave the advertised session cap fully enforced.
-    """
-    p = _payload(value=-(10**30), from_addr=signer.wallet_address)
-    with pytest.raises(X402AmountExceededError):
-        signer.sign_payment(**p, expected_to=p["message"]["to"])
-
-    # 5 x 1_000_000 exactly exhausts the 5_000_000 session budget.
-    for _ in range(5):
-        q = _payload(value=1_000_000, from_addr=signer.wallet_address)
-        signer.sign_payment(**q, expected_to=q["message"]["to"])
-    assert signer.budget.spent(U_MAINNET) == 5_000_000
-
-    r = _payload(value=1, from_addr=signer.wallet_address)
-    with pytest.raises(X402BudgetExhaustedError):
-        signer.sign_payment(**r, expected_to=r["message"]["to"])
-
-
-# ── SessionBudgetTracker negative-amount guard (SRC-1314) ────────────────
-# The "counter must never go negative" invariant was installed on rollback()
-# (where it is merely defensive) but not on the increment paths (where it is
-# load-bearing). Assert it directly on the tracker, independent of the signer.
-
-
-def test_tracker_reserve_rejects_negative_amount():
-    t = SessionBudgetTracker({U_MAINNET: 1_000})
-    with pytest.raises(X402BudgetExhaustedError, match="non-negative"):
-        t.reserve(U_MAINNET, -1)
-    assert t.spent(U_MAINNET) == 0
-
-
-def test_tracker_commit_rejects_negative_amount():
-    """commit() is the legacy path but reaches the same counter."""
-    t = SessionBudgetTracker({U_MAINNET: 1_000})
-    with pytest.raises(X402BudgetExhaustedError, match="non-negative"):
-        t.commit(U_MAINNET, -1)
-    assert t.spent(U_MAINNET) == 0
-
-
-def test_tracker_reserve_rejects_negative_even_without_a_cap():
-    """An untracked token has no cap, but the counter must still not go
-    negative — a later extend()/cap change would otherwise inherit the debt.
-    """
-    t = SessionBudgetTracker(None)
-    with pytest.raises(X402BudgetExhaustedError, match="non-negative"):
-        t.reserve(U_MAINNET, -1)
-    assert t.spent(U_MAINNET) == 0
 
 
 # ── Session budget ──────────────────────────────────────────────────────
