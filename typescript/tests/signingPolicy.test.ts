@@ -349,8 +349,8 @@ describe("EIP-3009 field-shape pinning", () => {
   });
 
   it("does not shape-pin unknown primary types", () => {
-    // Pinning applies only to structs we know canonically — permissive() and
-    // extend() callers signing custom types keep working.
+    // The pin keys on the struct name, so a differently-named custom type is
+    // untouched — permissive() and extend() callers keep working.
     const p = SigningPolicy.permissive({ allowInProduction: true });
     const domain = {
       name: "Custom",
@@ -364,6 +364,40 @@ describe("EIP-3009 field-shape pinning", () => {
     };
     expect(check(p, domain, types, { whatever: -5 }, { now: NOW })).toBe(
       "MyCustomStruct",
+    );
+  });
+
+  it("applies the pin even under permissive()", () => {
+    // The pin is keyed on the struct NAME, not on the policy. permissive()
+    // opts out of the allowlist, not out of the canonical shape: a struct
+    // calling itself TransferWithAuthorization is held to the EIP-3009 shape
+    // regardless of ruleset. This test exists to pin that decision down — it
+    // is the one behavioural consequence of the SRC-1314 fix that is not
+    // obvious from the allowlist.
+    const p = SigningPolicy.permissive({ allowInProduction: true });
+    expect(() =>
+      twaCall(p, { twaFields: withField("value", "type", "int256") }),
+    ).toThrow(SHAPE_ERR);
+  });
+
+  it("leaves EIP712Domain unpinned on purpose", () => {
+    // EIP-712 makes every domain field optional, so there is no single
+    // canonical shape to pin against. Recorded as checked-and-cleared rather
+    // than overlooked: altering the domain shape changes the domainSeparator,
+    // so the signature is useless against the real token.
+    const p = SigningPolicy.strictDefault();
+    const domain = {
+      name: "United Stables",
+      version: "1",
+      chainId: BSC_MAINNET_CHAIN_ID,
+      verifyingContract: U_MAINNET,
+    };
+    const types = {
+      EIP712Domain: [...EIP712DOMAIN_FIELDS, { name: "salt", type: "bytes32" }],
+      TransferWithAuthorization: TWA_FIELDS,
+    };
+    expect(check(p, domain, types, twaMsg(), { now: NOW })).toBe(
+      "TransferWithAuthorization",
     );
   });
 });
