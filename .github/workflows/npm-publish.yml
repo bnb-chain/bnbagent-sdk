@@ -1,0 +1,438 @@
+name: Publish (npm)
+run-name: Publish @bnbagent/sdk (${{ inputs.release_type }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: "Release channel"
+        required: true
+        default: alpha
+        type: choice
+        options:
+          - alpha
+          - production
+      source_ref:
+        description: "Alpha source branch or commit SHA (ignored for production)"
+        required: false
+        type: string
+      target_version:
+        description: "Alpha target stable version (X.Y.Z)"
+        required: true
+        default: "0.5.0"
+        type: string
+      existing_version:
+        description: "Existing alpha version to verify without republishing (optional)"
+        required: false
+        type: string
+      bump:
+        description: "Production version selection (current is for the first 0.5.0 release)"
+        required: true
+        default: current
+        type: choice
+        options:
+          - current
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate protected dispatch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the default-branch workflow
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REF_NAME: ${{ github.ref_name }}
+          RELEASE_TYPE: ${{ inputs.release_type }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          set -euo pipefail
+          if [[ "$REF_NAME" != "$DEFAULT_BRANCH" ]]; then
+            echo "Run this workflow from the protected default branch: $DEFAULT_BRANCH" >&2
+            exit 1
+          fi
+          if [[ "$RELEASE_TYPE" == "alpha" && -z "$SOURCE_REF" ]]; then
+            echo "source_ref is required for an alpha release" >&2
+            exit 1
+          fi
+
+  alpha-build:
+    name: Verify and pack alpha
+    if: inputs.release_type == 'alpha'
+    needs: validate
+    runs-on: ubuntu-latest
+    outputs:
+      alpha_version: ${{ steps.version.outputs.alpha_version }}
+      source_sha: ${{ steps.version.outputs.source_sha }}
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - name: Checkout alpha source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: typescript/package.json
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: typescript/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Allocate the alpha version
+        id: version
+        env:
+          EXISTING_VERSION: ${{ inputs.existing_version }}
+          TARGET_VERSION: ${{ inputs.target_version }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TARGET_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "target_version must be X.Y.Z, got: $TARGET_VERSION" >&2
+            exit 1
+          fi
+
+          PACKAGE_NAME="$(node -p "require('./package.json').name")"
+          if [[ "$PACKAGE_NAME" != "@bnbagent/sdk" ]]; then
+            echo "Refusing to publish unexpected package: $PACKAGE_NAME" >&2
+            exit 1
+          fi
+
+          STABLE_VERSION="$(npm view "$PACKAGE_NAME@$TARGET_VERSION" version 2>/dev/null || true)"
+          if [[ "$STABLE_VERSION" == "$TARGET_VERSION" ]]; then
+            echo "Refusing to publish an alpha after stable $TARGET_VERSION" >&2
+            exit 1
+          fi
+
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          if [[ -n "$EXISTING_VERSION" ]]; then
+            if [[ ! "$EXISTING_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]] ||
+              [[ "$EXISTING_VERSION" != "${TARGET_VERSION}-alpha."* ]]; then
+              echo "existing_version must match $TARGET_VERSION-alpha.N" >&2
+              exit 1
+            fi
+            PUBLISHED="$(npm view "$PACKAGE_NAME@$EXISTING_VERSION" version 2>/dev/null || true)"
+            if [[ "$PUBLISHED" != "$EXISTING_VERSION" ]]; then
+              echo "existing_version is not published: $EXISTING_VERSION" >&2
+              exit 1
+            fi
+            ALPHA_VERSION="$EXISTING_VERSION"
+          else
+            REGISTRY_ERROR="$RUNNER_TEMP/npm-view-versions.err"
+            if ! VERSIONS_JSON="$(
+              npm view "$PACKAGE_NAME" versions --json 2>"$REGISTRY_ERROR"
+            )"; then
+              if grep -q 'E404' "$REGISTRY_ERROR"; then
+                VERSIONS_JSON='[]'
+              else
+                cat "$REGISTRY_ERROR" >&2
+                exit 1
+              fi
+            fi
+            ALPHA_NUMBER="$(
+              TARGET_VERSION="$TARGET_VERSION" VERSIONS_JSON="$VERSIONS_JSON" node <<'NODE'
+          const parsed = JSON.parse(process.env.VERSIONS_JSON || "[]");
+          const versions = Array.isArray(parsed)
+            ? parsed
+            : typeof parsed === "string"
+              ? [parsed]
+              : [];
+          const prefix = `${process.env.TARGET_VERSION}-alpha.`;
+          const numbers = versions
+            .filter((version) => version.startsWith(prefix))
+            .map((version) => version.slice(prefix.length))
+            .filter((suffix) => /^\d+$/.test(suffix))
+            .map(Number);
+          process.stdout.write(String(Math.max(0, ...numbers) + 1));
+          NODE
+            )"
+            ALPHA_VERSION="${TARGET_VERSION}-alpha.${ALPHA_NUMBER}"
+          fi
+
+          npm pkg set "version=$ALPHA_VERSION"
+          echo "ALPHA_VERSION=$ALPHA_VERSION" >> "$GITHUB_ENV"
+          echo "alpha_version=$ALPHA_VERSION" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Verify ABIs are in sync
+        run: |
+          pnpm run codegen
+          git diff --exit-code src/abis
+
+      - name: Check source and build
+        run: |
+          pnpm run typecheck
+          pnpm run typecheck:examples
+          pnpm run lint
+          pnpm run test
+          pnpm run build
+
+      - name: Run offline examples
+        run: |
+          pnpm run example:x402
+          pnpm run example:security
+
+      - name: Pack and verify the installable tarball
+        run: |
+          set -euo pipefail
+          PACK_DIR="$RUNNER_TEMP/npm-pack"
+          CONSUMER_DIR="$(mktemp -d)"
+          mkdir -p "$PACK_DIR"
+          npm pack --json --pack-destination "$PACK_DIR" > "$RUNNER_TEMP/npm-pack.json"
+          TARBALL_NAME="$(jq -r '.[0].filename' "$RUNNER_TEMP/npm-pack.json")"
+          TARBALL_PATH="$PACK_DIR/$TARBALL_NAME"
+          test -f "$TARBALL_PATH"
+          tar -xOf "$TARBALL_PATH" package/package.json |
+            jq -e --arg version "$ALPHA_VERSION" \
+              '.name == "@bnbagent/sdk" and .version == $version' >/dev/null
+
+          cd "$CONSUMER_DIR"
+          npm init -y >/dev/null
+          npm install --ignore-scripts --no-audit --no-fund "$TARBALL_PATH"
+          node --input-type=module -e \
+            "await import('@bnbagent/sdk'); const { getBuiltWithValue } = await import('@bnbagent/sdk/erc8004'); const expected = 'https://github.com/bnb-chain/bnbagent-sdk#v' + process.env.ALPHA_VERSION; if (getBuiltWithValue() !== expected) throw new Error('unexpected built_with version')"
+          node -e \
+            "require('@bnbagent/sdk'); require('@bnbagent/sdk/erc8004')"
+
+      - name: Upload verified tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: bnbagent-sdk-${{ steps.version.outputs.alpha_version }}
+          path: ${{ runner.temp }}/npm-pack/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  alpha-publish:
+    name: Publish alpha to npm
+    if: inputs.release_type == 'alpha'
+    needs:
+      - validate
+      - alpha-build
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download verified tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: bnbagent-sdk-${{ needs.alpha-build.outputs.alpha_version }}
+          path: package
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+
+      - name: Install OIDC-capable npm
+        run: npm install --global npm@11.15.0
+
+      - name: Verify artifact identity
+        id: artifact
+        env:
+          ALPHA_VERSION: ${{ needs.alpha-build.outputs.alpha_version }}
+        run: |
+          set -euo pipefail
+          mapfile -t TARBALLS < <(find "$PWD/package" -maxdepth 1 -type f -name '*.tgz')
+          if [[ "${#TARBALLS[@]}" -ne 1 ]]; then
+            echo "Expected exactly one tarball, found ${#TARBALLS[@]}" >&2
+            exit 1
+          fi
+          TARBALL="${TARBALLS[0]}"
+          tar -xOf "$TARBALL" package/package.json |
+            jq -e --arg version "$ALPHA_VERSION" \
+              '.name == "@bnbagent/sdk" and .version == $version' >/dev/null
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+
+      - name: Read registry state
+        id: registry
+        env:
+          ALPHA_VERSION: ${{ needs.alpha-build.outputs.alpha_version }}
+        run: |
+          set -euo pipefail
+          TAGS="$(npm dist-tag ls "@bnbagent/sdk" 2>/dev/null || true)"
+          ALPHA_TAG="$(awk '$1 == "alpha:" { print $2 }' <<<"$TAGS")"
+          LATEST_TAG="$(awk '$1 == "latest:" { print $2 }' <<<"$TAGS")"
+          if [[ "$ALPHA_TAG" == "$ALPHA_VERSION" ]]; then
+            EXISTS=true
+          else
+            EXACT="$(npm view "@bnbagent/sdk@$ALPHA_VERSION" version --prefer-online 2>/dev/null || true)"
+            if [[ "$EXACT" == "$ALPHA_VERSION" ]]; then
+              EXISTS=true
+            else
+              EXISTS=false
+            fi
+          fi
+          echo "exists=$EXISTS" >> "$GITHUB_OUTPUT"
+          echo "latest=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Publish under the alpha dist-tag
+        if: steps.registry.outputs.exists != 'true'
+        env:
+          # workflow_dispatch runs from main while source_ref may be another
+          # commit, so alpha provenance would identify the dispatcher commit.
+          NPM_CONFIG_PROVENANCE: "false"
+        run: >-
+          npm publish "${{ steps.artifact.outputs.tarball }}"
+          --access public
+          --tag alpha
+          --ignore-scripts
+          --json
+
+      - name: Check prerelease dist-tags
+        env:
+          ALPHA_VERSION: ${{ needs.alpha-build.outputs.alpha_version }}
+          PREVIOUS_LATEST: ${{ steps.registry.outputs.latest }}
+        run: |
+          set -euo pipefail
+          TAGS="$(npm dist-tag ls "@bnbagent/sdk" 2>/dev/null || true)"
+          ALPHA_TAG="$(awk '$1 == "alpha:" { print $2 }' <<<"$TAGS")"
+          LATEST_TAG="$(awk '$1 == "latest:" { print $2 }' <<<"$TAGS")"
+
+          if [[ "$ALPHA_TAG" != "$ALPHA_VERSION" ]]; then
+            echo "::warning::npm accepted the publish, but the public alpha tag is still propagating"
+          fi
+          if [[ "$LATEST_TAG" == "$ALPHA_VERSION" ]]; then
+            echo "Refusing to leave an alpha version under latest" >&2
+            exit 1
+          fi
+          if [[ -n "$PREVIOUS_LATEST" && "$LATEST_TAG" != "$PREVIOUS_LATEST" ]]; then
+            echo "latest changed from $PREVIOUS_LATEST to $LATEST_TAG" >&2
+            exit 1
+          fi
+
+      - name: Write install summary
+        env:
+          ALPHA_VERSION: ${{ needs.alpha-build.outputs.alpha_version }}
+          SOURCE_SHA: ${{ needs.alpha-build.outputs.source_sha }}
+        run: |
+          {
+            echo "## @bnbagent/sdk alpha package"
+            echo
+            echo "- Version: \`$ALPHA_VERSION\`"
+            echo "- Source commit: \`$SOURCE_SHA\`"
+            echo "- Dist-tag: \`alpha\`"
+            echo "- Provenance: disabled because source_ref may differ from the dispatcher commit"
+            echo
+            echo '```bash'
+            echo "pnpm add -E @bnbagent/sdk@$ALPHA_VERSION"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  production:
+    name: Publish production to npm
+    if: inputs.release_type == 'production'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      contents: write
+      id-token: write
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: typescript/package.json
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+          cache-dependency-path: typescript/pnpm-lock.yaml
+
+      - name: Install OIDC-capable npm
+        run: npm install --global npm@11.15.0
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Verify ABIs are in sync
+        run: |
+          pnpm run codegen
+          git diff --exit-code src/abis
+
+      - name: Check source and build
+        run: |
+          pnpm run typecheck
+          pnpm run typecheck:examples
+          pnpm run lint
+          pnpm run test
+          pnpm run build
+          git diff --check
+
+      - name: Prepare or resume version
+        id: version
+        run: pnpm exec tsx scripts/release.ts prepare "${{ inputs.bump }}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes
+        run: pnpm exec tsx scripts/release.ts changelog > RELEASE_NOTES.md
+
+      - name: Commit version bump through the GitHub API
+        if: steps.version.outputs.commit == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.version.outputs.version }}
+        run: pnpm exec tsx scripts/release.ts commit "$V"
+
+      - name: Freeze workspace dependencies for publishing
+        run: pnpm exec tsx scripts/release.ts freeze
+
+      - name: Package smoke test
+        run: pnpm exec tsx scripts/release.ts pack
+
+      - name: Publish stable package with provenance
+        run: pnpm exec tsx scripts/release.ts publish --tag latest
+
+      - name: Create Git tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.version.outputs.version }}
+        run: >-
+          gh release create "v$V"
+          --target "${{ github.event.repository.default_branch }}"
+          --title "v$V"
+          --notes-file RELEASE_NOTES.md
+
+      - name: Write release summary
+        env:
+          V: ${{ steps.version.outputs.version }}
+        run: |
+          {
+            echo "## @bnbagent/sdk production package"
+            echo
+            echo "- Version: \`$V\`"
+            echo "- Dist-tag: \`latest\`"
+            echo "- GitHub Release: \`v$V\`"
+            echo "- Provenance: enabled by npm trusted publishing"
+          } >> "$GITHUB_STEP_SUMMARY"

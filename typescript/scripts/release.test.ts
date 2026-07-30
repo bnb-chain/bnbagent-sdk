@@ -1,8 +1,11 @@
 import { expect, test } from "vitest";
 import {
   freezeWorkspaceDeps,
+  npmPublishArgs,
   publishOne,
   refreshLockfile,
+  releaseRange,
+  resolveVersion,
   waitForPackage,
 } from "./release.ts";
 
@@ -49,6 +52,39 @@ test("release freeze converts every workspace dependency form", () => {
       external: "^1.0.0",
     },
   });
+});
+
+test("release supports publishing the current stable version", () => {
+  expect(resolveVersion("0.5.0", "current")).toBe("0.5.0");
+  expect(resolveVersion("0.5.0", "patch")).toBe("0.5.1");
+  expect(resolveVersion("0.5.0", "minor")).toBe("0.6.0");
+  expect(resolveVersion("0.5.0", "major")).toBe("1.0.0");
+});
+
+test("release rejects prerelease manifests and unknown version selections", () => {
+  expect(() => resolveVersion("0.5.0-alpha.1", "current")).toThrow(
+    "expected X.Y.Z",
+  );
+  expect(() => resolveVersion("0.5.0", "alpha")).toThrow(
+    "current|patch|minor|major",
+  );
+});
+
+test("release changelog prefers TypeScript tags with a first-release fallback", () => {
+  expect(releaseRange("v0.5.0", "bnbagent-v0.4.0")).toBe("v0.5.0..HEAD");
+  expect(releaseRange("", "bnbagent-v0.4.0")).toBe("bnbagent-v0.4.0..HEAD");
+  expect(releaseRange("", "")).toBe("HEAD");
+});
+
+test("release publishes production explicitly under latest", () => {
+  expect(npmPublishArgs("latest")).toEqual([
+    "npm",
+    "publish",
+    "--access",
+    "public",
+    "--tag",
+    "latest",
+  ]);
 });
 
 test("publish waits for npm visibility before continuing", () => {
