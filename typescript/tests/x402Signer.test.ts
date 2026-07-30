@@ -186,6 +186,96 @@ describe("X402Signer — per-call cap", () => {
   });
 });
 
+// ── Negative value (SRC-1314) ─────────────────────────────────────────────
+// The per-call cap and the session budget are both one-sided comparisons
+// (`value > cap`, `cur + amount > cap`), valid only under a `value >= 0`
+// precondition that nothing used to assert. A negative value slipped past both
+// and drove the session counter negative, neutralising the budget.
+
+const POISONED_TWA_FIELDS = TWA_FIELDS.map((f) =>
+  f.name === "value" ? { ...f, type: "int256" } : f,
+);
+
+describe("X402Signer — negative value (SRC-1314)", () => {
+  it("rejects a negative value, budget untouched", async () => {
+    const p = payload({ value: -1n });
+    await expect(
+      signer.signPayment({ ...p, expectedTo: p.message.to }),
+    ).rejects.toThrow(/non-negative/);
+    expect(signer.budget.spent(U_MAINNET)).toBe(0n);
+  });
+
+  it("rejects a huge negative value, budget untouched", async () => {
+    const p = payload({ value: -(10n ** 30n) });
+    await expect(
+      signer.signPayment({ ...p, expectedTo: p.message.to }),
+    ).rejects.toThrow(X402AmountExceededError);
+    expect(signer.budget.spent(U_MAINNET)).toBe(0n);
+  });
+
+  it("rejects the full exploit chain: int256 schema plus a negative value", async () => {
+    // Both defects had to align — under the canonical uint256 schema the
+    // encoder rejects and the rollback path restores the counter, so the
+    // corruption was transient. int256 made it persistent *and* produced a
+    // real signature.
+    const p = payload({
+      value: -(10n ** 30n),
+      fromAddr: signer.walletAddress,
+    });
+    await expect(
+      signer.signPayment({
+        ...p,
+        types: {
+          EIP712Domain: EIP712DOMAIN_FIELDS,
+          TransferWithAuthorization: POISONED_TWA_FIELDS,
+        },
+        expectedTo: p.message.to,
+      }),
+    ).rejects.toThrow();
+    expect(signer.budget.spent(U_MAINNET)).toBe(0n);
+  });
+
+  it("rejects an int256 schema through the x402 path even for a positive, in-cap value", async () => {
+    // The field-shape pin standing alone: the amount guards have nothing to
+    // object to here, so this only passes if the wallet's SigningPolicy is
+    // genuinely reached — and the budget must be rolled back on the way out.
+    const p = payload({ value: 500_000n, fromAddr: signer.walletAddress });
+    await expect(
+      signer.signPayment({
+        ...p,
+        types: {
+          EIP712Domain: EIP712DOMAIN_FIELDS,
+          TransferWithAuthorization: POISONED_TWA_FIELDS,
+        },
+        expectedTo: p.message.to,
+      }),
+    ).rejects.toThrow(X402PolicyError);
+    expect(signer.budget.spent(U_MAINNET)).toBe(0n);
+  });
+
+  it("leaves the advertised session cap fully enforced after a rejected poison", async () => {
+    const p = payload({
+      value: -(10n ** 30n),
+      fromAddr: signer.walletAddress,
+    });
+    await expect(
+      signer.signPayment({ ...p, expectedTo: p.message.to }),
+    ).rejects.toThrow(X402AmountExceededError);
+
+    // 5 x 1_000_000 exactly exhausts the 5_000_000 session budget.
+    for (let i = 0; i < 5; i++) {
+      const q = payload({ value: 1_000_000n, fromAddr: signer.walletAddress });
+      await signer.signPayment({ ...q, expectedTo: q.message.to });
+    }
+    expect(signer.budget.spent(U_MAINNET)).toBe(5_000_000n);
+
+    const r = payload({ value: 1n, fromAddr: signer.walletAddress });
+    await expect(
+      signer.signPayment({ ...r, expectedTo: r.message.to }),
+    ).rejects.toThrow(X402BudgetExhaustedError);
+  });
+});
+
 // ── Session budget ────────────────────────────────────────────────────────
 
 describe("X402Signer — session budget", () => {
@@ -432,6 +522,26 @@ describe("SessionBudgetTracker", () => {
   it("unlimited (uncapped) token never throws on reserve", () => {
     const tracker = new SessionBudgetTracker();
     expect(() => tracker.reserve(U_MAINNET, 10n ** 30n)).not.toThrow();
+  });
+
+  // SRC-1314: the "counter must never go negative" invariant was installed on
+  // rollback() (where it is merely defensive) but not on reserve() (where it is
+  // load-bearing). Assert it directly on the tracker.
+  it("reserve rejects a negative amount without mutating spent", () => {
+    const tracker = new SessionBudgetTracker({ [U_MAINNET]: 1_000n });
+    expect(() => tracker.reserve(U_MAINNET, -1n)).toThrow(
+      X402BudgetExhaustedError,
+    );
+    expect(() => tracker.reserve(U_MAINNET, -1n)).toThrow(/non-negative/);
+    expect(tracker.spent(U_MAINNET)).toBe(0n);
+  });
+
+  it("reserve rejects a negative amount even for an uncapped token", () => {
+    // No cap to exceed, but the counter must still not go negative — a later
+    // cap change would otherwise inherit the debt.
+    const tracker = new SessionBudgetTracker();
+    expect(() => tracker.reserve(U_MAINNET, -1n)).toThrow(/non-negative/);
+    expect(tracker.spent(U_MAINNET)).toBe(0n);
   });
 });
 

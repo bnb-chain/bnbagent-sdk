@@ -61,6 +61,7 @@ function twaCall(
   opts: {
     domainOverrides?: Record<string, unknown>;
     messageOverrides?: Record<string, unknown>;
+    twaFields?: unknown;
     now?: number;
   } = {},
 ): string {
@@ -73,7 +74,7 @@ function twaCall(
   };
   const types = {
     EIP712Domain: EIP712DOMAIN_FIELDS,
-    TransferWithAuthorization: TWA_FIELDS,
+    TransferWithAuthorization: opts.twaFields ?? TWA_FIELDS,
   };
   const msg = twaMsg(opts.messageOverrides);
   return check(policy, domain, types, msg, { now: opts.now ?? NOW });
@@ -242,6 +243,127 @@ describe("validity window", () => {
     };
     expect(() => check(p, domain, types, msg, { now: NOW })).toThrow(
       /requires validBefore/,
+    );
+  });
+});
+
+// ── EIP-3009 field-shape pinning (SRC-1314) ──────────────────────────────
+// The allowlist is name-scoped and `types` is caller-supplied (for x402 it
+// comes straight out of an untrusted 402 response body). Keeping the
+// allowlisted name while rewriting the field shape changes what the encoder
+// accepts, which is how a value-domain guard got silently removed.
+
+describe("EIP-3009 field-shape pinning", () => {
+  const withField = (name: string, key: string, value: string) =>
+    TWA_FIELDS.map((f) => (f.name === name ? { ...f, [key]: value } : f));
+  const SHAPE_ERR = /canonical EIP-3009 field shape/;
+
+  it("rejects value declared as int256", () => {
+    // The exploit primitive: int256 makes a negative `value` encodable. The
+    // message here carries an ordinary positive value, so this is rejected on
+    // field shape alone rather than depending on any amount check.
+    const p = SigningPolicy.strictDefault();
+    expect(() =>
+      twaCall(p, { twaFields: withField("value", "type", "int256") }),
+    ).toThrow(SHAPE_ERR);
+  });
+
+  it("rejects a narrowed value type", () => {
+    const p = SigningPolicy.strictDefault();
+    expect(() =>
+      twaCall(p, { twaFields: withField("value", "type", "uint128") }),
+    ).toThrow(SHAPE_ERR);
+  });
+
+  it("rejects reordered fields (order feeds the typeHash)", () => {
+    const p = SigningPolicy.strictDefault();
+    const swapped = [TWA_FIELDS[1], TWA_FIELDS[0], ...TWA_FIELDS.slice(2)];
+    expect(() => twaCall(p, { twaFields: swapped })).toThrow(SHAPE_ERR);
+  });
+
+  it("rejects an extra field", () => {
+    const p = SigningPolicy.strictDefault();
+    expect(() =>
+      twaCall(p, {
+        twaFields: [...TWA_FIELDS, { name: "memo", type: "bytes32" }],
+      }),
+    ).toThrow(SHAPE_ERR);
+  });
+
+  it("rejects a missing field", () => {
+    const p = SigningPolicy.strictDefault();
+    expect(() => twaCall(p, { twaFields: TWA_FIELDS.slice(0, -1) })).toThrow(
+      SHAPE_ERR,
+    );
+  });
+
+  it("rejects a renamed field", () => {
+    const p = SigningPolicy.strictDefault();
+    expect(() =>
+      twaCall(p, { twaFields: withField("value", "name", "amount") }),
+    ).toThrow(SHAPE_ERR);
+  });
+
+  it("rejects a non-array field descriptor", () => {
+    const p = SigningPolicy.strictDefault();
+    expect(() => twaCall(p, { twaFields: { from: "address" } })).toThrow(
+      /must be an array of field descriptors/,
+    );
+  });
+
+  it("carries diagnostics on a shape violation", () => {
+    const p = SigningPolicy.strictDefault();
+    try {
+      twaCall(p, { twaFields: withField("value", "type", "int256") });
+      throw new Error("expected PolicyViolation");
+    } catch (e) {
+      expect(e).toBeInstanceOf(PolicyViolation);
+      const v = e as PolicyViolation;
+      expect(v.primaryType).toBe("TransferWithAuthorization");
+      expect(v.chainId).toBe(BSC_MAINNET_CHAIN_ID);
+      expect(v.verifyingContract).toBe(U_MAINNET);
+    }
+  });
+
+  it("still accepts the canonical shape", () => {
+    // Guard against the pin being too tight to sign the real thing.
+    const p = SigningPolicy.strictDefault();
+    expect(twaCall(p)).toBe("TransferWithAuthorization");
+  });
+
+  it("accepts ReceiveWithAuthorization, which shares the canonical shape", () => {
+    const p = SigningPolicy.strictDefault();
+    const domain = {
+      name: "United Stables",
+      version: "1",
+      chainId: BSC_MAINNET_CHAIN_ID,
+      verifyingContract: U_MAINNET,
+    };
+    const types = {
+      EIP712Domain: EIP712DOMAIN_FIELDS,
+      ReceiveWithAuthorization: TWA_FIELDS,
+    };
+    expect(check(p, domain, types, twaMsg(), { now: NOW })).toBe(
+      "ReceiveWithAuthorization",
+    );
+  });
+
+  it("does not shape-pin unknown primary types", () => {
+    // Pinning applies only to structs we know canonically — permissive() and
+    // extend() callers signing custom types keep working.
+    const p = SigningPolicy.permissive({ allowInProduction: true });
+    const domain = {
+      name: "Custom",
+      version: "1",
+      chainId: BSC_MAINNET_CHAIN_ID,
+      verifyingContract: U_MAINNET,
+    };
+    const types = {
+      EIP712Domain: EIP712DOMAIN_FIELDS,
+      MyCustomStruct: [{ name: "whatever", type: "int256" }],
+    };
+    expect(check(p, domain, types, { whatever: -5 }, { now: NOW })).toBe(
+      "MyCustomStruct",
     );
   });
 });
