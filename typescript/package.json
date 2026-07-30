@@ -95,6 +95,7 @@
     "@altananetwork/sdk": "0.5.1",
     "@biomejs/biome": "^1.8.0",
     "@types/node": "^20.0.0",
+    "fast-check": "^4.9.0",
     "tsup": "^8.0.0",
     "tsx": "^4.23.0",
     "typescript": "^5.5.0",
