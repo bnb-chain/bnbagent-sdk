@@ -137,8 +137,8 @@ class X402Signer:
         Raises:
             X402RecipientMismatchError: ``message['to']`` differs from
                 ``expected_to``.
-            X402AmountExceededError: ``message['value']`` exceeds per-call
-                ``max_value_per_call`` for this token.
+            X402AmountExceededError: ``message['value']`` is negative, or
+                exceeds per-call ``max_value_per_call`` for this token.
             X402BudgetExhaustedError: session budget would be exceeded.
             X402PolicyError: wraps an underlying
                 :class:`bnbagent.signing.PolicyViolation`.
@@ -159,6 +159,14 @@ class X402Signer:
 
         # ── L1 per-call value cap ─────────────────────────────────
         value = int(message.get("value", 0))
+        # int() widens rather than validates: the declared uint256 field-shape
+        # is not enforced here, so a negative slips through the one-sided cap
+        # test below and neutralises the session budget. Refuse before
+        # reserve() so a rejected call still costs no budget.
+        if value < 0:
+            raise X402AmountExceededError(
+                f"message['value'] must be non-negative, got {value}"
+            )
         cap = self._max_value.get(verifying)
         if cap is not None and value > cap:
             raise X402AmountExceededError(

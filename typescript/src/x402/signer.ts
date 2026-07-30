@@ -163,7 +163,8 @@ export class X402Signer {
    *   the wallet's `SigningPolicy`, or a malformed/missing
    *   `domain.verifyingContract`.
    * @throws {X402AmountExceededError} `message.value` is not a valid integer
-   *   amount, or exceeds the per-call `maxValuePerCall` for this token.
+   *   amount, is negative, or exceeds the per-call `maxValuePerCall` for this
+   *   token.
    */
   async signPayment(opts: SignPaymentOptions): Promise<SignatureResult> {
     const { domain, types, message, expectedTo } = opts;
@@ -202,6 +203,15 @@ export class X402Signer {
       throw new X402AmountExceededError(
         `message.value is not a valid integer amount: ${JSON.stringify(message.value)}`,
         { cause: e },
+      );
+    }
+    // BigInt() widens rather than validates: the declared uint256 field-shape
+    // is not enforced here, so a negative slips through the one-sided cap test
+    // below and neutralises the session budget. Refuse before reserve() so a
+    // rejected call still costs no budget.
+    if (value < 0n) {
+      throw new X402AmountExceededError(
+        `message.value must be non-negative, got ${value}`,
       );
     }
     const cap = this.#maxValue.get(verifying);
