@@ -13,7 +13,7 @@ from typing import Any
 from web3 import Web3
 
 from .errors import PolicyViolation
-from .policy import SigningPolicy
+from .policy import EIP3009_CANONICAL_FIELDS, EIP3009_TYPES, SigningPolicy
 
 EIP712_DOMAIN_TYPE_NAME = "EIP712Domain"
 
@@ -140,11 +140,63 @@ def check(
                 verifying_contract=verifying,
             )
 
+    # ── Field-shape pinning for known structs ────────────────────────
+    _check_field_shape(types, primary_type, chain_id, verifying)
+
     # ── Validity window (only if primary type requires it) ───────────
     if primary_type in policy.validity_required_primary_types:
         _check_validity(policy, primary_type, message, chain_id, verifying, now)
 
     return primary_type
+
+
+def _check_field_shape(
+    types: dict[str, Any],
+    primary_type: str,
+    chain_id: int,
+    verifying: str,
+) -> None:
+    """Pin the field-shape of structs whose shape we know canonically.
+
+    The allowlist above is name-scoped, and ``types`` is caller-supplied — for
+    x402 it arrives verbatim in an untrusted 402 response body. Without this
+    check an attacker keeps the allowlisted name and rewrites the field's
+    Solidity type, which silently changes what the encoder will accept: the
+    canonical ``uint256`` is what makes a negative ``value`` unencodable, so
+    swapping in ``int256`` removes a value-domain guard the downstream layers
+    were relying on. Field order and count matter too — both feed the typeHash.
+
+    Only structs in :data:`EIP3009_CANONICAL_FIELDS`'s scope are pinned;
+    unknown types are left to the allowlist so ``permissive()`` and custom
+    ``extend()`` callers keep working.
+    """
+    if primary_type not in EIP3009_TYPES:
+        return
+    fields = types.get(primary_type)
+    if not isinstance(fields, list):
+        raise PolicyViolation(
+            f"types[{primary_type!r}] must be a list of field descriptors, "
+            f"got {type(fields).__name__}",
+            primary_type=primary_type,
+            chain_id=chain_id,
+            verifying_contract=verifying,
+        )
+    actual = tuple(
+        (f.get("name"), f.get("type")) if isinstance(f, dict) else (None, None)
+        for f in fields
+    )
+    if actual != EIP3009_CANONICAL_FIELDS:
+        expected_repr = ", ".join(f"{n} {t}" for n, t in EIP3009_CANONICAL_FIELDS)
+        actual_repr = ", ".join(f"{n} {t}" for n, t in actual)
+        raise PolicyViolation(
+            f"types[{primary_type!r}] does not match the canonical EIP-3009 "
+            f"field shape — refusing to sign a struct whose encoding differs "
+            f"from the on-chain type. expected ({expected_repr}), "
+            f"got ({actual_repr})",
+            primary_type=primary_type,
+            chain_id=chain_id,
+            verifying_contract=verifying,
+        )
 
 
 def _check_validity(
