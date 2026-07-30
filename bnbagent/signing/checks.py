@@ -166,9 +166,23 @@ def _check_field_shape(
     swapping in ``int256`` removes a value-domain guard the downstream layers
     were relying on. Field order and count matter too — both feed the typeHash.
 
-    Only structs in :data:`EIP3009_CANONICAL_FIELDS`'s scope are pinned;
-    unknown types are left to the allowlist so ``permissive()`` and custom
-    ``extend()`` callers keep working.
+    Scope is keyed on the struct **name**, not on the policy: anything calling
+    itself ``TransferWithAuthorization`` is held to the EIP-3009 shape even
+    under ``permissive()``, because the canonical shape is a property of the
+    name rather than of the ruleset. Types with any other name are untouched,
+    so custom ``extend()`` primary types keep working.
+
+    Two neighbouring surfaces are deliberately left unpinned:
+
+    * ``EIP712Domain`` — EIP-712 makes every domain field optional, so there is
+      no single canonical shape to pin against (``salt`` is legitimate, so is
+      omitting ``version``). Checked for exploitability: altering the domain
+      shape changes the domainSeparator, which makes the resulting signature
+      useless against the real token, and an out-of-range ``chainId`` cannot
+      pass the domain allowlist either.
+    * The Permit2 family (:data:`PERMIT2_SIGNATURE_TRANSFER_TYPES`) — opt-in
+      via ``extend()`` only, and the SDK carries no canonical field table for
+      them. Pin them here if they ever enter a default policy.
     """
     if primary_type not in EIP3009_TYPES:
         return

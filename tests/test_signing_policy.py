@@ -307,8 +307,8 @@ def test_receive_with_authorization_shares_the_canonical_shape():
 
 
 def test_unknown_primary_type_is_not_shape_pinned():
-    """Shape pinning applies only to the structs we know canonically —
-    permissive()/extend() callers signing custom types keep working.
+    """Shape pinning is keyed on the struct name, so a differently-named custom
+    type is untouched — permissive()/extend() callers keep working.
     """
     p = SigningPolicy.permissive(allow_in_production=True)
     domain = {
@@ -320,6 +320,44 @@ def test_unknown_primary_type_is_not_shape_pinned():
         "MyCustomStruct": [{"name": "whatever", "type": "int256"}],
     }
     assert check(p, domain, types, {"whatever": -5}, now=NOW) == "MyCustomStruct"
+
+
+def test_shape_pin_applies_even_under_permissive():
+    """The pin is keyed on the struct NAME, not on the policy.
+
+    permissive() opts out of the allowlist, not out of the canonical shape: a
+    struct calling itself TransferWithAuthorization is held to the EIP-3009
+    shape regardless of ruleset, because the shape belongs to the name. This
+    test exists to pin that decision down — it is the one behavioural
+    consequence of the SRC-1314 fix that is not obvious from the allowlist.
+    """
+    p = SigningPolicy.permissive(allow_in_production=True)
+    with pytest.raises(PolicyViolation, match="canonical EIP-3009 field shape"):
+        _twa_call(p, twa_fields=_twa_fields_with("value", "type", "int256"))
+
+
+def test_eip712domain_shape_is_not_pinned():
+    """EIP712Domain is deliberately left unpinned — EIP-712 makes every domain
+    field optional, so there is no single canonical shape to pin against.
+
+    Documented as checked-and-cleared rather than overlooked: altering the
+    domain shape changes the domainSeparator, so the signature is useless
+    against the real token.
+    """
+    p = SigningPolicy.strict_default()
+    odd_domain_fields = [
+        *EIP712DOMAIN_FIELDS,
+        {"name": "salt", "type": "bytes32"},
+    ]
+    domain = {
+        "name": "United Stables", "version": "1",
+        "chainId": BSC_MAINNET_CHAIN_ID, "verifyingContract": U_MAINNET,
+    }
+    types = {
+        "EIP712Domain": odd_domain_fields,
+        "TransferWithAuthorization": TWA_FIELDS,
+    }
+    assert check(p, domain, types, _twa_msg(), now=NOW) == "TransferWithAuthorization"
 
 
 # ── Structure / domain shape ─────────────────────────────────────────────

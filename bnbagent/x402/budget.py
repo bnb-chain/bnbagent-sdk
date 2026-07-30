@@ -83,7 +83,11 @@ class SessionBudgetTracker:
         return self._spent.get(cs, 0) + int(amount) > cap
 
     def commit(self, token: str, amount: int) -> None:
-        """Record a successful spend (unconditional increment under lock).
+        """Record a successful spend (increment under lock, no cap check).
+
+        Does not test the cap — that is the caller's job via
+        :meth:`would_exceed`. It does still reject a negative ``amount``,
+        so "unconditional" applies to the cap only (SRC-1314).
 
         ⚠️ Race-unsafe when paired with a separate :meth:`would_exceed`
         check — the gap between check and commit is exactly the TOCTOU
