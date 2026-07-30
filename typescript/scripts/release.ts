@@ -5,10 +5,11 @@
  * `"private": true`. When there is no packages/ directory the repo is treated as
  * a SINGLE package rooted at RELEASE_PACKAGE_DIR (default ".", i.e. the cwd) —
  * this repo ships one package (@bnbagent/sdk) from typescript/. All publishable
- * packages share ONE version (see docs/releasing.md).
+ * packages share ONE version (see docs/typescript-releasing.md).
  *
- *   prepare <patch|minor|major> resume an untagged release commit, or bump every
- *                              package; print version/commit outputs for Actions.
+ *   prepare <current|patch|minor|major>
+ *                              publish the current version, resume an untagged
+ *                              release commit, or bump every package.
  *   freeze                     rewrite internal `workspace:*` deps to `^<version>`
  *                              for publishing — run AFTER the version commit, NOT committed
  *                              (committing it would break local workspace linking).
@@ -120,17 +121,34 @@ function currentVersion(): string {
   return String(packages[0]!.pkg.version);
 }
 
-function bump(kind: string): string {
-  const cur = currentVersion();
-  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(cur);
+export function resolveVersion(current: string, kind: string): string {
+  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(current);
   if (!m)
-    throw new Error(`Unsupported current version "${cur}" (expected X.Y.Z)`);
+    throw new Error(
+      `Unsupported current version "${current}" (expected X.Y.Z)`,
+    );
+  if (kind === "current") return current;
+
   let [major, minor, patch] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  if (kind === "major") (major++, (minor = 0), (patch = 0));
-  else if (kind === "minor") (minor++, (patch = 0));
-  else if (kind === "patch") patch++;
-  else throw new Error(`Unknown bump "${kind}" (use patch|minor|major)`);
-  const next = `${major}.${minor}.${patch}`;
+  if (kind === "major") {
+    major++;
+    minor = 0;
+    patch = 0;
+  } else if (kind === "minor") {
+    minor++;
+    patch = 0;
+  } else if (kind === "patch") {
+    patch++;
+  } else {
+    throw new Error(
+      `Unknown version selection "${kind}" (use current|patch|minor|major)`,
+    );
+  }
+  return `${major}.${minor}.${patch}`;
+}
+
+function bump(kind: string): string {
+  const next = resolveVersion(currentVersion(), kind);
   for (const p of discoverPackages()) {
     p.pkg.version = next;
     writePkg(p);
@@ -187,9 +205,17 @@ function freeze(): void {
 /** Resume the current untagged release commit; otherwise start the next version. */
 function prepare(kind: string): { version: string; commit: boolean } {
   const version = currentVersion();
+  resolveVersion(version, kind);
   const subject = sh(["git", "log", "-1", "--pretty=%s"]);
   const tag = sh(["git", "tag", "--list", `v${version}`]);
   if (subject === `chore(release): v${version} [skip ci]` && !tag) {
+    return { version, commit: false };
+  }
+  if (kind === "current") {
+    if (tag)
+      throw new Error(
+        `Cannot publish current version ${version}: tag v${version} already exists`,
+      );
     return { version, commit: false };
   }
   const next = bump(kind);
@@ -275,8 +301,15 @@ function pack(): void {
 interface PublishOneOptions {
   exists?: (name: string, version: string) => boolean;
   run?: (pkg: Pkg) => number | null;
+  tag?: string;
   wait?: (name: string, version: string) => void;
   report?: (message: string) => void;
+}
+
+export function npmPublishArgs(tag?: string): string[] {
+  const args = ["npm", "publish", "--access", "public"];
+  if (tag) args.push("--tag", tag);
+  return args;
 }
 
 export function publishOne(
@@ -287,9 +320,8 @@ export function publishOne(
   const exists = options.exists ?? packageExists;
   const run =
     options.run ??
-    // npm reads the standard ~/.npmrc `_authToken` written by CI.
     ((pkg: Pkg) =>
-      runCmd(["npm", "publish", "--access", "public"], {
+      runCmd(npmPublishArgs(options.tag), {
         cwd: pkg.dir,
         inherit: true,
       }).status);
@@ -309,9 +341,9 @@ export function publishOne(
   wait(p.name, version);
 }
 
-function publish(dryRun: boolean): void {
+function publish(dryRun: boolean, tag?: string): void {
   for (const p of publishOrder(discoverPackages())) {
-    publishOne(p, dryRun);
+    publishOne(p, dryRun, { tag });
   }
 }
 
@@ -331,11 +363,29 @@ const ORDER = [
   "Other",
 ];
 
+export function releaseRange(
+  lastTypeScriptTag: string,
+  fallbackTag: string,
+): string {
+  const base = lastTypeScriptTag || fallbackTag;
+  return base ? `${base}..HEAD` : "HEAD";
+}
+
 function changelog(range?: string): string {
   let rev = range;
   if (!rev) {
-    const lastTag = sh(["git", "describe", "--tags", "--abbrev=0"]); // "" if no tags yet
-    rev = lastTag ? `${lastTag}..HEAD` : "HEAD";
+    const lastTypeScriptTag = sh([
+      "git",
+      "describe",
+      "--tags",
+      "--match",
+      "v[0-9]*",
+      "--abbrev=0",
+    ]);
+    const fallbackTag = lastTypeScriptTag
+      ? ""
+      : sh(["git", "describe", "--tags", "--abbrev=0"]);
+    rev = releaseRange(lastTypeScriptTag, fallbackTag);
   }
   const SEP = "\x1f";
   const log = sh(["git", "log", "--no-merges", `--pretty=%h${SEP}%s`, rev]);
@@ -457,11 +507,19 @@ if (invokedDirectly) {
   else if (sub === "commit") await commit(arg ?? "");
   else if (sub === "freeze") freeze();
   else if (sub === "pack") pack();
-  else if (sub === "publish") publish(arg === "--dry-run");
-  else if (sub === "changelog") process.stdout.write(`${changelog(arg)}\n`);
+  else if (sub === "publish") {
+    const args = process.argv.slice(3);
+    const dryRun = args.includes("--dry-run");
+    const tagIndex = args.indexOf("--tag");
+    const tag = tagIndex >= 0 ? args[tagIndex + 1] : undefined;
+    if (tagIndex >= 0 && !tag)
+      throw new Error("publish: --tag requires a value");
+    publish(dryRun, tag);
+  } else if (sub === "changelog")
+    process.stdout.write(`${changelog(arg)}\n`);
   else {
     console.error(
-      "usage: release.ts <prepare|bump patch|minor|major | commit <version> | freeze | pack | publish [--dry-run] | changelog [range]>",
+      "usage: release.ts <prepare current|patch|minor|major | bump patch|minor|major | commit <version> | freeze | pack | publish [--dry-run] [--tag <tag>] | changelog [range]>",
     );
     process.exit(1);
   }
