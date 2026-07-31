@@ -57,12 +57,9 @@ jobs:
           SOURCE_REF: ${{ inputs.source_ref }}
         run: |
           set -euo pipefail
-          # TEMPORARY: this workflow does not exist on $DEFAULT_BRANCH yet, so an
-          # alpha can only be dispatched from the branch that carries it. Restore
-          # the hard failure (exit 1) once the workflow lands on the default
-          # branch.
           if [[ "$REF_NAME" != "$DEFAULT_BRANCH" ]]; then
-            echo "::warning::dispatched from '$REF_NAME', not the protected default branch '$DEFAULT_BRANCH'"
+            echo "Run this workflow from the protected default branch: $DEFAULT_BRANCH" >&2
+            exit 1
           fi
           if [[ "$RELEASE_TYPE" == "alpha" && -z "$SOURCE_REF" ]]; then
             echo "source_ref is required for an alpha release" >&2
