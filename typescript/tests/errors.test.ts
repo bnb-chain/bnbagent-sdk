@@ -9,6 +9,7 @@ import {
   NegotiationError,
   NetworkError,
   RelayFallbackFailedError,
+  RelayRejectedError,
   RelaySubmissionUnverifiedError,
   RpcRangeLimitError,
   StorageError,
@@ -179,12 +180,60 @@ describe("RelaySubmissionUnverifiedError", () => {
   });
 });
 
+describe("relay observation status fields", () => {
+  it("TransactionPendingError defaults to public_tx_pending", () => {
+    const error = new TransactionPendingError("0xabc", 300);
+    expect(error.relayStatus).toBe("public_tx_pending");
+  });
+
+  it("TransactionPendingError can carry receipt_timeout_but_tx_visible", () => {
+    const error = new TransactionPendingError("0xabc", 300);
+    error.relayStatus = "receipt_timeout_but_tx_visible";
+    expect(error.relayStatus).toBe("receipt_timeout_but_tx_visible");
+  });
+
+  it("RelaySubmissionUnverifiedError pins relay_submission_unverified and defaults not-checked", () => {
+    const error = new RelaySubmissionUnverifiedError("0xabc", 30);
+    expect(error.relayStatus).toBe("relay_submission_unverified");
+    expect(error.secondaryRpcResult).toBe("not-checked");
+  });
+});
+
+describe("RelayRejectedError", () => {
+  it("is NOT a RelaySubmissionUnverifiedError (opposite retry semantics)", () => {
+    const error = new RelayRejectedError("not sponsorable", true);
+    expect(error).toBeInstanceOf(BNBAgentError);
+    expect(error).not.toBeInstanceOf(RelaySubmissionUnverifiedError);
+    expect(error.name).toBe("RelayRejectedError");
+    expect(error.relayStatus).toBe("relay_rejected");
+  });
+
+  it("a definite rejection says retrying is safe", () => {
+    const error = new RelayRejectedError("bad tx", true, {
+      rpcErrorCode: -32600,
+    });
+    expect(error.definite).toBe(true);
+    expect(error.rpcErrorCode).toBe(-32600);
+    expect(error.message).toContain("safely retried");
+  });
+
+  it("an ambiguous failure forbids blind resubmission and keeps the cause", () => {
+    const cause = new Error("ECONNRESET");
+    const error = new RelayRejectedError("socket hang up", false, { cause });
+    expect(error.definite).toBe(false);
+    expect(error.message).toContain("do not blindly resubmit");
+    expect(error.cause).toBe(cause);
+  });
+});
+
 describe("RelayFallbackFailedError", () => {
   it("extends RelaySubmissionUnverifiedError so classification is inherited", () => {
     const error = new RelayFallbackFailedError("0xabc", 30, "no gas");
     expect(error).toBeInstanceOf(RelaySubmissionUnverifiedError);
     expect(error).toBeInstanceOf(BNBAgentError);
     expect(error.name).toBe("RelayFallbackFailedError");
+    // The relayStatus discriminator is inherited unchanged.
+    expect(error.relayStatus).toBe("relay_submission_unverified");
   });
 
   it("surfaces the fallback reason and funding guidance", () => {

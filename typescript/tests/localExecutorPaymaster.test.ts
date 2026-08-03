@@ -11,7 +11,7 @@ import {
   _resetTxConfigOverrides,
   setDefaultReceiptTimeout,
 } from "../src/core/txConfig.js";
-import { TransactionPendingError } from "../src/errors.js";
+import { RelayRejectedError, TransactionPendingError } from "../src/errors.js";
 import {
   RelayFallbackFailedError,
   RelaySubmissionUnverifiedError,
@@ -23,6 +23,7 @@ import {
   WalletProvider,
 } from "../src/wallets/walletProvider.js";
 import {
+  FAKE_CHAIN_ID,
   FAKE_TX_HASH,
   type MockHandlers,
   mockPublicClient,
@@ -989,5 +990,216 @@ describe("LocalExecutor: self-pay fallback after unverified relay", () => {
 
     expect(error).toBeInstanceOf(RelaySubmissionUnverifiedError);
     expect(sendRawCount(mock)).toBe(0); // no self-pay broadcast
+  });
+});
+
+describe("LocalExecutor: multi-RPC secondary confirmation", () => {
+  function receiptFor(hash: `0x${string}`) {
+    return {
+      status: "0x1",
+      blockNumber: "0x1",
+      blockHash: `0x${"aa".repeat(32)}`,
+      transactionHash: hash,
+      transactionIndex: "0x0",
+      from: WALLET_ADDRESS,
+      to: CONTRACT_ADDRESS,
+      cumulativeGasUsed: "0x1e8480",
+      gasUsed: "0x186a0",
+      contractAddress: null,
+      logs: [],
+      logsBloom: `0x${"0".repeat(512)}`,
+      effectiveGasPrice: "0x3b9aca00",
+    };
+  }
+
+  it("a fallback RPC that can see the tx suppresses the self-pay and waits out the receipt", async () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let receiptAvailable = false;
+    const mock = mockPublicClient({
+      eth_getTransactionReceipt: () => {
+        if (receiptAvailable) return receiptFor(PAYMASTER_TX_HASH);
+        throw new Error("not found");
+      },
+    });
+    const wallet = new StubWallet();
+    const { paymaster } = makeFakePaymaster();
+    const confirmSeam = vi.fn(
+      async (_hash: `0x${string}`, _opts: { chainId: number }) => {
+        receiptAvailable = true;
+        return "seen" as const;
+      },
+    );
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: wallet,
+      paymaster,
+      receiptTimeout: 5,
+      relayUnseenTimeout: 1,
+      confirmTxUnseen: confirmSeam,
+    });
+
+    const promise = executor.execute(makeIntent());
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await promise;
+
+    expect(result.status).toBe(1);
+    expect(result.transactionHash).toBe(PAYMASTER_TX_HASH);
+    expect(confirmSeam).toHaveBeenCalledOnce();
+    expect(confirmSeam.mock.calls[0]?.[0]).toBe(PAYMASTER_TX_HASH);
+    expect(confirmSeam.mock.calls[0]?.[1]).toMatchObject({
+      chainId: FAKE_CHAIN_ID,
+    });
+    // No self-pay: only the sponsored sign, no direct broadcast.
+    expect(sendRawCount(mock)).toBe(0);
+    expect(wallet.signedTxs).toHaveLength(1);
+    expect(
+      warnSpy.mock.calls.some((args) =>
+        String(args[0]).includes("fallback RPC can see it"),
+      ),
+    ).toBe(true);
+  });
+
+  it("confirmed-unseen proceeds with the self-pay fallback", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mock = mockPublicClient({
+      eth_getTransactionReceipt: (params) => {
+        if (params[0] === FAKE_TX_HASH) return receiptFor(FAKE_TX_HASH);
+        throw new Error("not found");
+      },
+    });
+    const wallet = new StubWallet();
+    const { paymaster } = makeFakePaymaster();
+    const confirmSeam = vi.fn(async () => "confirmed-unseen" as const);
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: wallet,
+      paymaster,
+      receiptTimeout: 1,
+      confirmTxUnseen: confirmSeam,
+    });
+
+    const promise = executor.execute(makeIntent());
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await promise;
+
+    expect(result.transactionHash).toBe(FAKE_TX_HASH);
+    expect(confirmSeam).toHaveBeenCalledOnce();
+    expect(sendRawCount(mock)).toBe(1); // exactly one self-pay broadcast
+  });
+
+  it("inconclusive keeps the pre-existing self-pay behavior and warns", async () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mock = mockPublicClient({
+      eth_getTransactionReceipt: (params) => {
+        if (params[0] === FAKE_TX_HASH) return receiptFor(FAKE_TX_HASH);
+        throw new Error("not found");
+      },
+    });
+    const { paymaster } = makeFakePaymaster();
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: new StubWallet(),
+      paymaster,
+      receiptTimeout: 1,
+      confirmTxUnseen: async () => "inconclusive",
+    });
+
+    const promise = executor.execute(makeIntent());
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await promise;
+
+    expect(result.transactionHash).toBe(FAKE_TX_HASH);
+    expect(sendRawCount(mock)).toBe(1);
+    expect(
+      warnSpy.mock.calls.some((args) =>
+        String(args[0]).includes("could corroborate"),
+      ),
+    ).toBe(true);
+  });
+
+  it("fallbackRpcUrls from the constructor reach the verifier opts", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mock = mockPublicClient({
+      eth_getTransactionReceipt: (params) => {
+        if (params[0] === FAKE_TX_HASH) return receiptFor(FAKE_TX_HASH);
+        throw new Error("not found");
+      },
+    });
+    const { paymaster } = makeFakePaymaster();
+    const confirmSeam = vi.fn(
+      async (
+        _hash: `0x${string}`,
+        _opts: { fallbackRpcUrls?: string[] | null },
+      ) => "confirmed-unseen" as const,
+    );
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: new StubWallet(),
+      paymaster,
+      receiptTimeout: 1,
+      fallbackRpcUrls: ["https://alt.example"],
+      confirmTxUnseen: confirmSeam,
+    });
+
+    const promise = executor.execute(makeIntent());
+    await vi.advanceTimersByTimeAsync(1_000);
+    await promise;
+
+    expect(confirmSeam.mock.calls[0]?.[1]).toMatchObject({
+      fallbackRpcUrls: ["https://alt.example"],
+    });
+  });
+});
+
+describe("LocalExecutor: relay rejection classification", () => {
+  it("a definite relay rejection falls straight back to self-pay", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mock = mockPublicClient();
+    const wallet = new StubWallet();
+    const { paymaster } = makeFakePaymaster({
+      ethSendRawTransaction: async () => {
+        throw new RelayRejectedError(
+          "RPC error [-32000]: not sponsorable",
+          true,
+          {
+            rpcErrorCode: -32000,
+          },
+        );
+      },
+    });
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: wallet,
+      paymaster,
+    });
+
+    const result = await executor.execute(makeIntent());
+
+    expect(result.status).toBe(1);
+    // The self-pay path broadcast directly through the client.
+    expect(sendRawCount(mock)).toBe(1);
+  });
+
+  it("an ambiguous (definite=false) relay failure propagates and never self-pays", async () => {
+    const mock = mockPublicClient();
+    const { paymaster } = makeFakePaymaster({
+      ethSendRawTransaction: async () => {
+        throw new RelayRejectedError("HTTP error 502", false);
+      },
+    });
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: new StubWallet(),
+      paymaster,
+    });
+
+    await expect(executor.execute(makeIntent())).rejects.toBeInstanceOf(
+      RelayRejectedError,
+    );
+    expect(sendRawCount(mock)).toBe(0);
   });
 });

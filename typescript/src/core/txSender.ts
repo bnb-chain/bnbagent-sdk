@@ -25,10 +25,12 @@ import type { WalletProvider } from "../wallets/walletProvider.js";
 import { NonceManager, type NonceManagerClient } from "./nonceManager.js";
 import {
   DEFAULT_GAS_FALLBACK,
+  DEFAULT_RELAY_UNSEEN_TIMEOUT,
   MAX_RETRIES,
   MIN_GAS_PRICE_WEI,
   RETRY_BASE_DELAY,
   getDefaultReceiptTimeout,
+  getRelayUnseenTimeout,
   minGasPriceWei,
 } from "./txConfig.js";
 
@@ -50,8 +52,13 @@ export const RECEIPT_POLL_INTERVAL_MS = 250;
  * probed every `RECEIPT_POLL_INTERVAL_MS * 4`, so this window allows ~30
  * probes — ample for relay broadcast + mempool propagation; a relay that
  * silently dropped the tx is detected in seconds rather than minutes.
+ *
+ * @deprecated Use {@link DEFAULT_RELAY_UNSEEN_TIMEOUT} /
+ * `getRelayUnseenTimeout()` from `txConfig` — the effective default is now
+ * resolved lazily so `setRelayUnseenTimeout()` and the
+ * `BNBAGENT_RELAY_UNSEEN_TIMEOUT` env var take effect.
  */
-export const RELAY_UNSEEN_ABORT_SECONDS = 30;
+export const RELAY_UNSEEN_ABORT_SECONDS = DEFAULT_RELAY_UNSEEN_TIMEOUT;
 
 /** Internal sentinel distinguishing "receipt wait timed out" from any other rejection. */
 export class ReceiptWaitTimeout extends Error {
@@ -326,7 +333,7 @@ export async function waitForReceiptAndInterpret(
     receipt = await waitForReceipt(client, hash, timeoutSeconds, {
       trackTransactionPresence: opts.requireTransactionSeen,
       unseenAbortSeconds: opts.requireTransactionSeen
-        ? (opts.unseenAbortSeconds ?? RELAY_UNSEEN_ABORT_SECONDS)
+        ? (opts.unseenAbortSeconds ?? getRelayUnseenTimeout())
         : undefined,
     });
   } catch (error) {
@@ -334,7 +341,13 @@ export async function waitForReceiptAndInterpret(
       if (opts.requireTransactionSeen && !error.transactionSeen) {
         throw new RelaySubmissionUnverifiedError(hash, error.waitedSeconds);
       }
-      throw new TransactionPendingError(hash, timeoutSeconds);
+      const pending = new TransactionPendingError(hash, timeoutSeconds);
+      if (opts.requireTransactionSeen && error.transactionSeen) {
+        // The RPC saw the tx but it never mined within the full timeout —
+        // likely stuck in the mempool rather than still propagating.
+        pending.relayStatus = "receipt_timeout_but_tx_visible";
+      }
+      throw pending;
     }
     throw error;
   }

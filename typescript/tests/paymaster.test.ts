@@ -1,6 +1,7 @@
 import { getAddress } from "viem";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Paymaster, toAddressHex, toHex } from "../src/core/paymaster.js";
+import { RelayRejectedError } from "../src/errors.js";
 
 const PAYMASTER_URL = "https://paymaster.example.com";
 const ADDRESS = "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18";
@@ -295,5 +296,71 @@ describe("Paymaster", () => {
 
     const [, init] = mock.mock.calls[0];
     expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+});
+
+describe("Paymaster: ethSendRawTransaction relay-rejection classification", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock());
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("a JSON-RPC error is a definite RelayRejectedError with the rpc code", async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      mockResponse({ error: { message: "not sponsorable", code: -32000 } }),
+    );
+
+    const pm = new Paymaster(PAYMASTER_URL);
+    const error = await pm.ethSendRawTransaction("0xsignedtx").catch((e) => e);
+
+    expect(error).toBeInstanceOf(RelayRejectedError);
+    expect(error).toMatchObject({
+      name: "RelayRejectedError",
+      definite: true,
+      rpcErrorCode: -32000,
+      relayStatus: "relay_rejected",
+    });
+    expect(error.message).toContain("safely retried");
+  });
+
+  it("a non-2xx HTTP response is an ambiguous (definite=false) rejection", async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      mockResponse({}, 502),
+    );
+
+    const pm = new Paymaster(PAYMASTER_URL);
+    const error = await pm.ethSendRawTransaction("0xsignedtx").catch((e) => e);
+
+    expect(error).toBeInstanceOf(RelayRejectedError);
+    expect(error.definite).toBe(false);
+    expect(error.message).toContain("do not blindly resubmit");
+  });
+
+  it("a transport failure is an ambiguous rejection carrying the cause", async () => {
+    const networkError = new Error("refused");
+    (fetch as ReturnType<typeof vi.fn>).mockRejectedValue(networkError);
+
+    const pm = new Paymaster(PAYMASTER_URL);
+    const error = await pm.ethSendRawTransaction("0xsignedtx").catch((e) => e);
+
+    expect(error).toBeInstanceOf(RelayRejectedError);
+    expect(error.definite).toBe(false);
+    expect(error.cause).toBe(networkError);
+  });
+
+  it("read methods keep their plain-Error shape (no RelayRejectedError)", async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      mockResponse({ error: { message: "bad request", code: -32600 } }),
+    );
+
+    const pm = new Paymaster(PAYMASTER_URL);
+    const error = await pm.ethGetTransactionCount(ADDRESS).catch((e) => e);
+    expect(error).not.toBeInstanceOf(RelayRejectedError);
+    expect(error.message).toBe("RPC error [-32600]: bad request");
   });
 });

@@ -8,8 +8,26 @@
  */
 
 import { bytesToHex, getAddress, numberToHex } from "viem";
+import { RelayRejectedError } from "../errors.js";
 
 const RPC_TIMEOUT_MS = 30_000;
+
+/**
+ * Internal typed wrapper for paymaster request failures, so callers that
+ * need to classify (send vs read paths) can branch on `kind` instead of
+ * parsing messages. Messages are kept identical to the previous plain
+ * `Error`s.
+ */
+class PaymasterRequestError extends Error {
+  constructor(
+    message: string,
+    public readonly kind: "rpc" | "http",
+    public readonly code?: number,
+  ) {
+    super(message);
+    this.name = "PaymasterRequestError";
+  }
+}
 
 /** Shape of the transaction fields `isSponsorable` inspects. */
 export interface SponsorableTx {
@@ -159,8 +177,10 @@ export class Paymaster {
     }
 
     if (!response.ok) {
-      throw new Error(
+      throw new PaymasterRequestError(
         `HTTP error ${response.status}${response.statusText ? `: ${response.statusText}` : ""}`,
+        "http",
+        response.status,
       );
     }
 
@@ -173,7 +193,11 @@ export class Paymaster {
       if (result.error.data) {
         console.error(`Error data: ${JSON.stringify(result.error.data)}`);
       }
-      throw new Error(`RPC error [${errorCode}]: ${errorMsg}`);
+      throw new PaymasterRequestError(
+        `RPC error [${errorCode}]: ${errorMsg}`,
+        "rpc",
+        errorCode,
+      );
     }
 
     return result;
@@ -229,15 +253,36 @@ export class Paymaster {
       ? signedTransaction
       : `0x${signedTransaction}`;
 
-    const result = await this.makeRpcRequest(
-      "eth_sendRawTransaction",
-      [prefixed],
-      { headers: txOptions },
-    );
+    let result: JsonRpcResponse;
+    try {
+      result = await this.makeRpcRequest("eth_sendRawTransaction", [prefixed], {
+        headers: txOptions,
+      });
+    } catch (error) {
+      // A JSON-RPC error is the relay explicitly refusing the submission:
+      // no nonce was consumed, so callers may safely retry or self-pay
+      // (definite). An HTTP/transport failure is ambiguous — the tx may or
+      // may not have entered the relay queue — so it must never trigger an
+      // automatic re-send (definite: false).
+      if (error instanceof PaymasterRequestError && error.kind === "rpc") {
+        throw new RelayRejectedError(error.message, true, {
+          rpcErrorCode: error.code,
+          cause: error,
+        });
+      }
+      throw new RelayRejectedError(
+        error instanceof Error ? error.message : String(error),
+        false,
+        { cause: error },
+      );
+    }
 
     const txHash = result.result;
     if (txHash === undefined || txHash === null) {
-      throw new Error("Failed to send raw transaction: missing 'result' field");
+      throw new RelayRejectedError(
+        "Failed to send raw transaction: missing 'result' field",
+        false,
+      );
     }
     return txHash as string;
   }
