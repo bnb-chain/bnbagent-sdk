@@ -46,8 +46,17 @@ export const DEFAULT_GAS_FALLBACK = 2_000_000n;
  */
 export const DEFAULT_RECEIPT_TIMEOUT = 300;
 
+/**
+ * Default seconds a relay-returned tx hash may stay invisible to the chain
+ * RPC before the receipt wait aborts early with
+ * `RelaySubmissionUnverifiedError` instead of holding the caller for the full
+ * receipt timeout. Presence is probed every `RECEIPT_POLL_INTERVAL_MS * 4`.
+ */
+export const DEFAULT_RELAY_UNSEEN_TIMEOUT = 30;
+
 let minGasPriceOverride: bigint | null = null;
 let receiptTimeoutOverride: number | null = null;
+let relayUnseenTimeoutOverride: number | null = null;
 
 /**
  * Pin the gas-price floor (wei) for *all* chains.
@@ -127,10 +136,53 @@ export function getDefaultReceiptTimeout(): number {
   return DEFAULT_RECEIPT_TIMEOUT;
 }
 
-/** Reset both overrides to unset. Test-only. */
+/**
+ * Set the default relay-unseen abort timeout (seconds) for sponsored write
+ * paths. `0` disables the early abort entirely — the wait then runs to the
+ * full receipt timeout regardless of transaction visibility.
+ *
+ * Takes precedence over the `BNBAGENT_RELAY_UNSEEN_TIMEOUT` env var and is
+ * resolved lazily at execute time, like the receipt timeout.
+ *
+ * @throws {Error} `"relay unseen timeout must be >= 0"` if `seconds < 0`.
+ */
+export function setRelayUnseenTimeout(seconds: number): void {
+  if (seconds < 0) {
+    throw new Error("relay unseen timeout must be >= 0");
+  }
+  relayUnseenTimeoutOverride = Math.trunc(seconds);
+}
+
+/**
+ * Resolve the default relay-unseen abort timeout (seconds).
+ *
+ * Precedence: the {@link setRelayUnseenTimeout} override, then the
+ * `BNBAGENT_RELAY_UNSEEN_TIMEOUT` env var, then
+ * {@link DEFAULT_RELAY_UNSEEN_TIMEOUT}. A value of `0` disables the early
+ * abort.
+ */
+export function getRelayUnseenTimeout(): number {
+  if (relayUnseenTimeoutOverride !== null) {
+    return relayUnseenTimeoutOverride;
+  }
+  const raw = getEnv("BNBAGENT_RELAY_UNSEEN_TIMEOUT");
+  if (raw !== undefined) {
+    const parsed = parseIntStrict(raw);
+    if (parsed !== null && parsed >= 0) {
+      return parsed;
+    }
+    console.warn(
+      `Ignoring invalid BNBAGENT_RELAY_UNSEEN_TIMEOUT=${JSON.stringify(raw)}`,
+    );
+  }
+  return DEFAULT_RELAY_UNSEEN_TIMEOUT;
+}
+
+/** Reset all overrides to unset. Test-only. */
 export function _resetTxConfigOverrides(): void {
   minGasPriceOverride = null;
   receiptTimeoutOverride = null;
+  relayUnseenTimeoutOverride = null;
 }
 
 /** Parse a strict base-10 integer string to a `bigint`, or `null` if invalid. */

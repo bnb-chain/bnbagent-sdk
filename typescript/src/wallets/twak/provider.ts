@@ -40,6 +40,11 @@ import { join } from "node:path";
 import { hashMessage, recoverMessageAddress } from "viem";
 import { NETWORKS, type NetworkConfig } from "../../config.js";
 import {
+  type RelayVerifierOpts,
+  type SecondaryConfirmation,
+  confirmTxUnseen,
+} from "../../core/relayVerifier.js";
+import {
   RelaySubmissionUnverifiedError,
   TransactionPendingError,
 } from "../../errors.js";
@@ -330,6 +335,14 @@ export interface TWAKProviderOptions {
    */
   expectedAddress?: string;
   /**
+   * Secondary-confirmation seam for sponsored receipt timeouts; tests
+   * replace the real multi-RPC probe. Default: {@link confirmTxUnseen}.
+   */
+  confirmTxUnseen?: (
+    hash: `0x${string}`,
+    opts: RelayVerifierOpts,
+  ) => Promise<SecondaryConfirmation>;
+  /**
    * `true` (default, dev-machine parity with `EVMWalletProvider`): a
    * missing wallet is created lazily on the first operation. Deployments
    * must pass `false`: the wallet may only come from materialization
@@ -375,6 +388,10 @@ export class TWAKProvider extends WalletProvider implements IntentExecutor {
   readonly #home: string | undefined;
   readonly #expectedAddress: string | undefined;
   readonly #autoCreate: boolean;
+  readonly #confirmTxUnseen: (
+    hash: `0x${string}`,
+    opts: RelayVerifierOpts,
+  ) => Promise<SecondaryConfirmation>;
   #address: `0x${string}` | null = null;
   #ensured = false; // guards the one-shot lazy auto-create
   /**
@@ -399,6 +416,7 @@ export class TWAKProvider extends WalletProvider implements IntentExecutor {
     this.#home = opts.home;
     this.#expectedAddress = opts.expectedAddress;
     this.#autoCreate = opts.autoCreate ?? true;
+    this.#confirmTxUnseen = opts.confirmTxUnseen ?? confirmTxUnseen;
   }
 
   /** The twak chain key this provider is pinned to. */
@@ -483,18 +501,44 @@ export class TWAKProvider extends WalletProvider implements IntentExecutor {
     } catch {
       publicTxVisible = false;
     }
+    let secondary: SecondaryConfirmation | "not-checked" = "not-checked";
+    if (!publicTxVisible) {
+      // Corroborate with independent RPC endpoints before declaring the
+      // relay hash unverified — the primary RPC alone may be lagging.
+      const networkName =
+        NETWORK_FOR_TWAK_CHAIN[
+          this.#chain as keyof typeof NETWORK_FOR_TWAK_CHAIN
+        ];
+      const chainId = NETWORKS[networkName]?.chainId;
+      try {
+        secondary = await this.#confirmTxUnseen(timeout.txHash, {
+          chainId: chainId ?? 0,
+        });
+      } catch {
+        secondary = "inconclusive";
+      }
+      if (secondary === "seen") {
+        publicTxVisible = true;
+      }
+    }
     if (publicTxVisible) {
-      return new TransactionPendingError(
+      const pending = new TransactionPendingError(
         timeout.txHash,
         TWAK_RECEIPT_TIMEOUT_SECONDS,
         `TWAK sponsored transaction ${timeout.txHash} is visible on the public chain, but TWAK timed out waiting for its receipt. Do not retry until the transaction or job state is reconciled.`,
       );
+      pending.relayStatus = "receipt_timeout_but_tx_visible";
+      return pending;
     }
-    return new RelaySubmissionUnverifiedError(
+    const unverified = new RelaySubmissionUnverifiedError(
       timeout.txHash,
       TWAK_RECEIPT_TIMEOUT_SECONDS,
       `TWAK sponsored relay returned transaction ${timeout.txHash}, but the SDK could not verify it on the public chain after TWAK timed out waiting for its receipt. Do not retry blindly; reconcile the relay transaction and wallet nonce before issuing another write.`,
     );
+    if (secondary === "confirmed-unseen" || secondary === "inconclusive") {
+      unverified.secondaryRpcResult = secondary;
+    }
+    return unverified;
   }
 
   /** Sync variant for the base-class `address` getter / `exists()` only. */

@@ -99,6 +99,12 @@ export interface ExecutionContext {
    * SDK default. Self-broadcasting wallets ignore it.
    */
   relayUnseenTimeout?: number | null;
+  /**
+   * Extra RPC endpoints used to double-check an unseen relay hash before the
+   * self-pay fallback fires. Absent uses `BNBAGENT_FALLBACK_RPC_URLS`, then a
+   * built-in per-chain table. Self-broadcasting wallets ignore it.
+   */
+  fallbackRpcUrls?: string[] | null;
 }
 
 /**

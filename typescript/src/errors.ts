@@ -143,6 +143,15 @@ export class NegotiationError extends BNBAgentError {
  * which means the transaction failed (reverted, rejected, or never broadcast).
  */
 export class TransactionPendingError extends BNBAgentError {
+  /**
+   * Where in the relay-observability state machine this timeout sits:
+   * `"public_tx_pending"` (default — wait, do not re-send the nonce) or
+   * `"receipt_timeout_but_tx_visible"` (a relay hash the RPC has seen but
+   * that never mined within the timeout — likely stuck in the mempool;
+   * escalate rather than retry).
+   */
+  public relayStatus: RelayObservationStatus = "public_tx_pending";
+
   constructor(
     public readonly txHash: string,
     public readonly timeoutSeconds: number,
@@ -157,6 +166,24 @@ export class TransactionPendingError extends BNBAgentError {
 }
 
 /**
+ * Distinct outcomes of waiting on a relay/sponsored write. The previous
+ * single "timeout" collapsed states with opposite retry semantics; callers
+ * can now branch on `relayStatus` instead of parsing messages:
+ * - `public_tx_pending` — tx visible, still waiting: wait, never re-send.
+ * - `relay_submission_unverified` — relay returned a hash no RPC can see:
+ *   the SDK self-pay fallback handles it; blind resubmission is unsafe.
+ * - `relay_rejected` — the relay refused the submission; no nonce was
+ *   consumed, retrying (or self-paying) is safe.
+ * - `receipt_timeout_but_tx_visible` — tx seen but unmined for the whole
+ *   receipt timeout: likely gas-price-stuck, escalate.
+ */
+export type RelayObservationStatus =
+  | "public_tx_pending"
+  | "relay_submission_unverified"
+  | "relay_rejected"
+  | "receipt_timeout_but_tx_visible";
+
+/**
  * A relay returned a transaction hash, but the configured chain RPC never
  * observed that transaction before the receipt timeout expired.
  *
@@ -165,6 +192,20 @@ export class TransactionPendingError extends BNBAgentError {
  * known-pending transaction.
  */
 export class RelaySubmissionUnverifiedError extends BNBAgentError {
+  public readonly relayStatus: RelayObservationStatus =
+    "relay_submission_unverified";
+
+  /**
+   * Verdict of the multi-RPC secondary confirmation that ran before this
+   * error was acted on: `"confirmed-unseen"` (fallback RPCs corroborate),
+   * `"inconclusive"` (no fallback endpoint answered), or `"not-checked"`.
+   * Assigned by the executor after the error is raised by the receipt wait.
+   */
+  public secondaryRpcResult:
+    | "confirmed-unseen"
+    | "inconclusive"
+    | "not-checked" = "not-checked";
+
   constructor(
     public readonly txHash: string,
     public readonly timeoutSeconds: number,
@@ -205,6 +246,40 @@ export class RelayFallbackFailedError extends RelaySubmissionUnverifiedError {
       this.cause = options.cause;
     }
   }
+}
+
+/**
+ * The relay refused a sponsored submission outright.
+ *
+ * Deliberately NOT a subclass of {@link RelaySubmissionUnverifiedError} —
+ * the semantics are opposite: a definite rejection means no transaction was
+ * accepted and no nonce was consumed, so retrying (or self-paying the same
+ * payload) is safe. `definite` is `true` only for an explicit JSON-RPC error
+ * from the relay; an HTTP/transport failure sets `definite: false` because
+ * the submission may or may not have entered the relay queue, and callers
+ * must NOT automatically re-send in that ambiguous state.
+ */
+export class RelayRejectedError extends BNBAgentError {
+  public readonly relayStatus: RelayObservationStatus = "relay_rejected";
+
+  constructor(
+    public readonly reason: string,
+    public readonly definite: boolean,
+    options?: { rpcErrorCode?: number; cause?: unknown },
+  ) {
+    super(
+      definite
+        ? `Relay rejected the sponsored transaction: ${reason}. No nonce was consumed; the transaction can be safely retried or self-paid.`
+        : `Relay submission failed before acknowledgment: ${reason}. It is unknown whether the relay accepted the transaction — do not blindly resubmit; verify wallet nonce state first.`,
+    );
+    this.name = "RelayRejectedError";
+    this.rpcErrorCode = options?.rpcErrorCode;
+    if (options?.cause !== undefined) {
+      this.cause = options.cause;
+    }
+  }
+
+  public readonly rpcErrorCode?: number;
 }
 
 /**

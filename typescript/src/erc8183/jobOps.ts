@@ -29,6 +29,7 @@ import type { NetworkConfig } from "../config.js";
 import { getEnv } from "../core/envUtil.js";
 import { describeError } from "../core/txSender.js";
 import {
+  RelayRejectedError,
   RelaySubmissionUnverifiedError,
   RpcRangeLimitError,
   TransactionPendingError,
@@ -155,6 +156,7 @@ export const ERR_INTERNAL = "internal_error"; // unexpected failure (retryable)
 export const ERR_CHAIN_UNAVAILABLE = "chain_unavailable"; // transient chain/RPC trouble (retryable)
 export const ERR_TX_PENDING = "tx_pending"; // tx broadcast but unconfirmed (NOT retryable)
 export const ERR_TX_UNVERIFIED = "tx_unverified"; // relay hash not observed (NOT blindly retryable)
+export const ERR_RELAY_REJECTED = "relay_rejected"; // relay refused the submission (retryable only when definite)
 
 /**
  * Safe `{ error, error_code }` fields for an exception.
@@ -188,6 +190,20 @@ export function excErrorFields(exc: unknown): Record<string, unknown> {
       error_code: ERR_TX_UNVERIFIED,
       retryable: false,
       tx_hash: exc.txHash,
+    };
+  }
+
+  if (exc instanceof RelayRejectedError) {
+    // A definite rejection consumed no nonce, so a retry is safe. An
+    // ambiguous (definite=false) failure may have entered the relay queue —
+    // treat it like an unverified submission: no blind retry.
+    return {
+      error: exc.message,
+      error_code: ERR_RELAY_REJECTED,
+      retryable: exc.definite,
+      ...(exc.rpcErrorCode !== undefined
+        ? { rpc_error_code: exc.rpcErrorCode }
+        : {}),
     };
   }
 

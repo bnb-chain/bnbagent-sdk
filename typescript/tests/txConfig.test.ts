@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_RECEIPT_TIMEOUT,
+  DEFAULT_RELAY_UNSEEN_TIMEOUT,
   MIN_GAS_PRICE_WEI,
   _resetTxConfigOverrides,
   getDefaultReceiptTimeout,
+  getRelayUnseenTimeout,
   minGasPriceWei,
   setDefaultReceiptTimeout,
   setMinGasPriceWei,
+  setRelayUnseenTimeout,
 } from "../src/core/txConfig.js";
 import {
   BSC_MAINNET_CHAIN_ID,
@@ -112,12 +115,55 @@ describe("getDefaultReceiptTimeout", () => {
   });
 });
 
+describe("getRelayUnseenTimeout", () => {
+  it("defaults to 30", () => {
+    expect(getRelayUnseenTimeout()).toBe(DEFAULT_RELAY_UNSEEN_TIMEOUT);
+    expect(DEFAULT_RELAY_UNSEEN_TIMEOUT).toBe(30);
+  });
+
+  it("env overrides the default", () => {
+    vi.stubEnv("BNBAGENT_RELAY_UNSEEN_TIMEOUT", "90");
+    expect(getRelayUnseenTimeout()).toBe(90);
+  });
+
+  it("env value 0 disables the early abort", () => {
+    vi.stubEnv("BNBAGENT_RELAY_UNSEEN_TIMEOUT", "0");
+    expect(getRelayUnseenTimeout()).toBe(0);
+  });
+
+  it("invalid env is ignored", () => {
+    vi.stubEnv("BNBAGENT_RELAY_UNSEEN_TIMEOUT", "soon");
+    expect(getRelayUnseenTimeout()).toBe(30);
+  });
+
+  it("negative env is ignored", () => {
+    vi.stubEnv("BNBAGENT_RELAY_UNSEEN_TIMEOUT", "-5");
+    expect(getRelayUnseenTimeout()).toBe(30);
+  });
+
+  it("setter overrides env", () => {
+    vi.stubEnv("BNBAGENT_RELAY_UNSEEN_TIMEOUT", "90");
+    setRelayUnseenTimeout(45);
+    expect(getRelayUnseenTimeout()).toBe(45);
+  });
+
+  it("setter accepts 0 (disable) but rejects negatives", () => {
+    setRelayUnseenTimeout(0);
+    expect(getRelayUnseenTimeout()).toBe(0);
+    expect(() => setRelayUnseenTimeout(-1)).toThrow(
+      "relay unseen timeout must be >= 0",
+    );
+  });
+});
+
 describe("_resetTxConfigOverrides", () => {
-  it("clears both overrides back to env/default precedence", () => {
+  it("clears all overrides back to env/default precedence", () => {
     setMinGasPriceWei(9_000_000_000n);
     setDefaultReceiptTimeout(42);
+    setRelayUnseenTimeout(7);
     _resetTxConfigOverrides();
     expect(minGasPriceWei(BSC_TESTNET_CHAIN_ID)).toBe(ONE_GWEI);
     expect(getDefaultReceiptTimeout()).toBe(300);
+    expect(getRelayUnseenTimeout()).toBe(30);
   });
 });

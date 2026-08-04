@@ -47,8 +47,22 @@ export {
   TransactionPendingError,
   RelaySubmissionUnverifiedError,
   RelayFallbackFailedError,
+  RelayRejectedError,
   ERC8004PartialRegistrationError,
 } from "./errors.js";
+export type { RelayObservationStatus } from "./errors.js";
+
+// Relay observability — secondary confirmation of unseen relay hashes
+export {
+  confirmTxUnseen,
+  resolveFallbackRpcUrls,
+} from "./core/relayVerifier.js";
+export type {
+  RelayVerifierOpts,
+  SecondaryConfirmation,
+  TxPresenceProbe,
+  TxProbeResult,
+} from "./core/relayVerifier.js";
 
 // ERC-8004 Identity Registry
 export { ERC8004Agent } from "./erc8004/agent.js";
@@ -85,6 +99,8 @@ export {
   minGasPriceWei,
   setDefaultReceiptTimeout,
   getDefaultReceiptTimeout,
+  setRelayUnseenTimeout,
+  getRelayUnseenTimeout,
 } from "./core/txConfig.js";
 
 // Paymaster + nonce management

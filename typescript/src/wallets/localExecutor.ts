@@ -29,6 +29,11 @@ import {
   type NonceManagerClient,
 } from "../core/nonceManager.js";
 import type { Paymaster } from "../core/paymaster.js";
+import {
+  type RelayVerifierOpts,
+  type SecondaryConfirmation,
+  confirmTxUnseen,
+} from "../core/relayVerifier.js";
 import { getDefaultReceiptTimeout, minGasPriceWei } from "../core/txConfig.js";
 import {
   describeError,
@@ -42,6 +47,7 @@ import {
 } from "../core/txSender.js";
 import {
   RelayFallbackFailedError,
+  RelayRejectedError,
   RelaySubmissionUnverifiedError,
   TransactionPendingError,
 } from "../errors.js";
@@ -74,6 +80,17 @@ export interface LocalExecutorOpts {
    * (also the seam tests use to pin the raw unverified surface).
    */
   selfPayFallback?: boolean;
+  /**
+   * Extra RPC endpoints used to double-check that a relay-returned hash is
+   * really invisible before the self-pay fallback fires. `null`/absent falls
+   * back to `BNBAGENT_FALLBACK_RPC_URLS`, then a built-in per-chain table.
+   */
+  fallbackRpcUrls?: string[] | null;
+  /** Secondary-confirmation seam; tests replace the real multi-RPC probe. */
+  confirmTxUnseen?: (
+    hash: `0x${string}`,
+    opts: RelayVerifierOpts,
+  ) => Promise<SecondaryConfirmation>;
 }
 
 const USER_AGENT_HEADERS = { UserAgent: "bnbagent/v1.0.0" } as const;
@@ -96,6 +113,11 @@ export class LocalExecutor implements IntentExecutor {
   private readonly receiptTimeout: number | null;
   private readonly relayUnseenTimeout: number | null;
   private readonly selfPayFallback: boolean;
+  private readonly fallbackRpcUrls: string[] | null;
+  private readonly confirmTxUnseen: (
+    hash: `0x${string}`,
+    opts: RelayVerifierOpts,
+  ) => Promise<SecondaryConfirmation>;
 
   constructor(opts: LocalExecutorOpts) {
     this.client = opts.client;
@@ -104,6 +126,8 @@ export class LocalExecutor implements IntentExecutor {
     this.receiptTimeout = opts.receiptTimeout ?? null;
     this.relayUnseenTimeout = opts.relayUnseenTimeout ?? null;
     this.selfPayFallback = opts.selfPayFallback ?? true;
+    this.fallbackRpcUrls = opts.fallbackRpcUrls ?? null;
+    this.confirmTxUnseen = opts.confirmTxUnseen ?? confirmTxUnseen;
   }
 
   /** Execute an intent's mechanical `call`. */
@@ -134,15 +158,34 @@ export class LocalExecutor implements IntentExecutor {
       ));
 
     if (this.paymaster) {
-      const sponsored = await this.trySponsored({
-        paymaster: this.paymaster,
-        account,
-        to,
-        data,
-        value,
-        gas,
-        description,
-      });
+      let sponsored: {
+        hash: `0x${string}`;
+        tx: TransactionRequestLegacy & { chainId: number };
+      } | null;
+      try {
+        sponsored = await this.trySponsored({
+          paymaster: this.paymaster,
+          account,
+          to,
+          data,
+          value,
+          gas,
+          description,
+        });
+      } catch (error) {
+        if (error instanceof RelayRejectedError && error.definite) {
+          // The relay explicitly refused the submission — no nonce was
+          // consumed, so switching to a direct self-paid broadcast carries
+          // no double-broadcast risk. An ambiguous (definite=false) failure
+          // propagates instead: the tx may already sit in the relay queue.
+          console.warn(
+            `[LocalExecutor] relay rejected ${description} (${error.reason}); self-paying`,
+          );
+          sponsored = null;
+        } else {
+          throw error;
+        }
+      }
       if (sponsored) {
         const timeoutSeconds =
           this.receiptTimeout ?? getDefaultReceiptTimeout();
@@ -161,6 +204,30 @@ export class LocalExecutor implements IntentExecutor {
             error instanceof RelaySubmissionUnverifiedError &&
             this.selfPayFallback
           ) {
+            // Before charging the wallet, double-check against independent
+            // RPC endpoints that the relay hash is really invisible — a
+            // flaky primary RPC must not race a same-nonce self-pay against
+            // a transaction that actually reached the mempool.
+            const verdict = await this.secondaryConfirmation(
+              sponsored.hash,
+              sponsored.tx.chainId,
+            );
+            if (verdict === "seen") {
+              console.warn(
+                `[LocalExecutor] primary RPC never saw relay tx ${sponsored.hash}, but a fallback RPC can see it; waiting out the receipt instead of self-paying.`,
+              );
+              return await waitForReceiptAndInterpret(
+                this.client,
+                sponsored.hash,
+                timeoutSeconds,
+              );
+            }
+            error.secondaryRpcResult = verdict;
+            if (verdict === "inconclusive") {
+              console.warn(
+                `[LocalExecutor] no fallback RPC endpoint could corroborate that relay tx ${sponsored.hash} is unseen; proceeding with the self-pay fallback anyway.`,
+              );
+            }
             return await this.selfPayAfterUnverifiedRelay(
               sponsored,
               error,
@@ -427,6 +494,30 @@ export class LocalExecutor implements IntentExecutor {
         }
       }
       throw error;
+    }
+  }
+
+  /**
+   * Run the multi-RPC secondary confirmation for an unverified relay hash.
+   * Never throws — a verifier failure degrades to `"inconclusive"` so the
+   * self-pay safety net cannot be disabled by third-party RPC downtime.
+   */
+  private async secondaryConfirmation(
+    hash: `0x${string}`,
+    chainId: number,
+  ): Promise<SecondaryConfirmation> {
+    const transport = this.client.transport as unknown as
+      | { url?: string }
+      | undefined;
+    try {
+      return await this.confirmTxUnseen(hash, {
+        chainId,
+        primaryRpcUrl:
+          typeof transport?.url === "string" ? transport.url : undefined,
+        fallbackRpcUrls: this.fallbackRpcUrls,
+      });
+    } catch {
+      return "inconclusive";
     }
   }
 

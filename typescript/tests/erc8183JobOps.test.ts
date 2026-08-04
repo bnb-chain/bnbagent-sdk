@@ -39,6 +39,7 @@ import {
 } from "../src/erc8183/negotiation.js";
 import { type Job, JobStatus } from "../src/erc8183/types.js";
 import {
+  RelayRejectedError,
   RelaySubmissionUnverifiedError,
   RpcRangeLimitError,
   TransactionPendingError,
@@ -1462,5 +1463,23 @@ describe("ERC8183JobOps: retryable contract", () => {
     expect(fields.error_code).toBe("tx_unverified");
     expect(fields.retryable).toBe(false);
     expect(fields.tx_hash).toBe(`0x${"cd".repeat(32)}`);
+  });
+
+  it("a definite relay rejection is retryable and carries the rpc code", () => {
+    const exc = new RelayRejectedError("not sponsorable", true, {
+      rpcErrorCode: -32000,
+    });
+    const fields = excErrorFields(exc);
+    expect(fields.error_code).toBe("relay_rejected");
+    expect(fields.retryable).toBe(true);
+    expect(fields.rpc_error_code).toBe(-32000);
+  });
+
+  it("an ambiguous relay failure is not retryable", () => {
+    const exc = new RelayRejectedError("HTTP error 502", false);
+    const fields = excErrorFields(exc);
+    expect(fields.error_code).toBe("relay_rejected");
+    expect(fields.retryable).toBe(false);
+    expect(fields).not.toHaveProperty("rpc_error_code");
   });
 });

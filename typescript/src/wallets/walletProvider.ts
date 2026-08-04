@@ -226,6 +226,7 @@ export abstract class WalletProvider {
       paymaster: context.paymaster ?? null,
       receiptTimeout: context.receiptTimeout ?? null,
       relayUnseenTimeout: context.relayUnseenTimeout ?? null,
+      fallbackRpcUrls: context.fallbackRpcUrls ?? null,
     });
   }
 

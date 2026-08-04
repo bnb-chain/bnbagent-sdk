@@ -642,7 +642,14 @@ describe("TWAKProvider — sponsored receipt-timeout classification", () => {
   it("marks a relay hash unseen by the public RPC as unverified", async () => {
     installRouter((args) => (args[0] === "wallet" ? STATUS_OK : timeoutResult));
     const getTransaction = vi.fn().mockRejectedValue(new Error("not found"));
-    const twak = new TWAKProvider({ chain: "bsctestnet" });
+    const confirmSeam = vi.fn(
+      async (_hash: `0x${string}`, _opts: { chainId: number }) =>
+        "confirmed-unseen" as const,
+    );
+    const twak = new TWAKProvider({
+      chain: "bsctestnet",
+      confirmTxUnseen: confirmSeam,
+    });
     twak.makeExecutor(
       ctx(new Paymaster(PM_URL), {
         getTransaction,
@@ -660,9 +667,42 @@ describe("TWAKProvider — sponsored receipt-timeout classification", () => {
     }
 
     expect(caught).toBeInstanceOf(RelaySubmissionUnverifiedError);
-    expect(caught).toMatchObject({ txHash: hash });
+    expect(caught).toMatchObject({
+      txHash: hash,
+      secondaryRpcResult: "confirmed-unseen",
+    });
     expect(String(caught)).toContain("Do not retry blindly");
     expect(getTransaction).toHaveBeenCalledWith({ hash });
+    // The secondary confirmation ran against the bsctestnet chain id.
+    expect(confirmSeam).toHaveBeenCalledOnce();
+    expect(confirmSeam.mock.calls[0]?.[1]).toMatchObject({ chainId: 97 });
+  });
+
+  it("a fallback RPC that can see the hash reclassifies it as pending", async () => {
+    installRouter((args) => (args[0] === "wallet" ? STATUS_OK : timeoutResult));
+    const getTransaction = vi.fn().mockRejectedValue(new Error("not found"));
+    const twak = new TWAKProvider({
+      chain: "bsctestnet",
+      confirmTxUnseen: async () => "seen",
+    });
+    twak.makeExecutor(
+      ctx(new Paymaster(PM_URL), {
+        getTransaction,
+      } as unknown as ExecutionContext["client"]),
+    );
+
+    let caught: unknown;
+    try {
+      await twak.execute({ name: ERC8183_DISPUTE, kwargs: { jobId: 1n } });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(TransactionPendingError);
+    expect(caught).toMatchObject({
+      txHash: hash,
+      relayStatus: "receipt_timeout_but_tx_visible",
+    });
   });
 
   it("marks a public-chain-visible hash as pending", async () => {
