@@ -2,15 +2,11 @@
 
 ## Overview
 
-The `erc8183` module implements **ERC-8183**, an agentic commerce stack built on
-[ERC-8183](https://eips.ethereum.org/EIPS/eip-8183) with a pluggable,
-UMA-style optimistic evaluator. It covers the full job lifecycle —
-create → register → setBudget → fund → submit → settle — so a **client**
-and a **provider** can transact trustlessly through three contracts:
+The `erc8183` module implements **ERC-8183**, an agentic commerce stack built on [ERC-8183](https://eips.ethereum.org/EIPS/eip-8183) with a pluggable, UMA-style optimistic evaluator. It covers the full job lifecycle - create → register → setBudget → fund → submit → settle - so a **client** and a **provider** can transact trustlessly through three contracts:
 
-1. **AgenticCommerce** (ERC-8183 kernel) — job state + escrow.
-2. **EvaluatorRouter** — `jobId → policy` binding; doubles as `job.evaluator` and `job.hook`. `settle(jobId)` is permissionless.
-3. **OptimisticPolicy** — reference policy: **silence past the dispute window approves**; a client-raised dispute triggers a whitelisted-voter `voteReject` quorum.
+1. **AgenticCommerce** (ERC-8183 kernel) - job state + escrow.
+2. **EvaluatorRouter** - `jobId → policy` binding; doubles as `job.evaluator` and `job.hook`. `settle(jobId)` is permissionless.
+3. **OptimisticPolicy** - reference policy: **silence past the dispute window approves**; a client-raised dispute triggers a whitelisted-voter `voteReject` quorum.
 
 ## Architecture
 
@@ -21,19 +17,18 @@ ERC8183Client (facade)  ──┬──►  CommerceClient  ──►  AgenticCo
                        └──►  MinimalERC20    ──►  Payment token (immutable on kernel)
 ```
 
-Most callers only use `ERC8183Client`. The sub-clients are exposed as
-attributes for advanced workflows (direct `admin` calls, batch reads, etc.).
+Most callers only use `ERC8183Client`. The sub-clients are exposed as attributes for advanced workflows (direct `admin` calls, batch reads, etc.).
 
 ## Key Concepts
 
 | Term | Meaning |
-|------|---------|
+| --- | --- |
 | **Job lifecycle** | `OPEN → FUNDED → SUBMITTED → COMPLETED / REJECTED / EXPIRED`. |
 | **Policy** | Contract implementing `IPolicy`. `OptimisticPolicy` is v1's only policy. |
 | **Dispute window** | Grace period after `submit` in which the client can call `policy.dispute(jobId)`. Silence ⇒ approve. |
-| **Voter** | Admin-whitelisted EOA that can cast `voteReject`. Reaching `voteQuorum` flips the verdict to REJECT. Voters cannot approve — approval is implicit by silence. |
-| **Permissionless settle** | `router.settle(jobId)` pulls the current verdict from the policy and applies it. Anyone can call — clients, voters, or the provider's own operator script. |
-| **Claim refund** | `commerce.claimRefund(jobId)` after `expiredAt` — non-pausable, non-hookable universal escape hatch. |
+| **Voter** | Admin-whitelisted EOA that can cast `voteReject`. Reaching `voteQuorum` flips the verdict to REJECT. Voters cannot approve - approval is implicit by silence. |
+| **Permissionless settle** | `router.settle(jobId)` pulls the current verdict from the policy and applies it. Anyone can call - clients, voters, or the provider's own operator script. |
+| **Claim refund** | `commerce.claimRefund(jobId)` after `expiredAt` - non-pausable, non-hookable universal escape hatch. |
 | **Platform fee** | Basis points deducted from the budget on `complete` and sent to the platform treasury (configured by the Commerce admin). No fees on `reject` or `claimRefund`. |
 | **Negotiation** | Single-round HTTP exchange. The agreed terms are anchored on-chain in the job `description`. |
 
@@ -74,9 +69,7 @@ If the existing allowance already covers `amount`, no approve is sent.
 
 #### Custom networks / RPCs
 
-`network=` also accepts a `NetworkConfig`, which is used verbatim (env vars
-are ignored for that call). Handy for private RPCs, local forks, and
-bespoke deployments:
+`network=` also accepts a `NetworkConfig`, which is used verbatim (env vars are ignored for that call). Handy for private RPCs, local forks, and bespoke deployments:
 
 ```python
 from dataclasses import replace
@@ -106,14 +99,12 @@ await funded_job_watcher(ops, on_funded, interval=30)
 
 Built-in behaviour:
 
-- **`funded_job_watcher`**: signer-free detection loop over `get_pending_jobs()` — fires `on_funded` once per newly FUNDED job assigned to this provider; retries on transient failure; never submits or settles by itself.
-- **Deliverable size caps**: `submit_result` rejects oversized payloads before upload — `response_content` is capped at 5 MB and the `metadata` JSON at 256 KB. Override via `ERC8183_MAX_RESPONSE_BYTES` / `ERC8183_MAX_METADATA_BYTES`. Excess returns `error_code="payload_too_large"`.
-- **Semantic error codes**: failure dicts carry a transport-neutral string `error_code` (`budget_too_low`, `not_assigned`, `not_found`, `job_expired`, `wrong_status`, `description_invalid`, `submit_deadline_passed`, `payload_too_large`, `internal_error`, `chain_unavailable`) plus `"retryable": True` on transient failures only. A serving layer maps codes to its own protocol's rejection — the HTTP example keeps a code → status table.
+- **`funded_job_watcher`**: signer-free detection loop over `get_pending_jobs()` - fires `on_funded` once per newly FUNDED job assigned to this provider; retries on transient failure; never submits or settles by itself.
+- **Deliverable size caps**: `submit_result` rejects oversized payloads before upload - `response_content` is capped at 5 MB and the `metadata` JSON at 256 KB. Override via `ERC8183_MAX_RESPONSE_BYTES` / `ERC8183_MAX_METADATA_BYTES`. Excess returns `error_code="payload_too_large"`.
+- **Semantic error codes**: failure dicts carry a transport-neutral string `error_code` (`budget_too_low`, `not_assigned`, `not_found`, `job_expired`, `wrong_status`, `description_invalid`, `submit_deadline_passed`, `payload_too_large`, `internal_error`, `chain_unavailable`) plus `"retryable": True` on transient failures only. A serving layer maps codes to its own protocol's rejection - the HTTP example keeps a code → status table.
 - **Settle is delegated** to operator scripts. `router.settle(jobId)` is permissionless; operators run a separate process (or an ad-hoc script using `ERC8183Client.settle`) once the dispute window elapses or a verdict is finalised.
 
-How the loop faces the world (A2A / MCP / HTTP) is the application's choice —
-see `examples/a2a-agent/` (A2A, recommended) and `examples/agent-server/`
-(HTTP reference, including the `/negotiate` quote endpoint).
+How the loop faces the world (A2A / MCP / HTTP) is the application's choice - see `examples/a2a-agent/` (A2A, recommended) and `examples/agent-server/` (HTTP reference, including the `/negotiate` quote endpoint).
 
 ### Voter-side: `voteReject` and settle
 
@@ -129,10 +120,7 @@ if erc8183.policy.is_voter(erc8183.address) and erc8183.policy.disputed(job_id):
     erc8183.settle(job_id)
 ```
 
-`examples/voter/watch.py` automates the full loop: it polls `Disputed` and
-`VoteCast` events, downloads the `DeliverableManifest` from IPFS, verifies the
-hash, prompts the voter to `[r]eject / [s]kip`, and calls `router.settle`
-automatically when `rejectVotes >= voteQuorum`.
+`examples/voter/watch.py` automates the full loop: it polls `Disputed` and `VoteCast` events, downloads the `DeliverableManifest` from IPFS, verifies the hash, prompts the voter to `[r]eject / [s]kip`, and calls `router.settle` automatically when `rejectVotes >= voteQuorum`.
 
 See [`examples/voter/`](../../examples/voter/).
 
@@ -140,25 +128,11 @@ See [`examples/voter/`](../../examples/voter/).
 
 ### Negotiation contract (transport-agnostic)
 
-A negotiation inquiry is `{"task_description": "...", "terms": {...}}` and the
-reply is the signed `NegotiationResult` envelope — regardless of which
-transport carries it (the A2A example carries it in a `message/send` data
-part; the HTTP example as a `POST /negotiate` body).
+A negotiation inquiry is `{"task_description": "...", "terms": {...}}` and the reply is the signed `NegotiationResult` envelope - regardless of which transport carries it (the A2A example carries it in a `message/send` data part; the HTTP example as a `POST /negotiate` body).
 
-The combined `task_description` + `terms` must fit the on-chain
-`job.description` cap (`MAX_DESCRIPTION_BYTES = 4096`). Over-length requests
-are rejected at negotiation time with reason code `TASK_TOO_LONG` (`0x07`) —
-the description is **not** silently truncated, because truncating after
-signing would invalidate `negotiation_hash` / `provider_sig`.
+The combined `task_description` + `terms` must fit the on-chain `job.description` cap (`MAX_DESCRIPTION_BYTES = 4096`). Over-length requests are rejected at negotiation time with reason code `TASK_TOO_LONG` (`0x07`) - the description is **not** silently truncated, because truncating after signing would invalidate `negotiation_hash` / `provider_sig`.
 
-Quote TTL is bounded by `NegotiationHandler.MAX_QUOTE_TTL_SECONDS = 900` so
-leaked or replayed `provider_sig` values cannot accumulate value over time.
-Public quote endpoints should be throttled (every accepted request burns a
-wallet signature) — `bnbagent.utils.SlidingWindowLimiter` is the SDK's
-transport-agnostic building block; the serving layer maps
-`RateLimitExceeded` to its own rejection (HTTP 429, JSON-RPC error, ...).
-Behind a reverse proxy, make sure the real client IP reaches the limiter
-(e.g. uvicorn `--forwarded-allow-ips`).
+Quote TTL is bounded by `NegotiationHandler.MAX_QUOTE_TTL_SECONDS = 900` so leaked or replayed `provider_sig` values cannot accumulate value over time. Public quote endpoints should be throttled (every accepted request burns a wallet signature) - `bnbagent.utils.SlidingWindowLimiter` is the SDK's transport-agnostic building block; the serving layer maps `RateLimitExceeded` to its own rejection, such as HTTP 429 or a JSON-RPC error. Behind a reverse proxy, make sure the real client IP reaches the limiter (e.g. uvicorn `--forwarded-allow-ips`).
 
 ---
 
@@ -167,10 +141,10 @@ Behind a reverse proxy, make sure the real client IP reaches the limiter
 High-level facade. Most useful methods:
 
 | Method | Purpose |
-|--------|---------|
+| --- | --- |
 | `create_job(...)` | Create a job; defaults `evaluator` and `hook` to the Router. Returns `{jobId, transactionHash, receipt}`. |
 | `register_job(job_id, policy=None)` | Bind the configured policy (or override) to a job on the Router. |
-| `set_budget(job_id, amount)` | Set the escrow amount. Client **or** provider, any amount — `amount == 0` is a zero-price (free) job: `fund(0)` moves no tokens and the provider verifies the funded budget against its signed quote before working. |
+| `set_budget(job_id, amount)` | Set the escrow amount. Client **or** provider, any amount - `amount == 0` is a zero-price (free) job: `fund(0)` moves no tokens and the provider verifies the funded budget against its signed quote before working. |
 | `fund(job_id, amount, *, approve_floor=None)` | Approves (if needed) and funds. See floor strategy above. `amount == 0` (a zero-price job) moves no tokens and skips the ERC-20 approve entirely. |
 | `submit(job_id, deliverable, opt_params)` | Provider submits 32-byte `deliverable` (`DeliverableManifest.manifest_hash()`, keccak256 of canonical manifest JSON); `opt_params` dict (must contain `deliverable_url`) is serialized to JSON and forwarded as `optParams`. |
 | `cancel_open(job_id, reason=...)` | Client cancels while OPEN; no escrow moved. |
@@ -181,7 +155,7 @@ High-level facade. Most useful methods:
 | `vote_reject(job_id)` | Whitelisted voter casts a reject vote. |
 | `get_job(job_id)` | Returns typed `Job` dataclass (incl. on-chain `deliverable` bytes32). |
 | `get_job_status(job_id)` | Returns a `JobStatus` enum. |
-| `get_verdict(job_id)` | Simulate `Policy.check` — returns `(Verdict, reason)`. |
+| `get_verdict(job_id)` | Simulate `Policy.check` - returns `(Verdict, reason)`. |
 | `inflight_job_count()` | Number of jobs the Router currently tracks as in-flight. |
 | `dispute_quorum_snapshot(job_id)` | Reject-quorum snapshotted at `dispute()` time. |
 
@@ -203,17 +177,11 @@ OptimisticPolicy surface:
 
 - **Writes**: `dispute` (client), `vote_reject` (voter), admin methods `add_voter`, `remove_voter`, `set_quorum`.
 - **Reads**: `check`, `submitted_at`, `disputed`, `reject_votes`, `has_voted`, `is_voter`, `dispute_window`, `vote_quorum`, `dispute_quorum_snapshot`, `active_voter_count`, `admin`, `commerce`, `router`.
-- `get_deliverable_url(job_id, *, hint_block=None)` — reads `JobInitialised.optParams` to extract `deliverable_url`. Pass `hint_block` (e.g. the block number of the `Disputed` event) to keep the `eth_getLogs` window tight and avoid RPC block-range limits.
+- `get_deliverable_url(job_id, *, hint_block=None)` - reads `JobInitialised.optParams` to extract `deliverable_url`. Pass `hint_block` (e.g. the block number of the `Disputed` event) to keep the `eth_getLogs` window tight and avoid RPC block-range limits.
 
 ### `ERC8183JobOps` / `funded_job_watcher`
 
-`ERC8183JobOps` is the async wrapper over `ERC8183Client` that every serving
-form builds on. Key methods: `submit_result`, `get_job`, `get_response`,
-`get_pending_jobs`, `verify_job`. Constructed with `provider_address=` (no
-wallet) it is the keyless read path — any signing call raises at the SDK
-level. `funded_job_watcher(job_ops, on_funded)` is the signer-free detection
-loop over `get_pending_jobs()`. Settle is permissionless on-chain and is the
-responsibility of operator scripts, not the watcher.
+`ERC8183JobOps` is the async wrapper over `ERC8183Client` that every serving form builds on. Key methods: `submit_result`, `get_job`, `get_response`, `get_pending_jobs`, `verify_job`. Constructed with `provider_address=` (no wallet) it is the keyless read path - any signing call raises at the SDK level. `funded_job_watcher(job_ops, on_funded)` is the signer-free detection loop over `get_pending_jobs()`. Settle is permissionless on-chain and is the responsibility of operator scripts, not the watcher.
 
 ### `NegotiationHandler`
 
@@ -223,28 +191,21 @@ Single-round negotiation processor. `negotiate(request) → NegotiationResult`; 
 
 ### Types (`erc8183.types`)
 
-- `JobStatus` — `OPEN, FUNDED, SUBMITTED, COMPLETED, REJECTED, EXPIRED` (matches `IACP.JobStatus`).
-- `Verdict` — `PENDING, APPROVE, REJECT` (matches `VERDICT_*`).
-- `REASON_APPROVED`, `REASON_REJECTED` — `keccak256("OPTIMISTIC_APPROVED" / "OPTIMISTIC_REJECTED")`.
-- `Job` — typed dataclass returned by `CommerceClient.get_job`. Fields: `id`, `client`, `provider`, `evaluator`, `description`, `budget`, `expired_at`, `status`, `hook`, `deliverable` (bytes32, set by `submit`; `b"\x00" * 32` until then).
+- `JobStatus` - `OPEN, FUNDED, SUBMITTED, COMPLETED, REJECTED, EXPIRED` (matches `IACP.JobStatus`).
+- `Verdict` - `PENDING, APPROVE, REJECT` (matches `VERDICT_*`).
+- `REASON_APPROVED`, `REASON_REJECTED` - `keccak256("OPTIMISTIC_APPROVED" / "OPTIMISTIC_REJECTED")`.
+- `Job` - typed dataclass returned by `CommerceClient.get_job`. Fields: `id`, `client`, `provider`, `evaluator`, `description`, `budget`, `expired_at`, `status`, `hook`, `deliverable` (bytes32, set by `submit`; `b"\x00" * 32` until then).
 
 ### `ERC8183Config`
 
-Unified provider-config dataclass (consumed by `ERC8183JobOps` factories and
-the serving examples). Primary API:
-`wallet_provider`, `network` (str or `NetworkConfig`), `storage`,
-`service_price`. Convenience API: `private_key + wallet_password` →
-auto-wrapped into `EVMWalletProvider`; the plaintext key is zeroed
-immediately after wrapping.
+Unified provider-config dataclass (consumed by `ERC8183JobOps` factories and the serving examples). Primary API: `wallet_provider`, `network` (str or `NetworkConfig`), `storage`, `service_price`. Convenience API: `private_key + wallet_password` → auto-wrapped into `EVMWalletProvider`; the plaintext key is zeroed immediately after wrapping.
 
-Contract-address overrides are **not** fields — pass either a
-`NetworkConfig(...)` as `network=` for fully explicit control, or use the
-`ERC8183_*` env vars below (applied lazily by `effective_network`).
+Contract-address overrides are **not** fields - pass either a `NetworkConfig(...)` as `network=` for fully explicit control, or use the `ERC8183_*` env vars below (applied lazily by `effective_network`).
 
 `ERC8183Config.from_env()` reads:
 
 | Variable | Required | Description |
-|----------|----------|-------------|
+| --- | --- | --- |
 | `PRIVATE_KEY` | Recommended | Imported to keystore on first run. |
 | `WALLET_PASSWORD` | Yes | Keystore password. |
 | `NETWORK` | No | `bsc-testnet` (default) / `bsc-mainnet`. |
@@ -256,12 +217,11 @@ Contract-address overrides are **not** fields — pass either a
 | `STORAGE_PROVIDER` | No | `"local"` (default) or `"ipfs"`. |
 | `STORAGE_API_KEY` | If IPFS | Pinning-service JWT. |
 
-The payment token address is **not** configurable — it is fetched from
-`commerce.paymentToken()` at runtime and cached.
+The payment token address is **not** configurable - it is fetched from `commerce.paymentToken()` at runtime and cached.
 
 ## Related
 
-- [`wallets`](../wallets/README.md) — wallet providers injected into `ERC8183Config`.
-- [`storage`](../storage/README.md) — off-chain storage for deliverables.
-- [`erc8004`](../erc8004/README.md) — agent identity registry.
-- [`core`](../core/README.md) — nonce manager, contract mixin, Multicall3.
+- [`wallets`](../wallets/README.md) - wallet providers injected into `ERC8183Config`.
+- [`storage`](../storage/README.md) - off-chain storage for deliverables.
+- [`erc8004`](../erc8004/README.md) - agent identity registry.
+- [`core`](../core/README.md) - nonce manager, contract mixin, Multicall3.

@@ -1,10 +1,6 @@
-# a2a-agent — A2A-fronted ERC-8183 provider
+# a2a-agent - A2A-fronted ERC-8183 provider
 
-TypeScript port of `python/examples/a2a-agent`. The SDK's recommended serving
-direction made concrete: **the agent's outward surface is A2A** (agent card +
-JSON-RPC `message/send`); everything below it is plain SDK protocol capability.
-The SDK ships no serving runtime — `src/server.ts` here IS the serving layer,
-and it's yours to copy and own.
+TypeScript port of `python/examples/a2a-agent`. The SDK's recommended serving direction made concrete: **the agent's outward surface is A2A** (agent card + JSON-RPC `message/send`); everything below it is plain SDK protocol capability. The SDK ships no serving runtime - `src/server.ts` here IS the serving layer, and it's yours to copy and own.
 
 ```
 buyer.ts                                server.ts
@@ -20,18 +16,11 @@ buyer.ts                                server.ts
    │  setBudget → fund                     │
 ```
 
-- Discovery is **ERC-8004**: `scripts/register.ts` registers the card URL
-  on-chain via `AgentEndpoint.a2a(baseUrl)`; `scripts/buyer.ts` resolves it
-  back from an `AGENT_ID`.
-- The A2A wire format (card shape, JSON-RPC 2.0 `message/send`, data parts)
-  follows the A2A spec but is hand-rolled on `node:http` to stay minimal. For a
-  production agent consider the official `@a2a-js/sdk` — clients speaking spec
-  A2A interoperate with either.
-- The signed quote round-trips into `createJob` via `buildJobDescription`, so
-  the provider signature stays verifiable by EOA recovery or ERC-1271.
+- Discovery is **ERC-8004**: `scripts/register.ts` registers the card URL on-chain via `AgentEndpoint.a2a(baseUrl)`; `scripts/buyer.ts` resolves it back from an `AGENT_ID`.
+- The A2A wire format (card shape, JSON-RPC 2.0 `message/send`, data parts) follows the A2A spec but is hand-rolled on `node:http` to stay minimal. For a production agent consider the official `@a2a-js/sdk` - clients speaking spec A2A interoperate with either.
+- The signed quote round-trips into `createJob` via `buildJobDescription`, so the provider signature stays verifiable by EOA recovery or ERC-1271.
 
-> **EVM only.** Unlike the Python reference there is no `WALLET_KIND` switch —
-> the TypeScript SDK ships an EVM wallet provider only.
+> **Example wiring:** This example constructs `EVMWalletProvider` directly and does not expose a `WALLET_KIND` switch. The TypeScript SDK also ships TWAK and Altana providers, but integrating either requires choosing the matching quote-signing and custody flow explicitly.
 
 ## Run it
 
@@ -50,15 +39,12 @@ pnpm exec tsx examples/a2a-agent/scripts/register.ts   # prints AGENT_ID → put
 pnpm exec tsx examples/a2a-agent/scripts/buyer.ts
 ```
 
-Without `BUYER_PRIVATE_KEY` the buyer stops after printing the signed quote — a
-fully chain-free first run. With it, the buyer funds a real job on
-`bsc-testnet`; pair it with a funded-job watcher (see `../agent-server`) to
-complete the sell side.
+Without `BUYER_PRIVATE_KEY` the buyer stops after printing the signed quote - a fully chain-free first run. With it, the buyer funds a real job on `bsc-testnet`; pair it with a funded-job watcher (see `../agent-server`) to complete the sell side.
 
 ## Skills
 
 | Skill id | Input data part | Result data part |
-|---|---|---|
+| --- | --- | --- |
 | `negotiate-erc8183-job` | `{"skill": …, "task_description": "…", "terms": {"deliverables", "quality_standards"}}` | Signed negotiation envelope (`response.terms.price`, `negotiation_hash`, `provider_sig`, `provider_address`) |
 | `erc8183-job-status` | `{"skill": …, "job_id": 42}` | On-chain job snapshot (status, budget, deadlines) |
 

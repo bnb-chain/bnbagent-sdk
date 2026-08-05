@@ -2,15 +2,12 @@
 
 ## Overview
 
-The `storage` module provides a pluggable off-chain storage interface for the
-bnbagent SDK. On-chain contracts store only content hashes; full deliverable data lives
-off-chain. Implementations handle upload, download, and existence checks through a
-unified async API.
+The `storage` module provides a pluggable off-chain storage interface for the bnbagent SDK. On-chain contracts store only content hashes; full deliverable data lives off-chain. Implementations handle upload, download, and existence checks through a unified async API.
 
 ## Built-in providers
 
 | Provider | Import | When to use |
-|---|---|---|
+| --- | --- | --- |
 | `LocalStorageProvider` | `bnbagent.storage` | Development / local testing |
 | `IPFSStorageProvider` | `bnbagent.storage` | Production (Pinata-compatible IPFS) |
 
@@ -19,7 +16,7 @@ Custom backends: subclass `StorageProvider` and inject via `ERC8183Config(storag
 ## Quick Start
 
 ```python
-# LocalStorageProvider — dev / local
+# LocalStorageProvider - dev / local
 from bnbagent.storage import LocalStorageProvider
 
 storage = LocalStorageProvider("./my-data")
@@ -29,7 +26,7 @@ url = await storage.upload({"key": "value"}, "job-1.json")
 # LocalStorageProvider from env (reads STORAGE_LOCAL_PATH, default ".agent-data")
 storage = LocalStorageProvider.from_env()
 
-# IPFSStorageProvider — production (Pinata)
+# IPFSStorageProvider - production (Pinata)
 from bnbagent.storage import IPFSStorageProvider
 
 storage = IPFSStorageProvider(
@@ -45,8 +42,7 @@ storage = IPFSStorageProvider.from_env()
 
 ## Loading from env
 
-Each provider reads its own env vars via `from_env()`. The dispatch between providers
-happens in the caller (e.g. the startup script), not in the SDK:
+Each provider reads its own env vars via `from_env()`. The dispatch between providers happens in the caller (e.g. the startup script), not in the SDK:
 
 ```python
 import os
@@ -66,15 +62,15 @@ config = ERC8183Config.from_env(storage=storage)
 
 ### `LocalStorageProvider` env vars
 
-| Variable | Default | Description |
-|---|---|---|
+| Variable             | Default       | Description                          |
+| -------------------- | ------------- | ------------------------------------ |
 | `STORAGE_LOCAL_PATH` | `.agent-data` | Base directory for stored JSON files |
 
 ### `IPFSStorageProvider` env vars
 
 | Variable | Default | Description |
-|---|---|---|
-| `STORAGE_API_KEY` | — (required) | Pinata JWT or compatible pinning service API key |
+| --- | --- | --- |
+| `STORAGE_API_KEY` | - (required) | Pinata JWT or compatible pinning service API key |
 | `STORAGE_API_URL` | `https://api.pinata.cloud/pinning/pinJSONToIPFS` | Pinning endpoint |
 | `STORAGE_GATEWAY_URL` | `https://gateway.pinata.cloud/ipfs/` | IPFS HTTP gateway |
 
@@ -85,7 +81,7 @@ config = ERC8183Config.from_env(storage=storage)
 Async abstract base class. Subclass this to build a custom backend.
 
 | Method | Description |
-|---|---|
+| --- | --- |
 | `async upload(data, filename=None)` | Upload JSON dict. Returns a URL (`file://`, `ipfs://`, `https://`…). Implementations must reject `filename` values that resolve outside the storage scope by raising `StorageError`. |
 | `async download(url)` | Download and parse JSON from a URL. |
 | `async exists(url)` | Check whether data at the URL exists. |
@@ -105,16 +101,11 @@ url = upload_sync(storage, {"job": {"id": 1}}, "job-1.json")
 
 ## Custom storage providers
 
-Just like the wallet module has `EVMWalletProvider` / `MPCWalletProvider` plus the option
-to inject any `WalletProvider` subclass, storage has `LocalStorageProvider` /
-`IPFSStorageProvider` plus arbitrary custom backends.
+Just like the wallet module has `EVMWalletProvider` / `MPCWalletProvider` plus the option to inject any `WalletProvider` subclass, storage has `LocalStorageProvider` / `IPFSStorageProvider` plus arbitrary custom backends.
 
-Subclass `StorageProvider`, implement the three async methods, and inject via
-`ERC8183Config(storage=MyStorage(...))`. The SDK doesn't care about the implementation —
-only that `upload()` returns a URL the client/voter can fetch (or that
-`ERC8183_AGENT_URL` is set to let the agent serve it via its own HTTP endpoint).
+Subclass `StorageProvider`, implement the three async methods, and inject via `ERC8183Config(storage=MyStorage(...))`. The SDK doesn't care about the implementation - only that `upload()` returns a URL the client/voter can fetch (or that `ERC8183_AGENT_URL` is set to let the agent serve it via its own HTTP endpoint).
 
-**Example — SQLite backend (30 lines):**
+**Example - SQLite backend (30 lines):**
 
 ```python
 import json
@@ -179,10 +170,9 @@ data = {"job": {"id": 42}, "result": "done"}
 content_hash = StorageProvider.compute_hash(data)   # bytes32
 ```
 
-The hash is computed over canonical JSON (`sort_keys=True`, `separators=(",",":")`)
-to ensure deterministic output regardless of dict ordering.
+The hash is computed over canonical JSON (`sort_keys=True`, `separators=(",",":")`) to ensure deterministic output regardless of dict ordering.
 
 ## Related
 
-- [`erc8183`](../erc8183/README.md) — uses `StorageProvider` for deliverable persistence.
-- [`core`](../core/README.md) — shared infrastructure.
+- [`erc8183`](../erc8183/README.md) - uses `StorageProvider` for deliverable persistence.
+- [`core`](../core/README.md) - shared infrastructure.

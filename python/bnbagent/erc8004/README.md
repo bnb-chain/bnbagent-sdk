@@ -2,23 +2,14 @@
 
 ## Overview
 
-The `erc8004` module provides a high-level Python interface for the ERC-8004
-on-chain agent identity registry on BNB Chain. It handles agent registration,
-URI generation, metadata management, and endpoint discovery, so your code can
-focus on agent logic rather than contract plumbing.
+The `erc8004` module provides a high-level Python interface for the ERC-8004 on-chain agent identity registry on BNB Chain. It handles agent registration, URI generation, metadata management, and endpoint discovery, so your code can focus on agent logic rather than contract plumbing.
 
 ## Key Concepts
 
-- **Agent registration** -- publish an agent identity on-chain with a single
-  `register_agent()` call. The SDK builds the transaction, manages nonces,
-  and optionally uses a paymaster for gasless registration.
-- **Agent URI** -- an EIP-8004 compliant registration file encoded as a
-  base64 data URI, containing the agent's name, description, endpoints, and
-  on-chain registrations.
-- **Endpoints** -- each agent declares one or more protocol endpoints (A2A,
-  MCP, web) via `AgentEndpoint` dataclasses stored in the agent URI.
-- **Metadata** -- arbitrary key/value strings attached to an agent ID, useful
-  for description, version, tags, etc.
+- **Agent registration** -- publish an agent identity on-chain with a single `register_agent()` call. The SDK builds the transaction, manages nonces, and optionally uses a paymaster for gasless registration.
+- **Agent URI** -- an EIP-8004 compliant registration file encoded as a base64 data URI, containing the agent's name, description, endpoints, and on-chain registrations.
+- **Endpoints** -- each agent declares one or more protocol endpoints (A2A, MCP, web) via `AgentEndpoint` dataclasses stored in the agent URI.
+- **Metadata** -- arbitrary key/value strings attached to an agent ID, useful for description, version, tags, etc.
 
 ## Quick Start
 
@@ -33,7 +24,7 @@ agent_uri = sdk.generate_agent_uri(
     name="my-agent",
     description="AI agent for document processing",
     endpoints=[
-        # A2A first, MCP second — these constructors encode each protocol's
+        # A2A first, MCP second - these constructors encode each protocol's
         # registration convention; the SDK ships no protocol runtime.
         AgentEndpoint.a2a("https://myagent.example", version="0.3.0"),
         AgentEndpoint.mcp("https://myagent.example/mcp"),
@@ -50,7 +41,7 @@ print(f"Agent ID: {result['agentId']}")
 Main entry point. Requires a `WalletProvider` (no raw private key accepted).
 
 | Method | Description |
-|---|---|
+| --- | --- |
 | `generate_agent_uri(name, description, endpoints, ...)` | Build an EIP-8004 compliant base64 data URI. |
 | `register_agent(agent_uri, metadata=None)` | Register a new agent on-chain. Returns `agentId` and tx hash. |
 | `get_agent_info(agent_id)` | Fetch on-chain agent record by numeric ID. |
@@ -68,55 +59,50 @@ Main entry point. Requires a `WalletProvider` (no raw private key accepted).
 Dataclass describing a single protocol endpoint.
 
 | Field | Type | Description |
-|---|---|---|
+| --- | --- | --- |
 | `name` | `str` | Protocol name (`"A2A"`, `"MCP"`, `"web"`). |
 | `endpoint` | `str` | URL (`https://...`). |
 | `version` | `str \| None` | Optional protocol version. |
 | `capabilities` | `list[str] \| None` | Optional capability tags. |
 
-Protocol-aware constructors (registration conventions only — no runtime):
+Protocol-aware constructors (registration conventions only - no runtime):
 
 | Constructor | Behavior |
-|---|---|
+| --- | --- |
 | `AgentEndpoint.a2a(base_url, *, version=None, capabilities=None)` | Appends the A2A discovery path `/.well-known/agent-card.json` unless already present. |
 | `AgentEndpoint.mcp(url, *, version=None, capabilities=None)` | Registers the MCP server URL + protocol version, per the EIP-8004 registration-file example. stdio servers have no registrable URL (enforced by the `http(s)://` validation). |
 
 ### `get_erc8004_config(network)`
 
-Lazy configuration function (replaces the former `ERC8004_CONFIG` dict).
-Returns a dict with network settings and the registry contract address.
-Called at runtime (not import time) so environment variable overrides are
-always respected.
+Lazy configuration function (replaces the former `ERC8004_CONFIG` dict). Returns a dict with network settings and the registry contract address. Called at runtime (not import time) so environment variable overrides are always respected.
 
 ### `ContractInterface`
 
-Low-level wrapper around the ERC-8004 registry smart contract. Used
-internally by `ERC8004Agent`; prefer the high-level class for most work.
+Low-level wrapper around the ERC-8004 registry smart contract. Used internally by `ERC8004Agent`; prefer the high-level class for most work.
 
 ## Architecture
 
 ```
 ERC8004Agent  (high-level SDK)
-  ├── WalletProvider   (signing — required)
+  ├── WalletProvider   (signing - required)
   ├── ContractInterface (contract calls)
   │     └── Paymaster  (optional gasless tx)
-  └── AgentURIGenerator (URI construction — duck-typed endpoints)
+  └── AgentURIGenerator (URI construction - duck-typed endpoints)
 ```
 
 ## Configuration
 
-Network configuration is resolved lazily via `get_erc8004_config(network)`.
-Override with env vars when needed:
+Network configuration is resolved lazily via `get_erc8004_config(network)`. Override with env vars when needed:
 
-| Variable | Description | Default |
-|---|---|---|
-| `RPC_URL` | JSON-RPC endpoint | Network default |
+| Variable                   | Description               | Default         |
+| -------------------------- | ------------------------- | --------------- |
+| `RPC_URL`                  | JSON-RPC endpoint         | Network default |
 | `ERC8004_REGISTRY_ADDRESS` | Registry contract address | Network default |
 
 ## Network Support
 
 | Network | Status | Chain ID | Registry Contract |
-|---------|--------|----------|-------------------|
+| --- | --- | --- | --- |
 | BSC Testnet | **Active** | 97 | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
 | BSC Mainnet | **Active** | 56 | `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` |
 
