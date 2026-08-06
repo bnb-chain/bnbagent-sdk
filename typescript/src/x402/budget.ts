@@ -25,6 +25,24 @@ import { getAddress as toChecksumAddress } from "viem";
 
 import { X402BudgetExhaustedError } from "./errors.js";
 
+/**
+ * Refuse negative amounts — the counter's load-bearing invariant.
+ *
+ * The cap test is a one-sided `cur + amount > cap`, so a negative `amount`
+ * shrinks the sum and passes trivially while driving the counter negative;
+ * every later spend then measures against a huge negative baseline and the
+ * session cap stops binding. {@link SessionBudgetTracker.rollback} already
+ * floors at zero, but that is the decrement side, where the invariant is only
+ * defensive — it has to hold on the increment side to mean anything.
+ */
+function assertNonNegative(amount: bigint): void {
+  if (amount < 0n) {
+    throw new X402BudgetExhaustedError(
+      `budget amount must be non-negative, got ${amount}`,
+    );
+  }
+}
+
 /** Per-token cumulative spend tracker with caps. */
 export class SessionBudgetTracker {
   readonly #caps = new Map<string, bigint>();
@@ -62,9 +80,11 @@ export class SessionBudgetTracker {
    * The caller performs the slow work (signing) after this returns and
    * calls {@link rollback} on failure to release the reservation.
    *
-   * @throws {X402BudgetExhaustedError} If the reservation would exceed the cap.
+   * @throws {X402BudgetExhaustedError} If the reservation would exceed the
+   *   cap, or if `amount` is negative.
    */
   reserve(token: string, amount: bigint): void {
+    assertNonNegative(amount);
     const cs = toChecksumAddress(token as `0x${string}`);
     const cap = this.#caps.get(cs);
     const cur = this.#spent.get(cs) ?? 0n;

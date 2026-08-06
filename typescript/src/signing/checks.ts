@@ -10,6 +10,7 @@
 
 import { getAddress as toChecksumAddress } from "viem";
 import { PolicyViolation } from "./errors.js";
+import { EIP3009_CANONICAL_FIELDS, EIP3009_TYPES } from "./policy.js";
 import type { SigningPolicy } from "./policy.js";
 
 export const EIP712_DOMAIN_TYPE_NAME = "EIP712Domain";
@@ -171,12 +172,83 @@ export function check(
     }
   }
 
+  // ── Field-shape pinning for known structs ─────────────────────────
+  checkFieldShape(types, primaryType, chainId, verifying);
+
   // ── Validity window (only if primary type requires it) ────────────
   if (policy.validityRequiredPrimaryTypes.has(primaryType)) {
     checkValidity(policy, primaryType, message, chainId, verifying, opts.now);
   }
 
   return primaryType;
+}
+
+/**
+ * Pin the field-shape of structs whose shape we know canonically.
+ *
+ * The allowlist above is name-scoped, and `types` is caller-supplied — for x402
+ * it arrives verbatim in an untrusted 402 response body. Without this check an
+ * attacker keeps the allowlisted name and rewrites the field's Solidity type,
+ * which silently changes what the encoder will accept: the canonical `uint256`
+ * is what makes a negative `value` unencodable, so swapping in `int256` removes
+ * a value-domain guard the downstream layers were relying on. Field order and
+ * count matter too — both feed the typeHash.
+ *
+ * Scope is keyed on the struct **name**, not on the policy: anything calling
+ * itself `TransferWithAuthorization` is held to the EIP-3009 shape even under
+ * `permissive()`, because the canonical shape is a property of the name rather
+ * than of the ruleset. Types with any other name are untouched, so custom
+ * `extend()` primary types keep working.
+ *
+ * Two neighbouring surfaces are deliberately left unpinned:
+ *
+ * - `EIP712Domain` — EIP-712 makes every domain field optional, so there is no
+ *   single canonical shape to pin against (`salt` is legitimate, so is omitting
+ *   `version`). Checked for exploitability: altering the domain shape changes
+ *   the domainSeparator, which makes the resulting signature useless against
+ *   the real token, and an out-of-range `chainId` cannot pass the domain
+ *   allowlist either.
+ * - The Permit2 family (`PERMIT2_SIGNATURE_TRANSFER_TYPES`) — opt-in via
+ *   `extend()` only, and the SDK carries no canonical field table for them.
+ *   Pin them here if they ever enter a default policy.
+ */
+function checkFieldShape(
+  types: Record<string, unknown>,
+  primaryType: string,
+  chainId: number,
+  verifying: string,
+): void {
+  if (!EIP3009_TYPES.has(primaryType)) return;
+  const fields = types[primaryType];
+  if (!Array.isArray(fields)) {
+    throw new PolicyViolation(
+      `types['${primaryType}'] must be an array of field descriptors, got ${reprValue(fields)}`,
+      { primaryType, chainId, verifyingContract: verifying },
+    );
+  }
+  const describe = (pairs: ReadonlyArray<readonly [unknown, unknown]>) =>
+    pairs.map(([n, t]) => `${String(n)} ${String(t)}`).join(", ");
+  const actual: ReadonlyArray<readonly [unknown, unknown]> = fields.map((f) =>
+    typeof f === "object" && f !== null
+      ? ([
+          (f as Record<string, unknown>).name,
+          (f as Record<string, unknown>).type,
+        ] as const)
+      : ([undefined, undefined] as const),
+  );
+  const matches =
+    actual.length === EIP3009_CANONICAL_FIELDS.length &&
+    actual.every(
+      ([n, t], i) =>
+        n === EIP3009_CANONICAL_FIELDS[i]?.[0] &&
+        t === EIP3009_CANONICAL_FIELDS[i]?.[1],
+    );
+  if (!matches) {
+    throw new PolicyViolation(
+      `types['${primaryType}'] does not match the canonical EIP-3009 field shape — refusing to sign a struct whose encoding differs from the on-chain type. expected (${describe(EIP3009_CANONICAL_FIELDS)}), got (${describe(actual)})`,
+      { primaryType, chainId, verifyingContract: verifying },
+    );
+  }
 }
 
 function checkValidity(

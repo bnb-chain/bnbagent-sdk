@@ -26,6 +26,22 @@ export const EIP3009_TYPES: ReadonlySet<string> = new Set([
   "ReceiveWithAuthorization",
 ]);
 
+// Field-shape of both EIP-3009 authorization structs (name, solidity type), in
+// declaration order. EIP-712 hashes the field names, types *and* order into the
+// typeHash, so this list is the struct's on-chain identity — pinning it is what
+// makes the allowlist above mean "this exact struct" rather than just "a struct
+// that happens to carry this name".
+export const EIP3009_CANONICAL_FIELDS: ReadonlyArray<
+  readonly [name: string, type: string]
+> = [
+  ["from", "address"],
+  ["to", "address"],
+  ["value", "uint256"],
+  ["validAfter", "uint256"],
+  ["validBefore", "uint256"],
+  ["nonce", "bytes32"],
+];
+
 export const PERMIT_UNBOUNDED_TYPES: ReadonlySet<string> = new Set([
   "Permit", // EIP-2612 — long-lived allowance to a spender
   "PermitSingle", // Permit2 AllowanceTransfer — long-lived allowance
