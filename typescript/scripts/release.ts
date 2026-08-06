@@ -5,7 +5,7 @@
  * `"private": true`. When there is no packages/ directory the repo is treated as
  * a SINGLE package rooted at RELEASE_PACKAGE_DIR (default ".", i.e. the cwd) —
  * this repo ships one package (@bnbagent/sdk) from typescript/. All publishable
- * packages share ONE version (see docs/typescript-releasing.md).
+ * packages share ONE version (see docs/releasing.md).
  *
  *   prepare <current|patch|minor|major>
  *                              publish the current version, resume an untagged
@@ -24,6 +24,17 @@ import * as posix from "node:path/posix";
 import { pathToFileURL } from "node:url";
 
 const PACKAGES_DIR = "packages";
+/**
+ * Git tags for this component are the full npm coordinate
+ * (`@bnbagent/sdk@vX.Y.Z`) so they never collide with the Python component's
+ * `bnbagent-vX.Y.Z` line on the shared GitHub Releases page.
+ */
+export const RELEASE_TAG_PREFIX = "@bnbagent/sdk@v";
+const REPO_URL = "https://github.com/bnb-chain/bnbagent-sdk";
+
+export function releaseTag(version: string): string {
+  return `${RELEASE_TAG_PREFIX}${version}`;
+}
 /** In single-package mode, the dir (relative to cwd) holding the package.json. */
 const SINGLE_PACKAGE_DIR = process.env.RELEASE_PACKAGE_DIR ?? ".";
 /** Lockfile committed alongside the version bump (relative to each package dir). */
@@ -207,14 +218,14 @@ function prepare(kind: string): { version: string; commit: boolean } {
   const version = currentVersion();
   resolveVersion(version, kind);
   const subject = sh(["git", "log", "-1", "--pretty=%s"]);
-  const tag = sh(["git", "tag", "--list", `v${version}`]);
+  const tag = sh(["git", "tag", "--list", releaseTag(version)]);
   if (subject === `chore(release): v${version} [skip ci]` && !tag) {
     return { version, commit: false };
   }
   if (kind === "current") {
     if (tag)
       throw new Error(
-        `Cannot publish current version ${version}: tag v${version} already exists`,
+        `Cannot publish current version ${version}: tag ${releaseTag(version)} already exists`,
       );
     return { version, commit: false };
   }
@@ -363,32 +374,52 @@ const ORDER = [
   "Other",
 ];
 
-export function releaseRange(
-  lastTypeScriptTag: string,
-  fallbackTag: string,
-): string {
-  const base = lastTypeScriptTag || fallbackTag;
-  return base ? `${base}..HEAD` : "HEAD";
+/**
+ * Range for the component changelog: since the previous @bnbagent/sdk tag, or
+ * ALL history for the first release. Never falls back to another component's
+ * tag (e.g. Python's `bnbagent-v*`) — that would silently drop every commit
+ * older than an unrelated release.
+ */
+export function releaseRange(lastSdkTag: string): string {
+  return lastSdkTag ? `${lastSdkTag}..HEAD` : "HEAD";
+}
+
+const SEP = "\x1f";
+
+/**
+ * The changelog scopes to this component's sources: typescript/ plus the
+ * shared repo-root abis/ (vendored into the published package by codegen).
+ * `:(top)` anchors the pathspecs to the repo root — the script runs from
+ * typescript/, where a bare `typescript/` pathspec would match nothing.
+ */
+export function changelogLogArgs(rev: string): string[] {
+  return [
+    "git",
+    "log",
+    "--no-merges",
+    `--pretty=%h${SEP}%s`,
+    rev,
+    "--",
+    ":(top)typescript/",
+    ":(top)abis/",
+  ];
 }
 
 function changelog(range?: string): string {
   let rev = range;
+  let previousTag = "";
   if (!rev) {
-    const lastTypeScriptTag = sh([
+    previousTag = sh([
       "git",
       "describe",
       "--tags",
       "--match",
-      "v[0-9]*",
+      `${RELEASE_TAG_PREFIX}[0-9]*`,
       "--abbrev=0",
     ]);
-    const fallbackTag = lastTypeScriptTag
-      ? ""
-      : sh(["git", "describe", "--tags", "--abbrev=0"]);
-    rev = releaseRange(lastTypeScriptTag, fallbackTag);
+    rev = releaseRange(previousTag);
   }
-  const SEP = "\x1f";
-  const log = sh(["git", "log", "--no-merges", `--pretty=%h${SEP}%s`, rev]);
+  const log = sh(changelogLogArgs(rev));
 
   const groups: Record<string, string[]> = {};
   const breaking: string[] = [];
@@ -408,6 +439,10 @@ function changelog(range?: string): string {
     md += `### ⚠ BREAKING CHANGES\n${breaking.join("\n")}\n\n`;
   for (const t of ORDER)
     if (groups[t]?.length) md += `### ${t}\n${groups[t].join("\n")}\n\n`;
+  if (previousTag) {
+    const compare = `${REPO_URL}/compare/${previousTag}...${releaseTag(currentVersion())}`;
+    md += `**Full Changelog**: ${compare}\n`;
+  }
   return md.trim() || "_No notable changes._";
 }
 

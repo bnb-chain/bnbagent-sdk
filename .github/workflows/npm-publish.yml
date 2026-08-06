@@ -641,7 +641,18 @@ jobs:
         run: pnpm exec tsx scripts/release.ts prepare "${{ inputs.bump }}" >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes
-        run: pnpm exec tsx scripts/release.ts changelog > RELEASE_NOTES.md
+        env:
+          V: ${{ steps.version.outputs.version }}
+        run: |
+          pnpm exec tsx scripts/release.ts changelog > RELEASE_NOTES.md
+          {
+            echo
+            echo "### Installation"
+            echo
+            echo '```bash'
+            echo "pnpm add -E @bnbagent/sdk@$V"
+            echo '```'
+          } >> RELEASE_NOTES.md
 
       - name: Commit version bump through the GitHub API
         if: steps.version.outputs.commit == 'true'
@@ -663,11 +674,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           V: ${{ steps.version.outputs.version }}
+        # Tag carries the full npm coordinate so it cannot collide with the
+        # Python component's bnbagent-vX.Y.Z line. Both components explicitly
+        # mark their newest stable as Latest (most-recent-stable policy).
         run: >-
-          gh release create "v$V"
+          gh release create "@bnbagent/sdk@v$V"
           --target "${{ github.event.repository.default_branch }}"
-          --title "v$V"
+          --title "@bnbagent/sdk v$V"
           --notes-file RELEASE_NOTES.md
+          --latest
 
       - name: Write release summary
         env:
@@ -678,6 +693,6 @@ jobs:
             echo
             echo "- Version: \`$V\`"
             echo "- Dist-tag: \`latest\`"
-            echo "- GitHub Release: \`v$V\`"
+            echo "- GitHub Release: \`@bnbagent/sdk@v$V\`"
             echo "- Provenance: enabled by npm trusted publishing"
           } >> "$GITHUB_STEP_SUMMARY"

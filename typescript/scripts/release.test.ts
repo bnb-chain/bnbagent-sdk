@@ -1,10 +1,12 @@
 import { expect, test } from "vitest";
 import {
+  changelogLogArgs,
   freezeWorkspaceDeps,
   npmPublishArgs,
   publishOne,
   refreshLockfile,
   releaseRange,
+  releaseTag,
   resolveVersion,
   waitForPackage,
 } from "./release.ts";
@@ -70,10 +72,24 @@ test("release rejects prerelease manifests and unknown version selections", () =
   );
 });
 
-test("release changelog prefers TypeScript tags with a first-release fallback", () => {
-  expect(releaseRange("v0.5.0", "bnbagent-v0.4.0")).toBe("v0.5.0..HEAD");
-  expect(releaseRange("", "bnbagent-v0.4.0")).toBe("bnbagent-v0.4.0..HEAD");
-  expect(releaseRange("", "")).toBe("HEAD");
+test("release tags carry the full npm coordinate", () => {
+  expect(releaseTag("0.5.0")).toBe("@bnbagent/sdk@v0.5.0");
+});
+
+test("release changelog ranges from the previous sdk tag, never another component's", () => {
+  expect(releaseRange("@bnbagent/sdk@v0.5.0")).toBe(
+    "@bnbagent/sdk@v0.5.0..HEAD",
+  );
+  // First release: full history, NOT the latest Python (bnbagent-v*) tag —
+  // an unrelated tag would silently truncate the range.
+  expect(releaseRange("")).toBe("HEAD");
+});
+
+test("release changelog scopes to typescript/ and shared abis/ from the repo root", () => {
+  const args = changelogLogArgs("@bnbagent/sdk@v0.5.0..HEAD");
+  expect(args.slice(-3)).toEqual(["--", ":(top)typescript/", ":(top)abis/"]);
+  expect(args).toContain("--no-merges");
+  expect(args).toContain("@bnbagent/sdk@v0.5.0..HEAD");
 });
 
 test("release publishes production explicitly under latest", () => {

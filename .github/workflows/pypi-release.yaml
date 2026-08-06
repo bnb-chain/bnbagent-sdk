@@ -18,6 +18,10 @@ on:
         default: false
         type: boolean
 
+concurrency:
+  group: pypi-release
+  cancel-in-progress: false
+
 jobs:
   release:
     name: Build and Publish to PyPI
@@ -30,10 +34,94 @@ jobs:
         working-directory: python  # Python project lives under python/ (polyglot monorepo)
 
     steps:
+      - name: Validate release inputs
+        env:
+          VERSION: ${{ inputs.version }}
+          RELEASE_TO_PROD: ${{ inputs.release_to_prod }}
+          REF_NAME: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        working-directory: .
+        run: |
+          set -euo pipefail
+          # Test PyPI stays permissive (dev/rc suffixes, re-tries); the strict
+          # gates below apply to production only.
+          if [[ "$RELEASE_TO_PROD" != "true" ]]; then
+            exit 0
+          fi
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "version must be X.Y.Z, got: $VERSION" >&2
+            exit 1
+          fi
+          if [[ "$REF_NAME" != "$DEFAULT_BRANCH" ]]; then
+            echo "Production releases must be dispatched from $DEFAULT_BRANCH, got: $REF_NAME" >&2
+            exit 1
+          fi
+
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # Fetch all history for tags
+
+      - name: Resolve previous component tag
+        # Must run BEFORE the target tag is created, otherwise git describe
+        # would find the tag being released and produce an empty range.
+        if: ${{ inputs.release_to_prod }}
+        id: tags
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          TARGET_TAG="bnbagent-v$VERSION"
+          if git rev-parse -q --verify "refs/tags/$TARGET_TAG" >/dev/null; then
+            echo "Refusing to release: tag $TARGET_TAG already exists" >&2
+            exit 1
+          fi
+          PREVIOUS_TAG="$(git describe --tags --match 'bnbagent-v[0-9]*' --abbrev=0 2>/dev/null || true)"
+          echo "target_tag=$TARGET_TAG" >> "$GITHUB_OUTPUT"
+          echo "previous_tag=$PREVIOUS_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes
+        if: ${{ inputs.release_to_prod }}
+        env:
+          VERSION: ${{ inputs.version }}
+          TARGET_TAG: ${{ steps.tags.outputs.target_tag }}
+          PREVIOUS_TAG: ${{ steps.tags.outputs.previous_tag }}
+        working-directory: .
+        run: |
+          set -euo pipefail
+          if [[ -n "$PREVIOUS_TAG" ]]; then
+            RANGE="$PREVIOUS_TAG..HEAD"
+          else
+            RANGE="HEAD"
+          fi
+          # Scope to this component: python/ plus the shared repo-root abis/
+          # (vendored into the wheel/sdist by hatch_build.py). :(top) anchors
+          # the pathspecs to the repo root regardless of the working directory.
+          CHANGES="$(git log --no-merges --pretty='format:- %s (%h)' "$RANGE" \
+            -- ':(top)python/' ':(top)abis/')"
+          {
+            echo "## bnbagent v$VERSION"
+            echo
+            echo "Python SDK for ERC-8004 on-chain agent registration and management."
+            echo
+            echo "### Installation"
+            echo
+            echo '```bash'
+            echo "pip install bnbagent==$VERSION"
+            echo '```'
+            echo
+            echo "### What's Changed"
+            echo
+            if [[ -n "$CHANGES" ]]; then
+              echo "$CHANGES"
+            else
+              echo "_No notable changes._"
+            fi
+            if [[ -n "$PREVIOUS_TAG" ]]; then
+              echo
+              echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/$PREVIOUS_TAG...$TARGET_TAG"
+            fi
+          } > RELEASE_NOTES.md
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -70,8 +158,25 @@ jobs:
           echo "Package files:"
           find dist -type f
 
-      - name: Publish to Production PyPI
+      - name: Check whether the version is already on PyPI
+        # Recovery path: if a previous run published to PyPI but failed before
+        # the tag/Release, skip the duplicate upload and repair the rest.
         if: ${{ inputs.release_to_prod }}
+        id: pypi
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          STATUS="$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/bnbagent/$VERSION/json")"
+          if [[ "$STATUS" == "200" ]]; then
+            echo "bnbagent $VERSION is already on PyPI; skipping upload"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to Production PyPI
+        if: ${{ inputs.release_to_prod && steps.pypi.outputs.exists != 'true' }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: ./python/dist/
@@ -94,36 +199,35 @@ jobs:
       - name: Commit version update
         if: success() && inputs.release_to_prod
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add bnbagent/_version.py
-          git commit -m "chore: bump version to ${{ inputs.version }}" || exit 0
-          git push origin HEAD:${{ github.ref_name }} || echo "No changes to commit or branch protection"
+          if git diff --cached --quiet; then
+            echo "Version file already up to date; nothing to commit"
+          else
+            git commit -m "chore: bump version to ${{ inputs.version }}"
+            git push origin HEAD:${{ github.ref_name }}
+          fi
 
       - name: Create Git tag
         if: success() && inputs.release_to_prod
+        env:
+          TARGET_TAG: ${{ steps.tags.outputs.target_tag }}
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "bnbagent-v${{ inputs.version }}" -m "Release bnbagent v${{ inputs.version }}"
-          git push origin "bnbagent-v${{ inputs.version }}"
+          git tag -a "$TARGET_TAG" -m "Release bnbagent v${{ inputs.version }}"
+          git push origin "$TARGET_TAG"
 
       - name: Create GitHub Release
         if: success() && inputs.release_to_prod
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: bnbagent-v${{ inputs.version }}
+          tag_name: ${{ steps.tags.outputs.target_tag }}
           name: bnbagent v${{ inputs.version }}
-          body: |
-            ## bnbagent v${{ inputs.version }}
-
-            Python SDK for ERC-8004 on-chain agent registration and management.
-
-            ### Installation
-
-            ```bash
-            pip install bnbagent==${{ inputs.version }}
-            ```
-          generate_release_notes: true
+          body_path: RELEASE_NOTES.md
           draft: false
           prerelease: false
+          make_latest: true
