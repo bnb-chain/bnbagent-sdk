@@ -1,0 +1,5 @@
+dist/
+node_modules/
+
+# Altana e2e session material (contains the session private key)
+examples/altana/.session.json

@@ -1,0 +1,117 @@
+{
+  "name": "@bnbagent/sdk",
+  "version": "0.5.0",
+  "description": "TypeScript SDK for building on-chain AI agents on BNB Chain (ERC-8004 identity, ERC-8183 agentic commerce, x402 payments).",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bnb-chain/bnbagent-sdk.git",
+    "directory": "typescript"
+  },
+  "type": "module",
+  "packageManager": "pnpm@10.24.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./erc8004": {
+      "types": "./dist/erc8004/index.d.ts",
+      "import": "./dist/erc8004/index.js",
+      "require": "./dist/erc8004/index.cjs"
+    },
+    "./erc8183": {
+      "types": "./dist/erc8183/index.d.ts",
+      "import": "./dist/erc8183/index.js",
+      "require": "./dist/erc8183/index.cjs"
+    },
+    "./x402": {
+      "types": "./dist/x402/index.d.ts",
+      "import": "./dist/x402/index.js",
+      "require": "./dist/x402/index.cjs"
+    },
+    "./storage": {
+      "types": "./dist/storage/index.d.ts",
+      "import": "./dist/storage/index.js",
+      "require": "./dist/storage/index.cjs"
+    },
+    "./wallets": {
+      "types": "./dist/wallets/index.d.ts",
+      "import": "./dist/wallets/index.js",
+      "require": "./dist/wallets/index.cjs"
+    },
+    "./signing": {
+      "types": "./dist/signing/index.d.ts",
+      "import": "./dist/signing/index.js",
+      "require": "./dist/signing/index.cjs"
+    },
+    "./networks": {
+      "types": "./dist/networks/index.d.ts",
+      "import": "./dist/networks/index.js",
+      "require": "./dist/networks/index.cjs"
+    },
+    "./utils": {
+      "types": "./dist/utils/index.d.ts",
+      "import": "./dist/utils/index.js",
+      "require": "./dist/utils/index.cjs"
+    }
+  },
+  "scripts": {
+    "codegen": "node scripts/abi-codegen.mjs",
+    "build": "tsup",
+    "test": "vitest run",
+    "lint": "biome check src tests",
+    "typecheck": "tsc --noEmit",
+    "typecheck:examples": "tsc --noEmit -p examples",
+    "check": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build",
+    "example:x402": "tsx examples/x402/buyerDemo.ts",
+    "example:security": "tsx examples/security/e2e.ts",
+    "example:agent-server": "tsx examples/agent-server/src/service.ts",
+    "example:a2a-server": "tsx examples/a2a-agent/src/server.ts",
+    "example:a2a-buyer": "tsx examples/a2a-agent/scripts/buyer.ts",
+    "smoke:testnet": "tsx examples/smoke/readonly.ts",
+    "e2e:altana": "tsx examples/altana/e2e.ts"
+  },
+  "dependencies": {
+    "@noble/ciphers": "^1.0.0",
+    "@noble/hashes": "^1.4.0",
+    "dotenv": "^16.4.0",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@altananetwork/sdk": "0.5.1",
+    "@biomejs/biome": "^1.8.0",
+    "@types/node": "^20.0.0",
+    "tsup": "^8.0.0",
+    "tsx": "^4.23.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  },
+  "peerDependencies": {
+    "@altananetwork/sdk": ">=0.3.3 <0.6.0"
+  },
+  "peerDependenciesMeta": {
+    "@altananetwork/sdk": {
+      "optional": true
+    }
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@biomejs/biome",
+      "esbuild"
+    ]
+  }
+}
