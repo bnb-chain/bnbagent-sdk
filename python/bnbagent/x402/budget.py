@@ -26,6 +26,24 @@ from web3 import Web3
 from .errors import X402BudgetExhaustedError
 
 
+def _non_negative(amount: int) -> int:
+    """Coerce to int and refuse negatives — the counter's load-bearing invariant.
+
+    The cap test is a one-sided ``cur + amt > cap``, so a negative ``amt``
+    shrinks the sum and passes trivially while driving the counter negative;
+    every later spend then measures against a huge negative baseline and the
+    session cap stops binding. :meth:`SessionBudgetTracker.rollback` already
+    floors at zero, but that is the decrement side, where the invariant is
+    only defensive — it has to hold on the increment side to mean anything.
+    """
+    amt = int(amount)
+    if amt < 0:
+        raise X402BudgetExhaustedError(
+            f"budget amount must be non-negative, got {amt}"
+        )
+    return amt
+
+
 class SessionBudgetTracker:
     """Per-token cumulative spend tracker with caps."""
 
@@ -65,16 +83,25 @@ class SessionBudgetTracker:
         return self._spent.get(cs, 0) + int(amount) > cap
 
     def commit(self, token: str, amount: int) -> None:
-        """Record a successful spend (unconditional increment under lock).
+        """Record a successful spend (increment under lock, no cap check).
+
+        Does not test the cap — that is the caller's job via
+        :meth:`would_exceed`. It does still reject a negative ``amount``,
+        so "unconditional" applies to the cap only (SRC-1314).
 
         ⚠️ Race-unsafe when paired with a separate :meth:`would_exceed`
         check — the gap between check and commit is exactly the TOCTOU
         window. Use :meth:`reserve` for new code; ``commit`` is retained
         for backwards compatibility.
+
+        Raises:
+            X402BudgetExhaustedError: If ``amount`` is negative (see
+                :meth:`reserve` for why).
         """
         cs = Web3.to_checksum_address(token)
+        amt = _non_negative(amount)
         with self._lock:
-            self._spent[cs] = self._spent.get(cs, 0) + int(amount)
+            self._spent[cs] = self._spent.get(cs, 0) + amt
 
     def reserve(self, token: str, amount: int) -> None:
         """Atomic check-and-increment for the session budget.
@@ -87,10 +114,11 @@ class SessionBudgetTracker:
         concurrency.
 
         Raises:
-            X402BudgetExhaustedError: If reservation would exceed the cap.
+            X402BudgetExhaustedError: If reservation would exceed the cap, or
+                if ``amount`` is negative.
         """
         cs = Web3.to_checksum_address(token)
-        amt = int(amount)
+        amt = _non_negative(amount)
         with self._lock:
             cap = self._caps.get(cs)
             cur = self._spent.get(cs, 0)
