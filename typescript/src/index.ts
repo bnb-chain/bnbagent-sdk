@@ -77,6 +77,9 @@ export { AltanaWalletProvider } from "./wallets/altana/index.js";
 // Self-broadcasting TWAK (Trust Wallet Agent Kit CLI) wallet — twak is an
 // npm CLI; install @trustwallet/cli and the provider finds the local bin.
 export { TWAKProvider } from "./wallets/twak/index.js";
+// Pure-signer Turnkey wallet (remote signing, keys in AWS Nitro enclaves).
+// The backing @turnkey/* peers are optional and loaded lazily on first use.
+export { TurnkeyWalletProvider } from "./wallets/turnkey/index.js";
 
 // ERC-8183 — only essential public API
 export { ERC8183Client } from "./erc8183/client.js";
