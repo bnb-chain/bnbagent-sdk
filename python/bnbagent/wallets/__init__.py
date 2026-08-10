@@ -14,6 +14,7 @@ from .factory import SUPPORTED_WALLET_KINDS, create_wallet_provider
 from .intents import ExecutionContext, Intent, IntentExecutor
 from .mpc_wallet_provider import MPCWalletProvider
 from .protocols import MessageSigner, TypedDataSigner
+from .turnkey import TurnkeyWalletProvider
 from .twak_custody import materialize_twak_home
 from .twak_provider import TWAK_CHAIN_FOR_NETWORK, TWAKProvider
 from .wallet_provider import WalletProvider
@@ -23,6 +24,7 @@ __all__ = [
     "EVMWalletProvider",
     "MPCWalletProvider",
     "TWAKProvider",
+    "TurnkeyWalletProvider",
     "UnsupportedWalletOperation",
     "WalletIdentityMismatch",
     "materialize_twak_home",
