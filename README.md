@@ -28,15 +28,16 @@ Shared, language-neutral material lives at the root:
 
 ## Wallets
 
-Every protocol client signs through the `WalletProvider` seam, so the wallet is a construction-time choice. Three backends ship today:
+Every protocol client signs through the `WalletProvider` seam, so the wallet is a construction-time choice. Four backends ship today:
 
 | Wallet | Custody | SDK | Notes |
 | --- | --- | --- | --- |
 | `EVMWalletProvider` | local key (Keystore V3 on disk) | Python + TypeScript | full signing surface (`sign.message/transaction/typed_data`), MegaFuel paymaster support |
 | `TWAKProvider` | [Trust Wallet Agent Kit](./docs/twak.md) CLI (`twak` >= v0.20.0) | Python + TypeScript | self-broadcasting; ERC-8004/8183 intents + delegated x402; sponsored testnet writes via `--paymaster-url` |
 | `AltanaWalletProvider` | [Altana](./docs/altana.md) EIP-7702 wallet, on-chain session keys | TypeScript | self-broadcasting via relay; session-key x402 payer (Altana SDK >= 0.4.0); testnet preset, balances + ephemeral sessions (>= 0.5.0) |
+| `TurnkeyWalletProvider` | [Turnkey](https://docs.turnkey.com) remote signing — keys live in AWS Nitro enclaves, the agent holds only a P-256 API key | Python + TypeScript | full signing surface + MegaFuel paymaster; every successful signature is billed (free tier 25/month at 1 req/s, PAYG $0.10); production requires a non-root API user + explicit ALLOW policy (root keys bypass all Turnkey policies) |
 
-Details: [`python/bnbagent/wallets/README.md`](./python/bnbagent/wallets/README.md) (EVM + TWAK), [`typescript/README.md`](./typescript/README.md) (EVM + TWAK + Altana), [`docs/twak.md`](./docs/twak.md), and [`docs/altana.md`](./docs/altana.md).
+Details: [`python/bnbagent/wallets/README.md`](./python/bnbagent/wallets/README.md) (EVM + TWAK + Turnkey), [`typescript/README.md`](./typescript/README.md) (EVM + TWAK + Altana + Turnkey), [`docs/twak.md`](./docs/twak.md), and [`docs/altana.md`](./docs/altana.md).
 
 ## Getting started
 
