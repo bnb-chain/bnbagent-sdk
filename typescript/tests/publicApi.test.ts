@@ -66,6 +66,8 @@ describe("Tier 1 public API (src/index.ts)", () => {
     expect(typeof Tier1.EVMWalletProvider).toBe("function");
     expect(typeof Tier1.AltanaWalletProvider).toBe("function");
     expect(Tier1.AltanaWalletProvider.kind).toBe("altana");
+    expect(typeof Tier1.TurnkeyWalletProvider).toBe("function");
+    expect(Tier1.TurnkeyWalletProvider.kind).toBe("turnkey");
   });
 
   it("exports ERC-8183 essentials", () => {
@@ -200,6 +202,18 @@ describe("Tier 2 subpath: ./wallets", () => {
     expect(typeof Wallets.setAltanaSdkImporter).toBe("function");
     expect(typeof Wallets.ALTANA_NONCE_RETRY_TRIES).toBe("number");
     expect(typeof Wallets.ALTANA_NONCE_RETRY_DELAY_MS).toBe("number");
+  });
+
+  it("exports the turnkey surface (provider, loader seam, constants)", () => {
+    expect(typeof Wallets.TurnkeyWalletProvider).toBe("function");
+    expect(Wallets.TurnkeyWalletProvider.kind).toBe("turnkey");
+    expect(Wallets.TURNKEY_SDK_SERVER_PACKAGE).toBe("@turnkey/sdk-server");
+    expect(Wallets.TURNKEY_VIEM_PACKAGE).toBe("@turnkey/viem");
+    expect(typeof Wallets.setTurnkeySdkImporter).toBe("function");
+    expect(typeof Wallets.TURNKEY_API_BASE_URL_DEFAULT).toBe("string");
+    expect(Wallets.TURNKEY_API_BASE_URL_DEFAULT.startsWith("https://")).toBe(
+      true,
+    );
   });
 });
 
