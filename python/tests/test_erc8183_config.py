@@ -4,11 +4,63 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from bnbagent.erc8183.config import ERC8183Config
 from bnbagent.config import NetworkConfig
+from bnbagent.erc8183.config import ERC8183Config
 
 VALID_PK = "0x" + "cd" * 32
 VALID_PASSWORD = "test-password"
+
+
+class TestWalletKindTurnkey:
+    """WALLET_KIND=turnkey dispatches to TurnkeyWalletProvider.from_env
+    pinned to the config network's chain id (TS ERC8183Config parity)."""
+
+    SIGN_WITH = "0x" + "7a" * 20
+
+    def _set_env(self, monkeypatch):
+        monkeypatch.setenv("TURNKEY_API_PUBLIC_KEY", "02" + "ab" * 32)
+        monkeypatch.setenv("TURNKEY_API_PRIVATE_KEY", "cd" * 32)
+        monkeypatch.setenv("TURNKEY_ORG_ID", "org-config")
+        monkeypatch.setenv("TURNKEY_SIGN_WITH", self.SIGN_WITH)
+
+    def test_dispatches_pinned_to_network_chain_id(self, monkeypatch):
+        from bnbagent.wallets.turnkey import TurnkeyWalletProvider
+
+        self._set_env(monkeypatch)
+        config = ERC8183Config(wallet_kind="turnkey")
+        assert isinstance(config.wallet_provider, TurnkeyWalletProvider)
+        assert config.wallet_provider.expected_chain_id == 97
+        assert config.wallet_provider.address.lower() == self.SIGN_WITH
+
+    def test_missing_env_names_every_var(self, monkeypatch):
+        for key in (
+            "TURNKEY_API_PUBLIC_KEY",
+            "TURNKEY_API_PRIVATE_KEY",
+            "TURNKEY_ORG_ID",
+            "TURNKEY_SIGN_WITH",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv("TURNKEY_API_PUBLIC_KEY", "02" + "ab" * 32)
+        with pytest.raises(
+            ValueError, match="TURNKEY_API_PRIVATE_KEY, TURNKEY_ORG_ID, TURNKEY_SIGN_WITH"
+        ):
+            ERC8183Config(wallet_kind="turnkey")
+
+    def test_wallet_address_anchor_drift_fails_closed(self, monkeypatch):
+        from bnbagent.wallets.errors import WalletIdentityMismatch
+
+        self._set_env(monkeypatch)
+        with pytest.raises(WalletIdentityMismatch):
+            ERC8183Config(wallet_kind="turnkey", wallet_address="0x" + "9b" * 20)
+
+    def test_matching_anchor_and_no_password_required(self, monkeypatch):
+        self._set_env(monkeypatch)
+        monkeypatch.delenv("WALLET_PASSWORD", raising=False)
+        config = ERC8183Config(
+            wallet_kind="turnkey", wallet_address=self.SIGN_WITH.upper().replace("0X", "0x")
+        )
+        assert config.wallet_provider is not None
+        assert config.wallet_provider.kind == "turnkey"
 
 
 class TestInit:
@@ -96,17 +148,13 @@ class TestInit:
         assert config.private_key == ""
         assert VALID_PK not in repr(config)
 
-    def test_warns_when_private_key_env_persists_after_wrap(
-        self, monkeypatch, caplog
-    ):
+    def test_warns_when_private_key_env_persists_after_wrap(self, monkeypatch, caplog):
         import logging
 
         monkeypatch.setenv("PRIVATE_KEY", VALID_PK)
         with caplog.at_level(logging.WARNING, logger="bnbagent.core.config"):
             ERC8183Config(private_key=VALID_PK, wallet_password=VALID_PASSWORD)
-        assert any(
-            "PRIVATE_KEY is still set" in r.message for r in caplog.records
-        )
+        assert any("PRIVATE_KEY is still set" in r.message for r in caplog.records)
 
     def test_no_env_warning_when_private_key_unset(self, monkeypatch, caplog):
         import logging
@@ -114,9 +162,7 @@ class TestInit:
         monkeypatch.delenv("PRIVATE_KEY", raising=False)
         with caplog.at_level(logging.WARNING, logger="bnbagent.core.config"):
             ERC8183Config(private_key=VALID_PK, wallet_password=VALID_PASSWORD)
-        assert not any(
-            "PRIVATE_KEY is still set" in r.message for r in caplog.records
-        )
+        assert not any("PRIVATE_KEY is still set" in r.message for r in caplog.records)
 
     def test_repr_with_wallet_provider(self):
         mock_wallet = MagicMock()
