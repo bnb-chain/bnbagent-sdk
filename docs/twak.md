@@ -120,6 +120,6 @@ An optional `SessionBudgetTracker` reserves the quoted amount before the call an
 | ERC-8004 | Identity Registry | `0x8004a169fb4a3325136eb29fa0ceb6d2e539a432` | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
 | ERC-8183 | AgenticCommerce | `0xea4daa3100a767e86fded867729ae7446476eba6` | `0xa206c0517B6371C6638CD9e4a42Cc9f02A33B0DE` |
 | ERC-8183 | EvaluatorRouter | `0x51895229e12f9876011789b04f8698af06ccd6da` | `0xd7d36d66d2f1b608a0f943f722d27e3744f66f25` |
-| ERC-8183 | OptimisticPolicy | `0x9c01845705b3078aa2e8cff7520a6376fd766de5` | `0x4f4678d4439fec812ac7674bb3efb4c8f5fb78a6` |
+| ERC-8183 | OptimisticPolicy | `0x9c01845705b3078aa2e8cff7520a6376fd766de5` | `0xd6a4217588f6b1f5657a92a3e94e6422ad771cea` |
 
 Payment token `AgenticCommerce.paymentToken()`: **U** (United Stables, `0xce24439f2d9c6a2289f741120fe202248b666666`, 18 dp) on mainnet; `0xc70b8741b8b07a6d61e54fd4b20f22fa648e5565` on testnet. x402 has no contract of ours - it pays through the asset's own EIP-3009 / Permit2 methods. EVM wallets may override all module-specific contract addresses; TWAK v0.20.0 supports only the ERC-8004 registry override and rejects custom ERC-8183 targets as described above.

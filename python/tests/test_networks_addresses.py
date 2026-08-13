@@ -5,11 +5,11 @@ from __future__ import annotations
 import pytest
 from web3 import Web3
 
+from bnbagent.config import NETWORKS
 from bnbagent.networks import (
     BNB_CHAIN_ADDRESSES,
     BSC_MAINNET_CHAIN_ID,
     BSC_TESTNET_CHAIN_ID,
-    DeployedAddresses,
     PAYMENT_TOKEN_EIP712_NAME,
     PAYMENT_TOKEN_EIP712_VERSION,
     get_address,
@@ -25,6 +25,17 @@ def test_get_address_returns_mainnet_payment_token():
 def test_get_address_returns_testnet_payment_token():
     d = get_address(BSC_TESTNET_CHAIN_ID)
     assert d.payment_token == "0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565"
+
+
+def test_address_registry_matches_current_apex_deployments():
+    testnet = get_address(BSC_TESTNET_CHAIN_ID)
+    assert testnet.commerce_impl.lower() == "0x153783ddbdf5233c591965f04644b1df2d1a7815"
+    assert testnet.router_impl.lower() == "0x40c0254610d92f1eb9c2d7d5d2114bc4c99d935e"
+    assert testnet.policy.lower() == "0xd6a4217588f6b1f5657a92a3e94e6422ad771cea"
+    assert NETWORKS["bsc-testnet"].policy_contract.lower() == testnet.policy.lower()
+
+    mainnet = get_address(BSC_MAINNET_CHAIN_ID)
+    assert mainnet.commerce_impl.lower() == "0xd5f9b570c96b5d67702d508c0bfb8b3b09209787"
 
 
 def test_get_address_unknown_chain_raises_keyerror():

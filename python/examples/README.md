@@ -40,7 +40,7 @@ The SDK itself ships **no serving runtime** - how an agent faces the world (A2A,
 | ---------------------------- | -------------------------------------------- |
 | AgenticCommerce (kernel)     | `0xa206c0517b6371c6638cd9e4a42cc9f02a33b0de` |
 | EvaluatorRouter              | `0xd7d36d66d2f1b608a0f943f722d27e3744f66f25` |
-| OptimisticPolicy             | `0x4f4678d4439fec812ac7674bb3efb4c8f5fb78a6` |
+| OptimisticPolicy             | `0xd6a4217588f6b1f5657a92a3e94e6422ad771cea` |
 | Identity Registry (ERC-8004) | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
 
 Payment token address is fetched at runtime via `ERC8183Client.payment_token`.

@@ -1,5 +1,6 @@
 import { getAddress as toChecksumAddress } from "viem";
 import { describe, expect, it } from "vitest";
+import { NETWORKS } from "../src/config.js";
 import {
   BNB_CHAIN_ADDRESSES,
   BSC_MAINNET_CHAIN_ID,
@@ -55,6 +56,27 @@ describe("BNB_CHAIN_ADDRESSES", () => {
 
   it("is frozen at the top level", () => {
     expect(Object.isFrozen(BNB_CHAIN_ADDRESSES)).toBe(true);
+  });
+
+  it("matches the current APEX deployment registry", () => {
+    const testnet = getAddress(BSC_TESTNET_CHAIN_ID);
+    expect(testnet.commerceImpl.toLowerCase()).toBe(
+      "0x153783ddbdf5233c591965f04644b1df2d1a7815",
+    );
+    expect(testnet.routerImpl.toLowerCase()).toBe(
+      "0x40c0254610d92f1eb9c2d7d5d2114bc4c99d935e",
+    );
+    expect(testnet.policy.toLowerCase()).toBe(
+      "0xd6a4217588f6b1f5657a92a3e94e6422ad771cea",
+    );
+    expect(NETWORKS["bsc-testnet"].policyContract.toLowerCase()).toBe(
+      testnet.policy.toLowerCase(),
+    );
+
+    const mainnet = getAddress(BSC_MAINNET_CHAIN_ID);
+    expect(mainnet.commerceImpl.toLowerCase()).toBe(
+      "0xd5f9b570c96b5d67702d508c0bfb8b3b09209787",
+    );
   });
 
   it("rejects mutation of a per-chain DeployedAddresses instance", () => {
