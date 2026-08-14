@@ -376,6 +376,8 @@ export class TurnkeyWalletProvider extends WalletProvider {
   /**
    * Sign a transaction (legacy or EIP-1559 — the serializer infers the type
    * from the fee fields; both shapes are enclave-verified).
+   * Legacy transactions return the EIP-155 `v`; typed transactions return
+   * the wire-format y-parity bit (`0n` or `1n`).
    *
    * When the provider was constructed with `expectedChainId`, a mismatching
    * `tx.chainId` is refused before the billable API call.
@@ -395,8 +397,7 @@ export class TurnkeyWalletProvider extends WalletProvider {
     );
     const parsed = parseTransaction(rawTransaction);
     const v =
-      parsed.v ??
-      (parsed.yParity !== undefined ? BigInt(parsed.yParity) + 27n : 0n);
+      parsed.type === "legacy" ? (parsed.v ?? 0n) : BigInt(parsed.yParity ?? 0);
     return {
       rawTransaction,
       hash: keccak256(rawTransaction),

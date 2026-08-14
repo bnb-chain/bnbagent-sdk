@@ -33,7 +33,9 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parent.parent / os.path.basename(os.environ.get("ENV_FILE", ".env")))
+load_dotenv(
+    Path(__file__).resolve().parent.parent / os.path.basename(os.environ.get("ENV_FILE", ".env"))
+)
 
 NETWORK = os.getenv("NETWORK", "bsc-testnet")
 
@@ -74,7 +76,11 @@ def agent_card_url(base: str) -> str:
     parts = urlsplit(base)
     if not parts.scheme or not parts.netloc:
         url = base.rstrip("/")
-        return url if url.endswith("/.well-known/agent-card.json") else f"{url}/.well-known/agent-card.json"
+        return (
+            url
+            if url.endswith("/.well-known/agent-card.json")
+            else f"{url}/.well-known/agent-card.json"
+        )
     path = parts.path.rstrip("/")
     if not path.endswith("/.well-known/agent-card.json"):
         path += "/.well-known/agent-card.json"
@@ -154,7 +160,9 @@ def fund_job(quote: dict) -> int | None:
     from bnbagent import ERC8183Client, EVMWalletProvider
     from bnbagent.erc8183.negotiation import build_job_description
 
-    wallet = EVMWalletProvider(password=os.getenv("BUYER_WALLET_PASSWORD", "demo-password"), private_key=buyer_key)
+    wallet = EVMWalletProvider(
+        password=os.getenv("BUYER_WALLET_PASSWORD", "demo-password"), private_key=buyer_key
+    )
     client = ERC8183Client(wallet_provider=wallet, network=NETWORK)
 
     provider = quote["provider_address"]

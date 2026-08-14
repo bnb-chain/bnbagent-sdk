@@ -17,11 +17,11 @@ import sys
 import time
 from pathlib import Path
 
-from dotenv import load_dotenv, dotenv_values
+from dotenv import dotenv_values, load_dotenv
 
+from bnbagent.config import resolve_network
 from bnbagent.erc8183 import ERC8183Client
 from bnbagent.wallets import EVMWalletProvider
-from bnbagent.config import resolve_network
 
 ROOT = Path(__file__).resolve().parent
 
@@ -45,7 +45,7 @@ def main() -> int:
 
     network = os.environ.get("NETWORK", "bsc-testnet")
     rpc_url = dotenv_values(ROOT / ".env").get("RPC_URL")
-    wallet  = EVMWalletProvider(password="example", private_key=pk, persist=False)
+    wallet = EVMWalletProvider(password="example", private_key=pk, persist=False)
     if rpc_url:
         nc = dataclasses.replace(resolve_network(network), rpc_url=rpc_url)
         erc8183 = ERC8183Client(wallet, network=nc)
@@ -58,7 +58,9 @@ def main() -> int:
         print(f"{voter} is NOT a whitelisted voter on {erc8183.policy.address}", file=sys.stderr)
         return 1
     if not erc8183.policy.disputed(job_id):
-        print(f"jobId={job_id} has not been disputed yet; voteReject would revert", file=sys.stderr)
+        print(
+            f"jobId={job_id} has not been disputed yet; voteReject would revert", file=sys.stderr
+        )
         return 1
     if erc8183.policy.has_voted(job_id, voter):
         print(f"{voter} already voted on jobId={job_id}", file=sys.stderr)
@@ -80,7 +82,10 @@ def main() -> int:
         time.sleep(2)
 
     if new_total >= quorum:
-        print(f"[voter] quorum reached ({new_total}/{quorum}); any settler can now call router.settle({job_id})")
+        print(
+            f"[voter] quorum reached ({new_total}/{quorum}); "
+            f"any settler can now call router.settle({job_id})"
+        )
     else:
         print(f"[voter] current reject votes: {new_total}/{quorum} — still below quorum")
     return 0

@@ -9,7 +9,6 @@ from bnbagent.networks import (
     BNB_CHAIN_ADDRESSES,
     BSC_MAINNET_CHAIN_ID,
     BSC_TESTNET_CHAIN_ID,
-    DeployedAddresses,
     PAYMENT_TOKEN_EIP712_NAME,
     PAYMENT_TOKEN_EIP712_VERSION,
     get_address,
@@ -36,9 +35,13 @@ def test_all_addresses_are_checksummed():
     """Every address on every chain must be EIP-55 checksum-encoded."""
     for chain_id, deploy in BNB_CHAIN_ADDRESSES.items():
         for field_name in (
-            "payment_token", "treasury",
-            "commerce_proxy", "commerce_impl",
-            "router_proxy", "router_impl", "policy",
+            "payment_token",
+            "treasury",
+            "commerce_proxy",
+            "commerce_impl",
+            "router_proxy",
+            "router_impl",
+            "policy",
         ):
             addr = getattr(deploy, field_name)
             assert Web3.is_checksum_address(addr), (

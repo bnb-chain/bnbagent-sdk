@@ -13,6 +13,7 @@ Security:
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
@@ -20,13 +21,12 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-import inspect
-
 from eth_account import Account
 from eth_account.messages import encode_defunct
 from eth_account.signers.local import LocalAccount
 
-from ..signing import SigningPolicy, check as _policy_check
+from ..signing import SigningPolicy
+from ..signing import check as _policy_check
 from .capabilities import CALLS_ARBITRARY, PAYMASTER_SPONSOR
 from .wallet_provider import WalletProvider
 
@@ -170,8 +170,7 @@ class EVMWalletProvider(WalletProvider):
             if self._persist:
                 self._save_keystore()
                 logger.info(
-                    "Private key imported and encrypted: %s "
-                    "(PRIVATE_KEY can be removed from env)",
+                    "Private key imported and encrypted: %s (PRIVATE_KEY can be removed from env)",
                     self._account.address,
                 )
         except Exception as e:
@@ -236,7 +235,9 @@ class EVMWalletProvider(WalletProvider):
 
         # Atomic write
         fd, temp_path = tempfile.mkstemp(
-            dir=self._wallets_dir, prefix=".ks_", suffix=".tmp",
+            dir=self._wallets_dir,
+            prefix=".ks_",
+            suffix=".tmp",
         )
         try:
             with os.fdopen(fd, "w") as f:

@@ -51,7 +51,11 @@ from tests.conftest import FAKE_ADDRESS, FAKE_CONTRACT_ADDRESS
 
 # Canonical twak --json outputs (field-verified v0.18.0 shapes).
 _REGISTER_OUT = {
-    "success": True, "agentId": 42, "hash": "0xreg", "owner": FAKE_ADDRESS, "chain": "bsc",
+    "success": True,
+    "agentId": 42,
+    "hash": "0xreg",
+    "owner": FAKE_ADDRESS,
+    "chain": "bsc",
 }
 # spec spelling ("txHash"): exercises the hash-alias chain on the happy path
 _SETMETA_OUT = {"success": True, "txHash": "0xmeta", "chain": "bsc"}
@@ -130,6 +134,7 @@ def _make_twak_contract(twak):
 
 # ── TWAKProvider is a self-broadcasting executor ──
 
+
 def test_twak_provider_is_intent_executor():
     assert isinstance(TWAKProvider(), IntentExecutor)
 
@@ -184,17 +189,20 @@ def test_make_executor_captures_paymaster_url_and_writes_carry_flag():
     # write commands as --paymaster-url; reads (the status probe) never are.
     run, calls = _intent_router(_TX_OUT)
     twak = TWAKProvider()
-    executor = twak.make_executor(
-        ExecutionContext(web3=MagicMock(), paymaster=_paymaster())
-    )
+    executor = twak.make_executor(ExecutionContext(web3=MagicMock(), paymaster=_paymaster()))
     assert executor is twak
-    _execute(
-        twak, Intent(name=ERC8183_SETTLE, kwargs={"job_id": 137, "evidence": b""}), run
-    )
+    _execute(twak, Intent(name=ERC8183_SETTLE, kwargs={"job_id": 137, "evidence": b""}), run)
     assert calls[0] == _WALLET_STATUS_CMD
     assert calls[1] == [
-        "twak", "erc8183", "settle", "137",
-        "--paymaster-url", _PAYMASTER_URL, "--chain", "bsc", "--json",
+        "twak",
+        "erc8183",
+        "settle",
+        "137",
+        "--paymaster-url",
+        _PAYMASTER_URL,
+        "--chain",
+        "bsc",
+        "--json",
     ]
 
 
@@ -265,6 +273,7 @@ def test_contract_paymaster_flows_to_twak_writes():
 
 # ── erc8004.register: atomic --metadata flags (v0.18.0, no replay) ──
 
+
 def test_register_atomic_metadata_flags_and_field_mapping():
     run, calls = _router()
     twak = TWAKProvider()
@@ -294,11 +303,18 @@ def test_register_atomic_metadata_flags_and_field_mapping():
     # one atomic register invocation: repeatable --metadata, no set-metadata replay
     assert calls[0] == _WALLET_STATUS_CMD
     assert calls[1] == [
-        "twak", "erc8004", "register",
-        "--uri", "https://agent.example/card.json",
-        "--metadata", "built_with=https://github.com/bnb-chain/bnbagent-sdk#v1",
-        "--metadata", "foo=bar",
-        "--chain", "bsc", "--json",
+        "twak",
+        "erc8004",
+        "register",
+        "--uri",
+        "https://agent.example/card.json",
+        "--metadata",
+        "built_with=https://github.com/bnb-chain/bnbagent-sdk#v1",
+        "--metadata",
+        "foo=bar",
+        "--chain",
+        "bsc",
+        "--json",
     ]
     assert len(calls) == 2
 
@@ -331,6 +347,7 @@ def test_contract_register_end_to_end_no_web3_send():
 
 # ── other erc8004 intents ──
 
+
 def test_set_metadata_via_contract():
     run, calls = _router()
     twak = TWAKProvider()
@@ -355,6 +372,7 @@ def test_set_agent_uri_via_contract_uses_set_uri():
 
 # ── erc8183 dispatch table: exact argv + normalised result ──
 
+
 @pytest.mark.parametrize(
     ("name", "kwargs", "expected_argv"),
     [
@@ -368,8 +386,12 @@ def test_set_agent_uri_via_contract_uses_set_uri():
             ERC8183_SET_PROVIDER,
             {"job_id": 137, "provider": _PROVIDER_ADDR, "opt_params": b"\x01\x02"},
             [
-                "set-provider", "137", "--provider", _PROVIDER_ADDR,
-                "--opt-params", "0x0102",
+                "set-provider",
+                "137",
+                "--provider",
+                _PROVIDER_ADDR,
+                "--opt-params",
+                "0x0102",
             ],
             id="set_provider-opt-params-passthrough-s1",
         ),
@@ -401,8 +423,12 @@ def test_set_agent_uri_via_contract_uses_set_uri():
             ERC8183_COMPLETE,
             {"job_id": 137, "reason": b"\x12" * 32, "opt_params": b"\x01"},
             [
-                "complete", "137", "--reason", "0x" + "12" * 32,
-                "--opt-params", "0x01",
+                "complete",
+                "137",
+                "--reason",
+                "0x" + "12" * 32,
+                "--opt-params",
+                "0x01",
             ],
             id="complete-reason-then-opt-params",
         ),
@@ -496,12 +522,20 @@ def test_create_job_omits_hook_for_zero_address():
         "jobId": 138,
     }
     assert calls[1] == [
-        "twak", "erc8183", "create-job",
-        "--provider", _PROVIDER_ADDR,
-        "--evaluator", _EVALUATOR_ADDR,
-        "--expires-at", "1750000000",  # twak's flag name; carries expired_at
-        "--description", "index the docs",
-        "--chain", "bsc", "--json",
+        "twak",
+        "erc8183",
+        "create-job",
+        "--provider",
+        _PROVIDER_ADDR,
+        "--evaluator",
+        _EVALUATOR_ADDR,
+        "--expires-at",
+        "1750000000",  # twak's flag name; carries expired_at
+        "--description",
+        "index the docs",
+        "--chain",
+        "bsc",
+        "--json",
     ]
 
 
@@ -524,17 +558,27 @@ def test_create_job_includes_nonzero_hook():
     )
     assert result["jobId"] == 139
     assert calls[1] == [
-        "twak", "erc8183", "create-job",
-        "--provider", _PROVIDER_ADDR,
-        "--evaluator", _EVALUATOR_ADDR,
-        "--expires-at", "1750000000",
-        "--description", "index the docs",
-        "--hook", _HOOK_ADDR,
-        "--chain", "bsc", "--json",
+        "twak",
+        "erc8183",
+        "create-job",
+        "--provider",
+        _PROVIDER_ADDR,
+        "--evaluator",
+        _EVALUATOR_ADDR,
+        "--expires-at",
+        "1750000000",
+        "--description",
+        "index the docs",
+        "--hook",
+        _HOOK_ADDR,
+        "--chain",
+        "bsc",
+        "--json",
     ]
 
 
 # ── erc8183.fund: --expected-budget atomic pin (gaps S-2, v0.19.0) ──
+
 
 def _fund_intent(expected_budget, opt_params=b""):
     return Intent(
@@ -548,9 +592,7 @@ def _fund_intent(expected_budget, opt_params=b""):
 
 
 def test_fund_pins_expected_budget_no_status_precheck_and_surfaces_approve_hash():
-    run, calls = _intent_router(
-        {"success": True, "hash": "0xfund", "approveHash": "0xappr"}
-    )
+    run, calls = _intent_router({"success": True, "hash": "0xfund", "approveHash": "0xappr"})
     twak = TWAKProvider()
     result = _execute(twak, _fund_intent(1000), run)
     assert result == {
@@ -563,8 +605,15 @@ def test_fund_pins_expected_budget_no_status_precheck_and_surfaces_approve_hash(
     # old client-side `erc8183 status` pre-check is gone entirely.
     assert calls[0] == _WALLET_STATUS_CMD
     assert calls[1] == [
-        "twak", "erc8183", "fund", "137",
-        "--expected-budget", "1000", "--chain", "bsc", "--json",
+        "twak",
+        "erc8183",
+        "fund",
+        "137",
+        "--expected-budget",
+        "1000",
+        "--chain",
+        "bsc",
+        "--json",
     ]
     assert len(calls) == 2
     assert all(not (c[1] == "erc8183" and c[2] == "status") for c in calls)
@@ -575,9 +624,17 @@ def test_fund_opt_params_passthrough():
     twak = TWAKProvider()
     _execute(twak, _fund_intent(1000, opt_params=b"\xca\xfe"), run)
     assert calls[1] == [
-        "twak", "erc8183", "fund", "137",
-        "--expected-budget", "1000", "--opt-params", "0xcafe",
-        "--chain", "bsc", "--json",
+        "twak",
+        "erc8183",
+        "fund",
+        "137",
+        "--expected-budget",
+        "1000",
+        "--opt-params",
+        "0xcafe",
+        "--chain",
+        "bsc",
+        "--json",
     ]
 
 
@@ -609,6 +666,7 @@ def test_fund_budget_mismatch_revert_surfaces_selector():
 
 # ── opt-params passthrough (REQ-1 / S-1, v0.19.0) ──
 
+
 def test_submit_opt_params_passthrough_req1():
     # v0.19.0 (REQ-1): the deliverable_url JSON the SDK facade encodes into
     # optParams rides the submit tx verbatim — seller role works end-to-end.
@@ -625,10 +683,17 @@ def test_submit_opt_params_passthrough_req1():
     )
     assert result == {"success": True, "transactionHash": "0xfeed", "receipt": None}
     assert calls[1] == [
-        "twak", "erc8183", "submit", "137",
-        "--deliverable", "0x" + "ab" * 32,
-        "--opt-params", "0x" + opt.hex(),
-        "--chain", "bsc", "--json",
+        "twak",
+        "erc8183",
+        "submit",
+        "137",
+        "--deliverable",
+        "0x" + "ab" * 32,
+        "--opt-params",
+        "0x" + opt.hex(),
+        "--chain",
+        "bsc",
+        "--json",
     ]
 
 
@@ -644,8 +709,17 @@ def test_set_budget_opt_params_passthrough_s1():
         run,
     )
     assert calls[1] == [
-        "twak", "erc8183", "set-budget", "137", "--amount", "1",
-        "--opt-params", "0x78", "--chain", "bsc", "--json",
+        "twak",
+        "erc8183",
+        "set-budget",
+        "137",
+        "--amount",
+        "1",
+        "--opt-params",
+        "0x78",
+        "--chain",
+        "bsc",
+        "--json",
     ]
 
 
@@ -706,9 +780,7 @@ def test_unnamed_intent_rejected():
         (ERC8183_VOTE_REJECT, NETWORKS["bsc-mainnet"].policy_contract),
     ],
 )
-def test_custom_contract_intent_rejected_before_any_cli_call(
-    name, canonical_target
-):
+def test_custom_contract_intent_rejected_before_any_cli_call(name, canonical_target):
     twak = TWAKProvider()
     call = types.SimpleNamespace(address="0x" + "99" * 20)
     with patch("bnbagent.wallets.twak_provider.subprocess.run") as run:
@@ -739,9 +811,7 @@ def test_custom_erc8004_target_requires_matching_env_override(name):
 def test_custom_erc8004_target_allowed_with_matching_env_override(monkeypatch):
     custom_registry = "0x" + "99" * 20
     monkeypatch.setenv("ERC8004_REGISTRY_ADDRESS", custom_registry)
-    run, calls = _intent_router(
-        {"success": True, "hash": "0xreg", "agentId": "1362"}
-    )
+    run, calls = _intent_router({"success": True, "hash": "0xreg", "agentId": "1362"})
     twak = TWAKProvider()
     result = _execute(
         twak,
@@ -759,9 +829,7 @@ def test_custom_erc8004_target_allowed_with_matching_env_override(monkeypatch):
 def test_erc8004_env_override_cannot_redirect_canonical_intent(monkeypatch):
     monkeypatch.setenv("ERC8004_REGISTRY_ADDRESS", "0x" + "99" * 20)
     twak = TWAKProvider()
-    call = types.SimpleNamespace(
-        address=NETWORKS["bsc-mainnet"].registry_contract
-    )
+    call = types.SimpleNamespace(address=NETWORKS["bsc-mainnet"].registry_contract)
     with patch("bnbagent.wallets.twak_provider.subprocess.run") as run:
         with pytest.raises(
             UnsupportedWalletOperation,
@@ -800,6 +868,7 @@ def test_testnet_canonical_contract_target_allowed():
 
 
 # ── output parse hardening (gaps REQ-3 + error-envelope variants) ──
+
 
 @pytest.mark.parametrize("field", ["hash", "txHash", "transactionHash"])
 def test_tx_hash_field_variants_extracted(field):
@@ -904,8 +973,14 @@ def test_sign_message_normalises_and_self_checks():
 
     def run(cmd, **kwargs):
         assert cmd == [
-            "twak", "wallet", "sign-message",
-            "--chain", "bsc", "--message", message, "--json",
+            "twak",
+            "wallet",
+            "sign-message",
+            "--chain",
+            "bsc",
+            "--message",
+            message,
+            "--json",
         ]
         return _completed(cmd, {"success": True, "signature": raw_sig})
 
@@ -935,10 +1010,18 @@ def test_sign_message_uses_base_chain_key_on_testnet():
 
     def run(cmd, **kwargs):
         assert cmd == [
-            "twak", "wallet", "sign-message",
-            "--chain", "bsc", "--message", message, "--json",
+            "twak",
+            "wallet",
+            "sign-message",
+            "--chain",
+            "bsc",
+            "--message",
+            message,
+            "--json",
         ]
-        return _completed(cmd, {"success": True, "signature": "0x" + bytes(signed.signature).hex()})
+        return _completed(
+            cmd, {"success": True, "signature": "0x" + bytes(signed.signature).hex()}
+        )
 
     with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
         result = twak.sign_message(message)
@@ -951,9 +1034,7 @@ def test_sign_message_recovery_mismatch_raises():
     message = "hello twak"
     acct = Account.from_key(_TEST_KEY)
     tampered = bytes(
-        Account.sign_message(
-            encode_defunct(text=message), private_key="0x" + "cd" * 32
-        ).signature
+        Account.sign_message(encode_defunct(text=message), private_key="0x" + "cd" * 32).signature
     ).hex()
 
     twak = _primed_twak(acct.address)
@@ -1010,6 +1091,7 @@ def test_address_cached_after_first_lookup():
 
 
 # ── auto-create / create_wallet (EVM-parity) ──
+
 
 def _status_router(wallet_exists: bool):
     """Route wallet status / create / address with a toggleable existence."""
@@ -1222,10 +1304,19 @@ def test_x402_quote_argv_includes_method_and_body_only_when_given():
     with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
         twak.x402_quote("https://pay.example/x402", method="POST", body='{"amountUsd":0.1}')
 
-    assert calls == [[
-        "twak", "x402", "quote", "https://pay.example/x402",
-        "--method", "POST", "--body", '{"amountUsd":0.1}', "--json",
-    ]]
+    assert calls == [
+        [
+            "twak",
+            "x402",
+            "quote",
+            "https://pay.example/x402",
+            "--method",
+            "POST",
+            "--body",
+            '{"amountUsd":0.1}',
+            "--json",
+        ]
+    ]
 
 
 def test_x402_quote_https_only_error_surfaces():
@@ -1262,8 +1353,14 @@ def test_x402_request_argv_minimal_with_wallet_probe_first():
     assert calls[0] == _WALLET_STATUS_CMD
     # minimal argv: --max-payment + --yes, and no --prefer-*/--method/--body
     assert calls[1] == [
-        "twak", "x402", "request", "https://pay.example/x402",
-        "--max-payment", "1000", "--yes", "--json",
+        "twak",
+        "x402",
+        "request",
+        "https://pay.example/x402",
+        "--max-payment",
+        "1000",
+        "--yes",
+        "--json",
     ]
     assert len(calls) == 2
     # success output = the endpoint body verbatim (no receipt, gaps S-7)
@@ -1286,12 +1383,23 @@ def test_x402_request_argv_includes_prefer_flags_only_when_set():
         )
 
     assert calls[1] == [
-        "twak", "x402", "request", "https://pay.example/x402",
-        "--max-payment", str(10**17), "--yes",
-        "--method", "POST", "--body", '{"amountUsd":0.1}',
-        "--prefer-network", "eip155:56",
-        "--prefer-method", "eip3009",
-        "--prefer-asset", u_asset,
+        "twak",
+        "x402",
+        "request",
+        "https://pay.example/x402",
+        "--max-payment",
+        str(10**17),
+        "--yes",
+        "--method",
+        "POST",
+        "--body",
+        '{"amountUsd":0.1}',
+        "--prefer-network",
+        "eip155:56",
+        "--prefer-method",
+        "eip3009",
+        "--prefer-asset",
+        u_asset,
         "--json",
     ]
 
@@ -1314,6 +1422,7 @@ def test_x402_request_min_amount_error_surfaces():
 
 
 # ── live-CLI quirks surfaced by examples/twak (field-verified v0.18.0) ──
+
 
 def test_exists_false_when_status_reports_not_configured():
     # `wallet status` exits 0 even with no wallet; only the agentWallet field
@@ -1350,9 +1459,7 @@ def test_run_trusts_success_envelope_over_nonzero_exit():
     assert data["accepts"] == []
     # an error envelope with a non-zero exit still raises
     with patch("bnbagent.wallets.twak_provider.subprocess.run") as run:
-        run.return_value = _completed(
-            ["twak"], {"error": "boom", "errorCode": "X"}, returncode=1
-        )
+        run.return_value = _completed(["twak"], {"error": "boom", "errorCode": "X"}, returncode=1)
         with pytest.raises(RuntimeError, match="boom"):
             twak.x402_quote("https://www.x402.org/protected")
 
@@ -1367,7 +1474,9 @@ def test_create_wallet_password_requirement_maps_to_descriptive_error():
             return _completed(cmd, {"agentWallet": "not configured"})
         if "create" in cmd:
             return _completed(
-                cmd, {}, returncode=1,
+                cmd,
+                {},
+                returncode=1,
                 stderr="error: required option '--password <password>' not specified",
             )
         raise AssertionError(f"unexpected twak command: {cmd}")

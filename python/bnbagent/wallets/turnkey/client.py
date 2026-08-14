@@ -142,7 +142,8 @@ class TurnkeyClient:
 
     def _submit(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         activity = self._post(path, body)
-        for _ in range(_POLL_ATTEMPTS):
+        polls_remaining = _POLL_ATTEMPTS
+        while True:
             status = activity.get("status")
             if status == _ACTIVITY_TERMINAL_OK:
                 return activity
@@ -152,6 +153,8 @@ class TurnkeyClient:
                     f"{activity.get('failure') or activity.get('type', '')}".strip(),
                     activity_status=status,
                 )
+            if polls_remaining == 0:
+                break
             time.sleep(_POLL_INTERVAL_S)
             activity = self._post(
                 "/public/v1/query/get_activity",
@@ -160,6 +163,7 @@ class TurnkeyClient:
                     "activityId": activity.get("id", ""),
                 },
             )
+            polls_remaining -= 1
         raise TurnkeyApiError(
             "Turnkey activity still pending after "
             f"{_POLL_ATTEMPTS * _POLL_INTERVAL_S:.0f}s of polling",

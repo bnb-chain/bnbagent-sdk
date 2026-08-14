@@ -110,8 +110,9 @@ def create_throwaway_wallet(provider: TWAKProvider, home: Path) -> str:
     to resolve it from TWAK_WALLET_PASSWORD / the keychain. The shipped
     CLI, however, hard-requires ``--password`` on argv for ``wallet create``
     (env resolution only covers *unlock*; gaps S-8, re-verified unchanged on
-    v0.19.0) — so the SDK call currently fails. We try it first (so this script self-heals when either
-    side fixes the mismatch) and fall back to driving the CLI directly.
+    v0.19.0) — so the SDK call currently fails. We try it first (so this script
+    self-heals when either side fixes the mismatch) and fall back to driving
+    the CLI directly.
     The fallback puts the throwaway password on argv — acceptable for a
     demo wallet in a tempdir, never for a real one.
     """
@@ -124,9 +125,14 @@ def create_throwaway_wallet(provider: TWAKProvider, home: Path) -> str:
         print("          falling back to a direct CLI create — demo wallet only)")
     proc = subprocess.run(  # noqa: S603 - fixed arg list, no shell
         [
-            TWAK_BIN, "wallet", "create",
-            "--password", os.environ["TWAK_WALLET_PASSWORD"],
-            "--no-keychain", "--skip-password-check", "--json",
+            TWAK_BIN,
+            "wallet",
+            "create",
+            "--password",
+            os.environ["TWAK_WALLET_PASSWORD"],
+            "--no-keychain",
+            "--skip-password-check",
+            "--json",
         ],
         capture_output=True,
         text=True,
@@ -188,17 +194,11 @@ def step_b_capabilities(twak: TWAKProvider) -> None:
     evm = EVMWalletProvider(
         password="quickstart-demo",
         private_key=Account.create().key.hex(),  # ephemeral, never broadcast
-        persist=False,                           # in-memory only, no keystore file
+        persist=False,  # in-memory only, no keystore file
     )
     print(f"evm capabilities:  {sorted(evm.capabilities())}")
-    print(
-        "  evm-only:  "
-        f"{sorted(evm.capabilities() - twak.capabilities())}"
-    )
-    print(
-        "  twak-only: "
-        f"{sorted(twak.capabilities() - evm.capabilities())}"
-    )
+    print(f"  evm-only:  {sorted(evm.capabilities() - twak.capabilities())}")
+    print(f"  twak-only: {sorted(twak.capabilities() - evm.capabilities())}")
     print(
         "Reading: twak signs nothing raw (no sign.transaction/typed_data) but\n"
         "broadcasts its own fixed intent menu; EVM signs anything but needs\n"
@@ -250,9 +250,7 @@ def step_c_guard_rails(twak: TWAKProvider) -> None:
     # the message bytes.
     msg = "hello from the bnbagent twak quickstart"
     signed = twak.sign_message(msg)
-    recovered = Account.recover_message(
-        encode_defunct(text=msg), signature=signed["signature"]
-    )
+    recovered = Account.recover_message(encode_defunct(text=msg), signature=signed["signature"])
     assert recovered.lower() == twak.address.lower(), (recovered, twak.address)
     print("4. sign_message round-trip:")
     print(f"   messageHash = {signed['messageHash']}")

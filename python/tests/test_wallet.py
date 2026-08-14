@@ -2,8 +2,6 @@
 Test cases for EVMWalletProvider (~/.bnbagent/wallets/ keystore)
 """
 
-import json
-
 import pytest
 from eth_account import Account
 
@@ -139,7 +137,9 @@ class TestEVMWalletProvider:
         from bnbagent.signing import SigningPolicy
 
         wallet = EVMWalletProvider(
-            password=PW, private_key=PK, wallets_dir=wdir,
+            password=PW,
+            private_key=PK,
+            wallets_dir=wdir,
             signing_policy=SigningPolicy.permissive(),
         )
         domain = {
@@ -187,12 +187,19 @@ class TestEVMWalletProvider:
     def test_sign_typed_data_strips_domain_type_if_supplied(self, wdir):
         """Caller may pass EIP712Domain entry in types; should produce same sig."""
         from bnbagent.signing import SigningPolicy
+
         wallet = EVMWalletProvider(
-            password=PW, private_key=PK, wallets_dir=wdir,
+            password=PW,
+            private_key=PK,
+            wallets_dir=wdir,
             signing_policy=SigningPolicy.permissive(),
         )
-        domain = {"name": "Test", "version": "1", "chainId": 56,
-                  "verifyingContract": "0x" + "1" * 40}
+        domain = {
+            "name": "Test",
+            "version": "1",
+            "chainId": 56,
+            "verifyingContract": "0x" + "1" * 40,
+        }
         types_with_domain = {
             "EIP712Domain": [
                 {"name": "name", "type": "string"},
@@ -236,4 +243,3 @@ class TestEVMWalletProvider:
         wallet = EVMWalletProvider(password=PW, private_key=PK, persist=False, wallets_dir=wdir)
         assert wallet.address == Account.from_key(PK).address
         assert not wdir.exists()  # No directory created
-

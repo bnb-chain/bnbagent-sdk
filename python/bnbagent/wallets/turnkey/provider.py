@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 import rlp
@@ -76,7 +77,7 @@ def _map_vendor_error(op: str, error: Exception) -> Exception:
             "billed signatures/month; pay-as-you-go $0.10/signature) — check "
             "the Turnkey billing dashboard."
         )
-    if status == 429 or "rate limit" in lowered or "rate_limit" in lowered:
+    if status == 429 or re.search(r"rate.?limit", message, re.IGNORECASE):
         return RuntimeError(
             f"Turnkey rate limit hit during {op} (free tier allows 1 "
             "request/second) — pace calls or upgrade the plan."

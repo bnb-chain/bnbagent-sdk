@@ -38,7 +38,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
@@ -58,8 +58,9 @@ class DescriptionTooLongError(ValueError):
 
 
 if TYPE_CHECKING:
-    from .client import ERC8183Client
     from ..wallets.protocols import MessageSigner
+    from .client import ERC8183Client
+    from .schema import JobDescription
 
 
 class ReasonCode:
@@ -390,8 +391,14 @@ def _build_description_content(
     if success_criteria:
         terms["success_criteria"] = [_sanitize_for_claim(c) for c in success_criteria]
 
-    negotiated_at = negotiation_result.get("negotiated_at") or response.get("negotiated_at") or int(time.time())
-    quote_expires_at = negotiation_result.get("quote_expires_at") or response.get("quote_expires_at")
+    negotiated_at = (
+        negotiation_result.get("negotiated_at")
+        or response.get("negotiated_at")
+        or int(time.time())
+    )
+    quote_expires_at = negotiation_result.get("quote_expires_at") or response.get(
+        "quote_expires_at"
+    )
 
     content: dict = {
         "version": 1,
@@ -471,7 +478,7 @@ def build_job_description(
     return description
 
 
-def parse_job_description(description: str) -> "JobDescription | None":
+def parse_job_description(description: str) -> JobDescription | None:
     """Parse a structured on-chain job description (schema v1+).
 
     Returns a ``JobDescription`` if the description is a valid structured JSON,
@@ -481,6 +488,7 @@ def parse_job_description(description: str) -> "JobDescription | None":
         description: The job.description string from on-chain.
     """
     from .schema import JobDescription
+
     return JobDescription.from_str(description)
 
 
@@ -531,7 +539,8 @@ class NegotiationHandler:
         Initialize the negotiation handler.
 
         Args:
-            service_price: Price in token smallest unit (e.g., "20000000000000000000" for 20 tokens)
+            service_price: Price in token smallest unit
+                           (e.g., "20000000000000000000" for 20 tokens)
             currency: BEP20 token contract address
             estimated_completion_seconds: Estimated time to complete the service
             require_quality_standards: Whether to require quality_standards in request

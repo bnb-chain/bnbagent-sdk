@@ -132,7 +132,7 @@ class ERC8183Config(AgentConfig):
     @classmethod
     def from_env(
         cls,
-        storage: "StorageProvider | None" = None,
+        storage: StorageProvider | None = None,
     ) -> ERC8183Config:
         """Load ERC-8183 configuration from the environment.
 
@@ -180,6 +180,7 @@ class ERC8183Config(AgentConfig):
 
         if storage is None:
             from ..storage import LocalStorageProvider
+
             storage = LocalStorageProvider.from_env()
 
         return cls(

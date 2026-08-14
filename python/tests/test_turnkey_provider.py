@@ -387,11 +387,24 @@ class TestVendorErrorMapping:
         with pytest.raises(RuntimeError, match="25 billed signatures/month"):
             provider.sign_message("x")
 
-    def test_rate_limit_hint(self, fake_client):
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Turnkey error 8: RATE_LIMIT_EXCEEDED",
+            "Turnkey error 8: RATE LIMIT EXCEEDED",
+            "Turnkey error 8: rate-limit exceeded",
+            "Turnkey error 8: ratelimit hit",
+        ],
+    )
+    def test_rate_limit_hint(self, fake_client, message):
         provider = make_provider(fake_client)
-        fake_client.failure = TurnkeyApiError(
-            "Turnkey error 8: RATE_LIMIT_EXCEEDED", status_code=429
-        )
+        fake_client.failure = TurnkeyApiError(message)
+        with pytest.raises(RuntimeError, match="1 request/second"):
+            provider.sign_message("x")
+
+    def test_rate_limit_status_hint(self, fake_client):
+        provider = make_provider(fake_client)
+        fake_client.failure = TurnkeyApiError("too many requests", status_code=429)
         with pytest.raises(RuntimeError, match="1 request/second"):
             provider.sign_message("x")
 

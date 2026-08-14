@@ -503,8 +503,8 @@ describe("signTransaction", () => {
     const parsed = parseTransaction(signed.rawTransaction);
     expect(parsed.type).toBe("eip1559");
     expect(signed.hash).toBe(keccak256(signed.rawTransaction));
-    // Typed transactions carry yParity; the provider normalizes v to 27/28.
-    expect([27n, 28n]).toContain(signed.v);
+    // Typed transactions expose the wire-format yParity bit as v.
+    expect([0n, 1n]).toContain(signed.v);
   });
 
   it("refuses a chainId mismatch before any billable call when pinned", async () => {

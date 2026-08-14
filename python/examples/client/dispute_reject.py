@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from _helpers import banner, expiry_for, load_settings, make_client, make_primary_client
 
-from bnbagent.erc8183 import DeliverableManifest, JobStatus, SCHEMA_VERSION
+from bnbagent.erc8183 import SCHEMA_VERSION, DeliverableManifest, JobStatus
 
 
 def main() -> None:
@@ -20,7 +20,7 @@ def main() -> None:
     banner("DISPUTE REJECT — client disputes, voter rejects")
 
     decimals = client.token_decimals()
-    budget = 1 * (10 ** decimals)
+    budget = 1 * (10**decimals)
     expired_at = expiry_for(client)
 
     res = client.create_job(
@@ -49,11 +49,15 @@ def main() -> None:
             "router": provider.router.address,
             "policy": provider.policy.address,
         },
-        response={"content": f"dispute test result for job {job_id}", "content_type": "text/plain"},
+        response={
+            "content": f"dispute test result for job {job_id}",
+            "content_type": "text/plain",
+        },
     )
     # In production: upload manifest.to_dict() to IPFS/storage first, then pass the URL.
     # deliverable_url = storage.upload(manifest.to_dict(), f"job-{job_id}.json")
-    deliverable_url = "https://example.invalid/manifest.json"  # placeholder — these scripts test on-chain flow only
+    # Placeholder: these scripts test on-chain flow only.
+    deliverable_url = "https://example.invalid/manifest.json"
     provider.submit(job_id, manifest.manifest_hash(), {"deliverable_url": deliverable_url})
     print("[provider] submit OK")
 

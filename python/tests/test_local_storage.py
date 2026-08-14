@@ -48,7 +48,7 @@ class TestLocalStorageProvider:
     @pytest.mark.asyncio
     async def test_file_permissions(self, tmp_path):
         provider = LocalStorageProvider(str(tmp_path / "data"))
-        url = await provider.upload({"key": "val"}, "test.json")
+        await provider.upload({"key": "val"}, "test.json")
         filepath = tmp_path / "data" / "test.json"
         mode = os.stat(filepath).st_mode
         assert mode & stat.S_IRUSR
@@ -56,6 +56,7 @@ class TestLocalStorageProvider:
 
     def test_upload_sync(self, tmp_path):
         from bnbagent.storage import upload_sync
+
         provider = LocalStorageProvider(str(tmp_path / "data"))
         url = upload_sync(provider, {"sync": True}, "sync-test.json")
         assert url.startswith("file://")
@@ -136,6 +137,7 @@ class TestLocalStorageProvider:
 
     def test_upload_sync_path_traversal_blocked(self, tmp_path):
         from bnbagent.storage import upload_sync
+
         provider = LocalStorageProvider(str(tmp_path / "data"))
         with pytest.raises(StorageError, match="Path traversal blocked"):
             upload_sync(provider, {"k": "v"}, "../escape.json")

@@ -16,6 +16,7 @@ from __future__ import annotations
 from .client import DEFAULT_APPROVE_FLOOR_UNITS, ERC8183Client
 from .commerce import CommerceClient
 from .constants import get_erc8183_config
+from .job_ops import ERC8183JobOps, funded_job_watcher
 from .negotiation import (
     NegotiationHandler,
     NegotiationRequest,
@@ -26,7 +27,6 @@ from .negotiation import (
 )
 from .policy import PolicyClient
 from .router import RouterClient
-from .job_ops import ERC8183JobOps, funded_job_watcher
 from .schema import SCHEMA_VERSION, DeliverableManifest, JobDescription
 from .types import (
     REASON_APPROVED,

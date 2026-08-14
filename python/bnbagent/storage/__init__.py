@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from .storage_provider import StorageProvider
 from .local_storage_provider import LocalStorageProvider
+from .storage_provider import StorageProvider
 from .sync_utils import upload_sync
 
 __all__ = [
