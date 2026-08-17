@@ -57,7 +57,7 @@ export const NETWORKS: Record<string, NetworkConfig> = {
     registryContract: "0x8004A818BFB912233c491871b3d84c89A494BD9e",
     commerceContract: "0xa206c0517b6371c6638cd9e4a42cc9f02a33b0de",
     routerContract: "0xd7d36d66d2f1b608a0f943f722d27e3744f66f25",
-    policyContract: "0x4f4678d4439fec812ac7674bb3efb4c8f5fb78a6",
+    policyContract: "0xd6a4217588f6b1f5657a92a3e94e6422ad771cea",
   },
   "bsc-mainnet": {
     name: "bsc-mainnet",
