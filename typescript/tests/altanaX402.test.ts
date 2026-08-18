@@ -13,12 +13,18 @@ import { decodeFunctionData, getAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { erc20Abi } from "../src/abis/erc20.js";
+import {
+  PAYMENT_SIGNATURE_HEADER,
+  X_PAYMENT_HEADER,
+  normalizeX402PaymentHeader,
+} from "../src/wallets/altana/x402.js";
 import { X402_PAY } from "../src/wallets/capabilities.js";
 import { UnsupportedWalletOperation } from "../src/wallets/errors.js";
 import {
   X402AmountExceededError,
   X402BudgetExhaustedError,
   X402NoPayableRouteError,
+  X402RecipientMismatchError,
 } from "../src/x402/errors.js";
 
 const PERMIT2 = getAddress("0x000000000022D473030F116dDEE9F6B43aC78BA3");
@@ -249,17 +255,21 @@ describe("AltanaX402Payer.request", () => {
     expect(result.payTo).toBe(PAY_TO);
     expect(result.transaction).toBe(`0x${"ab".repeat(32)}`);
     // The signed requirement is the raw permit2 entry this payer validated
-    // (never the cheaper eip3009 decoy, never a re-fetched challenge).
-    // 0.4.0 shape: module-level signX402Payment(session, requirement).
+    // (never the cheaper eip3009 decoy, never a re-fetched challenge), plus
+    // the challenge's top-level x402Version (no resource: this challenge
+    // carries none). 0.4.0 shape: module-level signX402Payment(session,
+    // requirement).
     expect(sdkMocks.signX402PaymentMock).toHaveBeenCalledTimes(1);
     const [session, requirement] = sdkMocks.signX402PaymentMock.mock.calls[0];
-    expect(requirement).toEqual(PERMIT2_ENTRY);
+    expect(requirement).toEqual({ ...PERMIT2_ENTRY, x402Version: 1 });
     expect(session.walletAddress).toBe(WALLET);
-    // Retry carries the SDK-produced header verbatim.
+    // Retry carries the SDK-produced header verbatim (opaque headers pass
+    // normalization untouched) on BOTH header names — part of the b402
+    // merchant population reads only PAYMENT-SIGNATURE.
     expect(calls).toHaveLength(2);
-    expect(
-      (calls[1].init?.headers as Record<string, string>)["X-PAYMENT"],
-    ).toBe("xp-header");
+    const sentHeaders = calls[1].init?.headers as Record<string, string>;
+    expect(sentHeaders[X_PAYMENT_HEADER]).toBe("xp-header");
+    expect(sentHeaders[PAYMENT_SIGNATURE_HEADER]).toBe("xp-header");
   });
 
   it("returns without paying when the endpoint does not challenge", async () => {
@@ -426,8 +436,14 @@ describe("admin x402 setup", () => {
 // ── real-wire challenge shape (CMC B402, field-verified 2026-07-14) ──────
 
 const U_BSC = getAddress("0xcE24439F2D9C6a2289F741120FE202248B666666");
+const CMC_RESOURCE = {
+  url: "https://pro-api.example/x402",
+  description: "quotes",
+  mimeType: "application/json",
+};
 const CMC_CHALLENGE = {
   x402Version: 2,
+  resource: CMC_RESOURCE,
   accepts: [
     {
       scheme: "exact",
@@ -474,8 +490,39 @@ describe("real B402 wire shape (extra.assetTransferMethod, expectedAsset pin)", 
     // The eip3009 route is FIRST in the challenge; the permit2-exact U
     // route must still win (rail read from extra.assetTransferMethod).
     expect(result.asset).toBe(U_BSC);
+    // The signed requirement carries the challenge's top-level x402Version
+    // and resource — b402 merchants reject envelopes missing either.
     const [, requirement] = sdkMocks.signX402PaymentMock.mock.calls[0];
-    expect(requirement).toEqual(CMC_CHALLENGE.accepts[1]);
+    expect(requirement).toEqual({
+      ...CMC_CHALLENGE.accepts[1],
+      x402Version: 2,
+      resource: CMC_RESOURCE,
+    });
+  });
+
+  it("expectedPayTo pins the recipient: a mismatching payTo refuses before signing", async () => {
+    const { impl } = fetchQueue(json402(CMC_CHALLENGE));
+    const payer = sessionProvider().makeX402Payer({
+      fetchImpl: impl,
+      expectedPayTo: `0x${"77".repeat(20)}`,
+    });
+    await expect(
+      payer.request("https://pro-api.example/x402", { maxPayment: 10n ** 17n }),
+    ).rejects.toThrow(X402RecipientMismatchError);
+    expect(sdkMocks.signX402PaymentMock).not.toHaveBeenCalled();
+
+    const { impl: impl2 } = fetchQueue(
+      json402(CMC_CHALLENGE),
+      jsonOk({ ok: true }),
+    );
+    const pinned = sessionProvider().makeX402Payer({
+      fetchImpl: impl2,
+      expectedPayTo: PAY_TO.toUpperCase().replace("0X", "0x"), // case-insensitive
+    });
+    const result = await pinned.request("https://pro-api.example/x402", {
+      maxPayment: 10n ** 17n,
+    });
+    expect(result.success).toBe(true);
   });
 
   it("expectedAsset pins the token: only matching routes are payable", async () => {
@@ -499,5 +546,143 @@ describe("real B402 wire shape (extra.assetTransferMethod, expectedAsset pin)", 
         maxPayment: 10n ** 17n,
       }),
     ).rejects.toThrow(X402NoPayableRouteError);
+  });
+});
+
+// ── b402 envelope normalization (JSON-level, signature bytes untouched) ──
+
+const SIG_98 = `0x${"ab".repeat(98)}`;
+
+function b64(envelope: unknown): string {
+  return Buffer.from(JSON.stringify(envelope), "utf8").toString("base64");
+}
+
+function decode(header: string): Record<string, unknown> {
+  return JSON.parse(Buffer.from(header, "base64").toString("utf8"));
+}
+
+describe("normalizeX402PaymentHeader", () => {
+  const challengeMeta = { x402Version: 2, resource: CMC_RESOURCE };
+
+  it("is a strict no-op on a compliant (>=0.7.0) envelope — byte-identical header", () => {
+    const compliant = b64({
+      x402Version: 2,
+      resource: CMC_RESOURCE,
+      scheme: "exact",
+      network: "eip155:56",
+      accepted: {},
+      payload: {
+        signature: SIG_98,
+        from: WALLET,
+        permit: {
+          permitted: {},
+          spender: PAY_TO,
+          nonce: "1",
+          deadline: "2",
+          witness: {},
+        },
+        permit2Authorization: {
+          permitted: {},
+          from: WALLET,
+          spender: PAY_TO,
+          nonce: "1",
+          deadline: "2",
+          witness: {},
+        },
+      },
+    });
+    expect(normalizeX402PaymentHeader(compliant, challengeMeta)).toBe(
+      compliant,
+    );
+  });
+
+  it("injects missing resource and x402Version from the challenge", () => {
+    const legacy = b64({
+      scheme: "exact",
+      payload: { signature: SIG_98, authorization: { from: WALLET } },
+    });
+    const fixed = decode(normalizeX402PaymentHeader(legacy, challengeMeta));
+    expect(fixed.resource).toEqual(CMC_RESOURCE);
+    expect(fixed.x402Version).toBe(2);
+    // Signature bytes untouched.
+    expect((fixed.payload as Record<string, unknown>).signature).toBe(SIG_98);
+  });
+
+  it("adds the b402 permit2Authorization spelling alongside the legacy permit+from dialect", () => {
+    const permit = {
+      permitted: { token: U_BSC, amount: "10" },
+      spender: PAY_TO,
+      nonce: "7",
+      deadline: "99",
+      witness: { extra: true },
+    };
+    const legacy = b64({
+      x402Version: 2,
+      resource: CMC_RESOURCE,
+      payload: { signature: SIG_98, from: WALLET, permit },
+    });
+    const fixed = decode(normalizeX402PaymentHeader(legacy, challengeMeta));
+    const payload = fixed.payload as Record<string, unknown>;
+    expect(payload.permit2Authorization).toEqual({
+      permitted: permit.permitted,
+      from: WALLET,
+      spender: permit.spender,
+      nonce: permit.nonce,
+      deadline: permit.deadline,
+      witness: permit.witness,
+    });
+    // Legacy keys are retained (Altana's own x402-server still parses them).
+    expect(payload.permit).toEqual(permit);
+    expect(payload.from).toBe(WALLET);
+    expect(payload.signature).toBe(SIG_98);
+  });
+
+  it("returns non-JSON headers verbatim rather than corrupting them", () => {
+    expect(normalizeX402PaymentHeader("xp-header", challengeMeta)).toBe(
+      "xp-header",
+    );
+    const jsonArray = Buffer.from("[1,2]", "utf8").toString("base64");
+    expect(normalizeX402PaymentHeader(jsonArray, challengeMeta)).toBe(
+      jsonArray,
+    );
+  });
+
+  it("through the payer: a pre-0.7.0 envelope is normalized before the paid retry", async () => {
+    // The mock signer emits an envelope missing resource/x402Version and
+    // speaking only the legacy permit+from dialect — the 0.5.x/0.6.x wire.
+    const permit = {
+      permitted: { token: U_BSC, amount: "10000000000000000" },
+      spender: `0x${"30".repeat(20)}`,
+      nonce: "1",
+      deadline: "9999",
+      witness: {},
+    };
+    sdkMocks.signX402PaymentMock.mockResolvedValue({
+      header: b64({
+        scheme: "exact",
+        network: "eip155:56",
+        payload: { signature: SIG_98, from: WALLET, permit },
+      }),
+    });
+    const { impl, calls } = fetchQueue(
+      json402(CMC_CHALLENGE),
+      jsonOk({ ok: true }),
+    );
+    const payer = sessionProvider().makeX402Payer({ fetchImpl: impl });
+    await payer.request("https://pro-api.example/x402", {
+      maxPayment: 10n ** 17n,
+    });
+    const sentHeaders = calls[1].init?.headers as Record<string, string>;
+    expect(sentHeaders[X_PAYMENT_HEADER]).toBe(
+      sentHeaders[PAYMENT_SIGNATURE_HEADER],
+    );
+    const envelope = decode(sentHeaders[X_PAYMENT_HEADER]);
+    expect(envelope.resource).toEqual(CMC_RESOURCE);
+    expect(envelope.x402Version).toBe(2);
+    const payload = envelope.payload as Record<string, unknown>;
+    expect((payload.permit2Authorization as Record<string, unknown>).from).toBe(
+      WALLET,
+    );
+    expect(payload.signature).toBe(SIG_98);
   });
 });

@@ -22,8 +22,8 @@ importers:
         version: 2.54.6(typescript@5.9.3)(zod@4.4.3)
     devDependencies:
       '@altananetwork/sdk':
-        specifier: 0.5.1
-        version: 0.5.1(@wagmi/core@3.6.1(typescript@5.9.3)(viem@2.54.6(typescript@5.9.3)(zod@4.4.3)))(typescript@5.9.3)(zod@4.4.3)
+        specifier: 0.7.1
+        version: 0.7.1(@wagmi/core@3.6.1(typescript@5.9.3)(viem@2.54.6(typescript@5.9.3)(zod@4.4.3)))(typescript@5.9.3)(zod@4.4.3)
       '@biomejs/biome':
         specifier: ^1.8.0
         version: 1.9.4
@@ -54,8 +54,8 @@ packages:
   '@adraffy/ens-normalize@1.11.1':
     resolution: {integrity: sha512-nhCBV3quEgesuf7c7KYfperqSS14T8bYuvJ8PcLJp6znkZpFc0AuW4qBtr8eKVyPPe/8RSr7sglCWPU5eaxwKQ==}
 
-  '@altananetwork/sdk@0.5.1':
-    resolution: {integrity: sha512-wSm7UAHcRU9IonZ6+x4y9gD1wPyOnVKP2L4W62TicLVPaBdx43Oo1xIeA46DNu/wzSqfbDAeOzG+O2Rk/2zRmg==}
+  '@altananetwork/sdk@0.7.1':
+    resolution: {integrity: sha512-C1XCliQl4NRiHs5LwNtU2BmjqfB2MZWYR+e31ZmsH8fGs7l0bFiA/w5ufmzWj6LaXUYLQnpt6lI5kIQthNHY4Q==}
 
   '@biomejs/biome@1.9.4':
     resolution: {integrity: sha512-1rkd7G70+o9KkTn5KLmDYXihGoTaIGO9PIIN2ZB7UJxFrWw04CZHPYiMRjYsaDvVV7hP1dYNRLxSANLaBFGpog==}
@@ -1805,7 +1805,7 @@ snapshots:
 
   '@adraffy/ens-normalize@1.11.1': {}
 
-  '@altananetwork/sdk@0.5.1(@wagmi/core@3.6.1(typescript@5.9.3)(viem@2.54.6(typescript@5.9.3)(zod@4.4.3)))(typescript@5.9.3)(zod@4.4.3)':
+  '@altananetwork/sdk@0.7.1(@wagmi/core@3.6.1(typescript@5.9.3)(viem@2.54.6(typescript@5.9.3)(zod@4.4.3)))(typescript@5.9.3)(zod@4.4.3)':
     dependencies:
       ox: 0.14.30(typescript@5.9.3)(zod@4.4.3)
       porto: 0.2.37(@wagmi/core@3.6.1(typescript@5.9.3)(viem@2.54.6(typescript@5.9.3)(zod@4.4.3)))(typescript@5.9.3)(viem@2.54.6(typescript@5.9.3)(zod@4.4.3))
