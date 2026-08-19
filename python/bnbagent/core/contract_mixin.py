@@ -145,9 +145,7 @@ class ContractClientMixin:
             # how to use it (the local executor sponsors when sponsorable and
             # self-pays otherwise; a self-broadcasting wallet ignores it).
             executor = self._wallet_provider.make_executor(
-                ExecutionContext(
-                    web3=self.w3, paymaster=getattr(self, "_paymaster", None)
-                )
+                ExecutionContext(web3=self.w3, paymaster=getattr(self, "_paymaster", None))
             )
             self._intent_executor = executor
         return executor.execute(intent)
@@ -203,6 +201,7 @@ class ContractClientMixin:
                 # Skipped when skip_preflight=True (e.g. when node returns opaque 0x reverts).
                 if not skip_preflight:
                     import concurrent.futures as _cf
+
                     _call_params = {
                         "from": self._account,
                         "to": tx.get("to"),
@@ -215,23 +214,28 @@ class ContractClientMixin:
                         try:
                             _future.result(timeout=10)
                         except _cf.TimeoutError:
-                            logger.warning(f"[{class_name}] Pre-flight eth_call timed out, proceeding anyway")
+                            logger.warning(
+                                f"[{class_name}] Pre-flight eth_call timed out, proceeding anyway"
+                            )
                         except Exception as preflight_err:
                             err_str = str(preflight_err)
                             # Skip pre-flight if node returns opaque 0x (no revert data)
                             if "'0x'" in err_str or err_str.strip().endswith(", '0x')"):
-                                logger.warning(f"[{class_name}] Pre-flight returned opaque 0x revert, proceeding to on-chain tx")
+                                logger.warning(
+                                    f"[{class_name}] Pre-flight returned opaque 0x revert, "
+                                    "proceeding to on-chain tx"
+                                )
                             else:
-                                raise RuntimeError(f"Transaction would revert: {preflight_err}") from preflight_err
+                                raise RuntimeError(
+                                    f"Transaction would revert: {preflight_err}"
+                                ) from preflight_err
 
                 signed = self._wallet_provider.sign_transaction(tx)
                 raw_tx = signed["rawTransaction"]
                 tx_hash = self.w3.eth.send_raw_transaction(raw_tx)
                 timeout = get_default_receipt_timeout()
                 try:
-                    receipt = self.w3.eth.wait_for_transaction_receipt(
-                        tx_hash, timeout=timeout
-                    )
+                    receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=timeout)
                 except TimeExhausted as exc:
                     # Broadcast OK (nonce consumed) but unconfirmed in time —
                     # surface as pending with the hash, never as a fatal/retry

@@ -21,12 +21,24 @@
  * One-time setup (admin, once per session): approve the checker
  * (`approveX402SignatureChecker`) and fund a bounded allowance
  * (`setPermit2Allowance`). Payments then need only the session.
+ *
+ * B402-merchant wire compatibility (field-verified against CMC, 2026-08-18):
+ * the signed requirement carries the challenge's top-level `x402Version` and
+ * `resource` (omitting either gets the envelope rejected before signature
+ * checks), the paid retry sends the envelope under BOTH `X-PAYMENT` and
+ * `PAYMENT-SIGNATURE` (part of the b402 merchant population reads only the
+ * latter), and pre-0.7.0 `@altananetwork/sdk` envelopes are normalized
+ * JSON-level ({@link normalizeX402PaymentHeader}) without touching the
+ * signed bytes. The B402 facilitator verifies the ERC-1271 session
+ * signature on the permit2 rails only (eip3009 still requires a 65-byte
+ * EOA signature there).
  */
 
 import { SessionBudgetTracker } from "../../x402/budget.js";
 import {
   X402AmountExceededError,
   X402NoPayableRouteError,
+  X402RecipientMismatchError,
 } from "../../x402/errors.js";
 import type {
   X402Payer,
@@ -38,6 +50,10 @@ import type { AltanaWalletProvider } from "./provider.js";
 
 /** The x402 payment header (spec name, case-insensitive on the wire). */
 export const X_PAYMENT_HEADER = "X-PAYMENT";
+/** b402/Bazaar merchant alias for the payment header; sent alongside
+ * `X-PAYMENT` with the identical value (part of that merchant population
+ * reads only this name). */
+export const PAYMENT_SIGNATURE_HEADER = "PAYMENT-SIGNATURE";
 /** Settlement metadata header on the paid response (base64 JSON). */
 export const X_PAYMENT_RESPONSE_HEADER = "X-PAYMENT-RESPONSE";
 
@@ -170,6 +186,12 @@ export interface AltanaX402PayerOptions {
    * `expectedAsset`). No match on the chain → `X402NoPayableRouteError`.
    */
   expectedAsset?: string;
+  /**
+   * Pin the recipient: if the selected route's `payTo` differs from this
+   * address the payer throws `X402RecipientMismatchError` before signing
+   * (same semantics as `TwakX402Payer`'s `expectedPayTo`).
+   */
+  expectedPayTo?: string;
   /** Fetch implementation override (tests). Defaults to `globalThis.fetch`. */
   fetchImpl?: typeof fetch;
 }
@@ -182,6 +204,87 @@ async function parseBody(response: Response): Promise<unknown> {
   } catch {
     return text;
   }
+}
+
+/**
+ * Normalize a signed x402 payment header for the b402 merchant wire —
+ * JSON/envelope-level only, the signature bytes are never touched.
+ *
+ * `@altananetwork/sdk` >= 0.7.0 already emits a compliant envelope, so this
+ * is a strict no-op there (the original header string is returned
+ * byte-identical). For older installs it back-fills the three field-verified
+ * rejection causes (poc run log, altana-x402-poc):
+ *
+ * 1. missing top-level `resource` → injected from the challenge ("payment
+ *    header resource is null" otherwise);
+ * 2. missing top-level `x402Version` → injected from the challenge;
+ * 3. permit2 dialect `payload.permit` + `payload.from` without
+ *    `payload.permit2Authorization` → the b402 spelling is added alongside
+ *    ("payment payload permit2 authorization or witness is null" otherwise).
+ *
+ * A header that does not decode as base64 JSON is returned verbatim rather
+ * than corrupted.
+ */
+export function normalizeX402PaymentHeader(
+  header: string,
+  challenge: { x402Version?: unknown; resource?: unknown },
+): string {
+  let envelope: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(
+      Buffer.from(header, "base64").toString("utf8"),
+    );
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      return header;
+    }
+    envelope = parsed as Record<string, unknown>;
+  } catch {
+    return header;
+  }
+  let changed = false;
+  if (envelope.resource == null && challenge.resource != null) {
+    envelope.resource = challenge.resource;
+    changed = true;
+  }
+  if (envelope.x402Version == null && challenge.x402Version != null) {
+    envelope.x402Version = challenge.x402Version;
+    changed = true;
+  }
+  const payload = envelope.payload;
+  if (
+    payload !== null &&
+    typeof payload === "object" &&
+    !Array.isArray(payload)
+  ) {
+    const p = payload as Record<string, unknown>;
+    const permit = p.permit;
+    if (
+      p.permit2Authorization == null &&
+      permit !== null &&
+      typeof permit === "object" &&
+      !Array.isArray(permit) &&
+      typeof p.from === "string"
+    ) {
+      const pm = permit as Record<string, unknown>;
+      p.permit2Authorization = {
+        permitted: pm.permitted,
+        from: p.from,
+        spender: pm.spender,
+        nonce: pm.nonce,
+        deadline: pm.deadline,
+        witness: pm.witness,
+      };
+      changed = true;
+    }
+  }
+  if (!changed) {
+    return header;
+  }
+  return Buffer.from(JSON.stringify(envelope), "utf8").toString("base64");
 }
 
 /** Decode the settlement header (base64 JSON) into a tx hash, best-effort. */
@@ -209,6 +312,7 @@ export class AltanaX402Payer implements X402Payer {
   readonly #provider: AltanaWalletProvider;
   readonly #budget: SessionBudgetTracker;
   readonly #expectedAsset: string | undefined;
+  readonly #expectedPayTo: string | undefined;
   readonly #fetch: typeof fetch;
 
   /** @internal Constructed by {@link AltanaWalletProvider.makeX402Payer}. */
@@ -219,6 +323,7 @@ export class AltanaX402Payer implements X402Payer {
     this.#provider = provider;
     this.#budget = new SessionBudgetTracker(opts.sessionBudget);
     this.#expectedAsset = opts.expectedAsset;
+    this.#expectedPayTo = opts.expectedPayTo;
     this.#fetch = opts.fetchImpl ?? globalThis.fetch;
   }
 
@@ -285,18 +390,45 @@ export class AltanaX402Payer implements X402Payer {
       );
     }
     const { option } = route;
+    if (
+      this.#expectedPayTo !== undefined &&
+      option.payTo.toLowerCase() !== this.#expectedPayTo.toLowerCase()
+    ) {
+      throw new X402RecipientMismatchError(
+        `quoted payTo ${option.payTo} != expected ${this.#expectedPayTo}`,
+      );
+    }
     if (option.amount > opts.maxPayment) {
       throw new X402AmountExceededError(
         `x402 route asks ${option.amount} ${option.tokenName ?? option.asset}, above maxPayment ${opts.maxPayment}`,
       );
     }
 
+    // The b402 merchant wire rejects envelopes missing the challenge's
+    // top-level x402Version/resource, and @altananetwork/sdk only carries
+    // them into the envelope when the signed requirement includes them.
+    const x402Version = challengeBody.x402Version ?? 2;
+    const resource = challengeBody.resource;
+    const requirement: Record<string, unknown> = {
+      ...route.raw,
+      x402Version,
+      ...(resource !== undefined && resource !== null ? { resource } : {}),
+    };
+
     this.#budget.reserve(option.asset, option.amount);
     try {
-      const { header } = await this.#provider._signX402Payment(route.raw);
+      const { header: signedHeader } =
+        await this.#provider._signX402Payment(requirement);
+      const header = normalizeX402PaymentHeader(signedHeader, {
+        x402Version,
+        resource,
+      });
       const paid = await this.#fetch(url, {
         ...init,
-        headers: { [X_PAYMENT_HEADER]: header },
+        headers: {
+          [X_PAYMENT_HEADER]: header,
+          [PAYMENT_SIGNATURE_HEADER]: header,
+        },
       });
       if (!paid.ok) {
         throw new Error(

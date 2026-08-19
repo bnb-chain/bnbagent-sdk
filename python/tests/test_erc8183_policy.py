@@ -12,7 +12,9 @@ def policy_client(mock_web3):
     wallet = MagicMock()
     wallet.address = "0x" + "aa" * 20
     # Mocking the _load_abi to avoid file I/O errors if ABI isn't found
-    with patch("bnbagent.erc8183.policy._load_abi", return_value=[{"type": "function", "name": "dispute"}]):
+    with patch(
+        "bnbagent.erc8183.policy._load_abi", return_value=[{"type": "function", "name": "dispute"}]
+    ):
         client = PolicyClient(mock_web3, "0x" + "11" * 20, wallet)
         client._send_tx = MagicMock()
         client._execute_intent = MagicMock()
@@ -102,7 +104,9 @@ class TestPolicyClient:
     class TestGetDeliverableUrl:
         def test_rpc_range_error(self, policy_client):
             policy_client.contract.events.JobInitialised = MagicMock()
-            policy_client.contract.events.JobInitialised().get_logs.side_effect = Exception("limit exceeded")
+            policy_client.contract.events.JobInitialised().get_logs.side_effect = Exception(
+                "limit exceeded"
+            )
             with pytest.raises(RpcRangeLimitError):
                 policy_client.get_deliverable_url(1, hint_block=100)
 

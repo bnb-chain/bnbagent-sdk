@@ -1,6 +1,6 @@
 {
   "name": "@bnbagent/sdk",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "TypeScript SDK for building on-chain AI agents on BNB Chain (ERC-8004 identity, ERC-8183 agentic commerce, x402 payments).",
   "license": "MIT",
   "repository": {
@@ -83,17 +83,20 @@
     "example:a2a-server": "tsx examples/a2a-agent/src/server.ts",
     "example:a2a-buyer": "tsx examples/a2a-agent/scripts/buyer.ts",
     "smoke:testnet": "tsx examples/smoke/readonly.ts",
-    "e2e:altana": "tsx examples/altana/e2e.ts"
+    "e2e:altana": "tsx examples/altana/e2e.ts",
+    "e2e:turnkey": "tsx examples/turnkey/e2e.ts"
   },
   "dependencies": {
     "@noble/ciphers": "^1.0.0",
     "@noble/hashes": "^1.4.0",
     "dotenv": "^16.4.0",
-    "viem": "^2.21.0"
+    "viem": "^2.24.2"
   },
   "devDependencies": {
-    "@altananetwork/sdk": "0.5.1",
+    "@altananetwork/sdk": "0.7.1",
     "@biomejs/biome": "^1.8.0",
+    "@turnkey/sdk-server": "8.1.0",
+    "@turnkey/viem": "0.14.34",
     "@types/node": "^20.0.0",
     "tsup": "^8.0.0",
     "tsx": "^4.23.0",
@@ -101,10 +104,18 @@
     "vitest": "^2.0.0"
   },
   "peerDependencies": {
-    "@altananetwork/sdk": ">=0.3.3 <0.6.0"
+    "@altananetwork/sdk": ">=0.3.3 <0.8.0",
+    "@turnkey/sdk-server": ">=7.0.0 <9.0.0",
+    "@turnkey/viem": ">=0.14.32 <0.15.0"
   },
   "peerDependenciesMeta": {
     "@altananetwork/sdk": {
+      "optional": true
+    },
+    "@turnkey/sdk-server": {
+      "optional": true
+    },
+    "@turnkey/viem": {
       "optional": true
     }
   },

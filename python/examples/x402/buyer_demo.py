@@ -50,9 +50,7 @@ from bnbagent.networks import (
     get_address,
 )
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s | %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s | %(message)s")
 log = logging.getLogger("x402_buyer_demo")
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
@@ -63,8 +61,8 @@ DEMO_PW = "x402-buyer-demo-pw"
 
 U_TESTNET = get_address(BSC_TESTNET_CHAIN_ID).payment_token
 NETWORK_ID = f"eip155:{BSC_TESTNET_CHAIN_ID}"
-PAY_TO = "0x" + "be" * 20            # Mock beneficiary (server-controlled in real life)
-PRICE_BASE_UNITS = 100_000           # 0.1 U at 6 decimals — same shape as a real x402 listing
+PAY_TO = "0x" + "be" * 20  # Mock beneficiary (server-controlled in real life)
+PRICE_BASE_UNITS = 100_000  # 0.1 U at 6 decimals — same shape as a real x402 listing
 SECRET_PAYLOAD = "secret payload"
 
 # EIP-712 schema fields — identical to the production U-token EIP-3009 domain.
@@ -198,9 +196,7 @@ def _build_twa_message(from_addr: str, accept: dict[str, Any]) -> dict[str, Any]
     }
 
 
-def _build_payment_envelope(
-    accept: dict[str, Any], msg: dict[str, Any], signature: str
-) -> str:
+def _build_payment_envelope(accept: dict[str, Any], msg: dict[str, Any], signature: str) -> str:
     """Encode the X-PAYMENT envelope per x402 v2.
 
     The envelope is base64(json) so it travels safely in an HTTP header.
@@ -251,8 +247,13 @@ def main() -> int:
             return 1
         log.info("step 1: GET %s → 402 (challenge received)", url)
         accept = body["accepts"][0]
-        log.info("  challenge: pay %s base units of %s to %s on %s",
-                 accept["amount"], accept["asset"], accept["payTo"], accept["network"])
+        log.info(
+            "  challenge: pay %s base units of %s to %s on %s",
+            accept["amount"],
+            accept["asset"],
+            accept["payTo"],
+            accept["network"],
+        )
 
         # 4. Construct the EIP-712 payload that satisfies the challenge.
         domain = {
@@ -283,7 +284,9 @@ def main() -> int:
         # ``signature`` may come back as HexBytes; normalize to a 0x-hex
         # string for the JSON envelope.
         raw_sig = signed["signature"]
-        sig = raw_sig.hex() if hasattr(raw_sig, "hex") and not isinstance(raw_sig, str) else raw_sig
+        sig = (
+            raw_sig.hex() if hasattr(raw_sig, "hex") and not isinstance(raw_sig, str) else raw_sig
+        )
         if not sig.startswith("0x"):
             sig = "0x" + sig
         log.info("step 2: signed TransferWithAuthorization (sig=%s…%s)", sig[:10], sig[-6:])

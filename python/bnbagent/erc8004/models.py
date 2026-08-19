@@ -108,8 +108,9 @@ class AgentEndpoint:
         invalid URL — the path is inserted before the query/fragment instead.
 
         Example:
-            >>> AgentEndpoint.a2a("https://agent.example")
-            AgentEndpoint(name='A2A', endpoint='https://agent.example/.well-known/agent-card.json', ...)
+            >>> endpoint = AgentEndpoint.a2a("https://agent.example")
+            >>> endpoint.endpoint
+            'https://agent.example/.well-known/agent-card.json'
         """
         return cls(
             name="A2A",
@@ -137,9 +138,7 @@ class AgentEndpoint:
         path = parts.path.rstrip("/")
         if not path.endswith(cls.A2A_WELL_KNOWN_PATH):
             path += cls.A2A_WELL_KNOWN_PATH
-        return urlunsplit(
-            (parts.scheme, parts.netloc, path, parts.query, parts.fragment)
-        )
+        return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
 
     @classmethod
     def mcp(

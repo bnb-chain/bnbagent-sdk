@@ -117,15 +117,11 @@ def create_erc8183_state(config: ERC8183Config | None = None) -> ERC8183State:
 def _build_negotiate_limiter() -> SlidingWindowLimiter:
     """Read ERC8183_NEGOTIATE_RATE_LIMIT / ERC8183_NEGOTIATE_RATE_WINDOW from env."""
     raw_max = get_env("NEGOTIATE_RATE_LIMIT", "120", prefix=ERC8183_ENV_PREFIX) or "120"
-    raw_window = (
-        get_env("NEGOTIATE_RATE_WINDOW", "60.0", prefix=ERC8183_ENV_PREFIX) or "60.0"
-    )
+    raw_window = get_env("NEGOTIATE_RATE_WINDOW", "60.0", prefix=ERC8183_ENV_PREFIX) or "60.0"
     try:
         max_requests = int(raw_max)
     except ValueError:
-        logger.warning(
-            f"[ERC-8183] ERC8183_NEGOTIATE_RATE_LIMIT={raw_max!r} invalid, using 120"
-        )
+        logger.warning(f"[ERC-8183] ERC8183_NEGOTIATE_RATE_LIMIT={raw_max!r} invalid, using 120")
         max_requests = 120
     try:
         window_seconds = float(raw_window)
@@ -134,9 +130,7 @@ def _build_negotiate_limiter() -> SlidingWindowLimiter:
             f"[ERC-8183] ERC8183_NEGOTIATE_RATE_WINDOW={raw_window!r} invalid, using 60.0"
         )
         window_seconds = 60.0
-    raw_max_keys = (
-        get_env("RATE_LIMIT_MAX_KEYS", "10000", prefix=ERC8183_ENV_PREFIX) or "10000"
-    )
+    raw_max_keys = get_env("RATE_LIMIT_MAX_KEYS", "10000", prefix=ERC8183_ENV_PREFIX) or "10000"
     try:
         max_keys = int(raw_max_keys)
     except ValueError:
@@ -208,7 +202,7 @@ def _create_erc8183_routes(state: ERC8183State) -> APIRouter:
             negotiate_limiter.check(client_ip)
         except RateLimitExceeded:
             # The SDK limiter is transport-agnostic; this HTTP shell maps it to 429.
-            raise HTTPException(status_code=429, detail="Too many requests")
+            raise HTTPException(status_code=429, detail="Too many requests") from None
 
         try:
             body = await request.json()
@@ -216,12 +210,7 @@ def _create_erc8183_routes(state: ERC8183State) -> APIRouter:
             return JSONResponse({"error": "Invalid JSON"}, status_code=400)
         if not isinstance(body, dict) or "terms" not in body:
             return JSONResponse(
-                {
-                    "error": (
-                        "Request must include 'terms' with"
-                        " deliverables, quality_standards"
-                    )
-                },
+                {"error": ("Request must include 'terms' with deliverables, quality_standards")},
                 status_code=400,
             )
         try:
@@ -371,9 +360,7 @@ def create_erc8183_app(
         attempts = retry_attempts.get(job_id, 0) + 1
         if attempts >= _MAX_JOB_ATTEMPTS:
             retry_attempts.pop(job_id, None)
-            logger.error(
-                f"[ERC-8183] Job #{job_id} giving up after {attempts} attempts: {reason}"
-            )
+            logger.error(f"[ERC-8183] Job #{job_id} giving up after {attempts} attempts: {reason}")
             return
         retry_attempts[job_id] = attempts
         logger.warning(
@@ -404,16 +391,12 @@ def create_erc8183_app(
                         for job in jobs:
                             await _attempt_job(job["jobId"])
                     else:
-                        logger.warning(
-                            f"[ERC-8183] Funded-poll error: {result.get('error')}"
-                        )
+                        logger.warning(f"[ERC-8183] Funded-poll error: {result.get('error')}")
                 except Exception as exc:
                     logger.error(f"[ERC-8183] Funded-poll iteration failed: {exc}")
 
                 try:
-                    await asyncio.wait_for(
-                        stop_event.wait(), timeout=effective_poll_interval
-                    )
+                    await asyncio.wait_for(stop_event.wait(), timeout=effective_poll_interval)
                     break
                 except asyncio.TimeoutError:
                     continue

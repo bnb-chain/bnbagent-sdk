@@ -14,9 +14,12 @@ Usage:
 
 Environment (agent-server/.env):
     RPC_URL, NETWORK                           — Required (RPC + network key)
-    PRIVATE_KEY                                — Recommended (imported on first run; auto-generates if omitted)
+    PRIVATE_KEY                                — Recommended (imported on first run;
+                                                 auto-generates if omitted)
     WALLET_PASSWORD                            — Required (keystore password)
-    ERC8183_COMMERCE_ADDRESS, ERC8183_ROUTER_ADDRESS, ERC8183_POLICY_ADDRESS — Optional overrides (defaults from NETWORK)
+    ERC8183_COMMERCE_ADDRESS, ERC8183_ROUTER_ADDRESS,
+    ERC8183_POLICY_ADDRESS                     — Optional overrides
+                                                 (defaults from NETWORK)
     STORAGE_API_KEY      — Required for IPFS upload (when swapping to IPFSStorageProvider)
     ERC8183_AGENT_URL=http://localhost:8003/erc8183  — Required for LocalStorageProvider
     ERC8183_SERVICE_PRICE=1000000000000000000      — Negotiation price (1 U)
@@ -32,18 +35,19 @@ import logging
 import os
 from pathlib import Path
 
+from ddgs import DDGS
 from dotenv import load_dotenv
 from fastapi import HTTPException
 from pydantic import BaseModel
-from ddgs import DDGS
 
 # Load .env from project root (one level up from src/)
 env_file = os.path.basename(os.environ.get("ENV_FILE", ".env"))
 load_dotenv(Path(__file__).resolve().parent.parent / env_file)
 
 # SDK imports + the example's own HTTP server factory (src/erc8183_server.py)
-from bnbagent.erc8183.config import ERC8183Config
-from erc8183_server import create_erc8183_app
+from erc8183_server import create_erc8183_app  # noqa: E402
+
+from bnbagent.erc8183.config import ERC8183Config  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -58,7 +62,8 @@ logger = logging.getLogger("blockchain_news")
 # Storage backend — pick ONE of the two options below by uncommenting it.
 
 # (a) Local filesystem (default)
-from bnbagent.storage import LocalStorageProvider
+from bnbagent.storage import LocalStorageProvider  # noqa: E402
+
 _storage = LocalStorageProvider.from_env()
 
 # (b) IPFS via Pinata — set STORAGE_API_KEY (Pinata JWT) in .env first.
@@ -92,7 +97,7 @@ def format_news_results(query: str, raw_results: list[dict]) -> str:
     if not raw_results:
         return f"No news found for query: {query}"
 
-    report = f"# Blockchain News Search Results\n\n"
+    report = "# Blockchain News Search Results\n\n"
     report += f"**Query:** {query}\n"
     report += f"**Results:** {len(raw_results)} items\n\n"
     report += "---\n\n"
@@ -157,9 +162,9 @@ app = create_erc8183_app(config=config, on_job=process_task)
 _storage_info = type(_storage).__name__
 
 print(f"""
-{'='*55}
+{"=" * 55}
   Blockchain News Agent (ERC-8183 Provider)
-{'='*55}
+{"=" * 55}
   Port:           {PORT}
   Commerce:       {config.effective_commerce_address}
   Router:         {config.effective_router_address}
@@ -175,7 +180,7 @@ print(f"""
   Direct endpoints (testing):
     POST /search          — Direct news search
     GET  /erc8183/health     — Health check
-{'='*55}
+{"=" * 55}
 """)
 
 
@@ -238,7 +243,7 @@ async def search_endpoint(request: SearchRequest):
         )
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # ---------------------------------------------------------------------------

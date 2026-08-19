@@ -329,7 +329,9 @@ class TestBuildJobDescription:
     def test_sanitizes_brackets_in_task(self):
         result = _make_accepted_result(task="[REQUEST] tricky task [VERIFY]")
         desc = build_job_description(result)
-        assert "[" not in desc or "negotiation_hash" in desc  # only hex values may have no brackets
+        assert (
+            "[" not in desc or "negotiation_hash" in desc
+        )  # only hex values may have no brackets
         parsed = json.loads(desc)
         assert "[" not in parsed["task"]
 
@@ -530,6 +532,7 @@ class TestNegotiationHandler:
 
     def test_negotiation_hash_is_keccak256_of_content(self):
         from web3 import Web3
+
         from bnbagent.erc8183.negotiation import _build_description_content
 
         mock_wallet = MagicMock()
@@ -552,7 +555,9 @@ class TestNegotiationHandler:
         canonical = json.dumps(content, sort_keys=True, separators=(",", ":"))
         expected_hash = "0x" + Web3.keccak(text=canonical).hex().lstrip("0x")
         # Compare (both should have 0x prefix and 64 hex chars)
-        assert result.negotiation_hash == expected_hash or result.negotiation_hash.lstrip("0x") == expected_hash.lstrip("0x")
+        assert result.negotiation_hash == expected_hash or result.negotiation_hash.lstrip(
+            "0x"
+        ) == expected_hash.lstrip("0x")
 
     def test_invalid_format_rejection(self):
         handler = self._make_handler()
@@ -564,10 +569,12 @@ class TestNegotiationHandler:
         """A task that would overflow the on-chain description cap is rejected
         at negotiation time with TASK_TOO_LONG, before any quote is signed."""
         handler = self._make_handler()
-        result = handler.negotiate({
-            "task_description": "x" * 10_000,
-            "terms": {"deliverables": "summary", "quality_standards": "accurate"},
-        })
+        result = handler.negotiate(
+            {
+                "task_description": "x" * 10_000,
+                "terms": {"deliverables": "summary", "quality_standards": "accurate"},
+            }
+        )
         assert result.accepted is False
         assert result.response.get("reason_code") == ReasonCode.TASK_TOO_LONG
 
@@ -635,12 +642,14 @@ class TestNegotiationSignatureBinding:
         assert content["chain_id"] == 56
         # And the negotiation_hash must be derived from the chain-bound content.
         from web3 import Web3
+
         canonical = json.dumps(content, sort_keys=True, separators=(",", ":"))
         expected = "0x" + Web3.keccak(text=canonical).hex().lstrip("0x")
         assert result.negotiation_hash.lstrip("0x") == expected.lstrip("0x")
 
     def test_content_includes_verifying_contract_when_set(self):
         from web3 import Web3
+
         from bnbagent.erc8183.negotiation import _build_description_content
 
         commerce_addr = Web3.to_checksum_address("0xa206c0517b6371c6638cd9e4a42cc9f02a33b0de")
@@ -654,7 +663,9 @@ class TestNegotiationSignatureBinding:
         result = handler.negotiate(self._request())
 
         content = _build_description_content(
-            result.to_dict(), chain_id=97, verifying_contract=commerce_addr,
+            result.to_dict(),
+            chain_id=97,
+            verifying_contract=commerce_addr,
         )
         assert content["verifying_contract"] == commerce_addr  # checksummed
         # Hash binds the contract too.
@@ -679,12 +690,22 @@ class TestNegotiationSignatureBinding:
         mock_wallet = MagicMock()
         mock_wallet.sign_message.return_value = {"signature": b"\xab" * 65}
 
-        h_testnet = self._make_handler(
-            wallet_provider=mock_wallet, chain_id=97,
-        ).negotiate(self._request()).negotiation_hash
-        h_mainnet = self._make_handler(
-            wallet_provider=mock_wallet, chain_id=56,
-        ).negotiate(self._request()).negotiation_hash
+        h_testnet = (
+            self._make_handler(
+                wallet_provider=mock_wallet,
+                chain_id=97,
+            )
+            .negotiate(self._request())
+            .negotiation_hash
+        )
+        h_mainnet = (
+            self._make_handler(
+                wallet_provider=mock_wallet,
+                chain_id=56,
+            )
+            .negotiate(self._request())
+            .negotiation_hash
+        )
 
         assert h_testnet != h_mainnet
 
@@ -721,18 +742,21 @@ class TestChainBindingRoundtrip:
 
     def test_build_job_description_includes_chain_id_when_present(self):
         from web3 import Web3
-        commerce_addr = Web3.to_checksum_address(
-            "0xa206c0517b6371c6638cd9e4a42cc9f02a33b0de"
-        )
+
+        commerce_addr = Web3.to_checksum_address("0xa206c0517b6371c6638cd9e4a42cc9f02a33b0de")
         mock_wallet = MagicMock()
         mock_wallet.sign_message.return_value = {"signature": b"\xab" * 65}
         handler = self._make_handler(
-            wallet_provider=mock_wallet, chain_id=56, verifying_contract=commerce_addr,
+            wallet_provider=mock_wallet,
+            chain_id=56,
+            verifying_contract=commerce_addr,
         )
-        result = handler.negotiate({
-            "task_description": "Get news",
-            "terms": {"deliverables": "summary", "quality_standards": "accurate"},
-        })
+        result = handler.negotiate(
+            {
+                "task_description": "Get news",
+                "terms": {"deliverables": "summary", "quality_standards": "accurate"},
+            }
+        )
 
         description_json = build_job_description(result.to_dict())
         parsed = json.loads(description_json)
@@ -744,18 +768,21 @@ class TestChainBindingRoundtrip:
         compute by stripping negotiation_hash/provider_sig from the on-chain
         JSON and re-running keccak. Without this, provider_sig is useless."""
         from web3 import Web3
-        commerce_addr = Web3.to_checksum_address(
-            "0xa206c0517b6371c6638cd9e4a42cc9f02a33b0de"
-        )
+
+        commerce_addr = Web3.to_checksum_address("0xa206c0517b6371c6638cd9e4a42cc9f02a33b0de")
         mock_wallet = MagicMock()
         mock_wallet.sign_message.return_value = {"signature": b"\xab" * 65}
         handler = self._make_handler(
-            wallet_provider=mock_wallet, chain_id=97, verifying_contract=commerce_addr,
+            wallet_provider=mock_wallet,
+            chain_id=97,
+            verifying_contract=commerce_addr,
         )
-        result = handler.negotiate({
-            "task_description": "Get news",
-            "terms": {"deliverables": "summary", "quality_standards": "accurate"},
-        })
+        result = handler.negotiate(
+            {
+                "task_description": "Get news",
+                "terms": {"deliverables": "summary", "quality_standards": "accurate"},
+            }
+        )
 
         # Simulate downstream verifier:
         description_json = build_job_description(result.to_dict())
@@ -789,10 +816,12 @@ class TestSigningFailureLogging:
         handler = self._make_handler(wallet_provider=mock_wallet, chain_id=97)
 
         with caplog.at_level("WARNING"):
-            result = handler.negotiate({
-                "task_description": "Get news",
-                "terms": {"deliverables": "summary", "quality_standards": "accurate"},
-            })
+            result = handler.negotiate(
+                {
+                    "task_description": "Get news",
+                    "terms": {"deliverables": "summary", "quality_standards": "accurate"},
+                }
+            )
 
         # Quote still returned but without sig.
         assert result.accepted is True

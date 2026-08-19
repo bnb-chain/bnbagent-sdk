@@ -174,10 +174,7 @@ class WalletProvider(ABC):
         """
         raise UnsupportedWalletOperation(
             X402_PAY,
-            reason=(
-                f"the {self.kind!r} wallet has no x402 payment backend in "
-                "the SDK yet"
-            ),
+            reason=(f"the {self.kind!r} wallet has no x402 payment backend in the SDK yet"),
             alternative=(
                 "wallets with sign.typed_data can use X402Signer directly "
                 "today; a local payer that upgrades this default is planned"
@@ -207,14 +204,13 @@ class WalletProvider(ABC):
                         'gasPrice', 'nonce', 'data', 'chainId'
 
         Returns:
-            dict: Signed transaction dictionary with 'rawTransaction', 'hash', 'r', 's', 'v'
+            dict: Signed transaction dictionary with 'rawTransaction', 'hash', 'r', 's', 'v'.
+                For legacy transactions, ``v`` is the EIP-155 value; for typed
+                transactions, it is the y-parity bit (0 or 1).
         """
         raise UnsupportedWalletOperation(
             SIGN_TRANSACTION,
-            reason=(
-                f"the {self.kind!r} wallet does not implement raw-transaction "
-                "signing"
-            ),
+            reason=(f"the {self.kind!r} wallet does not implement raw-transaction signing"),
             alternative=(
                 "use a wallet whose capabilities() include 'sign.transaction', "
                 "or route high-level operations through the wallet's own "
@@ -241,13 +237,8 @@ class WalletProvider(ABC):
         """
         raise UnsupportedWalletOperation(
             SIGN_MESSAGE,
-            reason=(
-                f"the {self.kind!r} wallet does not implement EIP-191 "
-                "personal-sign"
-            ),
-            alternative=(
-                "use a wallet whose capabilities() include 'sign.message'"
-            ),
+            reason=(f"the {self.kind!r} wallet does not implement EIP-191 personal-sign"),
+            alternative=("use a wallet whose capabilities() include 'sign.message'"),
         )
 
     def sign_typed_data(
@@ -307,10 +298,7 @@ class WalletProvider(ABC):
         """
         raise UnsupportedWalletOperation(
             SIGN_TYPED_DATA,
-            reason=(
-                f"the {self.kind!r} wallet does not implement EIP-712 "
-                "typed-data signing"
-            ),
+            reason=(f"the {self.kind!r} wallet does not implement EIP-712 typed-data signing"),
             alternative=(
                 "use a wallet whose capabilities() include 'sign.typed_data', "
                 "or a delegated flow that signs internally (e.g. the x402 "

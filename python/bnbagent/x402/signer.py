@@ -30,7 +30,6 @@ from ..wallets.capabilities import SIGN_TYPED_DATA
 from .budget import SessionBudgetTracker
 from .errors import (
     X402AmountExceededError,
-    X402BudgetExhaustedError,
     X402PolicyError,
     X402RecipientMismatchError,
 )
@@ -164,9 +163,7 @@ class X402Signer:
         # test below and neutralises the session budget. Refuse before
         # reserve() so a rejected call still costs no budget.
         if value < 0:
-            raise X402AmountExceededError(
-                f"message['value'] must be non-negative, got {value}"
-            )
+            raise X402AmountExceededError(f"message['value'] must be non-negative, got {value}")
         cap = self._max_value.get(verifying)
         if cap is not None and value > cap:
             raise X402AmountExceededError(
@@ -221,6 +218,9 @@ class X402Signer:
 
         logger.info(
             "x402 payment signed: token=%s value=%s to=%s expected_to=%s",
-            verifying, value, msg_to, expected_to,
+            verifying,
+            value,
+            msg_to,
+            expected_to,
         )
         return signed

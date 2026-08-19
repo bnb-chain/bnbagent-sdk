@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .._version import __version__ as _sdk_version
 from ..config import resolve_network
 from ..core.config import get_env
 
@@ -32,8 +33,6 @@ def get_erc8004_config(network: str = "bsc-testnet") -> dict[str, Any]:
         "registry_contract": registry_override or nc.registry_contract,
     }
 
-
-from .._version import __version__ as _sdk_version
 
 BUILT_WITH_KEY = "built_with"
 _BUILT_WITH_URL = "https://github.com/bnb-chain/bnbagent-sdk"

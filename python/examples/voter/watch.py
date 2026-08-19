@@ -36,7 +36,7 @@ def fetch_manifest(deliverable_url: str, gateway_url: str) -> DeliverableManifes
     """Download and parse a DeliverableManifest from IPFS."""
     try:
         if deliverable_url.startswith("ipfs://"):
-            cid = deliverable_url[len("ipfs://"):]
+            cid = deliverable_url[len("ipfs://") :]
             url = f"{gateway_url.rstrip('/')}/{cid}"
         else:
             url = deliverable_url
@@ -48,11 +48,13 @@ def fetch_manifest(deliverable_url: str, gateway_url: str) -> DeliverableManifes
         return None
 
 
-def handle_quorum_reached(erc8183: ERC8183Client, job_id: int, reject_votes: int, quorum: int) -> None:
+def handle_quorum_reached(
+    erc8183: ERC8183Client, job_id: int, reject_votes: int, quorum: int
+) -> None:
     """Called when VoteCast shows rejectVotes >= quorum — settle and print result."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  QUORUM REACHED job_id={job_id}  ({reject_votes}/{quorum} reject votes)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"  settling job {job_id}...")
     try:
         erc8183.settle(job_id)
@@ -69,9 +71,9 @@ def handle_disputed_job(
     hint_block: int | None = None,
 ) -> None:
     """Show job details and prompt voter to reject or skip."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  DISPUTED job_id={job_id}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     already_voted = erc8183.policy.has_voted(job_id, voter)
     if already_voted:
@@ -121,13 +123,13 @@ def handle_disputed_job(
         choice = input("\n  [r]eject  [s]kip  > ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         print("\nstopped.")
-        raise SystemExit(0)
+        raise SystemExit(0) from None
 
     if choice == "r":
         print(f"  casting voteReject({job_id})...")
         erc8183.vote_reject(job_id)
         print(f"  voteReject({job_id}) submitted ✓")
-        print(f"  (waiting for VoteCast event to check quorum...)")
+        print("  (waiting for VoteCast event to check quorum...)")
     else:
         print(f"  skipped job {job_id}")
 
@@ -143,15 +145,16 @@ def main() -> None:
     gateway = os.environ.get("STORAGE_GATEWAY_URL", "https://gateway.pinata.cloud/ipfs/")
 
     from bnbagent.config import resolve_network
+
     nc = resolve_network(network)
 
     wallet = EVMWalletProvider(password="example", private_key=pk, persist=False)
-    erc8183   = ERC8183Client(wallet, network=nc)
-    voter  = erc8183.address
+    erc8183 = ERC8183Client(wallet, network=nc)
+    voter = erc8183.address
 
     quorum = erc8183.policy.vote_quorum()
 
-    print(f"Voter watch loop")
+    print("Voter watch loop")
     print(f"  network  : {nc.name}")
     print(f"  rpc      : {nc.rpc_url}")
     print(f"  policy   : {erc8183.policy.address}")
@@ -159,7 +162,7 @@ def main() -> None:
     print(f"  listed   : {erc8183.policy.is_voter(voter)}")
     print(f"  quorum   : {quorum}")
     print(f"  gateway  : {gateway}")
-    print(f"\nWatching for Disputed / VoteCast events (Ctrl+C to stop)...\n")
+    print("\nWatching for Disputed / VoteCast events (Ctrl+C to stop)...\n")
 
     seen_disputed: set[int] = set()
     settled: set[int] = set()
@@ -179,7 +182,9 @@ def main() -> None:
                 print(f"[{ts}] Disputed event — jobId={job_id}")
                 if job_id not in seen_disputed:
                     seen_disputed.add(job_id)
-                    handle_disputed_job(erc8183, job_id, voter, gateway, hint_block=log["blockNumber"])
+                    handle_disputed_job(
+                        erc8183, job_id, voter, gateway, hint_block=log["blockNumber"]
+                    )
 
             # --- VoteCast events ------------------------------------------------
             vote_logs = erc8183.policy.contract.events.VoteCast().get_logs(
@@ -187,11 +192,14 @@ def main() -> None:
                 to_block=head,
             )
             for log in vote_logs:
-                job_id      = log["args"]["jobId"]
+                job_id = log["args"]["jobId"]
                 reject_votes = log["args"]["rejectVotes"]
-                caster      = log["args"]["voter"]
+                caster = log["args"]["voter"]
                 ts = time.strftime("%H:%M:%S")
-                print(f"[{ts}] VoteCast — jobId={job_id}  rejectVotes={reject_votes}/{quorum}  by={caster}")
+                print(
+                    f"[{ts}] VoteCast — jobId={job_id}  "
+                    f"rejectVotes={reject_votes}/{quorum}  by={caster}"
+                )
                 if reject_votes >= quorum and job_id not in settled:
                     settled.add(job_id)
                     handle_quorum_reached(erc8183, job_id, reject_votes, quorum)

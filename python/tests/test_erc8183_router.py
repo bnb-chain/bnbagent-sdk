@@ -1,7 +1,6 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from web3 import Web3
 
 from bnbagent.erc8183.router import RouterClient
 from bnbagent.erc8183.types import JobStatus, Verdict
@@ -11,7 +10,9 @@ from bnbagent.erc8183.types import JobStatus, Verdict
 def router_client(mock_web3):
     wallet = MagicMock()
     wallet.address = "0x" + "aa" * 20
-    with patch("bnbagent.erc8183.router._load_abi", return_value=[{"type": "function", "name": "settle"}]):
+    with patch(
+        "bnbagent.erc8183.router._load_abi", return_value=[{"type": "function", "name": "settle"}]
+    ):
         client = RouterClient(mock_web3, "0x" + "11" * 20, wallet)
         client._execute_intent = MagicMock()
         client._call_with_retry = MagicMock()
@@ -54,7 +55,11 @@ class TestRouterClient:
     def test_get_job_registered_events(self, router_client):
         router_client.contract.events.JobRegistered = MagicMock()
         router_client.contract.events.JobRegistered().get_logs.return_value = [
-            {"args": {"jobId": 1, "policy": "0xcc", "client": "0xaa"}, "blockNumber": 100, "transactionHash": b"hash"}
+            {
+                "args": {"jobId": 1, "policy": "0xcc", "client": "0xaa"},
+                "blockNumber": 100,
+                "transactionHash": b"hash",
+            }
         ]
         logs = router_client.get_job_registered_events(0, client="0x" + "aa" * 20)
         assert len(logs) == 1
@@ -63,7 +68,11 @@ class TestRouterClient:
     def test_get_job_settled_events(self, router_client):
         router_client.contract.events.JobSettled = MagicMock()
         router_client.contract.events.JobSettled().get_logs.return_value = [
-            {"args": {"jobId": 1, "verdict": 1, "reason": b"reason"}, "blockNumber": 100, "transactionHash": b"hash"}
+            {
+                "args": {"jobId": 1, "verdict": 1, "reason": b"reason"},
+                "blockNumber": 100,
+                "transactionHash": b"hash",
+            }
         ]
         logs = router_client.get_job_settled_events(0, verdict=Verdict.APPROVE)
         assert len(logs) == 1

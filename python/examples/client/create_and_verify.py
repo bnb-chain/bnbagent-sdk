@@ -27,8 +27,8 @@ import time
 
 from _helpers import banner, expiry_for, load_settings, make_primary_client
 
-POLL_INTERVAL = 5    # seconds between status polls
-POLL_TIMEOUT  = 240  # allow for one full poll cycle + on-chain submission
+POLL_INTERVAL = 5  # seconds between status polls
+POLL_TIMEOUT = 240  # allow for one full poll cycle + on-chain submission
 
 
 def main() -> None:
@@ -49,7 +49,7 @@ def main() -> None:
     )
 
     decimals = client.token_decimals()
-    budget   = 1 * (10 ** decimals)
+    budget = 1 * (10**decimals)
 
     # --- 1. Create + register + fund ----------------------------------------
     expired_at = expiry_for(client)
@@ -72,6 +72,7 @@ def main() -> None:
 
     # --- 2. Wait for the agent's funded-poll loop to pick up the job --------
     from bnbagent.erc8183 import JobStatus
+
     print(f"\n[client] waiting for agent to submit (up to {POLL_TIMEOUT}s)...")
     deadline = time.time() + POLL_TIMEOUT
     job = client.get_job(job_id)
@@ -87,13 +88,15 @@ def main() -> None:
 
     # --- 4. Verify manifest hash via IPFS -----------------------------------
     import httpx
+
     deliverable_url = client.get_deliverable_url(job_id)
     print(f"  deliverableUrl:  {deliverable_url}")
     if deliverable_url and deliverable_url.startswith("ipfs://"):
-        cid = deliverable_url[len("ipfs://"):]
+        cid = deliverable_url[len("ipfs://") :]
         gateway_url = f"https://gateway.pinata.cloud/ipfs/{cid}"
         print(f"\n[client] fetching manifest from IPFS: {gateway_url}")
         from bnbagent.erc8183.schema import DeliverableManifest
+
         try:
             fetch = httpx.get(gateway_url, timeout=15)
             fetch.raise_for_status()
@@ -114,7 +117,7 @@ def main() -> None:
         client.dispute(job_id)
         print(f"[client] dispute({job_id}) OK")
         print(f"\n  job {job_id} is now DISPUTED")
-        print(f"  → voter can review and vote in examples/voter/watch.py")
+        print("  → voter can review and vote in examples/voter/watch.py")
         print(f"  → after quorum, anyone can call settle({job_id})")
     else:
         print(
