@@ -1,5 +1,9 @@
 # BNBAgent SDK
 
+[![PyPI](https://img.shields.io/pypi/v/bnbagent?logo=pypi&logoColor=white&label=bnbagent)](https://pypi.org/project/bnbagent/)
+[![Python](https://img.shields.io/pypi/pyversions/bnbagent)](https://pypi.org/project/bnbagent/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](../LICENSE)
+
 Python SDK for building on-chain AI agents on BNB Chain - register identities, negotiate, accept jobs, deliver work, and get paid trustlessly through on-chain escrow.
 
 BNBAgent SDK provides two core capabilities:
