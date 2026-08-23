@@ -38,6 +38,22 @@ Every protocol client signs through the `WalletProvider` seam, so the wallet is 
 
 Details: [`python/bnbagent/wallets/README.md`](./python/bnbagent/wallets/README.md) (EVM + TWAK), [`typescript/README.md`](./typescript/README.md) (EVM + TWAK + Altana), [`docs/twak.md`](./docs/twak.md), and [`docs/altana.md`](./docs/altana.md).
 
+### Bring your own MPC custody
+
+`mpc` is a recognised wallet kind (`SUPPORTED_WALLET_KINDS = ("evm", "twak", "mpc")`) but is a **stub by design**. The SDK deliberately ships no in-process MPC implementation: threshold-key custody, audit trails, and policy enforcement belong in a dedicated provider (Coinbase CDP, Fireblocks, Web3Auth, and similar), which already solves them at the enclave level.
+
+Selecting it fails loudly rather than falling through silently:
+
+```python
+>>> from bnbagent.wallets.factory import create_wallet_provider
+>>> create_wallet_provider("mpc")
+NotImplementedError: MPC wallet support is not yet implemented. Please use EVMWalletProvider for now.
+```
+
+To sign through an MPC backend, adapt its API in your own project by subclassing `WalletProvider` (`from bnbagent.wallets import WalletProvider`). Implement only the `sign_*` methods your backend supports — `capabilities()` reports the matching `sign.*` entries from your overrides, and anything you leave alone raises a descriptive `UnsupportedWalletOperation`, so never override a method just to raise.
+
+`MPCWalletProvider` is exported for `isinstance` checks and as a subclassing reference, but its `__init__` raises unconditionally — subclass `WalletProvider` directly unless you also override `__init__`.
+
 ## Getting started
 
 ### Python
