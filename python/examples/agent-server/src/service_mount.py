@@ -153,7 +153,12 @@ erc8183_app = create_erc8183_app(config=config, on_job=process_task, prefix="")
 async def lifespan(app: FastAPI):
     # Launch the funded-job poll loop (Starlette doesn't propagate lifespan to
     # mounted sub-apps, so we drive the erc8183 sub-app's startup ourselves).
-    await erc8183_app.state.startup()
+    #
+    # Do NOT await this. state.startup is a sync lambda that returns the
+    # poll loop's asyncio.Task; the loop only exits on shutdown, so awaiting
+    # it never returns and the lifespan never reaches `yield` - uvicorn would
+    # start up and never serve a request.
+    erc8183_app.state.startup()
     yield
 
 
