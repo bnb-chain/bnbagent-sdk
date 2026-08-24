@@ -627,6 +627,10 @@ jobs:
           pnpm run codegen
           git diff --exit-code src/abis
 
+      - name: Prepare or resume version
+        id: version
+        run: pnpm exec tsx scripts/release.ts prepare "${{ inputs.bump }}" >> "$GITHUB_OUTPUT"
+
       - name: Check source and build
         run: |
           pnpm run typecheck
@@ -635,10 +639,6 @@ jobs:
           pnpm run test
           pnpm run build
           git diff --check
-
-      - name: Prepare or resume version
-        id: version
-        run: pnpm exec tsx scripts/release.ts prepare "${{ inputs.bump }}" >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes
         env:
@@ -664,8 +664,36 @@ jobs:
       - name: Freeze workspace dependencies for publishing
         run: pnpm exec tsx scripts/release.ts freeze
 
-      - name: Package smoke test
-        run: pnpm exec tsx scripts/release.ts pack
+      - name: Pack and verify the installable tarball
+        env:
+          V: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          PACK_DIR="$RUNNER_TEMP/npm-pack"
+          CONSUMER_DIR="$(mktemp -d)"
+          mkdir -p "$PACK_DIR"
+          npm pack --json --pack-destination "$PACK_DIR" >/dev/null
+          mapfile -t TARBALLS < <(find "$PACK_DIR" -maxdepth 1 -type f -name '*.tgz')
+          if [[ "${#TARBALLS[@]}" -ne 1 ]]; then
+            echo "Expected exactly one tarball, found ${#TARBALLS[@]}" >&2
+            exit 1
+          fi
+          TARBALL_PATH="$PACK_DIR/bnbagent-sdk-$V.tgz"
+          if [[ "${TARBALLS[0]}" != "$TARBALL_PATH" ]]; then
+            echo "Unexpected tarball filename: ${TARBALLS[0]}" >&2
+            exit 1
+          fi
+          tar -xOf "$TARBALL_PATH" package/package.json |
+            jq -e --arg version "$V" \
+              '.name == "@bnbagent/sdk" and .version == $version' >/dev/null
+
+          cd "$CONSUMER_DIR"
+          npm init -y >/dev/null
+          npm install --ignore-scripts --no-audit --no-fund "$TARBALL_PATH"
+          node --input-type=module -e \
+            "await import('@bnbagent/sdk'); const { getBuiltWithValue } = await import('@bnbagent/sdk/erc8004'); const expected = 'https://github.com/bnb-chain/bnbagent-sdk#v' + process.env.V; if (getBuiltWithValue() !== expected) throw new Error('unexpected built_with version')"
+          node -e \
+            "require('@bnbagent/sdk'); require('@bnbagent/sdk/erc8004')"
 
       - name: Publish stable package with provenance
         run: pnpm exec tsx scripts/release.ts publish --tag latest
