@@ -340,9 +340,7 @@ class TestErrorSanitization:
     async def test_get_job_does_not_leak_rpc_url(self):
         ops = _make_ops()
         client = _inject_client(ops)
-        client.get_job.side_effect = Exception(
-            f"429 Too Many Requests for url: {self.SECRET}"
-        )
+        client.get_job.side_effect = Exception(f"429 Too Many Requests for url: {self.SECRET}")
         result = await ops.get_job(1)
         assert result["success"] is False
         assert "SECRET_KEY" not in result["error"]
@@ -352,9 +350,7 @@ class TestErrorSanitization:
     async def test_verify_job_does_not_leak_rpc_url(self):
         ops = _make_ops()
         client = _inject_client(ops)
-        client.get_job.side_effect = Exception(
-            f"Max retries exceeded with url: {self.SECRET}"
-        )
+        client.get_job.side_effect = Exception(f"Max retries exceeded with url: {self.SECRET}")
         result = await ops.verify_job(1)
         assert result["valid"] is False
         assert "SECRET_KEY" not in result["error"]
@@ -381,9 +377,7 @@ class TestGetPendingJobs:
         mine_funded = replace(_job(status=JobStatus.FUNDED, provider=ME), id=1)
         other_funded = replace(_job(status=JobStatus.FUNDED, provider=OTHER), id=2)
         mine_completed = replace(_job(status=JobStatus.COMPLETED, provider=ME), id=3)
-        client.commerce.get_jobs_batch.return_value = [
-            mine_funded, other_funded, mine_completed
-        ]
+        client.commerce.get_jobs_batch.return_value = [mine_funded, other_funded, mine_completed]
 
         result = await ops.get_pending_jobs()
         assert result["success"]
@@ -457,7 +451,9 @@ class TestGetSubmittedJobs:
         other_submitted = replace(_job(status=JobStatus.SUBMITTED, provider=OTHER), id=2)
         mine_funded = replace(_job(status=JobStatus.FUNDED, provider=ME), id=3)
         client.commerce.get_jobs_batch.return_value = [
-            mine_submitted, other_submitted, mine_funded
+            mine_submitted,
+            other_submitted,
+            mine_funded,
         ]
 
         result = await ops.get_submitted_jobs()
@@ -490,11 +486,11 @@ class TestDecodeJob:
             "0x" + "33" * 20,
             "desc",
             1000,
-            2000,                       # expiredAt (index 6)
+            2000,  # expiredAt (index 6)
             JobStatus.SUBMITTED.value,  # status (index 7)
-            "0x" + "44" * 20,           # hook (index 8)
-            1500,                       # submittedAt (index 9)
-            b"\x00" * 32,               # deliverable (index 10)
+            "0x" + "44" * 20,  # hook (index 8)
+            1500,  # submittedAt (index 9)
+            b"\x00" * 32,  # deliverable (index 10)
         )
         job = _decode_job(raw)
         assert job.submitted_at == 1500
@@ -648,8 +644,7 @@ class TestExcErrorFields:
         from bnbagent.erc8183.job_ops import _exc_error_fields
 
         exc = RuntimeError(
-            "Cannot publish: ERC8183_AGENT_URL is not set "
-            "(e.g. http://localhost:8003/erc8183)"
+            "Cannot publish: ERC8183_AGENT_URL is not set (e.g. http://localhost:8003/erc8183)"
         )
         fields = _exc_error_fields(exc)
         assert "ERC8183_AGENT_URL" in fields["error"]
@@ -703,7 +698,12 @@ class TestGetResponseClassification:
     @pytest.mark.asyncio
     async def test_unknown_status_is_chain_unavailable(self):
         ops = self._ops(
-            {"success": False, "error": "Temporary chain/RPC error", "error_code": "chain_unavailable", "retryable": True}
+            {
+                "success": False,
+                "error": "Temporary chain/RPC error",
+                "error_code": "chain_unavailable",
+                "retryable": True,
+            }
         )
         result = await ops.get_response(1)
         assert result["error_code"] == "chain_unavailable"

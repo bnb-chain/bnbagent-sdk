@@ -12,9 +12,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from bnbagent.config import NetworkConfig
 from bnbagent.erc8183 import ERC8183Client
 from bnbagent.erc8183.client import DEFAULT_APPROVE_FLOOR_UNITS
-from bnbagent.config import NetworkConfig
 from tests.conftest import FAKE_ADDRESS
 
 FAKE_COMMERCE = "0x" + "aa" * 20
@@ -43,10 +43,12 @@ def _mock_wallet() -> MagicMock:
 @pytest.fixture
 def facade(mock_web3):
     """``ERC8183Client`` wired against mock sub-clients (no real web3 traffic)."""
-    with patch("bnbagent.erc8183.client.create_web3", return_value=mock_web3), \
-         patch("bnbagent.erc8183.client.CommerceClient") as mcc, \
-         patch("bnbagent.erc8183.client.RouterClient") as mrc, \
-         patch("bnbagent.erc8183.client.PolicyClient") as mpc:
+    with (
+        patch("bnbagent.erc8183.client.create_web3", return_value=mock_web3),
+        patch("bnbagent.erc8183.client.CommerceClient") as mcc,
+        patch("bnbagent.erc8183.client.RouterClient") as mrc,
+        patch("bnbagent.erc8183.client.PolicyClient") as mpc,
+    ):
         commerce = MagicMock()
         commerce.address = FAKE_COMMERCE
         router = MagicMock()
@@ -65,10 +67,12 @@ class TestInit:
     def test_allows_read_only_without_wallet(self, mock_web3):
         """wallet_provider=None builds a read-only client (writes raise later
         via _send_tx); address is None."""
-        with patch("bnbagent.erc8183.client.create_web3", return_value=mock_web3), \
-             patch("bnbagent.erc8183.client.CommerceClient"), \
-             patch("bnbagent.erc8183.client.RouterClient"), \
-             patch("bnbagent.erc8183.client.PolicyClient"):
+        with (
+            patch("bnbagent.erc8183.client.create_web3", return_value=mock_web3),
+            patch("bnbagent.erc8183.client.CommerceClient"),
+            patch("bnbagent.erc8183.client.RouterClient"),
+            patch("bnbagent.erc8183.client.PolicyClient"),
+        ):
             client = ERC8183Client(None, network=_fake_network())
             assert client.address is None
             assert client._wallet_provider is None
@@ -99,13 +103,13 @@ class TestInit:
     def test_accepts_network_string(self, mock_web3):
         """String preset is resolved via ``resolve_network`` under the hood."""
         fake_net = _fake_network()
-        with patch("bnbagent.erc8183.client.create_web3", return_value=mock_web3), \
-             patch(
-                 "bnbagent.erc8183.client.resolve_network", return_value=fake_net
-             ) as resolve, \
-             patch("bnbagent.erc8183.client.CommerceClient") as mcc, \
-             patch("bnbagent.erc8183.client.RouterClient") as mrc, \
-             patch("bnbagent.erc8183.client.PolicyClient") as mpc:
+        with (
+            patch("bnbagent.erc8183.client.create_web3", return_value=mock_web3),
+            patch("bnbagent.erc8183.client.resolve_network", return_value=fake_net) as resolve,
+            patch("bnbagent.erc8183.client.CommerceClient") as mcc,
+            patch("bnbagent.erc8183.client.RouterClient") as mrc,
+            patch("bnbagent.erc8183.client.PolicyClient") as mpc,
+        ):
             mcc.return_value.address = FAKE_COMMERCE
             mrc.return_value.address = FAKE_ROUTER
             mpc.return_value.address = FAKE_POLICY
@@ -133,7 +137,9 @@ class TestCreateJob:
     def test_allows_overriding_hook(self, facade):
         facade.commerce.create_job.return_value = {"jobId": 1}
         custom_hook = "0x" + "11" * 20
-        facade.create_job(expired_at=123, description="d", hook=custom_hook, skip_expiry_check=True)
+        facade.create_job(
+            expired_at=123, description="d", hook=custom_hook, skip_expiry_check=True
+        )
         _, kwargs = facade.commerce.create_job.call_args
         assert kwargs["evaluator"] == FAKE_ROUTER
         assert kwargs["hook"] == custom_hook
@@ -147,6 +153,7 @@ class TestCreateJob:
         Regression for https://github.com/bnb-chain/bnbagent-sdk/issues/41.
         """
         import time
+
         facade.policy.dispute_window.return_value = 7 * 86400
         too_close = int(time.time()) + 86400  # 24h, well inside 7d window
         with pytest.raises(ValueError, match="dispute_window"):
@@ -155,6 +162,7 @@ class TestCreateJob:
 
     def test_accepts_expired_at_beyond_dispute_window(self, facade):
         import time
+
         facade.policy.dispute_window.return_value = 7 * 86400
         far_enough = int(time.time()) + 8 * 86400 + 60  # 8d + 1min
         facade.commerce.create_job.return_value = {"jobId": 99}
@@ -163,6 +171,7 @@ class TestCreateJob:
 
     def test_skip_expiry_check_bypasses_validation(self, facade):
         import time
+
         facade.policy.dispute_window.return_value = 7 * 86400
         facade.commerce.create_job.return_value = {"jobId": 99}
         facade.create_job(
@@ -209,9 +218,7 @@ class TestFund:
     def test_approves_default_floor_when_amount_below_floor(self, facade):
         erc20 = self._prime(facade, current_allowance=0, decimals=6)
         facade.fund(job_id=1, amount=1 * 10**6)
-        erc20.approve.assert_called_once_with(
-            FAKE_COMMERCE, DEFAULT_APPROVE_FLOOR_UNITS * 10**6
-        )
+        erc20.approve.assert_called_once_with(FAKE_COMMERCE, DEFAULT_APPROVE_FLOOR_UNITS * 10**6)
 
     def test_approves_exact_amount_when_above_default_floor(self, facade):
         erc20 = self._prime(facade, current_allowance=0, decimals=6)
@@ -331,16 +338,16 @@ class TestPolicyRangeLimit:
         from bnbagent.exceptions import RpcRangeLimitError
 
         policy = self._policy()
-        policy.contract.events.JobInitialised.return_value.get_logs.side_effect = (
-            Exception("{'code': -32005, 'message': 'limit exceeded'}")
+        policy.contract.events.JobInitialised.return_value.get_logs.side_effect = Exception(
+            "{'code': -32005, 'message': 'limit exceeded'}"
         )
         with pytest.raises(RpcRangeLimitError):
             policy.get_deliverable_url(1)
 
     def test_other_query_error_still_returns_none(self):
         policy = self._policy()
-        policy.contract.events.JobInitialised.return_value.get_logs.side_effect = (
-            Exception("some other rpc problem")
+        policy.contract.events.JobInitialised.return_value.get_logs.side_effect = Exception(
+            "some other rpc problem"
         )
         assert policy.get_deliverable_url(1) is None
 

@@ -1,6 +1,6 @@
 """Tests for Multicall3 batch read utility."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from eth_abi import encode as abi_encode
@@ -206,7 +206,7 @@ class TestRealContract:
         decoded = abi_decode(output_types, fake_return)
         # decoded is ((42, addr, addr, addr, "test job", 100, ...),) — unwrap tuple
         job = decoded[0]
-        assert job[0] == 42       # id
+        assert job[0] == 42  # id
         assert job[4] == "test job"  # description
-        assert job[5] == 100      # budget
-        assert job[7] == 1        # status
+        assert job[5] == 100  # budget
+        assert job[7] == 1  # status

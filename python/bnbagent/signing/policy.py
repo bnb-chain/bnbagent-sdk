@@ -35,10 +35,12 @@ logger = logging.getLogger(__name__)
 # at github.com/Uniswap/permit2 (allowance-transfer: PermitSingle/PermitBatch;
 # signature-transfer: PermitTransferFrom/PermitBatchTransferFrom).
 
-EIP3009_TYPES: frozenset[str] = frozenset({
-    "TransferWithAuthorization",
-    "ReceiveWithAuthorization",
-})
+EIP3009_TYPES: frozenset[str] = frozenset(
+    {
+        "TransferWithAuthorization",
+        "ReceiveWithAuthorization",
+    }
+)
 
 # Field-shape of both EIP-3009 authorization structs (name, solidity type),
 # in declaration order. EIP-712 hashes the field names, types *and* order into
@@ -54,21 +56,25 @@ EIP3009_CANONICAL_FIELDS: tuple[tuple[str, str], ...] = (
     ("nonce", "bytes32"),
 )
 
-PERMIT_UNBOUNDED_TYPES: frozenset[str] = frozenset({
-    "Permit",          # EIP-2612 — long-lived allowance to a spender
-    "PermitSingle",    # Permit2 AllowanceTransfer — long-lived allowance
-    "PermitBatch",     # Permit2 AllowanceTransfer (batch)
-})
+PERMIT_UNBOUNDED_TYPES: frozenset[str] = frozenset(
+    {
+        "Permit",  # EIP-2612 — long-lived allowance to a spender
+        "PermitSingle",  # Permit2 AllowanceTransfer — long-lived allowance
+        "PermitBatch",  # Permit2 AllowanceTransfer (batch)
+    }
+)
 
 # Permit2 SignatureTransfer family — opt-in only, NOT in default allowlist.
 # These are *safer* than the unbounded family because the spender contract
 # binds (to, requestedAmount) at call time, but full enforcement requires
 # witness validation we don't yet do. Callers explicitly extend the policy
 # to use these.
-PERMIT2_SIGNATURE_TRANSFER_TYPES: frozenset[str] = frozenset({
-    "PermitTransferFrom",
-    "PermitBatchTransferFrom",
-})
+PERMIT2_SIGNATURE_TRANSFER_TYPES: frozenset[str] = frozenset(
+    {
+        "PermitTransferFrom",
+        "PermitBatchTransferFrom",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -112,7 +118,7 @@ class SigningPolicy:
     # ── Factory presets ────────────────────────────────────────────────
 
     @classmethod
-    def strict_default(cls) -> "SigningPolicy":
+    def strict_default(cls) -> SigningPolicy:
         """Recommended fail-closed default for direct-SDK callers.
 
         Defaults are deliberately narrow:
@@ -141,12 +147,17 @@ class SigningPolicy:
 
     #: Environment values (case-insensitive) that block ``permissive()``
     #: construction unless the caller passes ``allow_in_production=True``.
-    PRODUCTION_ENV_MARKERS: frozenset[str] = frozenset({
-        "prod", "production", "live", "mainnet-prod",
-    })
+    PRODUCTION_ENV_MARKERS: frozenset[str] = frozenset(
+        {
+            "prod",
+            "production",
+            "live",
+            "mainnet-prod",
+        }
+    )
 
     @classmethod
-    def permissive(cls, *, allow_in_production: bool = False) -> "SigningPolicy":
+    def permissive(cls, *, allow_in_production: bool = False) -> SigningPolicy:
         """⚠️ Testing-only escape: allow_unknown_domain=True and empty deny/allow.
 
         Refuses to construct when ``ENV`` or ``ENVIRONMENT`` env vars indicate
@@ -175,7 +186,9 @@ class SigningPolicy:
         logger.warning(
             "SigningPolicy.permissive() in use — POLICY DISABLED. "
             "This bypasses ALL signing guards; only acceptable in tests. "
-            "(env=%r, allow_in_production=%s)", env_raw, allow_in_production,
+            "(env=%r, allow_in_production=%s)",
+            env_raw,
+            allow_in_production,
         )
         return cls(
             domain_allowlist=frozenset(),
@@ -197,7 +210,7 @@ class SigningPolicy:
         max_validity_window_seconds: int | None = None,
         max_future_validity_seconds: int | None = None,
         allow_unknown_domain: bool | None = None,
-    ) -> "SigningPolicy":
+    ) -> SigningPolicy:
         """Return a new policy with extended/overridden fields.
 
         Set-like arguments are *unioned* with the current value (additive).
@@ -205,9 +218,7 @@ class SigningPolicy:
         """
         kwargs: dict[str, Any] = {}
         if domain_allowlist is not None:
-            kwargs["domain_allowlist"] = self.domain_allowlist | frozenset(
-                domain_allowlist
-            )
+            kwargs["domain_allowlist"] = self.domain_allowlist | frozenset(domain_allowlist)
         if primary_type_allowlist is not None:
             kwargs["primary_type_allowlist"] = self.primary_type_allowlist | frozenset(
                 primary_type_allowlist
@@ -218,8 +229,7 @@ class SigningPolicy:
             )
         if validity_required_primary_types is not None:
             kwargs["validity_required_primary_types"] = (
-                self.validity_required_primary_types
-                | frozenset(validity_required_primary_types)
+                self.validity_required_primary_types | frozenset(validity_required_primary_types)
             )
         if max_validity_window_seconds is not None:
             kwargs["max_validity_window_seconds"] = max_validity_window_seconds
@@ -238,21 +248,17 @@ class SigningPolicy:
         nested lists (TOML-friendly). Round-trips via :meth:`from_dict`.
         """
         return {
-            "domain_allowlist": sorted(
-                [list(pair) for pair in self.domain_allowlist]
-            ),
+            "domain_allowlist": sorted([list(pair) for pair in self.domain_allowlist]),
             "primary_type_allowlist": sorted(self.primary_type_allowlist),
             "primary_type_denylist": sorted(self.primary_type_denylist),
-            "validity_required_primary_types": sorted(
-                self.validity_required_primary_types
-            ),
+            "validity_required_primary_types": sorted(self.validity_required_primary_types),
             "max_validity_window_seconds": self.max_validity_window_seconds,
             "max_future_validity_seconds": self.max_future_validity_seconds,
             "allow_unknown_domain": self.allow_unknown_domain,
         }
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "SigningPolicy":
+    def from_dict(cls, d: dict[str, Any]) -> SigningPolicy:
         """Reconstruct a SigningPolicy from its :meth:`to_dict` output.
 
         Missing keys fall back to the dataclass defaults (empty sets /
@@ -269,8 +275,7 @@ class SigningPolicy:
         for i, entry in enumerate(raw_domains):
             if not isinstance(entry, (list, tuple)) or len(entry) != 2:
                 raise ValueError(
-                    f"domain_allowlist[{i}] must be a [chain_id, address] "
-                    f"pair, got {entry!r}"
+                    f"domain_allowlist[{i}] must be a [chain_id, address] pair, got {entry!r}"
                 )
             domain_pairs.add((int(entry[0]), str(entry[1])))
         return cls(
@@ -298,12 +303,8 @@ class SigningPolicy:
             lines.append(f"    - chain_id={cid} verifyingContract={addr}")
         if n_domains == 0:
             lines.append("    (none)")
-        lines.append(
-            f"  primary_type_allowlist={sorted(self.primary_type_allowlist) or '(any)'}"
-        )
-        lines.append(
-            f"  primary_type_denylist={sorted(self.primary_type_denylist) or '(none)'}"
-        )
+        lines.append(f"  primary_type_allowlist={sorted(self.primary_type_allowlist) or '(any)'}")
+        lines.append(f"  primary_type_denylist={sorted(self.primary_type_denylist) or '(none)'}")
         lines.append(
             f"  validity: window<={self.max_validity_window_seconds}s, "
             f"future<={self.max_future_validity_seconds}s, "

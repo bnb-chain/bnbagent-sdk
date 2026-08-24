@@ -11,9 +11,9 @@ from pathlib import Path
 from dotenv import dotenv_values
 
 import bnbagent
+from bnbagent.config import resolve_network
 from bnbagent.erc8183 import ERC8183Client
 from bnbagent.wallets import TWAK_CHAIN_FOR_NETWORK, EVMWalletProvider, TWAKProvider
-from bnbagent.config import resolve_network
 
 ROOT = Path(__file__).resolve().parent
 
@@ -40,8 +40,8 @@ def _require_env(name: str) -> str:
 @dataclass(frozen=True)
 class Settings:
     network: str
-    wallet_kind: str        # "evm" (default) | "twak" — switches the CLIENT wallet only
-    client_pk: str | None   # required for evm; unused when wallet_kind=twak
+    wallet_kind: str  # "evm" (default) | "twak" — switches the CLIENT wallet only
+    client_pk: str | None  # required for evm; unused when wallet_kind=twak
     provider_address: str
     provider_pk: str | None
     voter_pk: str | None
@@ -84,7 +84,7 @@ def _demo_network(network: str):
     # Prefer the NodeReal RPC from voter/.env — it has a higher block-range
     # limit (5 000 blocks per get_logs) vs the public default endpoint.
     voter_env = dotenv_values(ROOT.parent / "voter" / ".env")
-    rpc_url   = voter_env.get("RPC_URL")
+    rpc_url = voter_env.get("RPC_URL")
     if rpc_url:
         return dataclasses.replace(resolve_network(network), rpc_url=rpc_url)
     return network

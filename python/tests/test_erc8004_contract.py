@@ -76,9 +76,14 @@ class TestExecuteTransactionReceiptRevert:
         fn = MagicMock()
         fn.estimate_gas.return_value = 100_000
         fn.build_transaction.return_value = {
-            "from": "0xDeadBeef", "to": "0x1234",
-            "data": "0x", "value": 0, "gas": 100_000,
-            "gasPrice": 3_000_000_000, "nonce": 1, "chainId": 97,
+            "from": "0xDeadBeef",
+            "to": "0x1234",
+            "data": "0x",
+            "value": 0,
+            "gas": 100_000,
+            "gasPrice": 3_000_000_000,
+            "nonce": 1,
+            "chainId": 97,
         }
         web3.eth.get_transaction_count.return_value = 1
         web3.eth.gas_price = 3_000_000_000
@@ -117,9 +122,14 @@ class TestExecuteTransactionReceiptRevert:
         fn = MagicMock()
         fn.estimate_gas.return_value = 100_000
         fn.build_transaction.return_value = {
-            "from": "0xDeadBeef", "to": "0x1234",
-            "data": "0x", "value": 0, "gas": 100_000,
-            "gasPrice": 3_000_000_000, "nonce": 1, "chainId": 97,
+            "from": "0xDeadBeef",
+            "to": "0x1234",
+            "data": "0x",
+            "value": 0,
+            "gas": 100_000,
+            "gasPrice": 3_000_000_000,
+            "nonce": 1,
+            "chainId": 97,
         }
         web3.eth.get_transaction_count.return_value = 1
         web3.eth.gas_price = 3_000_000_000
@@ -156,9 +166,14 @@ class TestPreflightEthCall:
         fn = MagicMock()
         fn.estimate_gas.return_value = 100_000
         fn.build_transaction.return_value = {
-            "from": "0xDeadBeef", "to": "0x1234",
-            "data": "0x", "value": 0, "gas": 100_000,
-            "gasPrice": 3_000_000_000, "nonce": 1, "chainId": 97,
+            "from": "0xDeadBeef",
+            "to": "0x1234",
+            "data": "0x",
+            "value": 0,
+            "gas": 100_000,
+            "gasPrice": 3_000_000_000,
+            "nonce": 1,
+            "chainId": 97,
         }
         web3.eth.get_transaction_count.return_value = 1
         web3.eth.gas_price = 3_000_000_000
@@ -174,7 +189,9 @@ class TestPreflightEthCall:
 
         ok_receipt = Mock()
         ok_receipt.__getitem__ = lambda s, k: {
-            "status": 1, "blockNumber": 1, "gasUsed": 1,
+            "status": 1,
+            "blockNumber": 1,
+            "gasUsed": 1,
             "transactionHash": sent_hash,
         }[k]
         web3.eth.wait_for_transaction_receipt.return_value = ok_receipt
@@ -208,9 +225,6 @@ class TestPreflightEthCall:
 
         web3.eth.call.side_effect = slow_call
 
-        # Patch ThreadPoolExecutor so TimeoutError propagates correctly
-        original_executor = concurrent.futures.ThreadPoolExecutor
-
         class ImmediateTimeoutExecutor:
             def __init__(self, **kwargs):
                 pass
@@ -226,7 +240,9 @@ class TestPreflightEthCall:
                 f.set_exception(concurrent.futures.TimeoutError())
                 return f
 
-        with patch("bnbagent.wallets.local_executor._cf.ThreadPoolExecutor", ImmediateTimeoutExecutor):
+        with patch(
+            "bnbagent.wallets.local_executor._cf.ThreadPoolExecutor", ImmediateTimeoutExecutor
+        ):
             result = ci._execute_transaction(fn, description="timeout-test")
 
         web3.eth.send_raw_transaction.assert_called_once()
@@ -243,9 +259,14 @@ class TestRegisterAgentPropagatesRevert:
         register_fn = MagicMock()
         register_fn.estimate_gas.return_value = 100_000
         register_fn.build_transaction.return_value = {
-            "from": "0xDeadBeef", "to": "0x1234",
-            "data": "0x", "value": 0, "gas": 100_000,
-            "gasPrice": 3_000_000_000, "nonce": 1, "chainId": 97,
+            "from": "0xDeadBeef",
+            "to": "0x1234",
+            "data": "0x",
+            "value": 0,
+            "gas": 100_000,
+            "gasPrice": 3_000_000_000,
+            "nonce": 1,
+            "chainId": 97,
         }
         ci.contract = MagicMock()
         ci.contract.functions.register.return_value = register_fn
@@ -265,7 +286,9 @@ class TestRegisterAgentPropagatesRevert:
 
         revert_receipt = Mock()
         revert_receipt.__getitem__ = lambda s, k: {
-            "status": 0, "blockNumber": 999, "gasUsed": 21000,
+            "status": 0,
+            "blockNumber": 999,
+            "gasUsed": 21000,
             "transactionHash": sent_hash,
         }[k]
         web3.eth.wait_for_transaction_receipt.return_value = revert_receipt
@@ -282,9 +305,14 @@ class TestReceiptTimeoutPending:
         fn = MagicMock()
         fn.estimate_gas.return_value = 100_000
         fn.build_transaction.return_value = {
-            "from": "0xDeadBeef", "to": "0x1234",
-            "data": "0x", "value": 0, "gas": 100_000,
-            "gasPrice": 3_000_000_000, "nonce": 1, "chainId": 97,
+            "from": "0xDeadBeef",
+            "to": "0x1234",
+            "data": "0x",
+            "value": 0,
+            "gas": 100_000,
+            "gasPrice": 3_000_000_000,
+            "nonce": 1,
+            "chainId": 97,
         }
         web3.eth.get_transaction_count.return_value = 1
         web3.eth.gas_price = 3_000_000_000
@@ -343,9 +371,14 @@ class TestRetryAndNonceManagement:
         fn = MagicMock()
         fn.estimate_gas.return_value = 100_000
         fn.build_transaction.return_value = {
-            "from": FAKE_ADDRESS, "to": FAKE_CONTRACT_ADDRESS,
-            "data": "0x", "value": 0, "gas": 100_000,
-            "gasPrice": 3_000_000_000, "nonce": 1, "chainId": 97,
+            "from": FAKE_ADDRESS,
+            "to": FAKE_CONTRACT_ADDRESS,
+            "data": "0x",
+            "value": 0,
+            "gas": 100_000,
+            "gasPrice": 3_000_000_000,
+            "nonce": 1,
+            "chainId": 97,
         }
         web3.eth.get_transaction_count.return_value = 1
         web3.eth.gas_price = 3_000_000_000
@@ -360,7 +393,9 @@ class TestRetryAndNonceManagement:
         sent_hash = b"\xab" * 32
         ok_receipt = Mock()
         ok_receipt.__getitem__ = lambda s, k: {
-            "status": 1, "blockNumber": 1, "gasUsed": 1,
+            "status": 1,
+            "blockNumber": 1,
+            "gasUsed": 1,
             "transactionHash": sent_hash,
         }[k]
         web3.eth.wait_for_transaction_receipt.return_value = ok_receipt

@@ -55,7 +55,20 @@ class TestFactory:
             create_wallet_provider("mpc")
 
     def test_supported_kinds_match_class_attrs(self):
-        assert set(SUPPORTED_WALLET_KINDS) == {"evm", "twak", "mpc"}
+        assert set(SUPPORTED_WALLET_KINDS) == {"evm", "twak", "mpc", "turnkey"}
+
+    def test_turnkey_dispatches_to_provider(self):
+        from bnbagent.wallets.turnkey import TurnkeyWalletProvider
+
+        wallet = create_wallet_provider(
+            "turnkey",
+            organization_id="org-123",
+            sign_with="0x" + "7a" * 20,
+            api_public_key="02" + "ab" * 32,
+            api_private_key="cd" * 32,
+        )
+        assert isinstance(wallet, TurnkeyWalletProvider)
+        assert wallet.kind == "turnkey"
 
 
 class TestIntrospection:

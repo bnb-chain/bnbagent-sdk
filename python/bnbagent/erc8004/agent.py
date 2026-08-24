@@ -22,8 +22,8 @@ from web3 import Web3
 from ..constants import SCAN_API_URL
 from ..core.paymaster import Paymaster
 from ..exceptions import ERC8004PartialRegistrationError, TransactionPendingError
-from .agent_uri import AgentURIGenerator
 from ..wallets import WalletProvider
+from .agent_uri import AgentURIGenerator
 from .constants import get_erc8004_config
 from .contract import ContractInterface
 from .models import AgentEndpoint

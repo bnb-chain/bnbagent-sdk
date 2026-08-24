@@ -47,16 +47,16 @@ def main():
     agent_endpoint = f"{agent_host}/erc8183/status"
 
     print(f"""
-{'='*60}
+{"=" * 60}
   ERC-8004 Agent Registration
-{'='*60}
+{"=" * 60}
   Name:        {agent_name}
   Description: {agent_description[:60]}...
   Endpoint:    {agent_endpoint}
 """)
 
     try:
-        from bnbagent import ERC8004Agent, AgentEndpoint, EVMWalletProvider
+        from bnbagent import AgentEndpoint, ERC8004Agent, EVMWalletProvider
     except ImportError:
         print("Error: bnbagent SDK not installed")
         print("Run: pip install bnbagent")
@@ -112,7 +112,7 @@ def main():
                 and agent.get("name", "").lower() == agent_name.lower()
             ):
                 existing_id = agent["token_id"]
-                print(f"\n  Agent already registered!")
+                print("\n  Agent already registered!")
                 print(f"  Agent ID: {existing_id}")
                 print(f"  Name:     {agent['name']}")
 
@@ -135,20 +135,20 @@ def main():
         result = sdk.register_agent(agent_uri=agent_uri)
 
         print(f"""
-{'='*60}
+{"=" * 60}
   Registration Successful!
-{'='*60}
-  Agent ID:    {result['agentId']}
-  TX Hash:     {result['transactionHash']}
+{"=" * 60}
+  Agent ID:    {result["agentId"]}
+  TX Hash:     {result["transactionHash"]}
   Owner:       {sdk.wallet_address}
 
   View on explorer:
-    https://testnet.bscscan.com/tx/{result['transactionHash']}
+    https://testnet.bscscan.com/tx/{result["transactionHash"]}
 
   Save this Agent ID for client configuration:
-    AGENT_ID={result['agentId']}
+    AGENT_ID={result["agentId"]}
 
-{'='*60}
+{"=" * 60}
 """)
 
     except Exception as e:

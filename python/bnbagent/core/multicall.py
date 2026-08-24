@@ -58,6 +58,7 @@ def _get_output_types(contract: Contract, function_name: str) -> list[str]:
             return [_abi_type(o) for o in item.get("outputs", [])]
     raise ValueError(f"Function {function_name} not found in ABI")
 
+
 # Canonical Multicall3 address — same on all EVM chains
 MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11"
 
@@ -152,7 +153,7 @@ def multicall_read(
         batch = encoded_calls[i : i + batch_size]
         raw_results = _aggregate3_with_retry(multicall3, batch)
 
-        for j, (success, return_data) in enumerate(raw_results):
+        for success, return_data in raw_results:
             if success and return_data:
                 try:
                     decoded = abi_decode(output_types, return_data)
@@ -181,8 +182,7 @@ def _aggregate3_with_retry(multicall3: Contract, calls: list[dict]) -> list[tupl
             if is_rate_limit and attempt < MAX_RETRIES - 1:
                 delay = RETRY_BASE_DELAY * (2**attempt)
                 logger.warning(
-                    f"[Multicall3] Rate limited, retry {attempt + 1}/{MAX_RETRIES} "
-                    f"in {delay:.1f}s"
+                    f"[Multicall3] Rate limited, retry {attempt + 1}/{MAX_RETRIES} in {delay:.1f}s"
                 )
                 time.sleep(delay)
             else:

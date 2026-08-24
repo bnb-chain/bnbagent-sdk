@@ -103,6 +103,26 @@ class AgentConfig:
         ):
             from ..wallets import create_wallet_provider
 
+            if self.wallet_kind.strip().lower() == "turnkey":
+                # Remote enclave signer, credentials from the TURNKEY_* env
+                # vars. Pin the network's chain id so a mismatching
+                # transaction fails closed before Turnkey's billable API
+                # call (mirrors the TypeScript ERC8183Config branch).
+                from eth_utils import to_checksum_address
+
+                from ..wallets.errors import WalletIdentityMismatch
+                from ..wallets.turnkey import TurnkeyWalletProvider
+
+                provider = TurnkeyWalletProvider.from_env(
+                    expected_chain_id=self.effective_network.chain_id
+                )
+                if self.wallet_address:
+                    expected = to_checksum_address(self.wallet_address)
+                    if expected != provider.address:
+                        raise WalletIdentityMismatch(expected=expected, actual=provider.address)
+                self.wallet_provider = provider
+                return
+
             kwargs: dict[str, str] = {}
             if self.wallet_kind.strip().lower() == "twak":
                 # Pin twak to the config's network (chain identity must not

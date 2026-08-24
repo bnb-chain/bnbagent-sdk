@@ -238,9 +238,7 @@ class TWAKProvider(WalletProvider, IntentExecutor):
     # sign.message derives automatically from the override below; twak has
     # no sign_transaction / sign_typed_data, so the base defaults raise.
     # x402.pay: served by the delegated TwakX402Payer (make_x402_payer).
-    _extra_capabilities = frozenset(
-        {BROADCAST_SELF, INTENTS_ERC8004, INTENTS_ERC8183, X402_PAY}
-    )
+    _extra_capabilities = frozenset({BROADCAST_SELF, INTENTS_ERC8004, INTENTS_ERC8183, X402_PAY})
 
     def __init__(
         self,
@@ -292,11 +290,7 @@ class TWAKProvider(WalletProvider, IntentExecutor):
                 an error.
         """
         cmd = [self._twak_bin, *args, "--json"]
-        env = (
-            {**os.environ, "HOME": str(self._home)}
-            if self._home is not None
-            else None
-        )
+        env = {**os.environ, "HOME": str(self._home)} if self._home is not None else None
         try:
             proc = subprocess.run(
                 cmd,
@@ -312,7 +306,9 @@ class TWAKProvider(WalletProvider, IntentExecutor):
                 "configure it (see TWAKProvider prerequisites)."
             ) from e
         except subprocess.TimeoutExpired as e:
-            raise RuntimeError(f"twak command timed out after {self._timeout}s: {_redact(cmd)}") from e
+            raise RuntimeError(
+                f"twak command timed out after {self._timeout}s: {_redact(cmd)}"
+            ) from e
 
         if proc.returncode != 0:
             # Quirk (field-verified v0.18.0): `x402 quote` exits non-zero on an
@@ -363,10 +359,7 @@ class TWAKProvider(WalletProvider, IntentExecutor):
             )
         else:
             hint = _SETUP_HINT
-        return (
-            f"twak command failed ({_redact(cmd)}): {detail or '<no output>'}. "
-            f"{hint}"
-        )
+        return f"twak command failed ({_redact(cmd)}): {detail or '<no output>'}. {hint}"
 
     @staticmethod
     def _extract_tx_hash(data: dict[str, Any]) -> str | None:
@@ -410,16 +403,9 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         data = self._run(["wallet", "address", "--chain", self._chain])
         addr = data.get("address") or data.get("wallet")
         if not addr:
-            raise RuntimeError(
-                f"twak `wallet address` did not return an address: {data!r}"
-            )
-        if (
-            self._expected_address is not None
-            and addr.lower() != self._expected_address.lower()
-        ):
-            raise WalletIdentityMismatch(
-                expected=self._expected_address, actual=addr
-            )
+            raise RuntimeError(f"twak `wallet address` did not return an address: {data!r}")
+        if self._expected_address is not None and addr.lower() != self._expected_address.lower():
+            raise WalletIdentityMismatch(expected=self._expected_address, actual=addr)
         self._address = addr
 
     @property
@@ -578,13 +564,10 @@ class TWAKProvider(WalletProvider, IntentExecutor):
             signature = "0x" + signature
         digest = "0x" + bytes(defunct_hash_message(text=message)).hex()
         try:
-            recovered = Account.recover_message(
-                encode_defunct(text=message), signature=signature
-            )
+            recovered = Account.recover_message(encode_defunct(text=message), signature=signature)
         except Exception as e:
             raise RuntimeError(
-                f"twak `sign-message` returned a malformed signature "
-                f"({signature[:20]}...): {e}"
+                f"twak `sign-message` returned a malformed signature ({signature[:20]}...): {e}"
             ) from e
         if recovered.lower() != self.address.lower():
             raise RuntimeError(
@@ -809,16 +792,21 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         for entry in metadata:
             args += ["--metadata", f"{entry['key']}={entry['value']}"]
         data = self._run([*args, *self._paymaster_args(), "--chain", self._chain])
-        return self._tx_result(
-            data, agentId=_as_int(data.get("agentId")), owner=data.get("owner")
-        )
+        return self._tx_result(data, agentId=_as_int(data.get("agentId")), owner=data.get("owner"))
 
     def _set_metadata(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         data = self._run(
             [
-                "erc8004", "set-metadata", str(kwargs["agent_id"]),
-                "--key", kwargs["key"], "--value", kwargs["value"],
-                *self._paymaster_args(), "--chain", self._chain,
+                "erc8004",
+                "set-metadata",
+                str(kwargs["agent_id"]),
+                "--key",
+                kwargs["key"],
+                "--value",
+                kwargs["value"],
+                *self._paymaster_args(),
+                "--chain",
+                self._chain,
             ]
         )
         return self._tx_result(data)
@@ -826,9 +814,14 @@ class TWAKProvider(WalletProvider, IntentExecutor):
     def _set_agent_uri(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         data = self._run(
             [
-                "erc8004", "set-uri", str(kwargs["agent_id"]),
-                "--uri", kwargs["agent_uri"],
-                *self._paymaster_args(), "--chain", self._chain,
+                "erc8004",
+                "set-uri",
+                str(kwargs["agent_id"]),
+                "--uri",
+                kwargs["agent_uri"],
+                *self._paymaster_args(),
+                "--chain",
+                self._chain,
             ]
         )
         return self._tx_result(data)
@@ -839,19 +832,29 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         """Run ``twak erc8183 <command> <jobId> [extra...] --chain <chain>``."""
         data = self._run(
             [
-                "erc8183", command, str(job_id), *extra,
-                *self._paymaster_args(), "--chain", self._chain,
+                "erc8183",
+                command,
+                str(job_id),
+                *extra,
+                *self._paymaster_args(),
+                "--chain",
+                self._chain,
             ]
         )
         return self._tx_result(data)
 
     def _create_job(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         args = [
-            "erc8183", "create-job",
-            "--provider", kwargs["provider"],
-            "--evaluator", kwargs["evaluator"],
-            "--expires-at", str(kwargs["expired_at"]),
-            "--description", kwargs["description"],
+            "erc8183",
+            "create-job",
+            "--provider",
+            kwargs["provider"],
+            "--evaluator",
+            kwargs["evaluator"],
+            "--expires-at",
+            str(kwargs["expired_at"]),
+            "--description",
+            kwargs["description"],
         ]
         hook = kwargs.get("hook")
         if hook and hook.lower() != _ZERO_ADDRESS:
@@ -865,14 +868,20 @@ class TWAKProvider(WalletProvider, IntentExecutor):
 
     def _set_provider(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         return self._erc8183(
-            "set-provider", kwargs["job_id"],
-            "--provider", kwargs["provider"], *self._opt_params(kwargs),
+            "set-provider",
+            kwargs["job_id"],
+            "--provider",
+            kwargs["provider"],
+            *self._opt_params(kwargs),
         )
 
     def _set_budget(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         return self._erc8183(
-            "set-budget", kwargs["job_id"],
-            "--amount", str(kwargs["amount"]), *self._opt_params(kwargs),
+            "set-budget",
+            kwargs["job_id"],
+            "--amount",
+            str(kwargs["amount"]),
+            *self._opt_params(kwargs),
         )
 
     def _fund(self, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -882,10 +891,15 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         # pre-check could not (gaps S-2, shipped).
         data = self._run(
             [
-                "erc8183", "fund", str(kwargs["job_id"]),
-                "--expected-budget", str(kwargs["expected_budget"]),
+                "erc8183",
+                "fund",
+                str(kwargs["job_id"]),
+                "--expected-budget",
+                str(kwargs["expected_budget"]),
                 *self._opt_params(kwargs),
-                *self._paymaster_args(), "--chain", self._chain,
+                *self._paymaster_args(),
+                "--chain",
+                self._chain,
             ]
         )
         result = self._tx_result(data)
@@ -899,8 +913,11 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         # JobInitialised event — the seller role works end-to-end.
         deliverable: bytes = kwargs["deliverable"]
         return self._erc8183(
-            "submit", kwargs["job_id"],
-            "--deliverable", "0x" + deliverable.hex(), *self._opt_params(kwargs),
+            "submit",
+            kwargs["job_id"],
+            "--deliverable",
+            "0x" + deliverable.hex(),
+            *self._opt_params(kwargs),
         )
 
     def _complete(self, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -914,17 +931,13 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         reason: bytes = kwargs.get("reason") or b""
         if reason and reason != _ZERO_REASON:  # twak defaults --reason to zero
             extra = ["--reason", "0x" + reason.hex()]
-        return self._erc8183(
-            command, kwargs["job_id"], *extra, *self._opt_params(kwargs)
-        )
+        return self._erc8183(command, kwargs["job_id"], *extra, *self._opt_params(kwargs))
 
     def _claim_refund(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         return self._erc8183("claim-refund", kwargs["job_id"])
 
     def _register_job(self, kwargs: dict[str, Any]) -> dict[str, Any]:
-        return self._erc8183(
-            "register-job", kwargs["job_id"], "--policy", kwargs["policy"]
-        )
+        return self._erc8183("register-job", kwargs["job_id"], "--policy", kwargs["policy"])
 
     def _settle(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         extra: list[str] = []

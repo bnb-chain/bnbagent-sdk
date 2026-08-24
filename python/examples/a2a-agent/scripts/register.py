@@ -22,9 +22,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parent.parent / os.path.basename(os.environ.get("ENV_FILE", ".env")))
+load_dotenv(
+    Path(__file__).resolve().parent.parent / os.path.basename(os.environ.get("ENV_FILE", ".env"))
+)
 
-from bnbagent import AgentEndpoint, ERC8004Agent, EVMWalletProvider
+from bnbagent import AgentEndpoint, ERC8004Agent, EVMWalletProvider  # noqa: E402
 
 
 def _make_wallet(network: str):

@@ -33,7 +33,12 @@ export type SignableTransaction = TransactionRequestLegacy & {
   chainId: number;
 };
 
-/** Result of {@link WalletProvider.signTransaction}. */
+/**
+ * Result of {@link WalletProvider.signTransaction}.
+ *
+ * For legacy transactions, `v` is the EIP-155 value. For typed transactions,
+ * it is the wire-format y-parity bit (`0n` or `1n`).
+ */
 export interface SignedTx {
   rawTransaction: `0x${string}`;
   hash: `0x${string}`;

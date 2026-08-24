@@ -92,6 +92,7 @@ There is **no shared key store** across providers - each owns its own custody, a
 | `EVMWalletProvider` | `evm` | `~/.bnbagent/wallets/<address>.json` (Keystore V3) |
 | `TWAKProvider` | `twak` | `<home or ~>/.twak/wallet.json` (encrypted mnemonic) + OS keychain / `TWAK_WALLET_PASSWORD` |
 | `MPCWalletProvider` | `mpc` | external MPC enclave (subclass-defined) |
+| `TurnkeyWalletProvider` | `turnkey` | [Turnkey](https://docs.turnkey.com)'s AWS Nitro enclave — the key never leaves it; the agent holds only a local P-256 API key |
 
 The twak CLI exposes no private-key `import`/`export` or `--keystore-path`, so its key cannot be shared with the SDK keystore (or vice versa). Treat "choose a provider" as "choose a custodian"; use `describe()` / `key_location` to report where a wallet's key lives without unifying storage.
 
@@ -102,6 +103,7 @@ from bnbagent.wallets import create_wallet_provider
 
 wallet = create_wallet_provider("evm", password="pw")   # -> EVMWalletProvider
 wallet = create_wallet_provider("twak", chain="bsc")     # -> TWAKProvider
+wallet = TurnkeyWalletProvider.from_env()                # -> TurnkeyWalletProvider (TURNKEY_* env)
 print(wallet.describe())  # {"kind": "twak", "address": "0x..", "key_location": "...",
                           #  "exists": True, "capabilities": ["broadcast.self", ...]}
 ```
@@ -293,6 +295,27 @@ Default `IntentExecutor`. Builds, signs (via the wrapped `WalletProvider`) and b
 - `Intent(name, kwargs, call, value, gas, description)` - a single high-level operation in both semantic and mechanical form.
 - `IntentExecutor.execute(intent) -> dict` - returns at least `{"transactionHash", "receipt"}` (executors may add `agentId`, etc.).
 - `ExecutionContext(web3, paymaster, receipt_timeout)` - the context a pure signer needs to build a `LocalExecutor`.
+
+### `TurnkeyWalletProvider`
+
+Pure signer over [Turnkey](https://docs.turnkey.com)'s remote key-management API: the private key is generated and held inside Turnkey's AWS Nitro enclave and never leaves it; every sign call is an HTTPS activity stamped by a locally held P-256 API key pair (`pip install 'bnbagent[turnkey]'` for the `cryptography` extra, imported lazily on first use). Same capability surface as `EVMWalletProvider` (`sign.*` x3 + `calls.arbitrary` + `paymaster.sponsor`), so ERC-8004/8183 writes ride the default `LocalExecutor` and x402 rides `X402Signer` unchanged.
+
+```python
+from bnbagent.wallets import TurnkeyWalletProvider
+
+# env: TURNKEY_API_PUBLIC_KEY / TURNKEY_API_PRIVATE_KEY / TURNKEY_ORG_ID /
+#      TURNKEY_SIGN_WITH (the wallet account's 0x ADDRESS, not a wallet id)
+wallet = TurnkeyWalletProvider.from_env(expected_chain_id=97)
+```
+
+Operational constraints (the same list as the TypeScript provider):
+
+- **Every successful signature is billed** — free tier 25/month at 1 request/second; pay-as-you-go $0.10/signature. All SDK-side guards (`SigningPolicy`, the `expected_chain_id` pin, input validation) run *before* the API call, so a refusal never costs quota.
+- **Root API keys bypass ALL Turnkey server-side policies** (root quorum). Production deployments need a non-root API user plus an explicit ALLOW policy; this cannot be detected client-side.
+- **Broadcast is never delegated** (Turnkey's managed broadcast is a paid feature) — the default `LocalExecutor` broadcasts over the SDK's own RPC, and the MegaFuel paymaster path works unchanged.
+- EIP-712 payloads are built by this module with the `EIP712Domain` entry always included, and EIP-191 messages are hashed locally and blind-signed (Turnkey's policies cannot see message content — content-level control is the SDK-side policy's job). Supported transactions: legacy + EIP-1559 (no access lists).
+
+Live verification: `TURNKEY_E2E=1 uv run python examples/turnkey_e2e.py` (4 billed signatures; see the script header).
 
 ### `MPCWalletProvider` (stub)
 

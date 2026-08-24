@@ -34,7 +34,10 @@
  *                              storage returns file:// scheme)
  *
  * Global env vars: NETWORK / PRIVATE_KEY / WALLET_PASSWORD / WALLET_ADDRESS
- * / WALLET_KIND.
+ * / WALLET_KIND. With `WALLET_KIND=turnkey` the wallet is built from the
+ * `TURNKEY_*` env vars (`TURNKEY_API_PUBLIC_KEY`, `TURNKEY_API_PRIVATE_KEY`,
+ * `TURNKEY_ORG_ID`, `TURNKEY_SIGN_WITH`, optional `TURNKEY_API_BASE_URL`)
+ * and WALLET_PASSWORD is not required.
  *
  * Payment token address is NOT configurable — it is immutable on the
  * Commerce kernel and fetched at runtime via `ERC8183Client.paymentToken`.
@@ -44,11 +47,14 @@
  * TypeScript port yet).
  */
 
+import { getAddress } from "viem";
 import type { NetworkConfig } from "../config.js";
 import { getEnv } from "../core/envUtil.js";
 import { LocalStorageProvider } from "../storage/localStorageProvider.js";
 import type { StorageProvider } from "../storage/storageProvider.js";
+import { WalletIdentityMismatch } from "../wallets/errors.js";
 import { EVMWalletProvider } from "../wallets/evmWalletProvider.js";
+import { TurnkeyWalletProvider } from "../wallets/turnkey/provider.js";
 import {
   TWAKProvider,
   TWAK_CHAIN_FOR_NETWORK,
@@ -72,8 +78,10 @@ export interface ERC8183ConfigOpts {
   walletPassword?: string;
   /** Select a specific wallet from the keystore directory (by address). */
   walletAddress?: string;
-  /** Select a non-EVM provider (out of scope; `"evm"` / `""` are the only
-   * accepted values — anything else throws). */
+  /** Select the wallet backend: `"evm"` / `""` (keystore), `"twak"`
+   * (self-broadcasting CLI) or `"turnkey"` (remote enclave signer, built
+   * from the `TURNKEY_*` env vars) — anything else throws. Advisory
+   * metadata only when `walletProvider` is supplied directly. */
   walletKind?: string;
   /** Off-chain storage for deliverables. */
   storage?: StorageProvider | null;
@@ -139,6 +147,22 @@ export class ERC8183Config {
         chain,
         ...(this.walletAddress ? { expectedAddress: this.walletAddress } : {}),
       });
+    } else if (kind === "turnkey" && !walletProvider) {
+      // Remote enclave signer, credentials from the TURNKEY_* env vars.
+      // Pin the network's chain id so a mismatching transaction fails
+      // closed before Turnkey's billable API call.
+      walletProvider = TurnkeyWalletProvider.fromEnv({
+        expectedChainId: this.effectiveChainId,
+      });
+      if (
+        this.walletAddress &&
+        getAddress(this.walletAddress) !== walletProvider.address
+      ) {
+        throw new WalletIdentityMismatch({
+          expected: getAddress(this.walletAddress),
+          actual: walletProvider.address,
+        });
+      }
     } else if (kind && kind !== "evm" && !walletProvider) {
       throw new Error(`Unknown wallet kind: ${this.walletKind}`);
     }
@@ -257,8 +281,8 @@ export class ERC8183Config {
     const walletKind = getEnv("WALLET_KIND") ?? "";
 
     // The WALLET_PASSWORD requirement is an EVM-kind concern: a non-EVM
-    // kind (twak) owns its custody end-to-end, so no password is needed
-    // here — the constructor dispatches it to TWAKProvider.
+    // kind (twak, turnkey) owns its custody end-to-end, so no password is
+    // needed here — the constructor dispatches to the matching provider.
     const kind = walletKind.trim().toLowerCase();
     if (kind === "" || kind === "evm") {
       if (!walletPassword) {

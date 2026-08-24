@@ -30,18 +30,19 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from ddgs import DDGS
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from ddgs import DDGS
 
 # Load .env from project root (one level up from src/)
 env_file = os.path.basename(os.environ.get("ENV_FILE", ".env"))
 load_dotenv(Path(__file__).resolve().parent.parent / env_file)
 
 # SDK imports + the example's own HTTP server factory (src/erc8183_server.py)
-from bnbagent.erc8183.config import ERC8183Config
-from erc8183_server import create_erc8183_app
+from erc8183_server import create_erc8183_app  # noqa: E402
+
+from bnbagent.erc8183.config import ERC8183Config  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,7 +57,8 @@ logger = logging.getLogger("blockchain_news")
 # Storage backend — pick ONE of the three options below by uncommenting it.
 
 # (a) Local filesystem (default)
-from bnbagent.storage import LocalStorageProvider
+from bnbagent.storage import LocalStorageProvider  # noqa: E402
+
 _storage = LocalStorageProvider.from_env()
 
 # (b) IPFS via Pinata — set STORAGE_API_KEY (Pinata JWT) in .env first.
@@ -92,7 +94,7 @@ def format_news_results(query: str, raw_results: list[dict]) -> str:
     if not raw_results:
         return f"No news found for query: {query}"
 
-    report = f"# Blockchain News Search Results\n\n"
+    report = "# Blockchain News Search Results\n\n"
     report += f"**Query:** {query}\n"
     report += f"**Results:** {len(raw_results)} items\n\n"
     report += "---\n\n"
@@ -237,7 +239,7 @@ async def search_endpoint(request: SearchRequest):
         )
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # ---------------------------------------------------------------------------
@@ -248,9 +250,9 @@ if __name__ == "__main__":
     import uvicorn
 
     print(f"""
-{'='*55}
+{"=" * 55}
   Blockchain News Agent (ERC-8183 — Mount Mode)
-{'='*55}
+{"=" * 55}
   Port:           {PORT}
   Commerce:       {config.effective_commerce_address}
   Router:         {config.effective_router_address}
@@ -267,7 +269,7 @@ if __name__ == "__main__":
     GET  /              — Service info
     POST /search          — Direct news search
     GET  /erc8183/health     — Health check
-{'='*55}
+{"=" * 55}
 """)
 
     uvicorn.run(app, host="0.0.0.0", port=PORT)

@@ -34,8 +34,8 @@ from typing import Any
 
 from ..config import NetworkConfig, resolve_network
 from ..core.abi_loader import create_web3
-from ..wallets.wallet_provider import WalletProvider
 from ..erc20.client import MinimalERC20Client
+from ..wallets.wallet_provider import WalletProvider
 from .commerce import CommerceClient
 from .policy import PolicyClient
 from .router import RouterClient
@@ -110,9 +110,7 @@ class ERC8183Client:
             )
 
         self._wallet_provider = wallet_provider
-        self.address: str | None = (
-            wallet_provider.address if wallet_provider is not None else None
-        )
+        self.address: str | None = wallet_provider.address if wallet_provider is not None else None
 
         # Gas sponsorship: wire a paymaster into the write path only on
         # networks where MegaFuel sponsors ERC-8183 (testnet today; mainnet
@@ -149,11 +147,7 @@ class ERC8183Client:
         Note: the ERC-20 ``approve`` inside :meth:`fund` runs through the
         ERC-20 client's own self-pay path and is not sponsored here.
         """
-        if (
-            nc.use_paymaster
-            and nc.paymaster_url
-            and nc.chain_id in ERC8183_PAYMASTER_CHAIN_IDS
-        ):
+        if nc.use_paymaster and nc.paymaster_url and nc.chain_id in ERC8183_PAYMASTER_CHAIN_IDS:
             from ..core.paymaster import Paymaster
 
             return Paymaster(paymaster_url=nc.paymaster_url, debug=debug)
@@ -170,9 +164,7 @@ class ERC8183Client:
 
     def _erc20_client(self) -> MinimalERC20Client:
         if self._erc20 is None:
-            self._erc20 = MinimalERC20Client(
-                self.w3, self.payment_token, self._wallet_provider
-            )
+            self._erc20 = MinimalERC20Client(self.w3, self.payment_token, self._wallet_provider)
         return self._erc20
 
     def token_decimals(self) -> int:
@@ -224,13 +216,14 @@ class ERC8183Client:
         if not skip_expiry_check:
             try:
                 import time
+
                 dispute_window = int(self.policy.dispute_window())
                 now = int(time.time())
                 if expired_at - now <= dispute_window:
                     raise ValueError(
                         f"expired_at ({expired_at}) is too close to now ({now}). "
                         f"OptimisticPolicy on this network has dispute_window="
-                        f"{dispute_window}s ({dispute_window/86400:.1f}d), so the "
+                        f"{dispute_window}s ({dispute_window / 86400:.1f}d), so the "
                         f"submit deadline (expired_at - dispute_window = "
                         f"{expired_at - dispute_window}) is already in the past or "
                         f"within seconds. provider.submit() would revert with "
@@ -312,7 +305,9 @@ class ERC8183Client:
             cap = max(amount, floor)
             logger.debug(
                 "[ERC8183Client] topping up allowance: current=%s amount=%s cap=%s",
-                current, amount, cap,
+                current,
+                amount,
+                cap,
             )
             self.approve_payment_token(self.commerce.address, cap)
 
@@ -394,7 +389,9 @@ class ERC8183Client:
             hint_block = self._resolve_submit_block(job_id)
         return self.policy.get_deliverable_url(job_id, hint_block=hint_block)
 
-    def _resolve_submit_block(self, job_id: int, *, lookback: int = 50_000, step: int = 1_000) -> int | None:
+    def _resolve_submit_block(
+        self, job_id: int, *, lookback: int = 50_000, step: int = 1_000
+    ) -> int | None:
         """Find the block where ``JobSubmitted`` was emitted for *job_id*.
 
         Walks backwards from the current head in ``step``-block windows so

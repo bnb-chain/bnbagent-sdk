@@ -41,8 +41,8 @@ async def auto_settle_loop(client: ERC8183Client, poll_interval: int = 15):
 
                 if job.status == JobStatus.SUBMITTED:
                     now = int(time.time())
-                    
-                    # We use expiredAt as the universal escape hatch, but rely on 
+
+                    # We use expiredAt as the universal escape hatch, but rely on
                     # router.settle's internal check for the dispute window.
                     if job.expired_at <= now:
                         logger.debug(f"Job {job_id} expired, waiting for claimRefund flow.")
@@ -53,11 +53,13 @@ async def auto_settle_loop(client: ERC8183Client, poll_interval: int = 15):
                         # client.settle() delegates to router.settle(), which pulls the verdict.
                         # If the dispute window hasn't passed, it will revert.
                         result = await asyncio.to_thread(client.settle, job_id)
-                        tx_hash = result.get('transactionHash')
+                        tx_hash = result.get("transactionHash")
                         logger.info(f"Successfully settled Job {job_id}. Tx: {tx_hash}")
                     except Exception as e:
                         # Expected to fail if the dispute window is still open
-                        logger.debug(f"Cannot settle Job {job_id} yet (likely dispute window open): {e}")
+                        logger.debug(
+                            f"Cannot settle Job {job_id} yet (likely dispute window open): {e}"
+                        )
                 else:
                     # Optional: log other statuses at debug level to avoid console spam
                     pass
@@ -82,12 +84,13 @@ async def main():
 
     # persist=True is default, allowing the keystore to be saved for future runs
     wallet = EVMWalletProvider(
-        password=wallet_password, 
-        private_key=private_key, 
+        password=wallet_password,
+        private_key=private_key,
     )
     client = ERC8183Client(wallet, network=network)
 
     await auto_settle_loop(client)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

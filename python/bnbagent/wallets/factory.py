@@ -20,18 +20,21 @@ from typing import Any
 from .wallet_provider import WalletProvider
 
 #: Wallet kinds the factory can construct. Mirrors each provider's ``kind``.
-SUPPORTED_WALLET_KINDS: tuple[str, ...] = ("evm", "twak", "mpc")
+SUPPORTED_WALLET_KINDS: tuple[str, ...] = ("evm", "twak", "mpc", "turnkey")
 
 
 def create_wallet_provider(kind: str, **kwargs: Any) -> WalletProvider:
     """Construct a :class:`WalletProvider` for ``kind``.
 
     Args:
-        kind: Provider identifier (case-insensitive): ``"evm"``, ``"twak"``
-            or ``"mpc"``.
+        kind: Provider identifier (case-insensitive): ``"evm"``, ``"twak"``,
+            ``"mpc"`` or ``"turnkey"``.
         **kwargs: Forwarded verbatim to the provider constructor. Required
             arguments differ per kind — e.g. ``EVMWalletProvider`` needs
-            ``password=...``; ``TWAKProvider`` accepts ``chain=...``.
+            ``password=...``; ``TWAKProvider`` accepts ``chain=...``;
+            ``TurnkeyWalletProvider`` needs the ``organization_id`` /
+            ``sign_with`` / ``api_public_key`` / ``api_private_key``
+            credentials (or use ``TurnkeyWalletProvider.from_env()``).
 
     Returns:
         The constructed provider.
@@ -55,6 +58,10 @@ def create_wallet_provider(kind: str, **kwargs: Any) -> WalletProvider:
         from .mpc_wallet_provider import MPCWalletProvider
 
         return MPCWalletProvider(**kwargs)
+    if normalized == "turnkey":
+        from .turnkey import TurnkeyWalletProvider
+
+        return TurnkeyWalletProvider(**kwargs)
 
     raise ValueError(
         f"Unknown wallet kind {kind!r}. "

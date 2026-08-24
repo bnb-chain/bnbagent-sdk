@@ -8,9 +8,8 @@ from the loop's retry queue; permanent failures (4xx) must not retry.
 import time
 from unittest.mock import AsyncMock, MagicMock
 
-from fastapi.testclient import TestClient
-
 from erc8183_server import create_erc8183_app
+from fastapi.testclient import TestClient
 
 
 def _fake_state(job_ops):
@@ -32,9 +31,7 @@ def _job_ops(verify_results, pending_jobs):
     ops.agent_address = "0x" + "aa" * 20
     ops.get_pending_jobs = get_pending_jobs
     ops.verify_job = AsyncMock(side_effect=verify_results)
-    ops.submit_result = AsyncMock(
-        return_value={"success": True, "txHash": "0x" + "de" * 32}
-    )
+    ops.submit_result = AsyncMock(return_value={"success": True, "txHash": "0x" + "de" * 32})
     return ops
 
 
@@ -62,7 +59,12 @@ def _valid(job_id=1):
 
 class TestFundedPollRetry:
     def test_transient_verify_failure_retries_then_succeeds(self, monkeypatch):
-        transient = {"valid": False, "error": "Temporary chain/RPC error", "error_code": "chain_unavailable", "retryable": True}
+        transient = {
+            "valid": False,
+            "error": "Temporary chain/RPC error",
+            "error_code": "chain_unavailable",
+            "retryable": True,
+        }
         ops = _job_ops(
             verify_results=[transient, _valid()],
             pending_jobs=[{"jobId": 1}],
@@ -80,7 +82,11 @@ class TestFundedPollRetry:
         assert ops.submit_result.await_count == 1
 
     def test_permanent_failure_does_not_retry(self, monkeypatch):
-        permanent = {"valid": False, "error": "This agent is not the provider", "error_code": "not_assigned"}
+        permanent = {
+            "valid": False,
+            "error": "This agent is not the provider",
+            "error_code": "not_assigned",
+        }
         ops = _job_ops(
             verify_results=lambda job_id: permanent,
             pending_jobs=[{"jobId": 1}],
@@ -94,7 +100,12 @@ class TestFundedPollRetry:
         ops.submit_result.assert_not_called()
 
     def test_retries_are_capped(self, monkeypatch):
-        transient = {"valid": False, "error": "Temporary chain/RPC error", "error_code": "chain_unavailable", "retryable": True}
+        transient = {
+            "valid": False,
+            "error": "Temporary chain/RPC error",
+            "error_code": "chain_unavailable",
+            "retryable": True,
+        }
         ops = _job_ops(
             verify_results=lambda job_id: transient,
             pending_jobs=[{"jobId": 1}],
@@ -110,7 +121,10 @@ class TestFundedPollRetry:
 
 
 class TestResponseRoute:
-    """/response maps get_response's semantic error_code (chain_unavailable→503 vs not_found→404), BUG-06."""
+    """Test mapping get_response errors to HTTP statuses (BUG-06).
+
+    ``chain_unavailable`` maps to 503 and ``not_found`` maps to 404.
+    """
 
     def _http(self, get_response_result, monkeypatch):
         ops = MagicMock()
@@ -124,7 +138,12 @@ class TestResponseRoute:
 
     def test_unresolvable_deliverable_forwards_503(self, monkeypatch):
         http = self._http(
-            {"success": False, "error": "temporarily unresolvable", "error_code": "chain_unavailable", "retryable": True},
+            {
+                "success": False,
+                "error": "temporarily unresolvable",
+                "error_code": "chain_unavailable",
+                "retryable": True,
+            },
             monkeypatch,
         )
         assert http.get("/erc8183/job/1/response").status_code == 503
@@ -137,7 +156,5 @@ class TestResponseRoute:
         assert http.get("/erc8183/job/1/response").status_code == 404
 
     def test_missing_error_code_defaults_to_404(self, monkeypatch):
-        http = self._http(
-            {"success": False, "error": "No storage configured"}, monkeypatch
-        )
+        http = self._http({"success": False, "error": "No storage configured"}, monkeypatch)
         assert http.get("/erc8183/job/1/response").status_code == 404

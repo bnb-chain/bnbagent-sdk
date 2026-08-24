@@ -223,9 +223,7 @@ def test_rejects_missing_validity_fields_when_required():
 
 
 def _twa_fields_with(name, key, new_value):
-    return [
-        {**f, key: new_value} if f["name"] == name else f for f in TWA_FIELDS
-    ]
+    return [{**f, key: new_value} if f["name"] == name else f for f in TWA_FIELDS]
 
 
 def test_rejects_value_declared_as_int256():
@@ -296,8 +294,10 @@ def test_canonical_shape_still_accepted():
 def test_receive_with_authorization_shares_the_canonical_shape():
     p = SigningPolicy.strict_default()
     domain = {
-        "name": "United Stables", "version": "1",
-        "chainId": BSC_MAINNET_CHAIN_ID, "verifyingContract": U_MAINNET,
+        "name": "United Stables",
+        "version": "1",
+        "chainId": BSC_MAINNET_CHAIN_ID,
+        "verifyingContract": U_MAINNET,
     }
     types = {
         "EIP712Domain": EIP712DOMAIN_FIELDS,
@@ -312,8 +312,10 @@ def test_unknown_primary_type_is_not_shape_pinned():
     """
     p = SigningPolicy.permissive(allow_in_production=True)
     domain = {
-        "name": "Custom", "version": "1",
-        "chainId": BSC_MAINNET_CHAIN_ID, "verifyingContract": U_MAINNET,
+        "name": "Custom",
+        "version": "1",
+        "chainId": BSC_MAINNET_CHAIN_ID,
+        "verifyingContract": U_MAINNET,
     }
     types = {
         "EIP712Domain": EIP712DOMAIN_FIELDS,
@@ -350,8 +352,10 @@ def test_eip712domain_shape_is_not_pinned():
         {"name": "salt", "type": "bytes32"},
     ]
     domain = {
-        "name": "United Stables", "version": "1",
-        "chainId": BSC_MAINNET_CHAIN_ID, "verifyingContract": U_MAINNET,
+        "name": "United Stables",
+        "version": "1",
+        "chainId": BSC_MAINNET_CHAIN_ID,
+        "verifyingContract": U_MAINNET,
     }
     types = {
         "EIP712Domain": odd_domain_fields,
@@ -430,7 +434,10 @@ def test_extend_overrides_scalars():
 def test_permissive_passes_unknown_domain_and_unknown_type():
     p = SigningPolicy.permissive()
     domain = {"chainId": 999, "verifyingContract": "0x" + "f" * 40}
-    types = {"EIP712Domain": EIP712DOMAIN_FIELDS, "SomethingExotic": [{"name": "x", "type": "uint256"}]}
+    types = {
+        "EIP712Domain": EIP712DOMAIN_FIELDS,
+        "SomethingExotic": [{"name": "x", "type": "uint256"}],
+    }
     msg = {"x": 1}
     # Must not raise
     pt = check(p, domain, types, msg, now=NOW)
@@ -463,9 +470,10 @@ def test_policy_violation_carries_structured_diagnostics():
 
 
 def test_infer_primary_type_returns_non_domain():
-    assert infer_primary_type(
-        {"EIP712Domain": [], "TransferWithAuthorization": []}
-    ) == "TransferWithAuthorization"
+    assert (
+        infer_primary_type({"EIP712Domain": [], "TransferWithAuthorization": []})
+        == "TransferWithAuthorization"
+    )
 
 
 def test_infer_primary_type_rejects_empty():
@@ -482,15 +490,11 @@ def test_infer_primary_type_rejects_multiple():
 
 
 def test_eip3009_types_set_contents():
-    assert EIP3009_TYPES == frozenset(
-        {"TransferWithAuthorization", "ReceiveWithAuthorization"}
-    )
+    assert EIP3009_TYPES == frozenset({"TransferWithAuthorization", "ReceiveWithAuthorization"})
 
 
 def test_permit_unbounded_types_contents():
-    assert PERMIT_UNBOUNDED_TYPES == frozenset(
-        {"Permit", "PermitSingle", "PermitBatch"}
-    )
+    assert PERMIT_UNBOUNDED_TYPES == frozenset({"Permit", "PermitSingle", "PermitBatch"})
 
 
 # ── Serialization ────────────────────────────────────────────────────────
@@ -562,8 +566,9 @@ def test_str_handles_empty_policy_cleanly():
 # ── permissive() env guard ──────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("env_value", ["prod", "production", "live", "mainnet-prod",
-                                       "PROD", " Production ", "LIVE"])
+@pytest.mark.parametrize(
+    "env_value", ["prod", "production", "live", "mainnet-prod", "PROD", " Production ", "LIVE"]
+)
 def test_permissive_refuses_in_production(monkeypatch, env_value):
     monkeypatch.setenv("ENV", env_value)
     with pytest.raises(RuntimeError, match="indicates production"):

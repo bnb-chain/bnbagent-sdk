@@ -46,6 +46,10 @@ vi.mock("node:os", async (importOriginal) => {
 });
 
 const { ERC8183Config } = await import("../src/erc8183/config.js");
+const { TurnkeyWalletProvider } = await import(
+  "../src/wallets/turnkey/provider.js"
+);
+const { WalletIdentityMismatch } = await import("../src/wallets/errors.js");
 
 const VALID_PK = `0x${"cd".repeat(32)}`;
 const VALID_PASSWORD = "test-password";
@@ -85,6 +89,11 @@ const ENV_KEYS = [
   "ERC8183_SERVICE_PRICE",
   "ERC8183_AGENT_URL",
   "STORAGE_LOCAL_PATH",
+  "TURNKEY_API_PUBLIC_KEY",
+  "TURNKEY_API_PRIVATE_KEY",
+  "TURNKEY_ORG_ID",
+  "TURNKEY_SIGN_WITH",
+  "TURNKEY_API_BASE_URL",
 ] as const;
 
 let saved: Record<string, string | undefined>;
@@ -255,6 +264,73 @@ describe("ERC8183Config: wallet_kind", () => {
     expect(() => new ERC8183Config({ walletKind: "mpc" })).toThrow(
       /Unknown wallet kind: mpc/,
     );
+  });
+});
+
+describe("ERC8183Config: wallet_kind=turnkey", () => {
+  const TURNKEY_SIGN_WITH = `0x${"7a".repeat(20)}`;
+
+  const setTurnkeyEnv = () => {
+    process.env.TURNKEY_API_PUBLIC_KEY = "02".repeat(33);
+    process.env.TURNKEY_API_PRIVATE_KEY = "aa".repeat(32);
+    process.env.TURNKEY_ORG_ID = "org-123";
+    process.env.TURNKEY_SIGN_WITH = TURNKEY_SIGN_WITH;
+  };
+
+  it("dispatches to TurnkeyWalletProvider pinned to the network's chain id", () => {
+    setTurnkeyEnv();
+    const config = new ERC8183Config({ walletKind: "turnkey" });
+    expect(config.walletProvider).toBeInstanceOf(TurnkeyWalletProvider);
+    const provider = config.walletProvider as InstanceType<
+      typeof TurnkeyWalletProvider
+    >;
+    // Default network is bsc-testnet → fail-closed pin to 97.
+    expect(provider.expectedChainId).toBe(97);
+    expect(provider.address.toLowerCase()).toBe(TURNKEY_SIGN_WITH);
+  });
+
+  it("surfaces the missing TURNKEY_* env vars in one error", () => {
+    process.env.TURNKEY_API_PUBLIC_KEY = "02".repeat(33);
+    expect(() => new ERC8183Config({ walletKind: "turnkey" })).toThrow(
+      /missing required env vars: TURNKEY_API_PRIVATE_KEY, TURNKEY_ORG_ID, TURNKEY_SIGN_WITH/,
+    );
+  });
+
+  it("fails closed on a WALLET_ADDRESS drift (WalletIdentityMismatch)", () => {
+    setTurnkeyEnv();
+    expect(
+      () =>
+        new ERC8183Config({
+          walletKind: "turnkey",
+          walletAddress: `0x${"9b".repeat(20)}`,
+        }),
+    ).toThrow(WalletIdentityMismatch);
+  });
+
+  it("accepts a matching WALLET_ADDRESS anchor (case-insensitive)", () => {
+    setTurnkeyEnv();
+    const config = new ERC8183Config({
+      walletKind: "turnkey",
+      walletAddress: TURNKEY_SIGN_WITH.toUpperCase().replace("0X", "0x"),
+    });
+    expect(config.walletProvider).toBeInstanceOf(TurnkeyWalletProvider);
+  });
+
+  it("treats wallet_kind as advisory when a wallet_provider is supplied", () => {
+    const stub = new StubWallet(`0x${"11".repeat(20)}`);
+    const config = new ERC8183Config({
+      walletKind: "turnkey",
+      walletProvider: stub,
+    });
+    expect(config.walletProvider).toBe(stub);
+  });
+
+  it("fromEnv builds a turnkey wallet without requiring WALLET_PASSWORD", () => {
+    setTurnkeyEnv();
+    process.env.WALLET_KIND = "turnkey";
+    const config = ERC8183Config.fromEnv(new FakeStorage());
+    expect(config.walletProvider).toBeInstanceOf(TurnkeyWalletProvider);
+    expect(config.walletKind).toBe("turnkey");
   });
 });
 

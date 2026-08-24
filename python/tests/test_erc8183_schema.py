@@ -71,7 +71,10 @@ class TestDeliverableManifest:
         d1 = _manifest_dict()
         d2 = _manifest_dict()
         d2["job_id"] = 999
-        assert DeliverableManifest.from_dict(d1).manifest_hash() != DeliverableManifest.from_dict(d2).manifest_hash()
+        assert (
+            DeliverableManifest.from_dict(d1).manifest_hash()
+            != DeliverableManifest.from_dict(d2).manifest_hash()
+        )
 
     def test_verify_returns_true_for_matching_hash(self):
         m = DeliverableManifest.from_dict(_manifest_dict())

@@ -523,7 +523,7 @@ export class AltanaWalletProvider extends WalletProvider {
    * `isValidSignature`/`transferFrom` fails on-chain, not here.
    *
    * `payerKwargs`: {@link AltanaX402PayerOptions} (`sessionBudget`,
-   * `fetchImpl`).
+   * `expectedAsset`, `expectedPayTo`, `fetchImpl`).
    */
   override makeX402Payer(
     payerKwargs?: Record<string, unknown>,

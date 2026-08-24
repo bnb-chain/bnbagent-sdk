@@ -34,6 +34,7 @@ from bnbagent.signing import SigningPolicy
 from bnbagent.wallets import (
     EVMWalletProvider,
     ExecutionContext,
+    TurnkeyWalletProvider,
     TWAKProvider,
     UnsupportedWalletOperation,
     WalletProvider,
@@ -51,6 +52,8 @@ from bnbagent.wallets.capabilities import (
 )
 from bnbagent.wallets.local_executor import LocalExecutor
 
+from .turnkey_fake import FakeTurnkeyClient
+
 PW = "test-secure-password-123"
 _TEST_KEY = "0x" + "ab" * 32
 
@@ -64,6 +67,9 @@ EXPECTED_CAPABILITIES: dict[str, frozenset[str]] = {
     ),
     "twak": frozenset(
         {SIGN_MESSAGE, BROADCAST_SELF, INTENTS_ERC8004, INTENTS_ERC8183, X402_PAY}
+    ),
+    "turnkey": frozenset(
+        {SIGN_MESSAGE, SIGN_TRANSACTION, SIGN_TYPED_DATA, CALLS_ARBITRARY, PAYMASTER_SPONSOR}
     ),
 }
 
@@ -93,6 +99,19 @@ def _make_provider(kind: str) -> WalletProvider:
             private_key=_TEST_KEY,
             persist=False,
             signing_policy=SigningPolicy.permissive(),
+        )
+    if kind == "turnkey":
+        # Remote signer with the fake in-process enclave (signs with the
+        # shared test key, never dials the network). Permissive policy for
+        # the same reason as evm above.
+        fake = FakeTurnkeyClient(_TEST_KEY)
+        return TurnkeyWalletProvider(
+            organization_id="org-conformance",
+            sign_with=fake.address,
+            api_public_key="02" + "ab" * 32,
+            api_private_key="cd" * 32,
+            signing_policy=SigningPolicy.permissive(),
+            client=fake,
         )
     return TWAKProvider(chain="bsc")
 

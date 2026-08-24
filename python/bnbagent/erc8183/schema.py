@@ -102,9 +102,9 @@ class DeliverableManifest:
         response = d["response"]
         if "content" not in response:
             raise ValueError("DeliverableManifest.response must contain 'content'")
-        for field in ("job_id", "chain_id", "contracts"):
-            if field not in d:
-                raise ValueError(f"DeliverableManifest missing required field: '{field}'")
+        for field_name in ("job_id", "chain_id", "contracts"):
+            if field_name not in d:
+                raise ValueError(f"DeliverableManifest missing required field: '{field_name}'")
         return cls(
             version=version,
             job_id=d["job_id"],
@@ -180,18 +180,14 @@ class JobDescription:
 
         negotiated_at = d["negotiated_at"]
         if not isinstance(negotiated_at, int) or isinstance(negotiated_at, bool):
-            raise ValueError(
-                f"negotiated_at must be int, got {type(negotiated_at).__name__}"
-            )
+            raise ValueError(f"negotiated_at must be int, got {type(negotiated_at).__name__}")
 
         quote_expires_at = d.get("quote_expires_at")
         if quote_expires_at is not None and (
-            not isinstance(quote_expires_at, int)
-            or isinstance(quote_expires_at, bool)
+            not isinstance(quote_expires_at, int) or isinstance(quote_expires_at, bool)
         ):
             raise ValueError(
-                f"quote_expires_at must be int or null, "
-                f"got {type(quote_expires_at).__name__}"
+                f"quote_expires_at must be int or null, got {type(quote_expires_at).__name__}"
             )
 
         return cls(

@@ -48,12 +48,17 @@ Issues = "https://github.com/bnb-chain/bnbagent-sdk/issues"
 ipfs = [
     "httpx>=0.25.0",
 ]
+turnkey = [
+    "cryptography>=42.0.0",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-mock>=3.11.0",
     "pytest-asyncio>=0.23.0",
     "httpx>=0.25.0",
     "ruff>=0.4.0",
+    # Exercises the turnkey extra's stamper in CI.
+    "cryptography>=42.0.0",
 ]
 examples = [
     "aiosqlite>=0.19",

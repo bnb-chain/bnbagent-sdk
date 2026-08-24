@@ -157,15 +157,32 @@ await fundedJobWatcher(
 
 Every protocol client signs through the `WalletProvider` seam - swap the provider, keep the protocol code:
 
-|  | `EVMWalletProvider` | `TWAKProvider` | `AltanaWalletProvider` |
-| --- | --- | --- | --- |
-| Custody | local key, Keystore V3 on disk | [twak CLI](../docs/twak.md) keystore (`~/.twak`) + OS keychain; the key never enters this process | EIP-7702 wallet == your EOA; the [Altana capability reference](../docs/altana.md) covers the relay and session model |
-| Capabilities | `sign.message/transaction/typed_data`, `calls.arbitrary`, `paymaster.sponsor` | `sign.message`, `broadcast.self`, `intents.erc8004`, `intents.erc8183`, `x402.pay` (no raw signing, no arbitrary calls) | `broadcast.self`, `calls.arbitrary`, `intents.erc8004`, `intents.erc8183` (+ `x402.pay` in session mode) |
-| Agent containment | `SigningPolicy` (in-process) | fixed command menu + out-of-process custody; twak's own `--max-payment` hard cap | on-chain session keys: call whitelist + spend caps + expiry, revocable in one tx |
-| Gas | self-paid or MegaFuel-sponsored | mainnet auto-sponsored by twak; the SDK forwards its paymaster as `--paymaster-url` (twak >= v0.20.0), so sponsored testnet writes work | relay fronts gas, recovers it from the wallet (MegaFuel not involved) |
-| ERC-8183 quote signing | EIP-191 via `walletProvider` | - | ERC-1271 via `sessionQuoteSigner()`; no admin EOA or generic message-signing authority in the agent |
-| x402 payments | `X402Signer` | Delegated `TwakX402Payer` (`makeX402Payer()`, five-point quote precheck) | Session-key payer (`makeX402Payer()`, SDK >= 0.4.0) after a one-time admin setup: `approveX402SignatureChecker` + bounded `setPermit2Allowance`; **receiving** at the wallet works fine |
-| Extra install | - | `npm i @trustwallet/cli` (>= 0.20.0; the local `node_modules/.bin/twak` is auto-resolved) | `pnpm add @altananetwork/sdk` (optional peer, GPL-3.0-or-later, lazily imported) |
+|  | `EVMWalletProvider` | `TWAKProvider` | `AltanaWalletProvider` | `TurnkeyWalletProvider` |
+| --- | --- | --- | --- | --- |
+| Custody | local key, Keystore V3 on disk | [twak CLI](../docs/twak.md) keystore (`~/.twak`) + OS keychain; the key never enters this process | EIP-7702 wallet == your EOA; the [Altana capability reference](../docs/altana.md) covers the relay and session model | key generated + held in [Turnkey](https://docs.turnkey.com)'s AWS Nitro enclave, never leaves it; the agent holds only a local P-256 API key that stamps each request |
+| Capabilities | `sign.message/transaction/typed_data`, `calls.arbitrary`, `paymaster.sponsor` | `sign.message`, `broadcast.self`, `intents.erc8004`, `intents.erc8183`, `x402.pay` (no raw signing, no arbitrary calls) | `broadcast.self`, `calls.arbitrary`, `intents.erc8004`, `intents.erc8183` (+ `x402.pay` in session mode) | `sign.message/transaction/typed_data`, `calls.arbitrary`, `paymaster.sponsor` (same surface as EVM, remote signer) |
+| Agent containment | `SigningPolicy` (in-process) | fixed command menu + out-of-process custody; twak's own `--max-payment` hard cap | on-chain session keys: call whitelist + spend caps + expiry, revocable in one tx | `SigningPolicy` (in-process, pre-billing) + Turnkey's server-side policy engine — **root API keys bypass the server layer entirely; production needs a non-root API user + explicit ALLOW policy** |
+| Gas | self-paid or MegaFuel-sponsored | mainnet auto-sponsored by twak; the SDK forwards its paymaster as `--paymaster-url` (twak >= v0.20.0), so sponsored testnet writes work | relay fronts gas, recovers it from the wallet (MegaFuel not involved) | self-paid or MegaFuel-sponsored (broadcast is always the SDK's own RPC; Turnkey's managed broadcast is a paid feature the provider never uses) |
+| ERC-8183 quote signing | EIP-191 via `walletProvider` | - | ERC-1271 via `sessionQuoteSigner()`; no admin EOA or generic message-signing authority in the agent | EIP-191 via `walletProvider` (1 billed signature per quote) |
+| x402 payments | `X402Signer` | Delegated `TwakX402Payer` (`makeX402Payer()`, five-point quote precheck) | Session-key payer (`makeX402Payer()`, SDK >= 0.4.0) after a one-time admin setup: `approveX402SignatureChecker` + bounded `setPermit2Allowance`; **receiving** at the wallet works fine | `X402Signer` — works, but $0.10/signature (PAYG) at 1 req/s makes high-frequency buying uneconomical; seller/low-frequency signing is the sweet spot |
+| Extra install | - | `npm i @trustwallet/cli` (>= 0.20.0; the local `node_modules/.bin/twak` is auto-resolved) | `pnpm add @altananetwork/sdk` (optional peer, GPL-3.0-or-later, lazily imported) | `pnpm add @turnkey/sdk-server @turnkey/viem` (optional peers, lazily imported) |
+
+Turnkey quick start (remote enclave signing; every successful signature is billed — free tier 25/month at 1 request/second, pay-as-you-go $0.10/signature):
+
+```ts
+import { TurnkeyWalletProvider } from "@bnbagent/sdk/wallets";
+
+// env: TURNKEY_API_PUBLIC_KEY / TURNKEY_API_PRIVATE_KEY / TURNKEY_ORG_ID /
+//      TURNKEY_SIGN_WITH (the wallet account's 0x ADDRESS, not a wallet id)
+const wallet = TurnkeyWalletProvider.fromEnv({ expectedChainId: 97 });
+
+const jobs = await ERC8183Client.create({
+  walletProvider: wallet,
+  network: "bsc-testnet",
+});
+```
+
+The provider is a pure signer: ERC-8004/8183 writes ride the default `LocalExecutor`, x402 rides `X402Signer`, and the MegaFuel paymaster path works unchanged (enclave-verified with `gasPrice=0` legacy signing). All SDK-side guards — `SigningPolicy`, the `expectedChainId` pin, input validation — run *before* the billable API call, so a refusal never costs quota. One vendor quirk is patched inside `signTypedData`: `@turnkey/viem` <= 0.14.34 silently serializes the EIP-712 domain as `{}` when the `types` object lacks an explicit `EIP712Domain` entry, so the provider always injects it (the signature would otherwise bind an empty domain). Live verification: `TURNKEY_E2E=1 pnpm run e2e:turnkey` (5 billed signatures; see `examples/turnkey/e2e.ts`).
 
 Session quick start (admin grants once, agent runs with the session):
 

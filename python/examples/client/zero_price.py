@@ -21,15 +21,14 @@ import time
 
 from _helpers import banner, expiry_for, load_settings, make_client, make_primary_client
 
-from bnbagent.erc8183 import DeliverableManifest, JobStatus, SCHEMA_VERSION
+from bnbagent.erc8183 import SCHEMA_VERSION, DeliverableManifest, JobStatus
 
 
 def main() -> None:
     s = load_settings()
     if not s.provider_pk:
         raise RuntimeError(
-            "PROVIDER_PRIVATE_KEY is required for the zero-price flow: "
-            "submit is provider-only."
+            "PROVIDER_PRIVATE_KEY is required for the zero-price flow: submit is provider-only."
         )
     client = make_primary_client(s)  # EVM or twak, per WALLET_KIND
     provider = make_client(s.provider_pk, s.network)
@@ -71,7 +70,8 @@ def main() -> None:
         },
         response={"content": f"zero-price result for job {job_id}", "content_type": "text/plain"},
     )
-    deliverable_url = "https://example.invalid/manifest.json"  # placeholder — these scripts test on-chain flow only
+    # Placeholder: these scripts test on-chain flow only.
+    deliverable_url = "https://example.invalid/manifest.json"
     provider.submit(job_id, manifest.manifest_hash(), {"deliverable_url": deliverable_url})
     print("[provider] submit OK (Funded -> Submitted)")
 

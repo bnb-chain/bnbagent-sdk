@@ -17,7 +17,7 @@ import time
 
 from _helpers import banner, expiry_for, load_settings, make_client, make_primary_client
 
-from bnbagent.erc8183 import DeliverableManifest, JobStatus, SCHEMA_VERSION
+from bnbagent.erc8183 import SCHEMA_VERSION, DeliverableManifest, JobStatus
 
 
 def main() -> None:
@@ -27,7 +27,7 @@ def main() -> None:
     banner("STALEMATE — dispute without quorum, refund at expiry")
 
     decimals = client.token_decimals()
-    budget = 1 * (10 ** decimals)
+    budget = 1 * (10**decimals)
 
     # Smallest expiry that still admits a valid submit: disputeWindow + 1 min.
     expired_at = expiry_for(client, slack_minutes=1)
@@ -56,11 +56,15 @@ def main() -> None:
             "router": provider.router.address,
             "policy": provider.policy.address,
         },
-        response={"content": f"stalemate test result for job {job_id}", "content_type": "text/plain"},
+        response={
+            "content": f"stalemate test result for job {job_id}",
+            "content_type": "text/plain",
+        },
     )
     # In production: upload manifest.to_dict() to IPFS/storage first, then pass the URL.
     # deliverable_url = storage.upload(manifest.to_dict(), f"job-{job_id}.json")
-    deliverable_url = "https://example.invalid/manifest.json"  # placeholder — these scripts test on-chain flow only
+    # Placeholder: these scripts test on-chain flow only.
+    deliverable_url = "https://example.invalid/manifest.json"
     provider.submit(job_id, manifest.manifest_hash(), {"deliverable_url": deliverable_url})
     print("[provider] submit OK")
 

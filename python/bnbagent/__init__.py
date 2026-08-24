@@ -26,24 +26,10 @@ Tier 2 (import from subpackage):
 
 from __future__ import annotations
 
-# ERC-8183 — only essential public API
-from .erc8183 import ERC8183Client, JobStatus, Verdict
+from ._version import __version__
 
 # Configuration
 from .config import NetworkConfig
-
-# ERC-8004 Identity Registry
-from .erc8004 import AgentEndpoint, ERC8004Agent
-
-# Exceptions
-from .exceptions import (
-    BNBAgentError,
-    ERC8004PartialRegistrationError,
-    TransactionPendingError,
-)
-
-# Opt-in .env loading (never called at import time — applications opt in)
-from .core.env import load_env
 
 # Transaction tuning (gas-price floor + receipt timeout) — public knobs that
 # replace any downstream monkey-patching of SDK internals.
@@ -53,18 +39,34 @@ from .core.contract_mixin import (
     set_min_gas_price_wei,
 )
 
-# Wallets
-from .wallets import EVMWalletProvider, WalletProvider
+# Opt-in .env loading (never called at import time — applications opt in)
+from .core.env import load_env
+
+# ERC-8004 Identity Registry
+from .erc8004 import AgentEndpoint, ERC8004Agent
+
+# ERC-8183 — only essential public API
+from .erc8183 import ERC8183Client, JobStatus, Verdict
+
+# Exceptions
+from .exceptions import (
+    BNBAgentError,
+    ERC8004PartialRegistrationError,
+    TransactionPendingError,
+)
 
 # Signing policy
 from .signing import PolicyViolation, SigningPolicy
 
+# Wallets
+from .wallets import EVMWalletProvider, WalletProvider
+
 # x402 payment signer
 from .x402 import X402Signer
 
-from ._version import __version__
 __all__ = [
     # Core
+    "__version__",
     "NetworkConfig",
     "BNBAgentError",
     "TransactionPendingError",

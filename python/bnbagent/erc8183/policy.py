@@ -17,8 +17,6 @@ import json
 import logging
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 from web3 import Web3
 from web3.contract import Contract
 
@@ -28,6 +26,8 @@ from ..exceptions import RpcRangeLimitError
 from ..wallets.intents import ERC8183_DISPUTE, ERC8183_VOTE_REJECT, Intent
 from ..wallets.wallet_provider import WalletProvider
 from .types import Verdict
+
+logger = logging.getLogger(__name__)
 
 
 def _load_abi() -> list:
@@ -125,7 +125,7 @@ class PolicyClient(ContractClientMixin):
         ``hint_block`` via Commerce's ``JobSubmitted`` event.  If called directly
         without ``hint_block`` a 1 000-block fallback window is used.
         """
-        _TIGHT = 10    # blocks either side when hint is known
+        _TIGHT = 10  # blocks either side when hint is known
         _FALLBACK = 1_000
 
         try:
@@ -159,7 +159,9 @@ class PolicyClient(ContractClientMixin):
                     f"JobInitialised scan for job {job_id} hit the RPC "
                     f"range/rate limit; retry later"
                 ) from exc
-            logger.warning("[PolicyClient] get_deliverable_url(%s) event query failed: %s", job_id, exc)
+            logger.warning(
+                "[PolicyClient] get_deliverable_url(%s) event query failed: %s", job_id, exc
+            )
             return None
 
         if not logs:
@@ -188,9 +190,7 @@ class PolicyClient(ContractClientMixin):
         the snapshot is the threshold ``check`` will use, even if an admin
         later calls ``setQuorum`` — protects pending disputes from
         retroactive admin adjustments."""
-        return self._call_with_retry(
-            self.contract.functions.disputeQuorumSnapshot(job_id)
-        )
+        return self._call_with_retry(self.contract.functions.disputeQuorumSnapshot(job_id))
 
     def active_voter_count(self) -> int:
         return self._call_with_retry(self.contract.functions.activeVoterCount())

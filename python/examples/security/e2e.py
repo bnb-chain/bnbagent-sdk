@@ -40,13 +40,10 @@ from bnbagent.networks import (
 )
 from bnbagent.x402 import (
     X402AmountExceededError,
-    X402PolicyError,
     X402RecipientMismatchError,
 )
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s | %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s | %(message)s")
 log = logging.getLogger("security_e2e")
 
 # ── Fixtures ───────────────────────────────────────────────────────────────
@@ -56,8 +53,12 @@ PW = "e2e-secure-pw"
 # if you need a deterministic key for a specific repro.
 PK = os.environ.get("E2E_PRIVATE_KEY") or Account.create().key.hex()
 U_TESTNET = get_address(BSC_TESTNET_CHAIN_ID).payment_token
-log.info("U testnet address: %s (name=%r version=%r)",
-         U_TESTNET, PAYMENT_TOKEN_EIP712_NAME, PAYMENT_TOKEN_EIP712_VERSION)
+log.info(
+    "U testnet address: %s (name=%r version=%r)",
+    U_TESTNET,
+    PAYMENT_TOKEN_EIP712_NAME,
+    PAYMENT_TOKEN_EIP712_VERSION,
+)
 
 EIP712_DOMAIN_FIELDS = [
     {"name": "name", "type": "string"},
@@ -126,7 +127,9 @@ def assert_1_default_signs_u_token_and_round_trips(tmpdir: str) -> None:
     # Round-trip recover
     message_types = {k: v for k, v in types.items() if k != "EIP712Domain"}
     signable = encode_typed_data(
-        domain_data=domain, message_types=message_types, message_data=msg,
+        domain_data=domain,
+        message_types=message_types,
+        message_data=msg,
     )
     recovered = Account.recover_message(signable, signature=signed["signature"])
     assert recovered == wallet.address, (recovered, wallet.address)
@@ -200,7 +203,10 @@ def assert_5_x402signer_rejects_overvalue(tmpdir: str) -> None:
     msg = twa_message(wallet, value=2_000_000)
     try:
         signer.sign_payment(
-            domain=domain, types=types, message=msg, expected_to=msg["to"],
+            domain=domain,
+            types=types,
+            message=msg,
+            expected_to=msg["to"],
         )
     except X402AmountExceededError as e:
         log.info("  → X402AmountExceededError as expected: %s", e)
@@ -218,7 +224,9 @@ def assert_6_x402signer_rejects_recipient_mismatch(tmpdir: str) -> None:
     msg = twa_message(wallet, to="0x" + "b" * 40)
     try:
         signer.sign_payment(
-            domain=domain, types=types, message=msg,
+            domain=domain,
+            types=types,
+            message=msg,
             expected_to="0x" + "9" * 40,  # different!
         )
     except X402RecipientMismatchError as e:

@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 
 _DEFAULT_MAX_RESPONSE_BYTES = 5 * 1024 * 1024  # 5 MB
-_DEFAULT_MAX_METADATA_BYTES = 256 * 1024       # 256 KB
+_DEFAULT_MAX_METADATA_BYTES = 256 * 1024  # 256 KB
 
 
 def _read_int_env(key: str, default: int) -> int:
@@ -53,7 +53,10 @@ def _read_int_env(key: str, default: int) -> int:
     except ValueError:
         logger.warning(
             "[ERC8183JobOps] %s%s=%r invalid, using default %d",
-            ERC8183_ENV_PREFIX, key, raw, default,
+            ERC8183_ENV_PREFIX,
+            key,
+            raw,
+            default,
         )
         return default
 
@@ -67,8 +70,14 @@ def _max_metadata_bytes() -> int:
 
 
 _TRANSIENT_ERROR_KEYWORDS = (
-    "timeout", "connection", "network", "rpc",
-    "429", "too many requests", "rate limit", "limit exceeded",
+    "timeout",
+    "connection",
+    "network",
+    "rpc",
+    "429",
+    "too many requests",
+    "rate limit",
+    "limit exceeded",
 )
 
 # ── Semantic error codes (transport-neutral) ──
@@ -80,17 +89,17 @@ _TRANSIENT_ERROR_KEYWORDS = (
 # Retry contract: error dicts carry ``"retryable": True`` only for transient
 # failures (``chain_unavailable``, ``internal_error``); absence means the
 # failure is permanent and retrying cannot succeed.
-ERR_BUDGET_TOO_LOW = "budget_too_low"        # budget < service_price
-ERR_NOT_ASSIGNED = "not_assigned"            # job.provider != this agent
-ERR_NOT_FOUND = "not_found"                  # job / stored response missing
-ERR_JOB_EXPIRED = "job_expired"              # past job.expiredAt
-ERR_WRONG_STATUS = "wrong_status"            # job not in the required status
+ERR_BUDGET_TOO_LOW = "budget_too_low"  # budget < service_price
+ERR_NOT_ASSIGNED = "not_assigned"  # job.provider != this agent
+ERR_NOT_FOUND = "not_found"  # job / stored response missing
+ERR_JOB_EXPIRED = "job_expired"  # past job.expiredAt
+ERR_WRONG_STATUS = "wrong_status"  # job not in the required status
 ERR_DESCRIPTION_INVALID = "description_invalid"  # malformed on-chain description (fail closed)
 ERR_SUBMIT_DEADLINE_PASSED = "submit_deadline_passed"  # past expiredAt - disputeWindow
 ERR_PAYLOAD_TOO_LARGE = "payload_too_large"  # response/metadata size cap hit
-ERR_INTERNAL = "internal_error"              # unexpected failure (retryable)
+ERR_INTERNAL = "internal_error"  # unexpected failure (retryable)
 ERR_CHAIN_UNAVAILABLE = "chain_unavailable"  # transient chain/RPC trouble (retryable)
-ERR_TX_PENDING = "tx_pending"                # tx broadcast but unconfirmed (NOT retryable)
+ERR_TX_PENDING = "tx_pending"  # tx broadcast but unconfirmed (NOT retryable)
 
 
 def _exc_error_fields(exc: Exception) -> dict[str, Any]:
@@ -262,23 +271,19 @@ class ERC8183JobOps:
                 return {
                     "success": False,
                     "error": (
-                        f"response_content size {actual_resp} bytes exceeds "
-                        f"limit {max_resp} bytes"
+                        f"response_content size {actual_resp} bytes exceeds limit {max_resp} bytes"
                     ),
                     "error_code": ERR_PAYLOAD_TOO_LARGE,
                 }
 
             if metadata is not None:
                 max_meta = _max_metadata_bytes()
-                actual_meta = len(
-                    json.dumps(metadata, separators=(",", ":")).encode("utf-8")
-                )
+                actual_meta = len(json.dumps(metadata, separators=(",", ":")).encode("utf-8"))
                 if actual_meta > max_meta:
                     return {
                         "success": False,
                         "error": (
-                            f"metadata size {actual_meta} bytes exceeds "
-                            f"limit {max_meta} bytes"
+                            f"metadata size {actual_meta} bytes exceeds limit {max_meta} bytes"
                         ),
                         "error_code": ERR_PAYLOAD_TOO_LARGE,
                     }
@@ -349,10 +354,14 @@ class ERC8183JobOps:
             # Return a generic message — the raw exception can embed the RPC
             # URL (and its API key) on transport errors. Classify here so
             # callers still get the right status without parsing the message.
-            is_net = any(k in str(exc).lower() for k in ("timeout", "connection", "network", "rpc"))
+            is_net = any(
+                k in str(exc).lower() for k in ("timeout", "connection", "network", "rpc")
+            )
             return {
                 "success": False,
-                "error": "Temporary chain/RPC error" if is_net else "Failed to fetch job from chain",
+                "error": "Temporary chain/RPC error"
+                if is_net
+                else "Failed to fetch job from chain",
                 "error_code": ERR_CHAIN_UNAVAILABLE if is_net else ERR_INTERNAL,
                 "retryable": True,
             }
@@ -387,9 +396,7 @@ class ERC8183JobOps:
 
         try:
             erc8183 = self._get_client()
-            deliverable_url = await asyncio.to_thread(
-                erc8183.get_deliverable_url, job_id
-            )
+            deliverable_url = await asyncio.to_thread(erc8183.get_deliverable_url, job_id)
             if deliverable_url:
                 self._deliverable_urls[job_id] = deliverable_url
                 data = await self._storage.download(deliverable_url)
@@ -406,7 +413,9 @@ class ERC8183JobOps:
                 "retryable": True,
             }
         except Exception as exc:
-            logger.warning(f"[ERC8183JobOps] get_response({job_id}) on-chain fallback failed: {exc}")
+            logger.warning(
+                f"[ERC8183JobOps] get_response({job_id}) on-chain fallback failed: {exc}"
+            )
 
         # A job that has been submitted on-chain MUST have a JobInitialised
         # event, so failing to resolve its URL above (rate-limited RPC,
@@ -475,9 +484,7 @@ class ERC8183JobOps:
             # agent doesn't keep retrying every funded-poll tick on a job whose
             # submit deadline has already passed.
             try:
-                dispute_window = await asyncio.to_thread(
-                    self._get_client().policy.dispute_window
-                )
+                dispute_window = await asyncio.to_thread(self._get_client().policy.dispute_window)
                 submit_deadline = expired_at - int(dispute_window)
                 if now > submit_deadline:
                     return {
@@ -550,7 +557,9 @@ class ERC8183JobOps:
             }
         except Exception as exc:
             logger.error(f"[ERC8183JobOps] verify_job({job_id}) failed: {exc}")
-            is_net = any(k in str(exc).lower() for k in ("timeout", "connection", "network", "rpc"))
+            is_net = any(
+                k in str(exc).lower() for k in ("timeout", "connection", "network", "rpc")
+            )
             return {
                 "valid": False,
                 "error": "Temporary chain/RPC error" if is_net else "Failed to verify job",
@@ -727,7 +736,8 @@ async def funded_job_watcher(
         except Exception as exc:
             logger.error(
                 "[funded_job_watcher] on_funded(%s) failed; will retry: %s",
-                job_id, exc,
+                job_id,
+                exc,
             )
             retry.add(job_id)
             return
@@ -745,9 +755,8 @@ async def funded_job_watcher(
                 fresh = await job_ops.get_job(job_id)
                 if not fresh.get("success"):
                     continue  # transient read error — keep for next tick
-                if (
-                    fresh.get("status") != JobStatus.FUNDED
-                    or fresh.get("expiredAt", 0) <= int(time.time())
+                if fresh.get("status") != JobStatus.FUNDED or fresh.get("expiredAt", 0) <= int(
+                    time.time()
                 ):
                     retry.discard(job_id)  # job moved on — stop retrying
                     continue
@@ -760,9 +769,7 @@ async def funded_job_watcher(
                         continue
                     await _fire(job)
             else:
-                logger.warning(
-                    "[funded_job_watcher] poll error: %s", result.get("error")
-                )
+                logger.warning("[funded_job_watcher] poll error: %s", result.get("error"))
         except Exception as exc:
             logger.error("[funded_job_watcher] iteration failed: %s", exc)
 
@@ -774,4 +781,3 @@ async def funded_job_watcher(
                 continue
         else:
             await asyncio.sleep(interval)
-

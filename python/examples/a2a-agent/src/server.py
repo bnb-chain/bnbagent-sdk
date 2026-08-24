@@ -40,11 +40,13 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-load_dotenv(Path(__file__).resolve().parent.parent / os.path.basename(os.environ.get("ENV_FILE", ".env")))
+load_dotenv(
+    Path(__file__).resolve().parent.parent / os.path.basename(os.environ.get("ENV_FILE", ".env"))
+)
 
-from bnbagent import EVMWalletProvider
-from bnbagent.erc8183 import ERC8183Client, NegotiationHandler
-from bnbagent.utils import RateLimitExceeded, SlidingWindowLimiter
+from bnbagent import EVMWalletProvider  # noqa: E402
+from bnbagent.erc8183 import ERC8183Client, NegotiationHandler  # noqa: E402
+from bnbagent.utils import RateLimitExceeded, SlidingWindowLimiter  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("a2a-agent")
@@ -112,8 +114,8 @@ AGENT_CARD: dict[str, Any] = {
             "id": "negotiate-erc8183-job",
             "name": "Negotiate an ERC-8183 job",
             "description": (
-                "Send a data part {\"skill\": \"negotiate-erc8183-job\", "
-                "\"task_description\": \"...\", \"terms\": {...}} and receive a "
+                'Send a data part {"skill": "negotiate-erc8183-job", '
+                '"task_description": "...", "terms": {...}} and receive a '
                 "wallet-signed quote (price, currency, negotiation_hash, provider_sig). "
                 "Anchor the returned envelope on-chain via createJob."
             ),
@@ -125,7 +127,7 @@ AGENT_CARD: dict[str, Any] = {
             "id": "erc8183-job-status",
             "name": "ERC-8183 job status",
             "description": (
-                "Send {\"skill\": \"erc8183-job-status\", \"job_id\": <int>} for a "
+                'Send {"skill": "erc8183-job-status", "job_id": <int>} for a '
                 "read-only on-chain job lookup."
             ),
             "tags": ["erc8183", "status"],
@@ -162,7 +164,11 @@ def _agent_message(data: dict[str, Any]) -> dict[str, Any]:
 
 def _extract_data_part(message: dict[str, Any]) -> dict[str, Any] | None:
     for part in message.get("parts", []):
-        if isinstance(part, dict) and part.get("kind") == "data" and isinstance(part.get("data"), dict):
+        if (
+            isinstance(part, dict)
+            and part.get("kind") == "data"
+            and isinstance(part.get("data"), dict)
+        ):
             return part["data"]
     return None
 
@@ -197,7 +203,8 @@ async def a2a_endpoint(request: Request):
         task_description = data.get("task_description")
         if not isinstance(terms, dict) or not isinstance(task_description, str):
             return _rpc_error(
-                req_id, -32602,
+                req_id,
+                -32602,
                 "negotiate-erc8183-job requires 'task_description' (string) and 'terms' (object)",
             )
         try:

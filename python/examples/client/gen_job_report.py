@@ -16,43 +16,50 @@ import sys
 import urllib.request
 from pathlib import Path
 
-from dotenv import load_dotenv, dotenv_values
+from dotenv import dotenv_values, load_dotenv
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 
-from bnbagent.erc8183 import ERC8183Client, JobStatus, Verdict
-from bnbagent.erc8183.types import REASON_APPROVED, REASON_REJECTED
-from bnbagent.wallets import EVMWalletProvider
-from bnbagent.config import resolve_network
+from bnbagent.config import resolve_network  # noqa: E402
+from bnbagent.erc8183 import ERC8183Client, JobStatus, Verdict  # noqa: E402
+from bnbagent.erc8183.types import REASON_APPROVED, REASON_REJECTED  # noqa: E402
+from bnbagent.wallets import EVMWalletProvider  # noqa: E402
 
 SCAN_TX = "https://testnet.bscscan.com/tx/0x"
 
 EMOJI: dict[str, str] = {
-    "JobCreated":      "🆕",
-    "BudgetSet":       "💰",
-    "ProviderSet":     "👤",
-    "JobRegistered":   "📋",
-    "JobFunded":       "💵",
-    "JobSubmitted":    "📤",
-    "JobInitialised":  "🗂",
-    "Disputed":        "⚖️",
-    "VoteCast":        "🗳",
-    "QuorumReached":   "✅",
-    "JobSettled":      "🏁",
-    "JobFinalised":    "🏁",
-    "JobCompleted":    "✔️",
-    "JobRejected":     "❌",
-    "JobExpired":      "⏰",
-    "Refunded":        "↩️",
+    "JobCreated": "🆕",
+    "BudgetSet": "💰",
+    "ProviderSet": "👤",
+    "JobRegistered": "📋",
+    "JobFunded": "💵",
+    "JobSubmitted": "📤",
+    "JobInitialised": "🗂",
+    "Disputed": "⚖️",
+    "VoteCast": "🗳",
+    "QuorumReached": "✅",
+    "JobSettled": "🏁",
+    "JobFinalised": "🏁",
+    "JobCompleted": "✔️",
+    "JobRejected": "❌",
+    "JobExpired": "⏰",
+    "Refunded": "↩️",
     "PaymentReleased": "💸",
 }
 
 EVENT_MAP_KEYS = {
     "commerce": [
-        "JobCreated", "BudgetSet", "ProviderSet", "JobFunded",
-        "JobSubmitted", "JobCompleted", "JobRejected", "JobExpired",
-        "Refunded", "PaymentReleased",
+        "JobCreated",
+        "BudgetSet",
+        "ProviderSet",
+        "JobFunded",
+        "JobSubmitted",
+        "JobCompleted",
+        "JobRejected",
+        "JobExpired",
+        "Refunded",
+        "PaymentReleased",
     ],
     "router": ["JobRegistered", "JobSettled", "JobFinalised"],
     "policy": ["Disputed", "JobInitialised", "VoteCast", "QuorumReached"],
@@ -61,9 +68,9 @@ EVENT_MAP_KEYS = {
 
 def _make_client() -> ERC8183Client:
     voter_env = dotenv_values(ROOT.parent / "voter" / ".env")
-    rpc_url   = voter_env.get("RPC_URL")
-    network   = os.environ.get("NETWORK", "bsc-testnet")
-    wallet    = EVMWalletProvider(
+    rpc_url = voter_env.get("RPC_URL")
+    network = os.environ.get("NETWORK", "bsc-testnet")
+    wallet = EVMWalletProvider(
         password="demo",
         private_key=os.environ["PRIVATE_KEY"],
         persist=False,
@@ -75,26 +82,28 @@ def _make_client() -> ERC8183Client:
 
 
 def _collect_events(client: ERC8183Client, job_id: int) -> list[dict]:
-    w3     = client.commerce.w3
+    w3 = client.commerce.w3
     latest = w3.eth.block_number
 
     submit_block = client._resolve_submit_block(job_id)
     if submit_block is not None:
         from_block = max(0, submit_block - 5_000)
-        to_block   = min(latest, submit_block + 5_000)
+        to_block = min(latest, submit_block + 5_000)
     else:
         from_block = max(0, latest - 1_000)
-        to_block   = latest
+        to_block = latest
 
     contract_map = {
         "Commerce": client.commerce.contract,
-        "Router":   client.router.contract,
-        "Policy":   client.policy.contract,
+        "Router": client.router.contract,
+        "Policy": client.policy.contract,
     }
 
     events: list[dict] = []
     for (contract_key, contract_label), contract in zip(
-        zip(EVENT_MAP_KEYS.keys(), contract_map.keys()), contract_map.values()
+        zip(EVENT_MAP_KEYS.keys(), contract_map.keys(), strict=True),
+        contract_map.values(),
+        strict=True,
     ):
         for ev_name in EVENT_MAP_KEYS[contract_key]:
             try:
@@ -104,13 +113,15 @@ def _collect_events(client: ERC8183Client, job_id: int) -> list[dict]:
                     argument_filters={"jobId": job_id},
                 )
                 for log in logs:
-                    events.append({
-                        "block":    log["blockNumber"],
-                        "tx":       log["transactionHash"].hex(),
-                        "contract": contract_label,
-                        "name":     ev_name,
-                        "args":     dict(log["args"]),
-                    })
+                    events.append(
+                        {
+                            "block": log["blockNumber"],
+                            "tx": log["transactionHash"].hex(),
+                            "contract": contract_label,
+                            "name": ev_name,
+                            "args": dict(log["args"]),
+                        }
+                    )
             except Exception as exc:
                 print(f"  [warn] {contract_label}.{ev_name}: {exc}", file=sys.stderr)
 
@@ -120,16 +131,21 @@ def _collect_events(client: ERC8183Client, job_id: int) -> list[dict]:
 
 _block_ts_cache: dict[int, int] = {}
 
+
 def _block_ts(w3, blk: int) -> int:
     if blk not in _block_ts_cache:
         _block_ts_cache[blk] = w3.eth.get_block(blk)["timestamp"]
     return _block_ts_cache[blk]
 
+
 def _utc(ts: int) -> str:
-    return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    return datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).strftime(
+        "%Y-%m-%d %H:%M:%S UTC"
+    )
 
 
 _receipt_cache: dict[str, str] = {}
+
 
 def _caller(w3, tx_hash: str) -> str:
     if tx_hash not in _receipt_cache:
@@ -148,14 +164,14 @@ def _resolve_deliverable(client: ERC8183Client, job_id: int) -> tuple[str | None
 
     gateway = os.environ.get("STORAGE_GATEWAY_URL", "https://gateway.pinata.cloud/ipfs/")
     if url.startswith("ipfs://"):
-        fetch_url = gateway.rstrip("/") + "/" + url[len("ipfs://"):]
+        fetch_url = gateway.rstrip("/") + "/" + url[len("ipfs://") :]
     elif url.startswith(("http://", "https://")):
         fetch_url = url
     else:
         return url, None
 
     try:
-        raw  = urllib.request.urlopen(fetch_url, timeout=15).read()
+        raw = urllib.request.urlopen(fetch_url, timeout=15).read()
         text = raw.decode("utf-8", errors="replace")
         if len(text) > 2048:
             text = text[:2048] + "\n... (truncated — see URL above for full content)"
@@ -169,11 +185,35 @@ def _compute_fund_flow(events: list[dict], commerce_addr: str) -> list[dict]:
     for e in events:
         a = e["args"]
         if e["name"] == "JobFunded":
-            flows.append({"dir": "Escrowed",  "from": a["client"],   "to": commerce_addr, "amount": a["amount"], "event": "JobFunded"})
+            flows.append(
+                {
+                    "dir": "Escrowed",
+                    "from": a["client"],
+                    "to": commerce_addr,
+                    "amount": a["amount"],
+                    "event": "JobFunded",
+                }
+            )
         elif e["name"] == "Refunded":
-            flows.append({"dir": "Refunded",  "from": commerce_addr, "to": a["client"],   "amount": a["amount"], "event": "Refunded"})
+            flows.append(
+                {
+                    "dir": "Refunded",
+                    "from": commerce_addr,
+                    "to": a["client"],
+                    "amount": a["amount"],
+                    "event": "Refunded",
+                }
+            )
         elif e["name"] == "PaymentReleased":
-            flows.append({"dir": "Released",  "from": commerce_addr, "to": a["provider"], "amount": a["amount"], "event": "PaymentReleased"})
+            flows.append(
+                {
+                    "dir": "Released",
+                    "from": commerce_addr,
+                    "to": a["provider"],
+                    "amount": a["amount"],
+                    "event": "PaymentReleased",
+                }
+            )
     return flows
 
 
@@ -215,15 +255,15 @@ def _render(
     response_body: str | None,
     fund_flows: list[dict],
 ) -> str:
-    w3       = client.commerce.w3
+    w3 = client.commerce.w3
     decimals = client.token_decimals()
-    symbol   = client.token_symbol()
+    symbol = client.token_symbol()
     chain_id = client.network.chain_id
-    now      = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    now = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-    rv     = client.policy.reject_votes(job_id)
+    rv = client.policy.reject_votes(job_id)
     quorum = client.policy.vote_quorum()
-    disp   = client.policy.disputed(job_id)
+    disp = client.policy.disputed(job_id)
     try:
         verdict, _ = client.policy.check(job_id)
         verdict_str = verdict.name
@@ -231,21 +271,22 @@ def _render(
         verdict_str = "N/A"
 
     exp_utc = _utc(job.expired_at)
-    now_ts  = int(datetime.datetime.now(tz=datetime.timezone.utc).timestamp())
+    now_ts = int(datetime.datetime.now(tz=datetime.timezone.utc).timestamp())
     if now_ts < job.expired_at:
         exp_rel = f"expires in {(job.expired_at - now_ts) // 60} min"
     else:
         exp_rel = f"expired {(now_ts - job.expired_at) // 60} min ago"
 
     L: list[str] = []
-    def l(s: str = "") -> None:
+
+    def l(s: str = "") -> None:  # noqa: E743 - concise local Markdown line builder
         L.append(s)
 
     l(f"# Job {job_id} — On-chain Timeline Report")
     l()
     l(f"> Generated: {now}  ")
     l(f"> Network: BSC Testnet (chain_id={chain_id})  ")
-    l(f"> Explorer: https://testnet.bscscan.com")
+    l("> Explorer: https://testnet.bscscan.com")
     l()
     l("---")
     l()
@@ -276,7 +317,7 @@ def _render(
     l(f"| rejectVotes | `{rv} / {quorum}` |")
     l(f"| verdict | `{verdict_str}` |")
     l(f"| disputed | `{disp}` |")
-    if job.deliverable and job.deliverable != b'\x00' * 32:
+    if job.deliverable and job.deliverable != b"\x00" * 32:
         l(f"| deliverable hash (on-chain) | `0x{job.deliverable.hex()}` |")
     l()
     l("---")
@@ -285,11 +326,11 @@ def _render(
     l("## Timeline")
     l()
     for ev in events:
-        blk      = ev["block"]
-        tx       = ev["tx"]
-        utc      = _utc(_block_ts(w3, blk))
-        emoji    = EMOJI.get(ev["name"], "📌")
-        c_from   = _caller(w3, tx)
+        blk = ev["block"]
+        tx = ev["tx"]
+        utc = _utc(_block_ts(w3, blk))
+        emoji = EMOJI.get(ev["name"], "📌")
+        c_from = _caller(w3, tx)
 
         l(f"### {emoji} `{ev['name']}` — {ev['contract']} — block {blk} — {utc}")
         l()
@@ -313,11 +354,11 @@ def _render(
     if deliverable_url:
         l(f"- **deliverable_url**: `{deliverable_url}`")
         if deliverable_url.startswith("ipfs://"):
-            cid     = deliverable_url[len("ipfs://"):]
+            cid = deliverable_url[len("ipfs://") :]
             gateway = os.environ.get("STORAGE_GATEWAY_URL", "https://gateway.pinata.cloud/ipfs/")
             l(f"- **CID**: `{cid}`")
             l(f"- **Gateway URL**: {gateway.rstrip('/')}/{cid}")
-        if job.deliverable and job.deliverable != b'\x00' * 32:
+        if job.deliverable and job.deliverable != b"\x00" * 32:
             l(f"- **Manifest hash (on-chain)**: `0x{job.deliverable.hex()}`")
         l()
         if response_body:
@@ -331,7 +372,10 @@ def _render(
         else:
             l("> Response body could not be fetched.")
     else:
-        l("> deliverable_url not found (job may not be submitted yet, or event is outside the scan window).")
+        l(
+            "> deliverable_url not found (job may not be submitted yet, "
+            "or event is outside the scan window)."
+        )
     l()
     l("---")
     l()
@@ -347,8 +391,10 @@ def _render(
         l()
 
         provider_received = sum(f["amount"] for f in fund_flows if f["event"] == "PaymentReleased")
-        client_refunded   = sum(f["amount"] for f in fund_flows if f["event"] == "Refunded")
-        client_spent      = sum(f["amount"] for f in fund_flows if f["event"] == "JobFunded") - client_refunded
+        client_refunded = sum(f["amount"] for f in fund_flows if f["event"] == "Refunded")
+        client_spent = (
+            sum(f["amount"] for f in fund_flows if f["event"] == "JobFunded") - client_refunded
+        )
 
         l(f"> **Provider received**: {provider_received / 10**decimals:.4f} {symbol}  ")
         l(f"> **Client net cost**: {client_spent / 10**decimals:.4f} {symbol}")
@@ -377,7 +423,7 @@ def _render(
 def main(job_id: int) -> None:
     print(f"Generating job-{job_id}-report.md ...")
     client = _make_client()
-    job    = client.get_job(job_id)
+    job = client.get_job(job_id)
     print(f"  job {job_id}: status={job.status.name}  provider={job.provider}")
 
     print("  Collecting on-chain events ...")
@@ -390,7 +436,7 @@ def main(job_id: int) -> None:
 
     fund_flows = _compute_fund_flow(events, client.commerce.address)
 
-    md  = _render(client, job_id, job, events, deliverable_url, response_body, fund_flows)
+    md = _render(client, job_id, job, events, deliverable_url, response_body, fund_flows)
     out = ROOT / f"job-{job_id}-report.md"
     out.write_text(md, encoding="utf-8")
     print(f"Done: {out}")
