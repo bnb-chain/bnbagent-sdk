@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
 import {
   changelogLogArgs,
@@ -13,6 +14,13 @@ import {
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+const publishWorkflow = readFileSync(
+  new URL("../../.github/workflows/npm-publish.yml", import.meta.url),
+  "utf8",
+);
+const productionJob = publishWorkflow.slice(
+  publishWorkflow.indexOf("\n  production:"),
+);
 
 test("release lock refresh routes installer output away from machine stdout", () => {
   const reported: string[] = [];
@@ -101,6 +109,19 @@ test("release publishes production explicitly under latest", () => {
     "--tag",
     "latest",
   ]);
+});
+
+test("production release versions the package before building it", () => {
+  const prepare = productionJob.indexOf("- name: Prepare or resume version");
+  const build = productionJob.indexOf("- name: Check source and build");
+
+  expect(prepare).toBeGreaterThan(-1);
+  expect(build).toBeGreaterThan(prepare);
+});
+
+test("production release verifies built_with from the installable tarball", () => {
+  expect(productionJob).toContain("npm pack --json");
+  expect(productionJob).toContain("getBuiltWithValue()");
 });
 
 test("publish waits for npm visibility before continuing", () => {
