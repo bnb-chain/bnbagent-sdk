@@ -40,7 +40,7 @@ Details: [`python/bnbagent/wallets/README.md`](./python/bnbagent/wallets/README.
 
 ### Bring your own MPC custody
 
-`mpc` is a recognised wallet kind (`SUPPORTED_WALLET_KINDS = ("evm", "twak", "mpc")`) but is a **stub by design**. The SDK deliberately ships no in-process MPC implementation: threshold-key custody, audit trails, and policy enforcement belong in a dedicated provider (Coinbase CDP, Fireblocks, Web3Auth, and similar), which already solves them at the enclave level.
+`mpc` is a recognised wallet kind (`SUPPORTED_WALLET_KINDS = ("evm", "twak", "mpc", "turnkey")`) but is a **stub by design**. The SDK deliberately ships no in-process MPC implementation: threshold-key custody, audit trails, and policy enforcement belong in a dedicated provider (Coinbase CDP, Fireblocks, Web3Auth, and similar), which already solves them at the enclave level.
 
 Selecting it fails loudly rather than falling through silently:
 
