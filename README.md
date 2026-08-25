@@ -1,5 +1,10 @@
 # BNBAgent SDK
 
+[![PyPI](https://img.shields.io/pypi/v/bnbagent?logo=pypi&logoColor=white&label=bnbagent%20%28PyPI%29)](https://pypi.org/project/bnbagent/)
+[![npm](https://img.shields.io/npm/v/%40bnbagent%2Fsdk?logo=npm&label=%40bnbagent%2Fsdk%20%28npm%29)](https://www.npmjs.com/package/@bnbagent/sdk)
+[![Python](https://img.shields.io/pypi/pyversions/bnbagent)](https://pypi.org/project/bnbagent/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+
 BNBAgent provides first-class Python and TypeScript SDKs for building on-chain AI agents on BNB Chain - register identities, negotiate, accept jobs, deliver work, and get paid trustlessly through on-chain escrow.
 
 Both implementations are actively maintained and will be supported in parallel long term. Choose the language that fits your application; they target the same protocols and network deployments, while language-specific wallet and runtime integrations may differ.
@@ -15,10 +20,14 @@ The SDK exposes two core capabilities:
 
 The Python and TypeScript SDKs live in the same repository and ship independently. Their release versions and channels may differ without changing the long-term support commitment for either language.
 
-| Directory | Language | Package | Support |
-| --- | --- | --- | --- |
-| [`python/`](./python) | Python | [`bnbagent`](https://pypi.org/project/bnbagent/) on PyPI | First-class, long-term |
-| [`typescript/`](./typescript) | TypeScript | [`@bnbagent/sdk`](https://www.npmjs.com/package/@bnbagent/sdk) on npm | First-class, long-term |
+| Directory | Language | Package | Current version | Support |
+| --- | --- | --- | --- | --- |
+| [`python/`](./python) | Python | [`bnbagent`](https://pypi.org/project/bnbagent/) on PyPI | [![PyPI](https://img.shields.io/pypi/v/bnbagent?label=%20)](https://pypi.org/project/bnbagent/) | First-class, long-term |
+| [`typescript/`](./typescript) | TypeScript | [`@bnbagent/sdk`](https://www.npmjs.com/package/@bnbagent/sdk) on npm | [![npm](https://img.shields.io/npm/v/%40bnbagent%2Fsdk?label=%20)](https://www.npmjs.com/package/@bnbagent/sdk) | First-class, long-term |
+
+The two badges above are live: because Python and TypeScript ship independently, they will
+often show different numbers. That is expected and does not indicate that either language is
+behind — see the release-channel note above.
 
 Shared, language-neutral material lives at the root:
 

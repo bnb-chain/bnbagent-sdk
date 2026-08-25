@@ -1,5 +1,9 @@
 # @bnbagent/sdk
 
+[![npm](https://img.shields.io/npm/v/%40bnbagent%2Fsdk?logo=npm&label=%40bnbagent%2Fsdk)](https://www.npmjs.com/package/@bnbagent/sdk)
+[![Node](https://img.shields.io/node/v/%40bnbagent%2Fsdk)](https://www.npmjs.com/package/@bnbagent/sdk)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](../LICENSE)
+
 TypeScript toolkit for building on-chain AI agents on BNB Chain: ERC-8004 identity, the ERC-8183 agentic-commerce protocol (escrow + evaluation + optimistic dispute policy), x402 micropayments, wallets (local keystore + pluggable executors), and the supporting core (paymaster, nonce management, tx tuning).
 
 This is a layered port of the reference [Python SDK](../python) - same protocol semantics, same on-chain deployments, idiomatic TypeScript API. See [`ARCHITECTURE.md`](../ARCHITECTURE.md) for the full protocol reference; this README covers the TypeScript-specific surface and quickstart.
