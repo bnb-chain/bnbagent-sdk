@@ -154,6 +154,12 @@ def fund_job(quote: dict) -> int | None:
     if not buyer_key:
         print("[on-chain] BUYER_PRIVATE_KEY not set — stopping after quote (chain-free run)")
         return None
+    expected_provider = os.getenv("EXPECTED_PROVIDER_ADDRESS")
+    if not expected_provider:
+        raise SystemExit(
+            "EXPECTED_PROVIDER_ADDRESS is required before funding; obtain it from "
+            "trusted ERC-8004 discovery or operator configuration, not the quote"
+        )
 
     import time
 
@@ -166,7 +172,11 @@ def fund_job(quote: dict) -> int | None:
     wallet = EVMWalletProvider(password=buyer_password, private_key=buyer_key)
     client = ERC8183Client(wallet_provider=wallet, network=NETWORK)
 
-    provider = quote["provider_address"]
+    verdict = client.verify_negotiation_quote(quote, expected_provider=expected_provider)
+    if not verdict.valid:
+        raise SystemExit(f"provider quote verification failed: {verdict.reason}")
+
+    provider = expected_provider
     price = int(quote["response"]["terms"]["price"])
     # Anchor the SAME signed terms on-chain so provider_sig stays verifiable:
     # ecrecover(negotiation_hash, provider_sig) == job.provider.

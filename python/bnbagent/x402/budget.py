@@ -4,17 +4,15 @@ Tracks cumulative spending per checksum-normalized token contract within
 the lifetime of a single X402Signer instance. Caps are configured at
 construction.
 
-Concurrency model (since v0.4.1): the canonical safe-under-concurrency API
-is :meth:`reserve` + :meth:`rollback`. ``reserve`` does an atomic
+Concurrency model: the only mutation API is :meth:`reserve` +
+:meth:`rollback`. ``reserve`` does an atomic
 check-and-increment under the tracker's ``Lock``; the caller does the slow
 work (e.g. ``wallet.sign_typed_data``) **outside** the lock and calls
 ``rollback`` if anything fails. This keeps the "rejected signs never
 consume budget" invariant while preventing two concurrent callers from
-both passing a budget check and over-spending the cap.
-
-The older :meth:`would_exceed` + :meth:`commit` pair is preserved for
-backward compatibility but is **not atomic** between the two calls — do
-not use it from concurrent code paths.
+both passing a budget check and over-spending the cap. The former
+``would_exceed`` + ``commit`` pair was removed because exposing a race-unsafe
+alternative made accidental misuse possible.
 """
 
 from __future__ import annotations
@@ -68,40 +66,6 @@ class SessionBudgetTracker:
 
     def spent(self, token: str) -> int:
         return self._spent.get(Web3.to_checksum_address(token), 0)
-
-    def would_exceed(self, token: str, amount: int) -> bool:
-        """Read-only predicate.
-
-        ⚠️ Race-unsafe in concurrent code: a True/False answer here can be
-        invalidated by a parallel ``commit`` / ``reserve`` before the caller
-        acts on it. Use :meth:`reserve` for the atomic check-and-increment.
-        """
-        cs = Web3.to_checksum_address(token)
-        cap = self._caps.get(cs)
-        if cap is None:
-            return False
-        return self._spent.get(cs, 0) + int(amount) > cap
-
-    def commit(self, token: str, amount: int) -> None:
-        """Record a successful spend (increment under lock, no cap check).
-
-        Does not test the cap — that is the caller's job via
-        :meth:`would_exceed`. It does still reject a negative ``amount``,
-        so "unconditional" applies to the cap only (SRC-1314).
-
-        ⚠️ Race-unsafe when paired with a separate :meth:`would_exceed`
-        check — the gap between check and commit is exactly the TOCTOU
-        window. Use :meth:`reserve` for new code; ``commit`` is retained
-        for backwards compatibility.
-
-        Raises:
-            X402BudgetExhaustedError: If ``amount`` is negative (see
-                :meth:`reserve` for why).
-        """
-        cs = Web3.to_checksum_address(token)
-        amt = _non_negative(amount)
-        with self._lock:
-            self._spent[cs] = self._spent.get(cs, 0) + amt
 
     def reserve(self, token: str, amount: int) -> None:
         """Atomic check-and-increment for the session budget.

@@ -35,6 +35,7 @@ class TestEVMWalletProvider:
         assert wallet.address == expected
         assert wallet.source == "imported"
         assert (wdir / f"{expected}.json").is_file()
+        assert not hasattr(wallet, "_password")
 
     def test_import_private_key_without_0x(self, wdir):
         wallet = EVMWalletProvider(password=PW, private_key="a" * 64, wallets_dir=wdir)
@@ -225,12 +226,18 @@ class TestEVMWalletProvider:
 
     def test_export_keystore(self, wdir):
         wallet = EVMWalletProvider(password=PW, private_key=PK, wallets_dir=wdir)
-        ks = wallet.export_keystore()
+        ks = wallet.export_keystore(PW)
         assert ks["version"] == 3
         assert "crypto" in ks
         # Verify roundtrip
         recovered = Account.from_key(Account.decrypt(ks, PW))
         assert recovered.address == wallet.address
+
+    def test_destroy_releases_the_live_account(self, wdir):
+        wallet = EVMWalletProvider(password=PW, private_key=PK, wallets_dir=wdir)
+        wallet.destroy()
+        with pytest.raises(RuntimeError, match="destroyed"):
+            _ = wallet.address
 
     def test_get_wallet_info(self, wdir):
         wallet = EVMWalletProvider(password=PW, private_key=PK, wallets_dir=wdir)

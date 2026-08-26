@@ -14,14 +14,17 @@ Altana support is currently available only in the TypeScript SDK.
 pnpm add @altananetwork/sdk
 ```
 
-The supported peer range is `>=0.3.3 <0.6.0`. Some provider features require a newer version:
+The supported and tested release is exactly `0.7.1`:
 
-| Feature | Minimum `@altananetwork/sdk` version |
-| --- | --- |
-| Mainnet execution and registered sessions | `0.3.3` |
-| ERC-8183 quote signing, x402 payments, and native balance reads | `0.4.0` |
-| `bnb-testnet`, ERC-20 balance reads, ephemeral sessions, and `registerSessionKey` | `0.5.0` |
-| Current BSC testnet relay endpoint | `0.5.1` |
+```bash
+pnpm add @altananetwork/sdk@0.7.1
+```
+
+The repository pins that version in its lockfile, checks the mirrored vendor
+types during `pnpm typecheck`, and validates the required runtime exports when
+the optional module is loaded. Treat every vendor-version change as a security
+change: review its source and changelog, regenerate the lockfile, then run the
+Altana type-compatibility, unit, and testnet E2E suites before changing the pin.
 
 ## Admin and session modes
 

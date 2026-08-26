@@ -311,6 +311,7 @@ See [`examples/client/`](examples/client/) for the five canonical flows (happy, 
 | `ERC8183_SERVICE_PRICE` | No | `1000000000000000000` (1 U) | Minimum acceptable budget, in raw units. |
 | `ERC8183_FUNDED_POLL_INTERVAL` | No | `30` | Seconds between funded-job poll passes (agent-server). |
 | `ERC8183_NEGOTIATE_RATE_LIMIT` | No | `120` | Max `/negotiate` requests per window per client IP (agent-server). |
+| `ERC8183_NEGOTIATE_GLOBAL_RATE_LIMIT` | No | `1200` | Process-wide `/negotiate` budget per window (agent-server). |
 | `ERC8183_NEGOTIATE_RATE_WINDOW` | No | `60` | Sliding-window length for `/negotiate` rate limit, in seconds (agent-server). |
 | `ERC8183_MAX_RESPONSE_BYTES` | No | `5242880` (5 MB) | Cap on `response_content` size in `submit_result`. |
 | `ERC8183_MAX_METADATA_BYTES` | No | `262144` (256 KB) | Cap on serialised metadata size in `submit_result`. |
@@ -347,6 +348,8 @@ Transaction signing is abstracted behind the `WalletProvider` ABC (`address`, `s
 - In-memory mode (`persist=False`) - no disk I/O; used internally when configs auto-wrap a `private_key` + `wallet_password` pair.
 - Auto-wrap - `ERC8183Config` (and other `AgentConfig` subclasses) accept `private_key=` directly and wrap it into `EVMWalletProvider(persist=False)` in `__post_init__`, immediately zeroing the plaintext field.
 - Keystores written with `0o600` permissions (directory `0o700`).
+- The construction password is not retained. `export_keystore(password)`
+  requires it explicitly; call `destroy()` when local signing is finished.
 
 **Built-in: `TWAKProvider` (Trust Wallet Agent Kit CLI)** - a self-custody, self-broadcasting wallet whose capabilities differ substantially from `EVMWalletProvider`. **Read [`docs/twak.md`](../docs/twak.md) before swapping in twak.** The key differences:
 
@@ -415,9 +418,15 @@ Payment token address is read from `commerce.paymentToken()` at runtime.
 
 ## Security
 
+Production applications should install from their own reviewed lockfile. The
+published library metadata bounds supported dependency majors, while
+`python/uv.lock` records the exact versions exercised by this repository's CI;
+dependency upgrades are security-relevant changes and should be reviewed as
+such.
+
 ### Wallet & key handling
 
-- **Encrypted keys** - `EVMWalletProvider` uses Keystore V3; plaintext keys are cleared from memory after import.
+- **Encrypted keys** - `EVMWalletProvider` uses Keystore V3 and does not retain the encryption password after construction. Local signing still requires a live private key in process memory; call `destroy()` when finished and use TWAK, Turnkey, HSM, or MPC custody for high-value deployments.
 - **Submit-time verification** - `submit_result()` re-verifies `FUNDED`, assignment, expiry, and `budget >= service_price` before every on-chain submission.
 - **Budget protection** - Underpriced jobs are rejected by `verify_job()` and again at submit time inside `submit_result()` (the HTTP example surfaces this as a 402 response).
 - **Permissionless settle** - `router.settle` is callable by anyone. The SDK does not gatekeep settlement; operators run their own settle script when ready.

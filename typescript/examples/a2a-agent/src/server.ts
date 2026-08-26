@@ -228,6 +228,20 @@ async function main(): Promise<void> {
     rateWindow,
     1,
   );
+  const environment = (
+    process.env.ENV ||
+    process.env.ENVIRONMENT ||
+    process.env.NODE_ENV ||
+    ""
+  )
+    .trim()
+    .toLowerCase();
+  if (["prod", "production", "live", "mainnet"].includes(environment)) {
+    console.warn(
+      "Production is using process-local A2A rate limits; this is safe only " +
+        "for one replica. Enforce an equivalent shared or edge limit before scaling out.",
+    );
+  }
 
   const server = createServer((req, res) => {
     void handle(req, res).catch((error) => {

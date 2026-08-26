@@ -143,7 +143,7 @@ Production wallet provider backed by a local private key with Keystore V3 encryp
 | --- | --- |
 | `__init__(password, private_key=None, persist=True)` | Import a key or load/create an encrypted wallet. |
 | `export_private_key()` | Return the hex private key (handle with care). |
-| `export_keystore()` | Return the Keystore V3 JSON dict. |
+| `export_keystore(password)` | Return a Keystore V3 JSON dict encrypted with the supplied password. The provider does not retain its construction password. |
 | `get_wallet_info()` | Return `{"address": "0x..."}` (no secrets). |
 
 Constructor behavior:

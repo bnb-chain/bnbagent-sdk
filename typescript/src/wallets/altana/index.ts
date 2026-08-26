@@ -35,6 +35,7 @@ export type {
 } from "./provider.js";
 export {
   ALTANA_SDK_PACKAGE,
+  ALTANA_SDK_TESTED_VERSION,
   setAltanaSdkImporter,
 } from "./sdkLoader.js";
 export type { AltanaSdkImporter } from "./sdkLoader.js";

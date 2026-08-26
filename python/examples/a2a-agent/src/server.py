@@ -129,6 +129,18 @@ global_negotiate_limiter = SlidingWindowLimiter(
     window_seconds=_rate_window,
     max_keys=1,
 )
+if (
+    os.getenv("ENV") or os.getenv("ENVIRONMENT") or os.getenv("NODE_ENV") or ""
+).strip().lower() in {
+    "prod",
+    "production",
+    "live",
+    "mainnet",
+}:
+    logger.warning(
+        "Production is using process-local A2A rate limits; this is safe only "
+        "for one replica. Enforce an equivalent shared or edge limit before scaling out."
+    )
 
 # ── A2A surface ──
 

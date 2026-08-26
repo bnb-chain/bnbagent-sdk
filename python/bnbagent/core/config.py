@@ -68,8 +68,9 @@ class AgentConfig:
     private_key + wallet_password
         Auto-wrapped into ``EVMWalletProvider`` in ``__post_init__``.
         Both ``private_key`` and ``wallet_password`` are cleared after
-        wrapping so neither survives in memory on the config object (the
-        provider keeps its own copy of the password).
+        wrapping so neither survives in memory on the config object. The
+        provider retains the live private key needed for local signing, but
+        not the encryption password.
 
     Network
     -------

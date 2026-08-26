@@ -635,6 +635,31 @@ describe("toDict / fromDict", () => {
     );
   });
 
+  it("refuses an unknown-domain bypass deserialized in production", () => {
+    vi.stubEnv("ENV", "production");
+    expect(() => SigningPolicy.fromDict({ allowUnknownDomain: true })).toThrow(
+      /indicates production/,
+    );
+  });
+
+  it("allows an out-of-band production break-glass", () => {
+    vi.stubEnv("ENV", "production");
+    const p = SigningPolicy.fromDict(
+      { allowUnknownDomain: true },
+      { allowInProduction: true },
+    );
+    expect(p.allowUnknownDomain).toBe(true);
+  });
+
+  it.each(["false", "true", 0, 1, null])(
+    "rejects non-boolean allowUnknownDomain=%j",
+    (value) => {
+      expect(() =>
+        SigningPolicy.fromDict({ allowUnknownDomain: value }),
+      ).toThrow(/allowUnknownDomain must be a boolean/);
+    },
+  );
+
   it("rejects a hex-string maxValidityWindowSeconds (must not silently coerce like JS Number())", () => {
     // Number("0x999") === 2457 in JS but Python's int("0x999") raises
     // ValueError; fromDict must fail closed the same way.

@@ -23,6 +23,15 @@ from __future__ import annotations
 
 import time
 from collections import OrderedDict, deque
+from collections.abc import Awaitable
+from typing import Protocol
+
+
+class RateLimiter(Protocol):
+    """Injectable limiter contract for single-process or shared backends."""
+
+    def check(self, key: str) -> None | Awaitable[None]:
+        """Record a hit for ``key`` or raise :class:`RateLimitExceeded`."""
 
 
 class RateLimitExceeded(Exception):

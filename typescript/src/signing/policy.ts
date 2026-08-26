@@ -162,6 +162,21 @@ export class SigningPolicy {
     "mainnet-prod",
   ]);
 
+  private static assertUnknownDomainAllowed(
+    source: string,
+    allowInProduction: boolean,
+  ): string {
+    const envRaw = process.env.ENV || process.env.ENVIRONMENT || "";
+    const env = envRaw.trim().toLowerCase();
+    if (SigningPolicy.PRODUCTION_ENV_MARKERS.has(env) && !allowInProduction) {
+      const markers = [...SigningPolicy.PRODUCTION_ENV_MARKERS].sort();
+      throw new Error(
+        `${source} refused: ENV=${JSON.stringify(envRaw)} indicates production (matches [${markers.join(", ")}]). Pass allowInProduction=true if this is intentional (e.g. break-glass).`,
+      );
+    }
+    return envRaw;
+  }
+
   constructor(fields: SigningPolicyFields = {}) {
     this.#domainAllowlist = new Set(fields.domainAllowlist ?? []);
     this.#primaryTypeAllowlist = new Set(fields.primaryTypeAllowlist ?? []);
@@ -222,14 +237,10 @@ export class SigningPolicy {
    */
   static permissive(opts: { allowInProduction?: boolean } = {}): SigningPolicy {
     const allowInProduction = opts.allowInProduction ?? false;
-    const envRaw = process.env.ENV || process.env.ENVIRONMENT || "";
-    const env = envRaw.trim().toLowerCase();
-    if (SigningPolicy.PRODUCTION_ENV_MARKERS.has(env) && !allowInProduction) {
-      const markers = [...SigningPolicy.PRODUCTION_ENV_MARKERS].sort();
-      throw new Error(
-        `SigningPolicy.permissive() refused: ENV=${JSON.stringify(envRaw)} indicates production (matches [${markers.join(", ")}]). Pass allowInProduction=true if this is intentional (e.g. break-glass).`,
-      );
-    }
+    const envRaw = SigningPolicy.assertUnknownDomainAllowed(
+      "SigningPolicy.permissive()",
+      allowInProduction,
+    );
     console.warn(
       `SigningPolicy.permissive() in use — POLICY DISABLED. This bypasses ALL signing guards; only acceptable in tests. (env=${JSON.stringify(envRaw)}, allowInProduction=${allowInProduction})`,
     );
@@ -321,7 +332,26 @@ export class SigningPolicy {
    *   maxFutureValiditySeconds that isn't strictly integer-coercible (e.g.
    *   hex "0x38" or exponent "1e2" strings) — mirrors Python's `int()`.
    */
-  static fromDict(d: Record<string, unknown>): SigningPolicy {
+  static fromDict(
+    d: Record<string, unknown>,
+    opts: { allowInProduction?: boolean } = {},
+  ): SigningPolicy {
+    const rawAllowUnknown = Object.hasOwn(d, "allowUnknownDomain")
+      ? d.allowUnknownDomain
+      : false;
+    if (typeof rawAllowUnknown !== "boolean") {
+      throw new Error("allowUnknownDomain must be a boolean");
+    }
+    if (rawAllowUnknown) {
+      const allowInProduction = opts.allowInProduction ?? false;
+      const envRaw = SigningPolicy.assertUnknownDomainAllowed(
+        "SigningPolicy.fromDict()",
+        allowInProduction,
+      );
+      console.warn(
+        `SigningPolicy.fromDict() loaded allowUnknownDomain=true — POLICY DOMAIN ALLOWLIST DISABLED. (env=${JSON.stringify(envRaw)}, allowInProduction=${allowInProduction})`,
+      );
+    }
     const rawDomains = (d.domainAllowlist as unknown[] | undefined) ?? [];
     const domainKeys = new Set<string>();
     rawDomains.forEach((entry, i) => {
@@ -343,7 +373,7 @@ export class SigningPolicy {
         (d.validityRequiredPrimaryTypes as string[] | undefined) ?? [],
       maxValidityWindowSeconds: toIntStrict(d.maxValidityWindowSeconds ?? 600),
       maxFutureValiditySeconds: toIntStrict(d.maxFutureValiditySeconds ?? 900),
-      allowUnknownDomain: Boolean(d.allowUnknownDomain ?? false),
+      allowUnknownDomain: rawAllowUnknown,
     });
   }
 

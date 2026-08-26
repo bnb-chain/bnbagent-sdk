@@ -57,6 +57,13 @@ ERC8183_MAX_RESPONSE_BYTES=5242880 response_content cap (5 MB)
 ERC8183_MAX_METADATA_BYTES=262144  metadata cap (256 KB)
 ```
 
+The built-in rate limiters are process-local and are suitable for a single
+replica. Multi-replica deployments can pass application-owned
+`negotiate_limiter` and `global_negotiate_limiter` implementations to
+`create_erc8183_app()` (including an async shared backend), or enforce the
+same per-client and global limits at a trusted edge. Production emits a
+warning when either default remains in use.
+
 The server binds to `127.0.0.1` by default. Set `HOST` explicitly only when a
 reverse proxy or deployment requires another interface. The unauthenticated
 `POST /search` helper is absent by default; enable it only for local testing

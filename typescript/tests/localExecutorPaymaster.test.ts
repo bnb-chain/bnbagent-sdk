@@ -785,6 +785,7 @@ describe("LocalExecutor: self-pay fallback after unverified relay", () => {
       walletProvider: wallet,
       paymaster,
       receiptTimeout: 1,
+      confirmTxUnseen: async () => "confirmed-unseen",
     });
 
     const promise = executor.execute(makeIntent());
@@ -830,6 +831,7 @@ describe("LocalExecutor: self-pay fallback after unverified relay", () => {
       walletProvider: new StubWallet(),
       paymaster,
       receiptTimeout: 1,
+      confirmTxUnseen: async () => "confirmed-unseen",
     });
 
     const promise = executor.execute(makeIntent());
@@ -859,6 +861,7 @@ describe("LocalExecutor: self-pay fallback after unverified relay", () => {
       walletProvider: new StubWallet(),
       paymaster,
       receiptTimeout: 1,
+      confirmTxUnseen: async () => "confirmed-unseen",
     });
 
     const promise = executor.execute(makeIntent()).catch((e) => e);
@@ -888,6 +891,7 @@ describe("LocalExecutor: self-pay fallback after unverified relay", () => {
       walletProvider: new StubWallet(),
       paymaster,
       receiptTimeout: 1,
+      confirmTxUnseen: async () => "confirmed-unseen",
     });
 
     const promise = executor.execute(makeIntent()).catch((e) => e);
@@ -925,6 +929,7 @@ describe("LocalExecutor: self-pay fallback after unverified relay", () => {
       walletProvider: new StubWallet(),
       paymaster,
       receiptTimeout: 1,
+      confirmTxUnseen: async () => "confirmed-unseen",
     });
 
     const promise = executor.execute(makeIntent());
@@ -952,6 +957,7 @@ describe("LocalExecutor: self-pay fallback after unverified relay", () => {
       paymaster,
       receiptTimeout: 300,
       relayUnseenTimeout: 5,
+      confirmTxUnseen: async () => "confirmed-unseen",
     });
 
     let outcome: unknown = "unsettled";
@@ -1055,7 +1061,7 @@ describe("LocalExecutor: multi-RPC secondary confirmation", () => {
     expect(wallet.signedTxs).toHaveLength(1);
     expect(
       warnSpy.mock.calls.some((args) =>
-        String(args[0]).includes("fallback RPC can see it"),
+        String(args[0]).includes("fallback RPC quorum can see it"),
       ),
     ).toBe(true);
   });
@@ -1089,7 +1095,7 @@ describe("LocalExecutor: multi-RPC secondary confirmation", () => {
     expect(sendRawCount(mock)).toBe(1); // exactly one self-pay broadcast
   });
 
-  it("inconclusive keeps the pre-existing self-pay behavior and warns", async () => {
+  it("inconclusive fails closed without a second broadcast", async () => {
     vi.useFakeTimers();
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const mock = mockPublicClient({
@@ -1107,15 +1113,16 @@ describe("LocalExecutor: multi-RPC secondary confirmation", () => {
       confirmTxUnseen: async () => "inconclusive",
     });
 
-    const promise = executor.execute(makeIntent());
+    const promise = executor.execute(makeIntent()).catch((error) => error);
     await vi.advanceTimersByTimeAsync(1_000);
-    const result = await promise;
+    const error = await promise;
 
-    expect(result.transactionHash).toBe(FAKE_TX_HASH);
-    expect(sendRawCount(mock)).toBe(1);
+    expect(error).toBeInstanceOf(RelaySubmissionUnverifiedError);
+    expect(error.secondaryRpcResult).toBe("inconclusive");
+    expect(sendRawCount(mock)).toBe(0);
     expect(
       warnSpy.mock.calls.some((args) =>
-        String(args[0]).includes("could corroborate"),
+        String(args[0]).includes("refusing the self-pay fallback"),
       ),
     ).toBe(true);
   });

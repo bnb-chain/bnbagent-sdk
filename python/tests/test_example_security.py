@@ -82,8 +82,8 @@ def test_per_ip_limit_runs_before_global_limit():
     checks = (
         (
             "python/examples/agent-server/src/erc8183_server.py",
-            "negotiate_limiter.check(client_ip)",
-            'global_negotiate_limiter.check("global")',
+            "await _check_limiter(negotiate_limiter, client_ip)",
+            'await _check_limiter(global_negotiate_limiter, "global")',
         ),
         (
             "python/examples/a2a-agent/src/server.py",
@@ -92,8 +92,8 @@ def test_per_ip_limit_runs_before_global_limit():
         ),
         (
             "typescript/examples/agent-server/src/erc8183Server.ts",
-            "negotiateLimiter.check(clientIp);",
-            'globalNegotiateLimiter.check("global");',
+            "await negotiateLimiter.check(clientIp);",
+            'await globalNegotiateLimiter.check("global");',
         ),
         (
             "typescript/examples/a2a-agent/src/server.ts",
@@ -113,3 +113,17 @@ def test_typescript_example_verifies_quote_before_funding():
     assert source.index("await verifyQuoteSignature({") < source.index(
         "await client.createJob({"
     )
+
+
+def test_python_example_verifies_expected_provider_before_funding():
+    source = (SDK_ROOT / "python/examples/a2a-agent/scripts/buyer.py").read_text()
+    assert 'os.getenv("EXPECTED_PROVIDER_ADDRESS")' in source
+    assert source.index("client.verify_negotiation_quote(") < source.index("client.create_job(")
+
+
+def test_settlement_example_is_explicitly_an_operator_process():
+    examples = SDK_ROOT / "python/examples"
+    assert not (examples / "auto_settle.py").exists()
+    source = (examples / "operator_settle_poll.py").read_text()
+    assert "separate trusted operator process" in source
+    assert "must not run inside" in source

@@ -137,6 +137,18 @@ describe("EVMWalletProvider — creation & import", () => {
     ).toThrow(/Invalid private key/);
   });
 
+  it("rejects a 32-byte-looking non-hex private key", () => {
+    expect(
+      () =>
+        new EVMWalletProvider({
+          password: PW,
+          privateKey: "z".repeat(64),
+          walletsDir: wdir,
+          persist: false,
+        }),
+    ).toThrow(/Invalid private key/);
+  });
+
   it("requires a non-empty password", () => {
     expect(
       () => new EVMWalletProvider({ password: "", walletsDir: wdir }),
@@ -375,12 +387,25 @@ describe("EVMWalletProvider — export", () => {
       privateKey: PK,
       walletsDir: wdir,
     });
-    const ks = wallet.exportKeystore();
+    const ks = wallet.exportKeystore(PW);
     expect(ks.version).toBe(3);
     expect(ks.crypto).toBeDefined();
     const recoveredKey = decryptKeystoreV3(ks, PW);
     const recovered = privateKeyToAccount(`0x${toHexString(recoveredKey)}`);
     expect(recovered.address).toBe(wallet.address);
+  });
+
+  it("destroy releases the retained key and disables signing", async () => {
+    const wallet = new EVMWalletProvider({
+      password: PW,
+      privateKey: PK,
+      walletsDir: wdir,
+    });
+    wallet.destroy();
+    expect(() => wallet.address).toThrow(/destroyed/);
+    await expect(wallet.signMessage("after destroy")).rejects.toThrow(
+      /destroyed/,
+    );
   });
 });
 
@@ -418,6 +443,46 @@ describe("EVMWalletProvider — capabilities", () => {
 // ── Cross-SDK keystore interop (THE headline invariant) ────────────────────
 
 describe("keystore interop — Python eth_account -> TS", () => {
+  it("rejects a non-V3 document before running its KDF", () => {
+    const fixture = JSON.parse(
+      readFileSync(FIXTURE_PATH, "utf8"),
+    ) as KeystoreV3;
+    Object.assign(fixture, { version: 4 });
+    expect(() => decryptKeystoreV3(fixture, "test-password")).toThrow(
+      /unsupported keystore version/,
+    );
+  });
+
+  it("rejects a cipher other than AES-128-CTR before running its KDF", () => {
+    const fixture = JSON.parse(
+      readFileSync(FIXTURE_PATH, "utf8"),
+    ) as KeystoreV3;
+    Object.assign(fixture.crypto, { cipher: "aes-256-cbc" });
+    expect(() => decryptKeystoreV3(fixture, "test-password")).toThrow(
+      /unsupported keystore cipher/,
+    );
+  });
+
+  it("rejects scrypt work above the supported bound before allocation", () => {
+    const fixture = JSON.parse(
+      readFileSync(FIXTURE_PATH, "utf8"),
+    ) as KeystoreV3;
+    Object.assign(fixture.crypto.kdfparams, { n: 2 ** 30 });
+    expect(() => decryptKeystoreV3(fixture, "test-password")).toThrow(
+      /scrypt n exceeds supported maximum/,
+    );
+  });
+
+  it("rejects malformed fixed-size hexadecimal fields before running its KDF", () => {
+    const fixture = JSON.parse(
+      readFileSync(FIXTURE_PATH, "utf8"),
+    ) as KeystoreV3;
+    Object.assign(fixture.crypto.cipherparams, { iv: "00" });
+    expect(() => decryptKeystoreV3(fixture, "test-password")).toThrow(
+      /crypto\.cipherparams\.iv must be 16 bytes/,
+    );
+  });
+
   it("decrypts a keystore produced by eth_account.Account.encrypt, recovering 0xab..ab", () => {
     const fixture = JSON.parse(
       readFileSync(FIXTURE_PATH, "utf8"),

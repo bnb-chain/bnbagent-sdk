@@ -691,4 +691,22 @@ describe("altana sdk loader", () => {
     const sdk = await loader.loadAltanaSdk();
     expect(typeof sdk.createClient).toBe("function");
   });
+
+  it("rejects an incompatible vendor runtime and does not cache it", async () => {
+    const loader = await import("../src/wallets/altana/sdkLoader.js");
+    try {
+      loader.setAltanaSdkImporter(async () => ({
+        signerFromPrivateKey: () => ({}),
+        BNB: { chainId: 56 },
+      }));
+      await expect(loader.loadAltanaSdk()).rejects.toThrow(
+        /Incompatible @altananetwork\/sdk runtime.*createClient.*@altananetwork\/sdk@0\.7\.1/,
+      );
+    } finally {
+      loader.setAltanaSdkImporter(null);
+    }
+
+    const sdk = await loader.loadAltanaSdk();
+    expect(typeof sdk.createClient).toBe("function");
+  });
 });

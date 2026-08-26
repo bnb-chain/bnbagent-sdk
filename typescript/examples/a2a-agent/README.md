@@ -44,6 +44,9 @@ Without `BUYER_PRIVATE_KEY` the buyer stops after printing the signed quote - a 
 Signed-quote traffic is controlled by `ERC8183_NEGOTIATE_RATE_LIMIT`,
 `ERC8183_NEGOTIATE_GLOBAL_RATE_LIMIT`, and `ERC8183_NEGOTIATE_RATE_WINDOW`,
 with defaults `120`, `1200`, and `60` seconds respectively.
+These example counters are process-local. Before running multiple production
+replicas, enforce equivalent per-client and global limits in a shared backend
+or at a trusted edge; production startup warns about this boundary.
 
 ## Skills
 

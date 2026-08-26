@@ -122,15 +122,13 @@ export class EVMWalletProvider extends WalletProvider {
     PAYMASTER_SPONSOR,
   ]);
 
-  readonly #password: string;
   readonly #persist: boolean;
   readonly #walletsDir: string;
   readonly #signingPolicy: SigningPolicy;
 
-  #account: PrivateKeyAccount | undefined;
-  // Raw private key hex, kept alongside the viem account since
-  // `PrivateKeyAccount` does not expose it (needed for keystore
-  // export/re-encryption and exportPrivateKey()).
+  // The single persistent key representation. viem accounts are constructed
+  // only for individual operations so the provider does not retain a second
+  // account closure over the same key.
   #privateKeyHex: Hex | undefined;
   #source: WalletSource = "";
 
@@ -146,15 +144,14 @@ export class EVMWalletProvider extends WalletProvider {
       );
     }
 
-    this.#password = opts.password;
     this.#persist = opts.persist ?? true;
     this.#walletsDir = opts.walletsDir ?? DEFAULT_WALLETS_DIR;
     this.#signingPolicy = opts.signingPolicy ?? SigningPolicy.strictDefault();
 
     if (opts.privateKey) {
-      this.#importPrivateKey(opts.privateKey);
+      this.#importPrivateKey(opts.privateKey, opts.password);
     } else if (this.#persist) {
-      this.#loadWallet(opts.address);
+      this.#loadWallet(opts.address, opts.password);
     } else {
       throw new Error(
         "private_key is required when persist=false (in-memory-only mode)",
@@ -202,7 +199,7 @@ export class EVMWalletProvider extends WalletProvider {
 
   // ── Private key import ──────────────────────────────────────────────
 
-  #importPrivateKey(privateKey: string): void {
+  #importPrivateKey(privateKey: string, password: string): void {
     try {
       const stripped = privateKey.startsWith("0x")
         ? privateKey.slice(2)
@@ -211,13 +208,12 @@ export class EVMWalletProvider extends WalletProvider {
         throw new Error("Private key must be 64 hex characters (32 bytes)");
       }
       const pkHex = `0x${stripped}` as Hex;
-      const account = privateKeyToAccount(pkHex);
+      privateKeyToAccount(pkHex); // validate without retaining another key closure
       this.#privateKeyHex = pkHex;
-      this.#account = account;
       this.#source = "imported";
 
       if (this.#persist) {
-        this.#saveKeystore();
+        this.#saveKeystore(password);
       }
     } catch (e) {
       throw new Error(`Invalid private key: ${(e as Error).message}`);
@@ -226,25 +222,25 @@ export class EVMWalletProvider extends WalletProvider {
 
   // ── Load from disk ───────────────────────────────────────────────────
 
-  #loadWallet(address: string | undefined): void {
+  #loadWallet(address: string | undefined, password: string): void {
     if (address) {
-      this.#loadKeystore(address);
+      this.#loadKeystore(address, password);
       return;
     }
     const wallets = EVMWalletProvider.listWallets(this.#walletsDir);
     if (wallets.length === 1) {
-      this.#loadKeystore(wallets[0] as string);
+      this.#loadKeystore(wallets[0] as string, password);
     } else if (wallets.length > 1) {
       const listRepr = `[${wallets.map((w) => `'${w}'`).join(", ")}]`;
       throw new Error(
         `Multiple wallets found in ${this.#walletsDir}: ${listRepr}. Set WALLET_ADDRESS to specify which one to use.`,
       );
     } else {
-      this.#createWallet();
+      this.#createWallet(password);
     }
   }
 
-  #loadKeystore(address: string): void {
+  #loadKeystore(address: string, password: string): void {
     const ksPath = join(this.#walletsDir, `${address}.json`);
     if (!existsSync(ksPath)) {
       throw new Error(`Keystore not found: ${ksPath}`);
@@ -252,10 +248,10 @@ export class EVMWalletProvider extends WalletProvider {
     try {
       const raw = readFileSync(ksPath, "utf8");
       const keystore = JSON.parse(raw) as KeystoreV3;
-      const privateKeyBytes = decryptKeystoreV3(keystore, this.#password);
+      const privateKeyBytes = decryptKeystoreV3(keystore, password);
       const pkHex = `0x${bytesToHex(privateKeyBytes)}` as Hex;
+      privateKeyToAccount(pkHex); // validate before retaining decrypted key material
       this.#privateKeyHex = pkHex;
-      this.#account = privateKeyToAccount(pkHex);
       this.#source = "loaded_keystore";
     } catch (e) {
       const err = e as Error;
@@ -266,24 +262,23 @@ export class EVMWalletProvider extends WalletProvider {
     }
   }
 
-  #createWallet(): void {
+  #createWallet(password: string): void {
     const pkHex = generatePrivateKey();
     this.#privateKeyHex = pkHex;
-    this.#account = privateKeyToAccount(pkHex);
     this.#source = "created_new";
     if (this.#persist) {
-      this.#saveKeystore();
+      this.#saveKeystore(password);
     }
   }
 
   // ── Save to disk ─────────────────────────────────────────────────────
 
-  #saveKeystore(): void {
+  #saveKeystore(password: string): void {
     mkdirSync(this.#walletsDir, { recursive: true });
     chmodSync(this.#walletsDir, 0o700);
 
     const privateKeyBytes = hexToBytes(this.#requirePrivateKeyHex().slice(2));
-    const keystore = encryptKeystoreV3(privateKeyBytes, this.#password);
+    const keystore = encryptKeystoreV3(privateKeyBytes, password);
     const ksPath = join(
       this.#walletsDir,
       `${this.#requireAccount().address}.json`,
@@ -319,12 +314,11 @@ export class EVMWalletProvider extends WalletProvider {
   // ── Public API ───────────────────────────────────────────────────────
 
   #requireAccount(): PrivateKeyAccount {
-    if (!this.#account) throw new Error("Account not initialized");
-    return this.#account;
+    return privateKeyToAccount(this.#requirePrivateKeyHex());
   }
 
   #requirePrivateKeyHex(): Hex {
-    if (!this.#privateKeyHex) throw new Error("Account not initialized");
+    if (!this.#privateKeyHex) throw new Error("Wallet has been destroyed");
     return this.#privateKeyHex;
   }
 
@@ -452,16 +446,22 @@ export class EVMWalletProvider extends WalletProvider {
   }
 
   /** Export the wallet as Keystore V3 JSON (MetaMask/Geth compatible). */
-  exportKeystore(): KeystoreV3 {
+  exportKeystore(password: string): KeystoreV3 {
+    if (!password) throw new Error("password is required for keystore export");
     const privateKeyBytes = hexToBytes(this.#requirePrivateKeyHex().slice(2));
-    return encryptKeystoreV3(privateKeyBytes, this.#password);
+    return encryptKeystoreV3(privateKeyBytes, password);
+  }
+
+  /** Release the retained key after the caller no longer needs local signing. */
+  destroy(): void {
+    this.#privateKeyHex = undefined;
   }
 
   /** Path of the encrypted Keystore V3 file, or an in-memory marker. */
   override get keyLocation(): string | null {
     if (!this.#persist) return "in-memory (not persisted)";
-    if (!this.#account) return this.#walletsDir;
-    return join(this.#walletsDir, `${this.#account.address}.json`);
+    if (!this.#privateKeyHex) return this.#walletsDir;
+    return join(this.#walletsDir, `${this.address}.json`);
   }
 
   /**
@@ -471,10 +471,7 @@ export class EVMWalletProvider extends WalletProvider {
    * and always report `false`.
    */
   override exists(): boolean {
-    if (!this.#persist || !this.#account) return false;
-    return EVMWalletProvider.keystoreExists(
-      this.#account.address,
-      this.#walletsDir,
-    );
+    if (!this.#persist || !this.#privateKeyHex) return false;
+    return EVMWalletProvider.keystoreExists(this.address, this.#walletsDir);
   }
 }

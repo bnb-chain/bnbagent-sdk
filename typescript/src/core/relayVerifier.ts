@@ -8,9 +8,9 @@
  * unseen — a flaky primary RPC must not trigger a same-nonce race against a
  * transaction that actually reached the mempool.
  *
- * Degradation is deliberate: when every fallback endpoint errors out the
- * result is `"inconclusive"`, and callers keep their existing behavior. The
- * self-pay safety net must never depend on third-party RPC availability.
+ * A decisive result requires two distinct RPC origins. Anything weaker is
+ * `"inconclusive"`, and callers fail closed instead of starting a second
+ * broadcast from one configurable source's claim.
  */
 
 import {
@@ -24,12 +24,9 @@ export type TxProbeResult = "seen" | "unseen" | "error";
 
 /**
  * Aggregate verdict across all fallback endpoints:
- * - `"seen"` — at least one endpoint can see the transaction; it reached the
- *   network and MUST NOT be treated as unverified.
- * - `"confirmed-unseen"` — no endpoint saw it and at least one answered
- *   authoritatively; the relay-dropped diagnosis is corroborated.
- * - `"inconclusive"` — no usable endpoint or every probe errored; callers
- *   should keep their pre-existing behavior.
+ * - `"seen"` — two independent origins can see the transaction.
+ * - `"confirmed-unseen"` — two independent origins report it absent.
+ * - `"inconclusive"` — fewer than two agree, or any seen/unseen answers conflict.
  */
 export type SecondaryConfirmation =
   | "confirmed-unseen"
@@ -58,6 +55,7 @@ export interface RelayVerifierOpts {
 
 /** Default per-endpoint probe timeout (ms). */
 export const RELAY_VERIFIER_ENDPOINT_TIMEOUT_MS = 3_000;
+const RELAY_VERIFIER_QUORUM = 2;
 
 /**
  * Built-in public fallback endpoints per chain. Deliberately module-local:
@@ -100,7 +98,7 @@ export function resolveFallbackRpcUrls(
       urls = FALLBACK_RPC_URLS[opts.chainId] ?? [];
     }
   }
-  const primary = normalizeRpcUrl(opts.primaryRpcUrl);
+  const primary = rpcOrigin(opts.primaryRpcUrl);
   const out: string[] = [];
   const seen = new Set<string>();
   for (const entry of urls) {
@@ -108,7 +106,10 @@ export function resolveFallbackRpcUrls(
     if (trimmed === "") {
       continue;
     }
-    const key = normalizeRpcUrl(trimmed);
+    const key = rpcOrigin(trimmed);
+    if (key === null) {
+      continue;
+    }
     if (key === primary || seen.has(key)) {
       continue;
     }
@@ -121,10 +122,7 @@ export function resolveFallbackRpcUrls(
 /**
  * Ask the fallback RPC endpoints (in parallel) whether `hash` is visible.
  *
- * Never rejects. See {@link SecondaryConfirmation} for the verdict semantics;
- * "no seen + at least one unseen" is graded `"confirmed-unseen"` even when
- * other endpoints errored — a single authoritative "not found" is already
- * more signal than the primary RPC alone provided.
+ * Never rejects. See {@link SecondaryConfirmation} for the quorum semantics.
  */
 export async function confirmTxUnseen(
   hash: `0x${string}`,
@@ -146,10 +144,15 @@ export async function confirmTxUnseen(
       }
     }),
   );
-  if (results.includes("seen")) {
+  const seenCount = results.filter((result) => result === "seen").length;
+  const unseenCount = results.filter((result) => result === "unseen").length;
+  if (seenCount > 0 && unseenCount > 0) {
+    return "inconclusive";
+  }
+  if (seenCount >= RELAY_VERIFIER_QUORUM) {
     return "seen";
   }
-  if (results.includes("unseen")) {
+  if (unseenCount >= RELAY_VERIFIER_QUORUM) {
     return "confirmed-unseen";
   }
   return "inconclusive";
@@ -191,13 +194,33 @@ async function fetchTxPresence(
     if (payload.result === null) {
       return "unseen";
     }
-    return payload.result !== undefined ? "seen" : "error";
+    if (
+      typeof payload.result !== "object" ||
+      payload.result === undefined ||
+      payload.result === null
+    ) {
+      return "error";
+    }
+    const returnedHash = (payload.result as { hash?: unknown }).hash;
+    return typeof returnedHash === "string" &&
+      returnedHash.toLowerCase() === hash.toLowerCase()
+      ? "seen"
+      : "error";
   } catch {
     return "error";
   }
 }
 
-/** Canonical form for URL dedup: lowercase, no trailing slash. */
-function normalizeRpcUrl(url: string | undefined): string {
-  return (url ?? "").trim().toLowerCase().replace(/\/+$/, "");
+/** Independent-source key: scheme + host + port, never path or query. */
+function rpcOrigin(url: string | undefined): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url.trim());
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null;
+    }
+    return parsed.origin.toLowerCase();
+  } catch {
+    return null;
+  }
 }

@@ -28,6 +28,7 @@ import {
 } from "../../../src/erc8183/index.js";
 import {
   RateLimitExceeded,
+  type RateLimiter,
   SlidingWindowLimiter,
 } from "../../../src/utils/index.js";
 import { type Route, makeRequestListener, route, sendJson } from "./http.js";
@@ -57,6 +58,12 @@ export interface Erc8183ServerOpts {
   /** Extra routes to serve alongside the ERC-8183 ones (e.g. a `/search`
    * testing endpoint). */
   extraRoutes?: Route[];
+  /** Application-owned per-client limiter. Inject a shared backend when
+   * running multiple replicas; defaults to an in-memory limiter. */
+  negotiateLimiter?: RateLimiter;
+  /** Application-owned global limiter. Inject a shared backend when running
+   * multiple replicas; defaults to an in-memory limiter. */
+  globalNegotiateLimiter?: RateLimiter;
 }
 
 /** A configured ERC-8183 server, ready to `listen()`. */
@@ -170,15 +177,38 @@ export async function createErc8183Server(
     );
   }
 
-  const negotiateLimiter = new SlidingWindowLimiter(
-    readIntEnv("ERC8183_NEGOTIATE_RATE_LIMIT", 120),
-    readIntEnv("ERC8183_NEGOTIATE_RATE_WINDOW", 60),
-  );
-  const globalNegotiateLimiter = new SlidingWindowLimiter(
-    readIntEnv("ERC8183_NEGOTIATE_GLOBAL_RATE_LIMIT", 1_200),
-    readIntEnv("ERC8183_NEGOTIATE_RATE_WINDOW", 60),
-    1,
-  );
+  const rateWindow = readIntEnv("ERC8183_NEGOTIATE_RATE_WINDOW", 60);
+  const negotiateLimiter =
+    opts.negotiateLimiter ??
+    new SlidingWindowLimiter(
+      readIntEnv("ERC8183_NEGOTIATE_RATE_LIMIT", 120),
+      rateWindow,
+    );
+  const globalNegotiateLimiter =
+    opts.globalNegotiateLimiter ??
+    new SlidingWindowLimiter(
+      readIntEnv("ERC8183_NEGOTIATE_GLOBAL_RATE_LIMIT", 1_200),
+      rateWindow,
+      1,
+    );
+  const environment = (
+    process.env.ENV ||
+    process.env.ENVIRONMENT ||
+    process.env.NODE_ENV ||
+    ""
+  )
+    .trim()
+    .toLowerCase();
+  if (
+    ["prod", "production", "live", "mainnet"].includes(environment) &&
+    (!opts.negotiateLimiter || !opts.globalNegotiateLimiter)
+  ) {
+    console.warn(
+      "[erc8183Server] production is using an in-memory negotiate limiter; " +
+        "this is safe only for one replica. Inject both limiter options or " +
+        "enforce an equivalent shared/edge limit before scaling out.",
+    );
+  }
 
   const routes: Route[] = [
     route("GET", `${prefix}/health`, ({ res }) =>
@@ -200,8 +230,8 @@ export async function createErc8183Server(
 
     route("POST", `${prefix}/negotiate`, async ({ res, body, clientIp }) => {
       try {
-        negotiateLimiter.check(clientIp);
-        globalNegotiateLimiter.check("global");
+        await negotiateLimiter.check(clientIp);
+        await globalNegotiateLimiter.check("global");
       } catch (error) {
         if (error instanceof RateLimitExceeded) {
           return sendJson(res, 429, { error: "Too many requests" });

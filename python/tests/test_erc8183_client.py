@@ -125,6 +125,89 @@ class TestTokenCache:
         facade.commerce.payment_token.assert_called_once()
 
 
+class TestVerifyNegotiationQuote:
+    def test_binds_provider_currency_chain_and_commerce(self, facade):
+        facade.commerce.payment_token.return_value = FAKE_TOKEN
+        quote = {
+            "response": {
+                "accepted": True,
+                "terms": {"price": "1000", "currency": FAKE_TOKEN},
+            },
+            "chain_id": 12345,
+            "negotiation_hash": "0x" + "11" * 32,
+            "provider_sig": "0x" + "22" * 65,
+        }
+        expected = MagicMock(valid=True)
+        with patch(
+            "bnbagent.erc8183.client.verify_quote_signature", return_value=expected
+        ) as verify:
+            assert (
+                facade.verify_negotiation_quote(quote, expected_provider=FAKE_ADDRESS) is expected
+            )
+        verify.assert_called_once_with(
+            envelope=quote,
+            provider=FAKE_ADDRESS,
+            w3=facade.w3,
+            expected_verifying_contract=FAKE_COMMERCE,
+            block_number=None,
+        )
+
+    def test_rejects_currency_mismatch_before_signature_rpc(self, facade):
+        facade.commerce.payment_token.return_value = FAKE_TOKEN
+        quote = {
+            "response": {
+                "accepted": True,
+                "terms": {
+                    "price": "1000",
+                    "currency": "0x" + "11" * 20,
+                }
+            },
+            "chain_id": 12345,
+        }
+        with patch("bnbagent.erc8183.client.verify_quote_signature") as verify:
+            verdict = facade.verify_negotiation_quote(quote, expected_provider=FAKE_ADDRESS)
+        assert verdict.valid is False
+        assert verdict.reason == "quote currency does not match payment token"
+        verify.assert_not_called()
+
+    @pytest.mark.parametrize("price", [True, 0, -1, "0", "1.5", "1e3", None])
+    def test_rejects_invalid_price(self, facade, price):
+        facade.commerce.payment_token.return_value = FAKE_TOKEN
+        quote = {
+            "response": {
+                "accepted": True,
+                "terms": {"price": price, "currency": FAKE_TOKEN},
+            },
+            "chain_id": 12345,
+        }
+        verdict = facade.verify_negotiation_quote(quote, expected_provider=FAKE_ADDRESS)
+        assert verdict.valid is False
+        assert verdict.reason == "quote price must be a positive integer"
+
+    def test_rejects_noncanonical_top_level_accepted(self, facade):
+        quote = {
+            "accepted": True,
+            "response": {"terms": {"price": "1000", "currency": FAKE_TOKEN}},
+        }
+        verdict = facade.verify_negotiation_quote(quote, expected_provider=FAKE_ADDRESS)
+        assert verdict.valid is False
+        assert verdict.reason == "quote is not accepted"
+
+    @pytest.mark.parametrize("chain_id", [None, True, 56])
+    def test_requires_exact_chain_binding(self, facade, chain_id):
+        facade.commerce.payment_token.return_value = FAKE_TOKEN
+        quote = {
+            "response": {
+                "accepted": True,
+                "terms": {"price": "1000", "currency": FAKE_TOKEN},
+            },
+            "chain_id": chain_id,
+        }
+        verdict = facade.verify_negotiation_quote(quote, expected_provider=FAKE_ADDRESS)
+        assert verdict.valid is False
+        assert verdict.reason == "quote chain_id mismatch"
+
+
 class TestCreateJob:
     def test_defaults_to_router_as_evaluator_and_hook(self, facade):
         facade.commerce.create_job.return_value = {"jobId": 1}

@@ -198,7 +198,8 @@ export class RelaySubmissionUnverifiedError extends BNBAgentError {
   /**
    * Verdict of the multi-RPC secondary confirmation that ran before this
    * error was acted on: `"confirmed-unseen"` (fallback RPCs corroborate),
-   * `"inconclusive"` (no fallback endpoint answered), or `"not-checked"`.
+   * `"inconclusive"` (the quorum was unavailable or conflicting), or
+   * `"not-checked"`.
    * Assigned by the executor after the error is raised by the receipt wait.
    */
   public secondaryRpcResult:

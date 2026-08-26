@@ -157,6 +157,19 @@ class SigningPolicy:
     )
 
     @classmethod
+    def _assert_unknown_domain_allowed(cls, *, source: str, allow_in_production: bool) -> str:
+        """Apply the production guard to factory and deserialization paths."""
+        env_raw = os.environ.get("ENV") or os.environ.get("ENVIRONMENT") or ""
+        env = env_raw.strip().lower()
+        if env in cls.PRODUCTION_ENV_MARKERS and not allow_in_production:
+            raise RuntimeError(
+                f"{source} refused: ENV={env_raw!r} indicates production "
+                f"(matches {sorted(cls.PRODUCTION_ENV_MARKERS)}). Pass "
+                f"allow_in_production=True if this is intentional (e.g. break-glass)."
+            )
+        return env_raw
+
+    @classmethod
     def permissive(cls, *, allow_in_production: bool = False) -> SigningPolicy:
         """⚠️ Testing-only escape: allow_unknown_domain=True and empty deny/allow.
 
@@ -174,15 +187,10 @@ class SigningPolicy:
             RuntimeError: When env indicates production and
                 ``allow_in_production`` is not set.
         """
-        env_raw = os.environ.get("ENV") or os.environ.get("ENVIRONMENT") or ""
-        env = env_raw.strip().lower()
-        if env in cls.PRODUCTION_ENV_MARKERS and not allow_in_production:
-            raise RuntimeError(
-                f"SigningPolicy.permissive() refused: ENV={env_raw!r} indicates "
-                f"production (matches {sorted(cls.PRODUCTION_ENV_MARKERS)}). "
-                f"Pass allow_in_production=True if this is intentional (e.g. "
-                f"break-glass)."
-            )
+        env_raw = cls._assert_unknown_domain_allowed(
+            source="SigningPolicy.permissive()",
+            allow_in_production=allow_in_production,
+        )
         logger.warning(
             "SigningPolicy.permissive() in use — POLICY DISABLED. "
             "This bypasses ALL signing guards; only acceptable in tests. "
@@ -258,7 +266,7 @@ class SigningPolicy:
         }
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> SigningPolicy:
+    def from_dict(cls, d: dict[str, Any], *, allow_in_production: bool = False) -> SigningPolicy:
         """Reconstruct a SigningPolicy from its :meth:`to_dict` output.
 
         Missing keys fall back to the dataclass defaults (empty sets /
@@ -270,6 +278,22 @@ class SigningPolicy:
             ValueError: On malformed entries (e.g. a domain entry that is
                 not a two-element list).
         """
+        raw_allow_unknown = d.get("allow_unknown_domain", False)
+        if not isinstance(raw_allow_unknown, bool):
+            raise ValueError("allow_unknown_domain must be a boolean")
+        if raw_allow_unknown:
+            env_raw = cls._assert_unknown_domain_allowed(
+                source="SigningPolicy.from_dict()",
+                allow_in_production=allow_in_production,
+            )
+            logger.warning(
+                "SigningPolicy.from_dict() loaded allow_unknown_domain=True — "
+                "POLICY DOMAIN ALLOWLIST DISABLED. "
+                "(env=%r, allow_in_production=%s)",
+                env_raw,
+                allow_in_production,
+            )
+
         raw_domains = d.get("domain_allowlist", []) or []
         domain_pairs: set[tuple[int, str]] = set()
         for i, entry in enumerate(raw_domains):
@@ -287,7 +311,7 @@ class SigningPolicy:
             ),
             max_validity_window_seconds=int(d.get("max_validity_window_seconds", 600)),
             max_future_validity_seconds=int(d.get("max_future_validity_seconds", 900)),
-            allow_unknown_domain=bool(d.get("allow_unknown_domain", False)),
+            allow_unknown_domain=raw_allow_unknown,
         )
 
     # ── Human-readable output ──────────────────────────────────────────

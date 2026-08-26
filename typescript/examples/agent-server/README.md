@@ -46,6 +46,12 @@ When running behind a reverse proxy, list the proxy's exact socket IP in
 `ERC8183_TRUSTED_PROXY_IPS`. Forwarding headers from every other peer are
 ignored. A process-wide negotiate limit complements the per-IP limit.
 
+The built-in limiters are process-local and are suitable for one replica.
+For multiple replicas, pass application-owned `negotiateLimiter` and
+`globalNegotiateLimiter` implementations to `createErc8183Server()` (async
+shared backends are supported), or enforce equivalent limits at a trusted
+edge. Production emits a warning when either default remains in use.
+
 ### One-time ERC-8004 registration
 
 ```bash

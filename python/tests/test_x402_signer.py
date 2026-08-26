@@ -251,12 +251,10 @@ def test_tracker_reserve_rejects_negative_amount():
     assert t.spent(U_MAINNET) == 0
 
 
-def test_tracker_commit_rejects_negative_amount():
-    """commit() is the legacy path but reaches the same counter."""
+def test_tracker_does_not_expose_race_unsafe_legacy_methods():
     t = SessionBudgetTracker({U_MAINNET: 1_000})
-    with pytest.raises(X402BudgetExhaustedError, match="non-negative"):
-        t.commit(U_MAINNET, -1)
-    assert t.spent(U_MAINNET) == 0
+    assert not hasattr(t, "would_exceed")
+    assert not hasattr(t, "commit")
 
 
 def test_tracker_reserve_rejects_negative_even_without_a_cap():
@@ -280,7 +278,7 @@ def test_session_budget_accumulates_across_calls(signer):
     assert signer.budget.spent(U_MAINNET) == 2_500_000
 
 
-def test_session_budget_blocks_next_call_when_would_exceed(signer):
+def test_session_budget_blocks_next_call_when_exhausted(signer):
     """Budget 5M, per-call 1M. Spend 4M then try 1.5M (per-call would also
     fail but budget should trigger first only if budget < per-call)."""
     # First spend 5M cumulative (within both caps)
@@ -367,8 +365,8 @@ def test_wraps_wallet_policy_violation_as_x402_policy_error(wallet, tmp_path):
 def test_budget_atomic_under_concurrent_signs(wallet):
     """Two threads racing sign_payment with value==full-cap must result in
     exactly one signed payment, not two. Without atomic reserve/rollback,
-    both threads pass would_exceed (spent=0), both sign, both commit →
-    spent=2*cap. This test asserts the v0.4.1 fix.
+    both threads could otherwise observe spent=0 and sign, producing
+    spent=2*cap. This test asserts the atomic reserve/rollback path.
     """
     import threading
     import time
