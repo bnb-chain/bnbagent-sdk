@@ -23,6 +23,7 @@ import {
   ERC8183JobOps,
   JobStatus,
   NegotiationHandler,
+  QuoteSigningError,
   fundedJobWatcher,
 } from "../../../src/erc8183/index.js";
 import {
@@ -79,8 +80,8 @@ const HTTP_STATUS: Record<string, number> = {
   not_found: 404,
   job_expired: 408,
   wrong_status: 409,
-  quote_expired: 410,
   description_invalid: 410,
+  quote_invalid: 400,
   submit_deadline_passed: 410,
   payload_too_large: 413,
   internal_error: 500,
@@ -99,6 +100,15 @@ function readIntEnv(name: string, fallback: number): number {
   }
   const value = Number(raw.trim());
   return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function readIpSetEnv(name: string): ReadonlySet<string> {
+  return new Set(
+    (process.env[name] ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
 }
 
 /**
@@ -164,6 +174,11 @@ export async function createErc8183Server(
     readIntEnv("ERC8183_NEGOTIATE_RATE_LIMIT", 120),
     readIntEnv("ERC8183_NEGOTIATE_RATE_WINDOW", 60),
   );
+  const globalNegotiateLimiter = new SlidingWindowLimiter(
+    readIntEnv("ERC8183_NEGOTIATE_GLOBAL_RATE_LIMIT", 1_200),
+    readIntEnv("ERC8183_NEGOTIATE_RATE_WINDOW", 60),
+    1,
+  );
 
   const routes: Route[] = [
     route("GET", `${prefix}/health`, ({ res }) =>
@@ -186,6 +201,7 @@ export async function createErc8183Server(
     route("POST", `${prefix}/negotiate`, async ({ res, body, clientIp }) => {
       try {
         negotiateLimiter.check(clientIp);
+        globalNegotiateLimiter.check("global");
       } catch (error) {
         if (error instanceof RateLimitExceeded) {
           return sendJson(res, 429, { error: "Too many requests" });
@@ -213,6 +229,12 @@ export async function createErc8183Server(
             error instanceof Error ? error.message : String(error)
           }`,
         );
+        if (error instanceof QuoteSigningError) {
+          return sendJson(res, 503, {
+            error: "Quote signer unavailable",
+            error_code: "quote_signing_unavailable",
+          });
+        }
         return sendJson(res, 500, { error: "Negotiation failed" });
       }
     }),
@@ -252,7 +274,9 @@ export async function createErc8183Server(
     ...(opts.extraRoutes ?? []),
   ];
 
-  const listener = makeRequestListener(routes);
+  const listener = makeRequestListener(routes, {
+    trustedProxyIps: readIpSetEnv("ERC8183_TRUSTED_PROXY_IPS"),
+  });
 
   // ── funded-job watcher ──
   const pollInterval =
@@ -295,7 +319,7 @@ export async function createErc8183Server(
     paymentToken,
     paymentTokenDecimals,
 
-    listen(port: number, host = "0.0.0.0"): Server {
+    listen(port: number, host = "127.0.0.1"): Server {
       const server = createServer((req, res) => {
         void listener(req, res);
       });

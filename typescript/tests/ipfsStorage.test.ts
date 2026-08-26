@@ -77,6 +77,22 @@ describe("IPFSStorageProvider", () => {
     expect(payload.pinataMetadata.name).toBe("job-5");
   });
 
+  it("rejects an oversize upload before making an HTTP request", async () => {
+    const provider = new IPFSStorageProvider(
+      "https://api.pinata.cloud/pinning/pinJSONToIPFS",
+      "test-jwt-token",
+      undefined,
+      64,
+    );
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(provider.upload({ data: "x".repeat(100) })).rejects.toThrow(
+      /limit is 64 bytes/,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("upload without a filename or job.id uses 'deliverable' as the pin name", async () => {
     const provider = makeProvider();
     const fetchMock = vi

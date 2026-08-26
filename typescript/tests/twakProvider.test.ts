@@ -851,6 +851,7 @@ const QUOTE_OUT = {
 };
 const ASSET = `0x${"55".repeat(20)}`;
 const PAY_TO = `0x${"66".repeat(20)}`;
+const PAYER_OPTS = { expectedPayTo: PAY_TO, expectedAsset: ASSET };
 
 function x402Router(): string[][] {
   return installRouter((args) => {
@@ -868,9 +869,40 @@ function x402Router(): string[][] {
 }
 
 describe("TwakX402Payer", () => {
+  it("requires valid trusted recipient and asset anchors", () => {
+    const provider = new TWAKProvider();
+    expect(() =>
+      (
+        provider as unknown as {
+          makeX402Payer(): unknown;
+        }
+      ).makeX402Payer(),
+    ).toThrow(/requires expectedPayTo and expectedAsset/);
+    expect(() =>
+      provider.makeX402Payer({
+        expectedPayTo: "not-an-address",
+        expectedAsset: ASSET,
+      }),
+    ).toThrow();
+  });
+
+  it.each([
+    "https://user:password@api.example/paid",
+    "https://api.example/paid?access_token=secret",
+  ])(
+    "rejects sensitive URL credentials before spawning TWAK: %s",
+    async (url) => {
+      const calls = x402Router();
+      const provider = new TWAKProvider();
+
+      await expect(provider.x402Quote(url)).rejects.toThrow(/process argv/);
+      expect(calls).toHaveLength(0);
+    },
+  );
+
   it("quote is read-only: no wallet-status probe (F-3)", async () => {
     const calls = x402Router();
-    const payer = new TWAKProvider().makeX402Payer();
+    const payer = new TWAKProvider().makeX402Payer(PAYER_OPTS);
     const quote = await payer.quote("https://api.example/paid");
     expect(quote.accepts).toHaveLength(1);
     expect(quote.accepts[0].amount).toBe(5000n);
@@ -880,7 +912,7 @@ describe("TwakX402Payer", () => {
 
   it("request pins the prechecked route and reports the quoted terms", async () => {
     const calls = x402Router();
-    const payer = new TWAKProvider().makeX402Payer();
+    const payer = new TWAKProvider().makeX402Payer(PAYER_OPTS);
     const result = await payer.request("https://api.example/paid", {
       maxPayment: 10_000n,
     });
@@ -907,7 +939,7 @@ describe("TwakX402Payer", () => {
 
   it("enforces the per-call cap before paying", async () => {
     x402Router();
-    const payer = new TWAKProvider().makeX402Payer();
+    const payer = new TWAKProvider().makeX402Payer(PAYER_OPTS);
     await expect(
       payer.request("https://api.example/paid", { maxPayment: 4_999n }),
     ).rejects.toThrow(X402AmountExceededError);
@@ -918,19 +950,28 @@ describe("TwakX402Payer", () => {
     const provider = new TWAKProvider();
     await expect(
       provider
-        .makeX402Payer({ expectedPayTo: `0x${"77".repeat(20)}` })
+        .makeX402Payer({
+          expectedPayTo: `0x${"77".repeat(20)}`,
+          expectedAsset: ASSET,
+        })
         .request("https://api.example/paid", { maxPayment: 10_000n }),
     ).rejects.toThrow(X402RecipientMismatchError);
     await expect(
       provider
-        .makeX402Payer({ expectedAsset: `0x${"88".repeat(20)}` })
+        .makeX402Payer({
+          expectedPayTo: PAY_TO,
+          expectedAsset: `0x${"88".repeat(20)}`,
+        })
         .request("https://api.example/paid", { maxPayment: 10_000n }),
     ).rejects.toThrow(X402PolicyError);
   });
 
   it("bounds the claimed validity window", async () => {
     x402Router();
-    const payer = new TWAKProvider().makeX402Payer({ maxTimeoutSeconds: 60 });
+    const payer = new TWAKProvider().makeX402Payer({
+      ...PAYER_OPTS,
+      maxTimeoutSeconds: 60,
+    });
     await expect(
       payer.request("https://api.example/paid", { maxPayment: 10_000n }),
     ).rejects.toThrow(/maxTimeoutSeconds 300 exceeds/);
@@ -952,6 +993,7 @@ describe("TwakX402Payer", () => {
       return { success: true, data: "paid" };
     });
     const payer = new TWAKProvider().makeX402Payer({
+      ...PAYER_OPTS,
       sessionBudget: { [ASSET]: 5_000n },
     });
     await expect(

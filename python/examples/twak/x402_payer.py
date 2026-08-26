@@ -58,6 +58,7 @@ X402_ORG_URL = "https://www.x402.org/protected"
 # which is why the payer's expected_asset pin is the SigningPolicy domain
 # allowlist relocated to the quote terms.
 BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+ONESOURCE_PAY_TO = "0x52E29e0d2Aa49bfBfC548C0A9F2196F4aa51f3ea"
 
 # Session cap: at most 0.05 USDC (atomic, 6dp) across this payer's lifetime,
 # no matter how many requests run. Shared shape with the X402Signer path.
@@ -89,7 +90,11 @@ def print_quote(quote: X402Quote) -> None:
 
 
 def free_mode(wallet: TWAKProvider, tracker: SessionBudgetTracker) -> int:
-    payer = wallet.make_x402_payer(session_budget=tracker)
+    payer = wallet.make_x402_payer(
+        session_budget=tracker,
+        expected_pay_to=ONESOURCE_PAY_TO,
+        expected_asset=BASE_USDC,
+    )
     failures = 0
 
     # ── 1. quote a live Bazaar-spec endpoint (Base USDC) ──────────────────
@@ -144,6 +149,7 @@ def free_mode(wallet: TWAKProvider, tracker: SessionBudgetTracker) -> int:
     strict_payer = wallet.make_x402_payer(
         session_budget=tracker,
         expected_pay_to="0x" + "42" * 20,  # deliberately not the seller
+        expected_asset=BASE_USDC,
     )
     try:
         strict_payer.request(ONESOURCE_URL, max_payment=0)
@@ -170,6 +176,8 @@ def paid_mode(
     max_payment: int,
     method: str,
     body: str | None,
+    expected_pay_to: str,
+    expected_asset: str,
 ) -> int:
     banner("PAID MODE — THIS SPENDS REAL FUNDS")
     print("  !! You passed --pay. twak will sign and settle a REAL x402")
@@ -178,7 +186,11 @@ def paid_mode(
     print(f"  !! max payment = {max_payment} atomic units of the quoted asset")
     print("  !! (twak pays mainnet routes only; gas-free via EIP-3009/Permit2)")
 
-    payer = wallet.make_x402_payer(session_budget=tracker)
+    payer = wallet.make_x402_payer(
+        session_budget=tracker,
+        expected_pay_to=expected_pay_to,
+        expected_asset=expected_asset,
+    )
 
     # Show the terms first, then pay. request() re-quotes and prechecks the
     # terms again internally (TOCTOU narrowing via --prefer-* + --max-payment).
@@ -214,6 +226,14 @@ def main() -> int:
     )
     parser.add_argument("--method", default="GET", help="HTTP method (default GET)")
     parser.add_argument("--body", default=None, help="request body for POST/PUT")
+    parser.add_argument(
+        "--expected-pay-to",
+        help="trusted x402 recipient address (required with --pay)",
+    )
+    parser.add_argument(
+        "--expected-asset",
+        help="trusted payment-token address (required with --pay)",
+    )
     args = parser.parse_args()
 
     print("x402 delegated payer demo — TWAK wallet")
@@ -232,10 +252,14 @@ def main() -> int:
     if args.pay:
         if args.max_payment is None:
             parser.error("--pay requires --max-payment <atomic units>")
+        if not args.expected_pay_to or not args.expected_asset:
+            parser.error("--pay requires --expected-pay-to and --expected-asset")
         return paid_mode(
             wallet, tracker,
             url=args.pay, max_payment=args.max_payment,
             method=args.method, body=args.body,
+            expected_pay_to=args.expected_pay_to,
+            expected_asset=args.expected_asset,
         )
     return free_mode(wallet, tracker)
 

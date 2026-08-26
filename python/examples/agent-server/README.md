@@ -51,10 +51,16 @@ ERC8183_ROUTER_ADDRESS=            override Router proxy
 ERC8183_POLICY_ADDRESS=            override OptimisticPolicy
 ERC8183_FUNDED_POLL_INTERVAL=30    funded-job poll cadence (seconds)
 ERC8183_NEGOTIATE_RATE_LIMIT=120   /negotiate per-IP request budget
+ERC8183_NEGOTIATE_GLOBAL_RATE_LIMIT=1200 process-wide request budget
 ERC8183_NEGOTIATE_RATE_WINDOW=60   rate-limit window (seconds)
 ERC8183_MAX_RESPONSE_BYTES=5242880 response_content cap (5 MB)
 ERC8183_MAX_METADATA_BYTES=262144  metadata cap (256 KB)
 ```
+
+The server binds to `127.0.0.1` by default. Set `HOST` explicitly only when a
+reverse proxy or deployment requires another interface. The unauthenticated
+`POST /search` helper is absent by default; enable it only for local testing
+with `ENABLE_DEBUG_SEARCH=1`. Do not expose that development endpoint publicly.
 
 ### Storage backends
 
@@ -130,7 +136,10 @@ The agent builds a `DeliverableManifest` (job metadata + response content) for e
 
 ## Testing Without ERC-8183
 
+The direct route is development-only, so enable it explicitly first:
+
 ```bash
+ENABLE_DEBUG_SEARCH=1 uv run python scripts/run_agent.py
 curl -X POST http://localhost:8003/search \
   -H "Content-Type: application/json" \
   -d '{"query": "BNB Chain news", "max_results": 5}'

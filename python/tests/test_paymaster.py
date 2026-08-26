@@ -163,3 +163,28 @@ class TestPaymaster:
         pm = self._make_paymaster()
         with pytest.raises(requests.exceptions.ConnectionError):
             pm.eth_getTransactionCount("0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18")
+
+    @patch("bnbagent.core.paymaster.requests.post")
+    def test_request_error_logs_redact_urls_and_bound_response(self, mock_post, caplog):
+        import requests
+
+        response = MagicMock()
+        response.text = (
+            '{"upstream":"https://paymaster.example/key/super-secret?token=also-secret"}'
+            + "x" * 1_000
+        )
+        error = requests.exceptions.HTTPError(
+            "401 for https://paymaster.example/key/super-secret?token=also-secret",
+            response=response,
+        )
+        mock_post.side_effect = error
+
+        pm = self._make_paymaster()
+        with caplog.at_level("ERROR"), pytest.raises(requests.exceptions.HTTPError):
+            pm.eth_getTransactionCount("0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18")
+
+        logged = caplog.text
+        assert "super-secret" not in logged
+        assert "also-secret" not in logged
+        assert "<redacted-url>" in logged
+        assert "x" * 501 not in logged

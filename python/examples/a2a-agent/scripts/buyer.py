@@ -160,9 +160,10 @@ def fund_job(quote: dict) -> int | None:
     from bnbagent import ERC8183Client, EVMWalletProvider
     from bnbagent.erc8183.negotiation import build_job_description
 
-    wallet = EVMWalletProvider(
-        password=os.getenv("BUYER_WALLET_PASSWORD", "demo-password"), private_key=buyer_key
-    )
+    buyer_password = os.getenv("BUYER_WALLET_PASSWORD")
+    if not buyer_password:
+        raise SystemExit("BUYER_WALLET_PASSWORD is required when BUYER_PRIVATE_KEY is set")
+    wallet = EVMWalletProvider(password=buyer_password, private_key=buyer_key)
     client = ERC8183Client(wallet_provider=wallet, network=NETWORK)
 
     provider = quote["provider_address"]

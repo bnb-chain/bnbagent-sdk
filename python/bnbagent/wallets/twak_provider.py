@@ -79,6 +79,7 @@ import os
 import subprocess
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 from eth_account import Account
 from eth_account.messages import defunct_hash_message, encode_defunct
@@ -157,6 +158,35 @@ TWAK_CHAIN_FOR_NETWORK = {
 
 _ZERO_ADDRESS = "0x" + "00" * 20
 _ZERO_REASON = b"\x00" * 32
+_SENSITIVE_QUERY_KEYS = {
+    "apikey",
+    "api_key",
+    "access_token",
+    "auth",
+    "authorization",
+    "credential",
+    "key",
+    "password",
+    "secret",
+    "signature",
+    "token",
+}
+
+
+def _reject_sensitive_argv_url(url: str) -> None:
+    """Refuse credentials that TWAK would expose through process argv."""
+    parsed = urlsplit(url)
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(
+            "TWAK x402 URLs must not contain userinfo credentials; the CLI "
+            "receives URLs through process argv"
+        )
+    for key, _value in parse_qsl(parsed.query, keep_blank_values=True):
+        if key.lower() in _SENSITIVE_QUERY_KEYS:
+            raise ValueError(
+                f"TWAK x402 URL query parameter {key!r} may contain credentials; "
+                "the CLI receives URLs through process argv"
+            )
 
 _NETWORK_FOR_TWAK_CHAIN = {
     "bsc": "bsc-mainnet",
@@ -605,6 +635,7 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         Runs ``twak x402 quote <url> [--method M] [--body B] --json`` and
         returns the parsed JSON challenge verbatim.
         """
+        _reject_sensitive_argv_url(url)
         # F-3: deliberately NO _ensure_wallet() here. A quote is a read-only
         # challenge fetch that needs no wallet — calling _ensure_wallet would
         # let a mere price check silently auto-create a wallet (INV-4).
@@ -634,6 +665,7 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         checks). The ``--prefer-*`` flags narrow which challenge entry twak
         picks (TOCTOU backstop between a prior quote and this request).
         """
+        _reject_sensitive_argv_url(url)
         self._ensure_wallet()
         args = ["x402", "request", url, "--max-payment", str(max_payment), "--yes"]
         if method != "GET":

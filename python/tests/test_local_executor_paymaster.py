@@ -11,6 +11,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
+from web3 import Web3
 
 from bnbagent.wallets.local_executor import LocalExecutor
 
@@ -24,6 +25,7 @@ def _make_pieces(*, gas_limit: int = 100_000):
     web3 = MagicMock()
     web3.eth.gas_price = 3_000_000_000
     web3.eth.chain_id = 97
+    web3.eth.get_transaction_count.return_value = 1
     web3.eth.call.return_value = b""  # pre-flight passes
     web3.eth.send_raw_transaction.return_value = b"\xab" * 32
     web3.eth.wait_for_transaction_receipt.return_value = _ok_receipt(b"\xab" * 32)
@@ -63,9 +65,36 @@ def test_sponsorable_goes_through_paymaster():
 
     pm.eth_sendRawTransaction.assert_called_once()          # sent via paymaster
     web3.eth.send_raw_transaction.assert_not_called()       # NOT self-paid
-    assert result["transactionHash"] == "0x" + "cd" * 32
+    local_hash = "0x" + Web3.keccak(b"\x00" * 32).hex().removeprefix("0x")
+    assert result["transactionHash"] == local_hash
     # sponsored tx is sent gas-free
     assert fn.build_transaction.return_value["gasPrice"] == 0
+
+
+def test_paymaster_hash_mismatch_tracks_signed_transaction(caplog):
+    fn, web3, wallet = _make_pieces()
+    pm = _make_paymaster(sponsorable=True)
+    local_hash = "0x" + Web3.keccak(b"\x00" * 32).hex().removeprefix("0x")
+
+    ex = LocalExecutor(web3=web3, wallet_provider=wallet, paymaster=pm)
+    with caplog.at_level("WARNING"):
+        result = ex._execute_function(fn, description="submit")
+
+    assert result["transactionHash"] == local_hash
+    assert "does not match signed transaction hash" in caplog.text
+
+
+def test_paymaster_send_429_never_falls_back_or_rebroadcasts():
+    fn, web3, wallet = _make_pieces()
+    pm = _make_paymaster(sponsorable=True)
+    pm.eth_sendRawTransaction.side_effect = RuntimeError("HTTP 429")
+
+    ex = LocalExecutor(web3=web3, wallet_provider=wallet, paymaster=pm)
+    result = ex._execute_function(fn, description="submit")
+
+    assert result["transactionHash"].startswith("0x")
+    pm.eth_sendRawTransaction.assert_called_once()
+    web3.eth.send_raw_transaction.assert_not_called()
 
 
 def test_not_sponsorable_falls_back_to_self_pay(caplog):

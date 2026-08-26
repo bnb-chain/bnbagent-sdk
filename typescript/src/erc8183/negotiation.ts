@@ -65,6 +65,14 @@ export class DescriptionTooLongError extends Error {
   }
 }
 
+/** Raised when a configured quote signer cannot produce a signature. */
+export class QuoteSigningError extends Error {
+  constructor(message?: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "QuoteSigningError";
+  }
+}
+
 /** ERC-8183 standard rejection codes (aligned with whitepaper + PRD FR-06). */
 export const ReasonCode = {
   PRICE_TOO_LOW: "0x01",
@@ -1051,20 +1059,18 @@ export class NegotiationHandler {
           providerSig = sigResult.signature
             ? ensureHexPrefix(sigResult.signature)
             : "";
+          if (!providerSig) {
+            throw new Error("wallet provider returned an empty signature");
+          }
         }
       } catch (e) {
-        if (this.quoteSigner) {
-          throw new Error(`quote signing failed: ${(e as Error).message}`, {
-            cause: e,
-          });
-        }
-        // Signing failure is non-fatal: return the quote without a
-        // provider_sig, but log so operators can detect wallet issues.
-        console.warn(
-          `[NegotiationHandler] sign_message failed: ${(e as Error).message}; returning quote without provider_sig`,
+        console.error(
+          `[NegotiationHandler] quote signing failed: ${(e as Error).message}`,
         );
-        negotiationHash = "";
-        providerSig = "";
+        throw new QuoteSigningError(
+          `quote signing failed: ${(e as Error).message}`,
+          { cause: e },
+        );
       }
     }
 

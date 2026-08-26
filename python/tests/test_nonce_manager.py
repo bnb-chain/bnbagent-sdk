@@ -3,7 +3,9 @@
 import threading
 from unittest.mock import MagicMock
 
-from bnbagent.core.nonce_manager import NonceManager
+import pytest
+
+from bnbagent.core.nonce_manager import NonceManager, NonceState
 from tests.conftest import FAKE_ADDRESS
 
 
@@ -110,6 +112,47 @@ class TestGetNonce:
         mgr.get_nonce()
         checksummed = Web3.to_checksum_address(FAKE_ADDRESS)
         w3.eth.get_transaction_count.assert_called_with(checksummed, "pending")
+
+
+class TestReservationLifecycle:
+    def test_prebroadcast_release_reuses_nonce(self):
+        mgr = NonceManager.for_account(_make_w3(nonce=7), FAKE_ADDRESS)
+        nonce = mgr.reserve()
+        assert mgr.state_of(nonce) is NonceState.RESERVED
+
+        assert mgr.release(nonce) is True
+        assert mgr.reserve() == 7
+
+    def test_released_gap_is_reused_even_when_later_nonce_broadcast(self):
+        mgr = NonceManager.for_account(_make_w3(nonce=7), FAKE_ADDRESS)
+        first = mgr.reserve()
+        second = mgr.reserve()
+        mgr.mark_broadcast(second, "0x" + "22" * 32)
+        mgr.release(first)
+
+        assert mgr.reserve() == first
+        assert mgr.state_of(second) is NonceState.BROADCAST
+
+    def test_broadcast_nonce_cannot_be_released(self):
+        mgr = NonceManager.for_account(_make_w3(nonce=1), FAKE_ADDRESS)
+        nonce = mgr.reserve()
+        tx_hash = "0x" + "11" * 32
+        mgr.mark_broadcast(nonce, tx_hash)
+
+        with pytest.raises(RuntimeError, match="cannot release broadcast"):
+            mgr.release(nonce)
+        assert mgr.broadcast_hash(nonce) == tx_hash
+
+    def test_reset_preserves_broadcast_tracking(self):
+        w3 = _make_w3(nonce=1)
+        mgr = NonceManager.for_account(w3, FAKE_ADDRESS)
+        nonce = mgr.reserve()
+        mgr.mark_broadcast(nonce, "0x" + "11" * 32)
+        mgr.reset()
+        w3.eth.get_transaction_count.return_value = 1
+
+        assert mgr.reserve() == 2
+        assert mgr.state_of(1) is NonceState.BROADCAST
 
 
 class TestHandleError:

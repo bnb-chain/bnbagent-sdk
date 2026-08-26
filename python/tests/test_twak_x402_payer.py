@@ -45,6 +45,7 @@ def _fixture(name: str) -> dict:
 USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 U_BSC = "0xce24439f2d9c6a2289f741120fe202248b666666"
 PIEVERSE_PAY_TO = "0x4ba07885c7a05734be6ea6f46f749564e1476751"
+ONESOURCE_PAY_TO = "0x52E29e0d2Aa49bfBfC548C0A9F2196F4aa51f3ea"
 PIEVERSE_TX = "0x09b1af61cdf080e4f3fc7dd999626268ed07ccfdb629b0c0c764b175830c22f8"
 
 URL = "https://pay.pieverse.io/v1/topup/x402"
@@ -58,12 +59,33 @@ def _stub_provider(quote="quote_bsc_u.json", request="request_success_pieverse.j
     return provider
 
 
+def _payer(provider, **overrides):
+    return TwakX402Payer(
+        provider,
+        expected_pay_to=overrides.pop("expected_pay_to", PIEVERSE_PAY_TO),
+        expected_asset=overrides.pop("expected_asset", U_BSC),
+        **overrides,
+    )
+
+
 # ── quote() parsing ──
+
+
+def test_trusted_recipient_and_asset_anchors_are_required_and_validated():
+    provider = _stub_provider()
+    with pytest.raises(TypeError, match="expected_pay_to"):
+        TwakX402Payer(provider)  # type: ignore[call-arg]
+    with pytest.raises(ValueError):
+        TwakX402Payer(
+            provider,
+            expected_pay_to="not-an-address",
+            expected_asset=U_BSC,
+        )
 
 
 def test_quote_parses_base_usdc_challenge():
     provider = _stub_provider(quote="quote_base_usdc.json")
-    payer = TwakX402Payer(provider)
+    payer = _payer(provider)
 
     quoted = payer.quote("https://skills.onesource.io/api/chain/chain-id")
 
@@ -90,7 +112,7 @@ def test_quote_parses_base_usdc_challenge():
 
 def test_quote_forwards_method_and_body():
     provider = _stub_provider(quote="quote_bsc_u.json")
-    TwakX402Payer(provider).quote(URL, method="POST", body='{"amountUsd":0.1}')
+    _payer(provider).quote(URL, method="POST", body='{"amountUsd":0.1}')
     provider.x402_quote.assert_called_once_with(URL, method="POST", body='{"amountUsd":0.1}')
 
 
@@ -99,7 +121,7 @@ def test_quote_forwards_method_and_body():
 
 def test_request_happy_path_pieverse():
     provider = _stub_provider()
-    payer = TwakX402Payer(provider)
+    payer = _payer(provider)
 
     result = payer.request(URL, max_payment=10**18, method="POST", body='{"amountUsd":0.1}')
 
@@ -126,7 +148,7 @@ def test_request_happy_path_pieverse():
 def test_request_passes_matching_expectations():
     # casing differences must not trip the byte-equality checks
     provider = _stub_provider()
-    payer = TwakX402Payer(
+    payer = _payer(
         provider,
         expected_pay_to=PIEVERSE_PAY_TO.upper(),
         expected_asset=U_BSC.upper(),
@@ -142,7 +164,7 @@ def test_request_passes_matching_expectations():
 def test_empty_accepts_raises_no_payable_route():
     # live x402.org capture: base-sepolia routes filtered out by the client
     provider = _stub_provider(quote="quote_no_supported_route.json")
-    payer = TwakX402Payer(provider)
+    payer = _payer(provider)
     with pytest.raises(X402NoPayableRouteError, match="accepts list is empty"):
         payer.request("https://www.x402.org/protected", max_payment=10**6)
     provider.x402_request.assert_not_called()
@@ -150,7 +172,7 @@ def test_empty_accepts_raises_no_payable_route():
 
 def test_pay_to_mismatch_rejected():
     provider = _stub_provider()
-    payer = TwakX402Payer(provider, expected_pay_to="0x" + "aa" * 20)
+    payer = _payer(provider, expected_pay_to="0x" + "aa" * 20)
     with pytest.raises(X402RecipientMismatchError, match=PIEVERSE_PAY_TO):
         payer.request(URL, max_payment=10**18)
     provider.x402_request.assert_not_called()
@@ -160,7 +182,7 @@ def test_asset_mismatch_rejected():
     # asset == EIP-712 verifyingContract for eip3009: the SigningPolicy
     # domain-allowlist check relocated to the quote terms
     provider = _stub_provider()
-    payer = TwakX402Payer(provider, expected_asset=USDC_BASE)
+    payer = _payer(provider, expected_asset=USDC_BASE)
     with pytest.raises(X402PolicyError, match="verifyingContract"):
         payer.request(URL, max_payment=10**18)
     provider.x402_request.assert_not_called()
@@ -168,7 +190,7 @@ def test_asset_mismatch_rejected():
 
 def test_amount_above_max_payment_rejected():
     provider = _stub_provider()  # quoted amount = 10**17
-    payer = TwakX402Payer(provider)
+    payer = _payer(provider)
     with pytest.raises(X402AmountExceededError, match="exceeds max_payment"):
         payer.request(URL, max_payment=10**17 - 1)
     provider.x402_request.assert_not_called()
@@ -177,7 +199,7 @@ def test_amount_above_max_payment_rejected():
 def test_timeout_above_configured_cap_rejected():
     # pieverse claims a 300s window; a 200s cap must refuse it
     provider = _stub_provider()
-    payer = TwakX402Payer(provider, max_timeout_seconds=200)
+    payer = _payer(provider, max_timeout_seconds=200)
     with pytest.raises(X402PolicyError, match="maxTimeoutSeconds 300"):
         payer.request(URL, max_payment=10**18)
     provider.x402_request.assert_not_called()
@@ -190,7 +212,11 @@ def test_default_timeout_cap_accepts_3600s_endpoint():
     assert DEFAULT_MAX_TIMEOUT_SECONDS == 3600
     provider = _stub_provider(quote="quote_base_usdc.json")
     provider.x402_request.return_value = {"chainId": "0x2105"}
-    payer = TwakX402Payer(provider)
+    payer = _payer(
+        provider,
+        expected_pay_to=ONESOURCE_PAY_TO,
+        expected_asset=USDC_BASE,
+    )
 
     result = payer.request("https://skills.onesource.io/api/chain/chain-id", max_payment=2000)
 
@@ -206,7 +232,7 @@ def test_default_timeout_cap_accepts_3600s_endpoint():
 def test_budget_reserved_by_quoted_amount_keyed_by_asset():
     tracker = SessionBudgetTracker(caps={U_BSC: 3 * 10**17})
     provider = _stub_provider()
-    payer = TwakX402Payer(provider, session_budget=tracker)
+    payer = _payer(provider, session_budget=tracker)
 
     payer.request(URL, max_payment=10**18)
 
@@ -219,7 +245,7 @@ def test_budget_rolled_back_when_provider_fails():
     tracker.reserve(U_BSC, 5)  # pre-existing spend must survive the rollback
     provider = _stub_provider()
     provider.x402_request.side_effect = RuntimeError("twak command failed")
-    payer = TwakX402Payer(provider, session_budget=tracker)
+    payer = _payer(provider, session_budget=tracker)
 
     with pytest.raises(RuntimeError, match="twak command failed"):
         payer.request(URL, max_payment=10**18)
@@ -231,7 +257,7 @@ def test_budget_rolled_back_when_provider_fails():
 def test_budget_exhausted_raises_before_payment():
     tracker = SessionBudgetTracker(caps={U_BSC: 10**17 - 1})  # below the quote
     provider = _stub_provider()
-    payer = TwakX402Payer(provider, session_budget=tracker)
+    payer = _payer(provider, session_budget=tracker)
 
     with pytest.raises(X402BudgetExhaustedError):
         payer.request(URL, max_payment=10**18)
@@ -247,11 +273,15 @@ def test_twak_make_x402_payer_applies_kwargs_without_cli_calls():
     with patch("bnbagent.wallets.twak_provider.subprocess.run") as run:
         twak = TWAKProvider()
         tracker = SessionBudgetTracker()
-        payer = twak.make_x402_payer(session_budget=tracker, expected_pay_to=PIEVERSE_PAY_TO)
+        payer = twak.make_x402_payer(
+            session_budget=tracker,
+            expected_pay_to=PIEVERSE_PAY_TO,
+            expected_asset=U_BSC,
+        )
     assert isinstance(payer, TwakX402Payer)
     assert payer._provider is twak
     assert payer._session_budget is tracker
-    assert payer._expected_pay_to == PIEVERSE_PAY_TO
+    assert payer._expected_pay_to.lower() == PIEVERSE_PAY_TO.lower()
     assert payer._max_timeout_seconds == DEFAULT_MAX_TIMEOUT_SECONDS  # F-2
     run.assert_not_called()  # construction-time seam: no probe, no CLI
 
@@ -269,7 +299,7 @@ def test_evm_make_x402_payer_raises_capability_gate():
 
 def test_twak_payer_satisfies_x402_payer_protocol():
     # X402Payer is a @runtime_checkable Protocol — structural isinstance.
-    payer = TwakX402Payer(_stub_provider())
+    payer = _payer(_stub_provider())
     assert isinstance(payer, X402Payer)
 
 
@@ -296,7 +326,10 @@ def test_end_to_end_request_through_twak_provider():
         raise AssertionError(f"unexpected twak command: {cmd}")
 
     twak = TWAKProvider()
-    payer = twak.make_x402_payer()
+    payer = twak.make_x402_payer(
+        expected_pay_to=PIEVERSE_PAY_TO,
+        expected_asset=U_BSC,
+    )
     with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
         result = payer.request(URL, max_payment=10**18)
 
@@ -319,3 +352,18 @@ def test_end_to_end_request_through_twak_provider():
     assert ["--prefer-asset", U_BSC] == request_cmd[
         request_cmd.index("--prefer-asset") : request_cmd.index("--prefer-asset") + 2
     ]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://user:password@example.com/paid",
+        "https://api.example/paid?access_token=secret",
+    ],
+)
+def test_sensitive_x402_urls_never_reach_process_argv(url):
+    twak = TWAKProvider()
+    with patch("bnbagent.wallets.twak_provider.subprocess.run") as run:
+        with pytest.raises(ValueError, match="process argv"):
+            twak.x402_quote(url)
+    run.assert_not_called()

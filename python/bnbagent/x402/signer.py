@@ -142,7 +142,15 @@ class X402Signer:
             X402PolicyError: wraps an underlying
                 :class:`bnbagent.signing.PolicyViolation`.
         """
-        verifying = Web3.to_checksum_address(domain["verifyingContract"])
+        raw_verifying = domain.get("verifyingContract")
+        try:
+            if not isinstance(raw_verifying, str):
+                raise ValueError("verifyingContract must be an address string")
+            verifying = Web3.to_checksum_address(raw_verifying)
+        except (TypeError, ValueError) as exc:
+            raise X402PolicyError(
+                f"invalid or missing verifyingContract in EIP-712 domain: {raw_verifying!r}"
+            ) from exc
 
         # ── L0 recipient (cheapest check, fail fast) ───────────────
         msg_to = message.get("to")

@@ -22,6 +22,7 @@ from __future__ import annotations
 import concurrent.futures as _cf
 import logging
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from web3 import Web3
@@ -45,6 +46,50 @@ if TYPE_CHECKING:
     from .wallet_provider import WalletProvider
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _BroadcastAttempt:
+    nonce: int
+    nonce_manager: NonceManager
+    tx_hash: bytes
+    tx_hash_hex: str
+
+
+def _hex_hash(value: bytes | str) -> str:
+    result = value.hex() if isinstance(value, bytes) else str(value)
+    return result if result.startswith("0x") else "0x" + result
+
+
+def _raw_transaction_bytes(signed: Any) -> bytes:
+    raw = signed["rawTransaction"]
+    if isinstance(raw, str):
+        return bytes.fromhex(raw.removeprefix("0x"))
+    return bytes(raw)
+
+
+def _signed_transaction_hash(raw_transaction: bytes) -> tuple[bytes, str]:
+    digest = bytes(Web3.keccak(raw_transaction))
+    return digest, _hex_hash(digest)
+
+
+def _is_ambiguous_broadcast_error(error: Exception) -> bool:
+    """Whether a send failure may have happened after node acceptance."""
+    text = str(error).lower()
+    return any(
+        marker in text
+        for marker in (
+            "429",
+            "too many requests",
+            "timeout",
+            "timed out",
+            "connection",
+            "network",
+            "already known",
+            "nonce too low",
+            "replacement transaction underpriced",
+        )
+    )
 
 
 class LocalExecutor(IntentExecutor):
@@ -145,16 +190,13 @@ class LocalExecutor(IntentExecutor):
             logger.debug(f"Gas estimate: {gas_estimate}")
             gas_limit = int(gas_estimate * 1.2)  # Add 20% buffer
 
-            tx_hash: bytes | None = None
-            tx_hash_hex = ""
+            broadcast: _BroadcastAttempt | None = None
             if self.paymaster is not None:
-                sponsored = self._try_sponsored(
+                broadcast = self._try_sponsored(
                     function, gas_limit, wallet_address, description
                 )
-                if sponsored is not None:
-                    tx_hash, tx_hash_hex = sponsored
-            if tx_hash is None:
-                tx_hash, tx_hash_hex = self._send_self_pay(
+            if broadcast is None:
+                broadcast = self._send_self_pay(
                     function, gas_limit, wallet_address, description
                 )
 
@@ -166,7 +208,7 @@ class LocalExecutor(IntentExecutor):
             )
             try:
                 receipt = self.web3.eth.wait_for_transaction_receipt(
-                    tx_hash, timeout=timeout
+                    broadcast.tx_hash, timeout=timeout
                 )
             except TimeExhausted as exc:
                 # The tx was broadcast (tx_hash is known) but did not confirm
@@ -177,26 +219,40 @@ class LocalExecutor(IntentExecutor):
                     "[LocalExecutor] %s broadcast but no receipt after %ss: %s",
                     description,
                     timeout,
-                    tx_hash_hex,
+                    broadcast.tx_hash_hex,
                 )
                 raise TransactionPendingError(
-                    tx_hash=tx_hash_hex, timeout_seconds=timeout
+                    tx_hash=broadcast.tx_hash_hex, timeout_seconds=timeout
+                ) from exc
+            except Exception as exc:
+                raise TransactionPendingError(
+                    tx_hash=broadcast.tx_hash_hex,
+                    timeout_seconds=timeout,
+                    message=(
+                        f"Transaction {broadcast.tx_hash_hex} may be broadcast, but "
+                        f"receipt lookup failed: {exc}. Do not rebroadcast until its "
+                        "chain status is reconciled."
+                    ),
                 ) from exc
 
             if receipt["status"] == 0:
+                broadcast.nonce_manager.mark_finalized(broadcast.nonce)
                 logger.error(
                     "[LocalExecutor] %s reverted on-chain: tx=%s block=%s gasUsed=%s",
                     description,
-                    tx_hash_hex,
+                    broadcast.tx_hash_hex,
                     receipt["blockNumber"],
                     receipt["gasUsed"],
                 )
-                raise RuntimeError(f"Transaction reverted on-chain: {tx_hash_hex}")
+                raise RuntimeError(
+                    f"Transaction reverted on-chain: {broadcast.tx_hash_hex}"
+                )
 
+            broadcast.nonce_manager.mark_finalized(broadcast.nonce)
             logger.debug(f"Transaction confirmed: {receipt}")
 
             return {
-                "transactionHash": tx_hash_hex,
+                "transactionHash": broadcast.tx_hash_hex,
                 "receipt": receipt,
             }
 
@@ -213,7 +269,7 @@ class LocalExecutor(IntentExecutor):
         gas_limit: int,
         wallet_address: str,
         description: str,
-    ) -> tuple[bytes, str] | None:
+    ) -> _BroadcastAttempt | None:
         """Attempt a paymaster-sponsored broadcast.
 
         Returns ``(tx_hash, tx_hash_hex)`` on success, or ``None`` when the tx
@@ -223,56 +279,87 @@ class LocalExecutor(IntentExecutor):
         self-pay fallback (avoids any double-broadcast risk once submitted).
         """
         try:
-            nonce = self.paymaster.eth_getTransactionCount(wallet_address, "pending")
+            relay_nonce = self.paymaster.eth_getTransactionCount(
+                wallet_address, "pending"
+            )
         except Exception as exc:
             logger.warning(
                 "[LocalExecutor] paymaster nonce fetch failed for %s (%s); self-paying",
-                description, exc,
+                description,
+                exc,
             )
             return None
-
-        transaction = function.build_transaction(
-            {
-                "from": wallet_address,
-                "chainId": self.web3.eth.chain_id,
-                "nonce": nonce,
-                "gas": gas_limit,
-                "gasPrice": max(
-                    self.web3.eth.gas_price,
-                    min_gas_price_wei(self.web3.eth.chain_id),
-                ),
-            }
-        )
-        logger.debug(f"Building sponsored {description} transaction: {transaction}")
-
-        # Pre-flight simulation to surface a revert reason before spending gas.
-        self._run_preflight(transaction, description)
+        nonce_mgr = NonceManager.for_account(self.web3, wallet_address)
+        nonce = nonce_mgr.reserve(seed_nonce=relay_nonce)
 
         try:
-            sponsorable = self.paymaster.isSponsorable(transaction)
-        except Exception as exc:
-            logger.warning(
-                "[LocalExecutor] isSponsorable check failed for %s (%s); self-paying",
-                description, exc,
+            transaction = function.build_transaction(
+                {
+                    "from": wallet_address,
+                    "chainId": self.web3.eth.chain_id,
+                    "nonce": nonce,
+                    "gas": gas_limit,
+                    "gasPrice": max(
+                        self.web3.eth.gas_price,
+                        min_gas_price_wei(self.web3.eth.chain_id),
+                    ),
+                }
             )
-            return None
-        if not sponsorable:
-            logger.info(
-                "[LocalExecutor] %s is not sponsorable on this network; self-paying gas",
-                description,
+            logger.debug(
+                f"Building sponsored {description} transaction: {transaction}"
             )
-            return None
 
-        transaction["gasPrice"] = 0
-        signed_txn = self.wallet_provider.sign_transaction(transaction)
-        tx_hash_hex = self.paymaster.eth_sendRawTransaction(
-            signed_txn["rawTransaction"].hex(), tx_options={"UserAgent": "bnbagent/v1.0.0"}
-        )
-        if not tx_hash_hex.startswith("0x"):
-            tx_hash_hex = "0x" + tx_hash_hex
-        tx_hash = bytes.fromhex(tx_hash_hex[2:])
+            self._run_preflight(transaction, description)
+
+            try:
+                sponsorable = self.paymaster.isSponsorable(transaction)
+            except Exception as exc:
+                nonce_mgr.release(nonce)
+                logger.warning(
+                    "[LocalExecutor] isSponsorable check failed for %s (%s); self-paying",
+                    description,
+                    exc,
+                )
+                return None
+            if not sponsorable:
+                nonce_mgr.release(nonce)
+                logger.info(
+                    "[LocalExecutor] %s is not sponsorable on this network; self-paying gas",
+                    description,
+                )
+                return None
+
+            transaction["gasPrice"] = 0
+            signed_txn = self.wallet_provider.sign_transaction(transaction)
+            raw_transaction = _raw_transaction_bytes(signed_txn)
+            tx_hash, tx_hash_hex = _signed_transaction_hash(raw_transaction)
+        except Exception:
+            nonce_mgr.release(nonce)
+            raise
+
+        try:
+            relay_hash = self.paymaster.eth_sendRawTransaction(
+                "0x" + raw_transaction.hex(),
+                tx_options={"UserAgent": "bnbagent/v1.0.0"},
+            )
+        except Exception as exc:
+            if _is_ambiguous_broadcast_error(exc):
+                nonce_mgr.mark_broadcast(nonce, tx_hash_hex)
+                return _BroadcastAttempt(nonce, nonce_mgr, tx_hash, tx_hash_hex)
+            nonce_mgr.release(nonce)
+            raise
+
+        relay_hash = _hex_hash(relay_hash)
+        if relay_hash.lower() != tx_hash_hex.lower():
+            logger.warning(
+                "[LocalExecutor] paymaster returned tx hash %s, which does not "
+                "match signed transaction hash %s; tracking the signed hash",
+                relay_hash,
+                tx_hash_hex,
+            )
+        nonce_mgr.mark_broadcast(nonce, tx_hash_hex)
         logger.debug(f"Transaction sent via paymaster: {tx_hash_hex}")
-        return tx_hash, tx_hash_hex
+        return _BroadcastAttempt(nonce, nonce_mgr, tx_hash, tx_hash_hex)
 
     def _send_self_pay(
         self,
@@ -280,7 +367,7 @@ class LocalExecutor(IntentExecutor):
         gas_limit: int,
         wallet_address: str,
         description: str,
-    ) -> tuple[bytes, str]:
+    ) -> _BroadcastAttempt:
         """Standard Web3 broadcast: the wallet pays its own gas, with
         NonceManager + retry on transient (nonce / rate-limit) errors."""
         nonce_mgr = NonceManager.for_account(self.web3, wallet_address)
@@ -293,7 +380,8 @@ class LocalExecutor(IntentExecutor):
             floor_wei = MIN_GAS_PRICE_WEI
 
         for attempt in range(MAX_RETRIES):
-            nonce = nonce_mgr.get_nonce()
+            nonce = nonce_mgr.reserve()
+            raw_transaction: bytes | None = None
             try:
                 # Floor at the per-chain minimum and add 20% headroom so a low
                 # eth_gasPrice on quiet networks doesn't leave the tx stranded
@@ -317,17 +405,36 @@ class LocalExecutor(IntentExecutor):
                 self._run_preflight(transaction, description)
 
                 signed_txn = self.wallet_provider.sign_transaction(transaction)
-                tx_hash = self.web3.eth.send_raw_transaction(
-                    signed_txn["rawTransaction"]
-                )
-                tx_hash_hex = tx_hash.hex()
-                if not tx_hash_hex.startswith("0x"):
-                    tx_hash_hex = "0x" + tx_hash_hex
+                raw_transaction = _raw_transaction_bytes(signed_txn)
+                local_hash, local_hash_hex = _signed_transaction_hash(raw_transaction)
+                try:
+                    returned_hash = self.web3.eth.send_raw_transaction(raw_transaction)
+                except Exception as send_err:
+                    if _is_ambiguous_broadcast_error(send_err):
+                        nonce_mgr.mark_broadcast(nonce, local_hash_hex)
+                        logger.warning(
+                            "[LocalExecutor] %s send result is ambiguous (%s); "
+                            "tracking local tx hash %s without rebroadcast",
+                            description,
+                            send_err,
+                            local_hash_hex,
+                        )
+                        return _BroadcastAttempt(
+                            nonce, nonce_mgr, local_hash, local_hash_hex
+                        )
+                    raise
+                tx_hash = bytes(returned_hash)
+                tx_hash_hex = _hex_hash(tx_hash)
+                nonce_mgr.mark_broadcast(nonce, local_hash_hex)
                 logger.debug(f"Transaction sent via Web3: {tx_hash_hex}")
-                return tx_hash, tx_hash_hex
+                return _BroadcastAttempt(nonce, nonce_mgr, tx_hash, tx_hash_hex)
             except Exception as send_err:
                 last_error = send_err
                 error_str = str(send_err).lower()
+
+                # No send was attempted (or it returned a deterministic
+                # rejection), so this reservation is safe to reuse.
+                nonce_mgr.release(nonce)
 
                 if nonce_mgr.handle_error(send_err, nonce) and attempt < MAX_RETRIES - 1:
                     logger.warning(
@@ -346,9 +453,6 @@ class LocalExecutor(IntentExecutor):
                     time.sleep(delay)
                     continue
 
-                # Non-retryable: invalidate cached nonce so the next caller
-                # re-seeds from chain rather than leaving a gap.
-                nonce_mgr.reset()
                 raise
 
         # All retries exhausted with retryable errors.

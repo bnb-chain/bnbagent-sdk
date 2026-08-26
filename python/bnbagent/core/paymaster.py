@@ -7,12 +7,20 @@ Provides methods for interacting with paymaster services to sponsor gas fees.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import requests
 from web3 import Web3
 
 logger = logging.getLogger(__name__)
+
+_URL_RE = re.compile(r"\b(?:https?|wss?)://[^\s\"'<>]+", re.IGNORECASE)
+
+
+def _redact_url_tokens(value: object, *, limit: int = 500) -> str:
+    """Remove complete URLs (including path/query credentials) before logging."""
+    return _URL_RE.sub("<redacted-url>", str(value))[:limit]
 
 
 def _to_hex(value: int | str | bytes | None, default: str = "0x0") -> str:
@@ -153,9 +161,9 @@ class Paymaster:
 
             return result
         except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to make RPC request: {e}")
+            logger.error("Failed to make RPC request: %s", _redact_url_tokens(e))
             if hasattr(e, "response") and e.response is not None:
-                logger.error(f"Response: {e.response.text}")
+                logger.error("Response: %s", _redact_url_tokens(e.response.text))
             raise
 
     def eth_getTransactionCount(

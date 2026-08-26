@@ -32,8 +32,12 @@ async function main(): Promise<void> {
     process.env.AGENT_DESCRIPTION ??
     "Demo provider that quotes ERC-8183 jobs over the A2A protocol.";
 
+  const walletPassword = process.env.WALLET_PASSWORD;
+  if (!walletPassword) {
+    throw new Error("WALLET_PASSWORD is required (see .env.example)");
+  }
   const wallet = new EVMWalletProvider({
-    password: process.env.WALLET_PASSWORD ?? "demo-password",
+    password: walletPassword,
     privateKey,
   });
   const sdk = await ERC8004Agent.create({ walletProvider: wallet, network });

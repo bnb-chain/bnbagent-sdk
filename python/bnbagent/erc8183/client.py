@@ -373,6 +373,59 @@ class ERC8183Client:
     def get_job_status(self, job_id: int) -> JobStatus:
         return self.commerce.get_job(job_id).status
 
+    def get_job_funded_block(
+        self,
+        job_id: int,
+        *,
+        negotiated_at: int,
+        quote_expires_at: int,
+    ) -> int | None:
+        """Return the ``JobFunded`` block inside a signed quote window.
+
+        Timestamp-to-block binary searches keep the indexed event query
+        narrow.  ``None`` means the job was not economically accepted while
+        the quote was valid and callers must fail closed.
+        """
+        if (
+            not isinstance(negotiated_at, int)
+            or isinstance(negotiated_at, bool)
+            or not isinstance(quote_expires_at, int)
+            or isinstance(quote_expires_at, bool)
+            or negotiated_at < 0
+            or quote_expires_at <= negotiated_at
+        ):
+            raise ValueError("invalid signed quote time window")
+
+        head_number = self.w3.eth.block_number
+        head = self.w3.eth.get_block(head_number)
+        if int(head["timestamp"]) < negotiated_at:
+            return None
+        from_block = self._first_block_at_or_after(negotiated_at, head_number)
+        to_block = (
+            head_number
+            if int(head["timestamp"]) < quote_expires_at
+            else self._first_block_at_or_after(quote_expires_at, head_number)
+        )
+        events = self.commerce.get_job_funded_events(
+            from_block,
+            to_block,
+            job_id=job_id,
+        )
+        return int(events[0]["blockNumber"]) if events else None
+
+    def _first_block_at_or_after(self, timestamp: int, head: int) -> int:
+        """Return the lowest block whose timestamp is at least ``timestamp``."""
+        low = 0
+        high = head
+        while low < high:
+            mid = (low + high) // 2
+            block = self.w3.eth.get_block(mid)
+            if int(block["timestamp"]) < timestamp:
+                low = mid + 1
+            else:
+                high = mid
+        return low
+
     def get_deliverable_url(self, job_id: int, *, hint_block: int | None = None) -> str | None:
         """Return the ``deliverable_url`` for a submitted job.
 

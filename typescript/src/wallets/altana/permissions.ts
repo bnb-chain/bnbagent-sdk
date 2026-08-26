@@ -17,6 +17,7 @@
 import { getAddress as toChecksumAddress } from "viem";
 import { NETWORKS } from "../../config.js";
 import { BNB_CHAIN_ADDRESSES } from "../../networks/addresses.js";
+import { SigningPolicy } from "../../signing/policy.js";
 import type {
   AltanaCallPermission,
   AltanaSessionPermissions,
@@ -45,6 +46,56 @@ export interface SpendCap {
   period?: AltanaSpendPermission["period"];
 }
 
+/** Protocol roles compiled into least-privilege Altana call selectors. */
+export type AgentAuthorizationRole =
+  | "identity"
+  | "buyer"
+  | "seller"
+  | "evaluator"
+  | "voter";
+
+/** Additional permissions must bind both the target and function selector. */
+export interface StrictAgentCallPermission {
+  to: `0x${string}`;
+  signature: string;
+}
+
+/** Default full SDK surface, still selector-restricted on every target. */
+export const DEFAULT_AGENT_AUTHORIZATION_ROLES: readonly AgentAuthorizationRole[] =
+  ["identity", "buyer", "seller", "evaluator", "voter"];
+
+const REGISTRY_SIGNATURES = {
+  register: "register(string,(string,bytes)[])",
+  setMetadata: "setMetadata(uint256,string,bytes)",
+  setAgentURI: "setAgentURI(uint256,string)",
+} as const;
+
+const COMMERCE_SIGNATURES = {
+  createJob: "createJob(address,address,uint256,string,address)",
+  setProvider: "setProvider(uint256,address,bytes)",
+  setBudget: "setBudget(uint256,uint256,bytes)",
+  fund: "fund(uint256,uint256,bytes)",
+  submit: "submit(uint256,bytes32,bytes)",
+  complete: "complete(uint256,bytes32,bytes)",
+  reject: "reject(uint256,bytes32,bytes)",
+  claimRefund: "claimRefund(uint256)",
+} as const;
+
+const ROUTER_SIGNATURES = {
+  registerJob: "registerJob(uint256,address)",
+  settle: "settle(uint256,bytes)",
+  markExpired: "markExpired(uint256)",
+} as const;
+
+const POLICY_SIGNATURES = {
+  dispute: "dispute(uint256)",
+  voteReject: "voteReject(uint256)",
+} as const;
+
+const PAYMENT_TOKEN_SIGNATURES = {
+  approve: "approve(address,uint256)",
+} as const;
+
 /** Options accepted by {@link defaultAgentPermissions}. */
 export interface DefaultAgentPermissionsOpts {
   /** Chain the session will operate on (56 / 97 for the built-in presets). */
@@ -62,8 +113,49 @@ export interface DefaultAgentPermissionsOpts {
    * preset; on an unknown `chainId` ALL five must be provided.
    */
   addresses?: Partial<AgentPermissionTargets>;
-  /** Extra call rules appended after the five protocol targets. */
-  extraCalls?: readonly AltanaCallPermission[];
+  /** Protocol roles to grant. Defaults to the full SDK surface. */
+  roles?: readonly AgentAuthorizationRole[];
+  /** Extra rules; each must bind both target and selector. */
+  extraCalls?: readonly StrictAgentCallPermission[];
+}
+
+export interface AgentAuthorizationPolicyOpts {
+  /** Protocol roles allowed by the on-chain session compiler. */
+  roles?: readonly AgentAuthorizationRole[];
+  /** Typed-data policy used by the off-chain signer compiler. */
+  signingPolicy?: SigningPolicy;
+}
+
+/**
+ * One logical authorization policy with two enforcement compilers:
+ * `toSigningPolicy()` for Studio/EVM typed-data signing and
+ * `toAltanaPermissions()` for Altana's on-chain target+selector grants.
+ */
+export class AgentAuthorizationPolicy {
+  readonly #roles: ReadonlySet<AgentAuthorizationRole>;
+  readonly #signingPolicy: SigningPolicy;
+
+  constructor(opts: AgentAuthorizationPolicyOpts = {}) {
+    this.#roles = new Set(opts.roles ?? DEFAULT_AGENT_AUTHORIZATION_ROLES);
+    this.#signingPolicy = opts.signingPolicy ?? SigningPolicy.strictDefault();
+    if (this.#roles.size === 0) {
+      throw new Error("AgentAuthorizationPolicy requires at least one role");
+    }
+  }
+
+  get roles(): ReadonlySet<AgentAuthorizationRole> {
+    return new Set(this.#roles);
+  }
+
+  toSigningPolicy(): SigningPolicy {
+    return this.#signingPolicy;
+  }
+
+  toAltanaPermissions(
+    opts: Omit<DefaultAgentPermissionsOpts, "roles">,
+  ): AltanaSessionPermissions {
+    return compileAltanaPermissions(opts, this.#roles);
+  }
 }
 
 /** Resolve the preset targets for `chainId`, or `null` if unknown. */
@@ -95,6 +187,16 @@ function presetTargets(chainId: number): AgentPermissionTargets | null {
 export function defaultAgentPermissions(
   opts: DefaultAgentPermissionsOpts,
 ): AltanaSessionPermissions {
+  const { roles, ...permissionOpts } = opts;
+  return new AgentAuthorizationPolicy({ roles }).toAltanaPermissions(
+    permissionOpts,
+  );
+}
+
+function compileAltanaPermissions(
+  opts: Omit<DefaultAgentPermissionsOpts, "roles">,
+  roles: ReadonlySet<AgentAuthorizationRole>,
+): AltanaSessionPermissions {
   const preset = presetTargets(opts.chainId);
   const overrides = opts.addresses ?? {};
   const merged: Partial<AgentPermissionTargets> = { ...preset, ...overrides };
@@ -109,13 +211,60 @@ export function defaultAgentPermissions(
   }
   const targets = merged as AgentPermissionTargets;
 
-  const calls: AltanaCallPermission[] = [
-    { to: targets.registry },
-    { to: targets.commerce },
-    { to: targets.router },
-    { to: targets.policy },
-    { to: targets.paymentToken },
-    ...(opts.extraCalls ?? []),
+  const calls: StrictAgentCallPermission[] = [];
+  const allow = (to: `0x${string}`, signatures: readonly string[]) => {
+    for (const signature of signatures) calls.push({ to, signature });
+  };
+
+  if (roles.has("identity")) {
+    allow(targets.registry, Object.values(REGISTRY_SIGNATURES));
+  }
+  if (roles.has("buyer")) {
+    allow(targets.commerce, [
+      COMMERCE_SIGNATURES.createJob,
+      COMMERCE_SIGNATURES.setProvider,
+      COMMERCE_SIGNATURES.setBudget,
+      COMMERCE_SIGNATURES.fund,
+      COMMERCE_SIGNATURES.reject,
+      COMMERCE_SIGNATURES.claimRefund,
+    ]);
+    allow(targets.router, Object.values(ROUTER_SIGNATURES));
+    allow(targets.policy, [POLICY_SIGNATURES.dispute]);
+    allow(targets.paymentToken, [PAYMENT_TOKEN_SIGNATURES.approve]);
+  }
+  if (roles.has("seller")) {
+    allow(targets.commerce, [COMMERCE_SIGNATURES.submit]);
+  }
+  if (roles.has("evaluator")) {
+    allow(targets.commerce, [
+      COMMERCE_SIGNATURES.complete,
+      COMMERCE_SIGNATURES.reject,
+    ]);
+    allow(targets.router, [
+      ROUTER_SIGNATURES.settle,
+      ROUTER_SIGNATURES.markExpired,
+    ]);
+  }
+  if (roles.has("voter")) {
+    allow(targets.policy, [POLICY_SIGNATURES.voteReject]);
+  }
+
+  for (const extra of opts.extraCalls ?? []) {
+    if (!extra.to || !extra.signature) {
+      throw new Error(
+        "defaultAgentPermissions.extraCalls must bind both to and signature",
+      );
+    }
+    calls.push({
+      to: toChecksumAddress(extra.to),
+      signature: extra.signature,
+    });
+  }
+
+  const dedupedCalls: AltanaCallPermission[] = [
+    ...new Map(
+      calls.map((call) => [`${call.to.toLowerCase()}:${call.signature}`, call]),
+    ).values(),
   ];
 
   const spend: AltanaSpendPermission[] = [
@@ -132,5 +281,5 @@ export function defaultAgentPermissions(
     },
   ];
 
-  return { calls, spend };
+  return { calls: dedupedCalls, spend };
 }

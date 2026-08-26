@@ -196,6 +196,7 @@ describe("Tier 2 subpath: ./wallets", () => {
     expect(typeof Wallets.serializeSession).toBe("function");
     expect(typeof Wallets.deserializeSession).toBe("function");
     expect(typeof Wallets.defaultAgentPermissions).toBe("function");
+    expect(typeof Wallets.AgentAuthorizationPolicy).toBe("function");
     expect(Wallets.ALTANA_SESSION_VERSION).toBe(1);
     expect(typeof Wallets.DEFAULT_NATIVE_GAS_ALLOWANCE_WEI).toBe("bigint");
     expect(Wallets.ALTANA_SDK_PACKAGE).toBe("@altananetwork/sdk");

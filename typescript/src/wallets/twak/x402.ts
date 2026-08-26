@@ -12,6 +12,7 @@
  * `asset`, validity window ↔ `maxTimeoutSeconds`.
  */
 
+import { getAddress } from "viem";
 import { SessionBudgetTracker } from "../../x402/budget.js";
 import {
   X402AmountExceededError,
@@ -45,14 +46,14 @@ export interface TwakX402PayerOptions {
    * passed instead to share one budget across payers/signers.
    */
   sessionBudget?: Record<string, bigint> | SessionBudgetTracker;
-  /** When set, the quoted `payTo` must byte-equal this address. */
-  expectedPayTo?: string;
+  /** Trusted recipient anchor; the quoted `payTo` must byte-equal it. */
+  expectedPayTo: string;
   /**
-   * When set, the quoted `asset` must equal this token address (for
+   * The quoted `asset` must equal this trusted token address (for
    * EIP-3009 the asset IS the EIP-712 `verifyingContract` — this is the
    * SigningPolicy domain allowlist relocated to the quote terms).
    */
-  expectedAsset?: string;
+  expectedAsset: string;
   /** Reject challenges claiming a wider payment window (default 3600s). */
   maxTimeoutSeconds?: number;
 }
@@ -64,11 +65,16 @@ export interface TwakX402PayerOptions {
 export class TwakX402Payer implements X402Payer {
   readonly #provider: TWAKProvider;
   readonly #budget: SessionBudgetTracker | null;
-  readonly #expectedPayTo: string | undefined;
-  readonly #expectedAsset: string | undefined;
+  readonly #expectedPayTo: `0x${string}`;
+  readonly #expectedAsset: `0x${string}`;
   readonly #maxTimeoutSeconds: number;
 
-  constructor(provider: TWAKProvider, opts: TwakX402PayerOptions = {}) {
+  constructor(provider: TWAKProvider, opts: TwakX402PayerOptions) {
+    if (opts === undefined) {
+      throw new Error(
+        "TwakX402Payer requires expectedPayTo and expectedAsset trusted anchors",
+      );
+    }
     this.#provider = provider;
     this.#budget =
       opts.sessionBudget === undefined
@@ -76,8 +82,8 @@ export class TwakX402Payer implements X402Payer {
         : opts.sessionBudget instanceof SessionBudgetTracker
           ? opts.sessionBudget
           : new SessionBudgetTracker(opts.sessionBudget);
-    this.#expectedPayTo = opts.expectedPayTo;
-    this.#expectedAsset = opts.expectedAsset;
+    this.#expectedPayTo = getAddress(opts.expectedPayTo);
+    this.#expectedAsset = getAddress(opts.expectedAsset);
     this.#maxTimeoutSeconds =
       opts.maxTimeoutSeconds ?? DEFAULT_MAX_TIMEOUT_SECONDS;
   }
@@ -128,19 +134,13 @@ export class TwakX402Payer implements X402Payer {
 
     // --- five-point precheck on the quoted terms -----------------------
     // 1. payTo: byte-equal vs the caller's committed recipient.
-    if (
-      this.#expectedPayTo !== undefined &&
-      option.payTo.toLowerCase() !== this.#expectedPayTo.toLowerCase()
-    ) {
+    if (option.payTo.toLowerCase() !== this.#expectedPayTo.toLowerCase()) {
       throw new X402RecipientMismatchError(
         `quoted payTo ${option.payTo} != expected ${this.#expectedPayTo}`,
       );
     }
     // 2. asset ↔ EIP-712 verifyingContract (domain allowlist equivalent).
-    if (
-      this.#expectedAsset !== undefined &&
-      option.asset.toLowerCase() !== this.#expectedAsset.toLowerCase()
-    ) {
+    if (option.asset.toLowerCase() !== this.#expectedAsset.toLowerCase()) {
       throw new X402PolicyError(
         `quoted asset ${option.asset} != expected ${this.#expectedAsset} (asset is the EIP-712 verifyingContract for EIP-3009 routes)`,
       );

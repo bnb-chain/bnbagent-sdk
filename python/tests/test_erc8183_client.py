@@ -316,6 +316,42 @@ class TestReads:
         )
         assert facade.get_job_status(1) == JobStatus.FUNDED
 
+    def test_get_job_funded_block_queries_signed_window(self, facade):
+        facade.w3.eth.block_number = 10
+        facade.w3.eth.get_block.side_effect = lambda number: {
+            "timestamp": int(number) * 10
+        }
+        facade.commerce.get_job_funded_events.return_value = [{"blockNumber": 6}]
+
+        block = facade.get_job_funded_block(
+            7,
+            negotiated_at=25,
+            quote_expires_at=75,
+        )
+
+        assert block == 6
+        facade.commerce.get_job_funded_events.assert_called_once_with(
+            3,
+            8,
+            job_id=7,
+        )
+
+    def test_get_job_funded_block_fails_closed_without_event(self, facade):
+        facade.w3.eth.block_number = 10
+        facade.w3.eth.get_block.side_effect = lambda number: {
+            "timestamp": int(number) * 10
+        }
+        facade.commerce.get_job_funded_events.return_value = []
+
+        assert (
+            facade.get_job_funded_block(
+                7,
+                negotiated_at=25,
+                quote_expires_at=75,
+            )
+            is None
+        )
+
     def test_get_verdict_delegates_to_policy(self, facade):
         from bnbagent.erc8183.types import Verdict
 

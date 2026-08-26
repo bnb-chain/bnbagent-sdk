@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import { NETWORKS } from "../src/config.js";
 import { BNB_CHAIN_ADDRESSES } from "../src/networks/addresses.js";
 import {
+  AgentAuthorizationPolicy,
   DEFAULT_NATIVE_GAS_ALLOWANCE_WEI,
   defaultAgentPermissions,
 } from "../src/wallets/altana/permissions.js";
@@ -148,7 +149,7 @@ describe("serializeSession / deserializeSession", () => {
 });
 
 describe("defaultAgentPermissions", () => {
-  it("whitelists the five protocol targets and caps token + unconditional native spend", () => {
+  it("whitelists only explicit target+selector pairs and caps token + native spend", () => {
     const permissions = defaultAgentPermissions({
       chainId: 97,
       tokenSpend: { limit: 5n * 10n ** 18n },
@@ -159,13 +160,22 @@ describe("defaultAgentPermissions", () => {
     expect(testnet).toBeDefined();
     expect(paymentToken).toBeDefined();
     if (!testnet || !paymentToken) return;
-    expect(permissions.calls).toEqual([
-      { to: getAddress(testnet.registryContract) },
-      { to: getAddress(testnet.commerceContract) },
-      { to: getAddress(testnet.routerContract) },
-      { to: getAddress(testnet.policyContract) },
-      { to: paymentToken },
-    ]);
+    expect(permissions.calls).toHaveLength(17);
+    expect(permissions.calls).toContainEqual({
+      to: getAddress(testnet.registryContract),
+      signature: "register(string,(string,bytes)[])",
+    });
+    expect(permissions.calls).toContainEqual({
+      to: getAddress(testnet.commerceContract),
+      signature: "submit(uint256,bytes32,bytes)",
+    });
+    expect(permissions.calls).toContainEqual({
+      to: paymentToken,
+      signature: "approve(address,uint256)",
+    });
+    expect(
+      permissions.calls?.every((call) => "to" in call && "signature" in call),
+    ).toBe(true);
 
     const spend = permissions.spend ?? [];
     expect(spend).toHaveLength(2);
@@ -191,12 +201,22 @@ describe("defaultAgentPermissions", () => {
       tokenSpend: { limit: 1n, period: "hour" },
       nativeSpend: { limit: 7n, period: "week" },
       addresses: { commerce: commerceOverride },
-      extraCalls: [{ signature: "transfer(address,uint256)" }],
+      extraCalls: [
+        {
+          to: getAddress(`0x${"77".repeat(20)}`),
+          signature: "safeMethod(uint256)",
+        },
+      ],
     });
-    expect(overridden.calls?.[1]).toEqual({ to: commerceOverride });
-    expect(overridden.calls).toHaveLength(6);
-    expect(overridden.calls?.[5]).toEqual({
-      signature: "transfer(address,uint256)",
+    expect(
+      overridden.calls?.filter(
+        (call) => "to" in call && call.to === commerceOverride,
+      ),
+    ).not.toHaveLength(0);
+    expect(overridden.calls).toHaveLength(18);
+    expect(overridden.calls?.[17]).toEqual({
+      to: getAddress(`0x${"77".repeat(20)}`),
+      signature: "safeMethod(uint256)",
     });
     expect(overridden.spend?.[0]?.period).toBe("hour");
     expect(overridden.spend?.[1]).toEqual({ limit: 7n, period: "week" });
@@ -224,7 +244,35 @@ describe("defaultAgentPermissions", () => {
         paymentToken: TOKEN,
       },
     });
-    expect(full.calls).toHaveLength(5);
+    expect(full.calls).toHaveLength(17);
     expect(full.spend?.[0]?.token).toBe(TOKEN);
+  });
+
+  it("compiles one logical policy to Studio signing and least-privilege Altana roles", () => {
+    const policy = new AgentAuthorizationPolicy({ roles: ["seller"] });
+    const signing = policy.toSigningPolicy();
+    const permissions = policy.toAltanaPermissions({
+      chainId: 97,
+      tokenSpend: { limit: 1n },
+    });
+    const commerce = getAddress(NETWORKS["bsc-testnet"].commerceContract);
+
+    expect(signing.allowUnknownDomain).toBe(false);
+    expect(permissions.calls).toEqual([
+      {
+        to: commerce,
+        signature: "submit(uint256,bytes32,bytes)",
+      },
+    ]);
+  });
+
+  it("rejects wildcard-shaped extra permissions at runtime", () => {
+    expect(() =>
+      defaultAgentPermissions({
+        chainId: 97,
+        tokenSpend: { limit: 1n },
+        extraCalls: [{ signature: "transfer(address,uint256)" }] as never,
+      }),
+    ).toThrow(/must bind both to and signature/);
   });
 });

@@ -8,13 +8,18 @@
  */
 
 export {
+  AgentAuthorizationPolicy,
+  DEFAULT_AGENT_AUTHORIZATION_ROLES,
   DEFAULT_NATIVE_GAS_ALLOWANCE_WEI,
   defaultAgentPermissions,
 } from "./permissions.js";
 export type {
+  AgentAuthorizationPolicyOpts,
+  AgentAuthorizationRole,
   AgentPermissionTargets,
   DefaultAgentPermissionsOpts,
   SpendCap,
+  StrictAgentCallPermission,
 } from "./permissions.js";
 export {
   ALTANA_NONCE_RETRY_DELAY_MS,

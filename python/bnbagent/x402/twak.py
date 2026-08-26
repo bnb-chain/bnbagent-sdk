@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from web3 import Web3
+
 from .budget import SessionBudgetTracker
 from .errors import (
     X402AmountExceededError,
@@ -42,9 +44,9 @@ class TwakX402Payer:
         self,
         provider: TWAKProvider,
         *,
+        expected_pay_to: str,
+        expected_asset: str,
         session_budget: SessionBudgetTracker | None = None,
-        expected_pay_to: str | None = None,
-        expected_asset: str | None = None,
         max_timeout_seconds: int = DEFAULT_MAX_TIMEOUT_SECONDS,
     ) -> None:
         """
@@ -53,17 +55,17 @@ class TwakX402Payer:
                 executes quotes and payments.
             session_budget: Optional cumulative spend tracker, keyed by
                 token (asset) address. Shared with the X402Signer path.
-            expected_pay_to: When set, the quoted ``payTo`` must byte-equal
-                this address (case-insensitive hex compare).
-            expected_asset: When set, the quoted ``asset`` must equal this
-                token address (case-insensitive hex compare).
+            expected_pay_to: Trusted recipient anchor. The quoted ``payTo``
+                must byte-equal this address.
+            expected_asset: Trusted payment-token anchor. The quoted
+                ``asset`` must equal this address.
             max_timeout_seconds: Reject challenges claiming a payment
                 window wider than this (default 3600s, design F-2).
         """
         self._provider = provider
         self._session_budget = session_budget
-        self._expected_pay_to = expected_pay_to
-        self._expected_asset = expected_asset
+        self._expected_pay_to = Web3.to_checksum_address(expected_pay_to)
+        self._expected_asset = Web3.to_checksum_address(expected_asset)
         self._max_timeout_seconds = max_timeout_seconds
 
     def quote(
@@ -110,10 +112,7 @@ class TwakX402Payer:
 
         # --- five-point precheck on the quoted terms (design §3.2) -------
         # 1. payTo: byte-equal vs the caller's committed recipient.
-        if (
-            self._expected_pay_to is not None
-            and option.pay_to.lower() != self._expected_pay_to.lower()
-        ):
+        if option.pay_to.lower() != self._expected_pay_to.lower():
             raise X402RecipientMismatchError(
                 f"quoted payTo {option.pay_to} != expected "
                 f"{self._expected_pay_to}"
@@ -122,10 +121,7 @@ class TwakX402Payer:
         #    verifyingContract — this is the SigningPolicy domain allowlist
         #    check relocated to the quote terms (the payload itself never
         #    crosses the process boundary).
-        if (
-            self._expected_asset is not None
-            and option.asset.lower() != self._expected_asset.lower()
-        ):
+        if option.asset.lower() != self._expected_asset.lower():
             raise X402PolicyError(
                 f"quoted asset {option.asset} != expected "
                 f"{self._expected_asset} (asset is the EIP-712 "

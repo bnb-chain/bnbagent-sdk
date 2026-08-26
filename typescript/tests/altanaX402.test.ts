@@ -20,6 +20,7 @@ import {
 } from "../src/wallets/altana/x402.js";
 import { X402_PAY } from "../src/wallets/capabilities.js";
 import { UnsupportedWalletOperation } from "../src/wallets/errors.js";
+import { SessionBudgetTracker } from "../src/x402/budget.js";
 import {
   X402AmountExceededError,
   X402BudgetExhaustedError,
@@ -313,6 +314,26 @@ describe("AltanaX402Payer.request", () => {
     await payer.request("https://api.example/paid", { maxPayment: 10_000n });
     await expect(
       payer.request("https://api.example/paid", { maxPayment: 10_000n }),
+    ).rejects.toThrow(X402BudgetExhaustedError);
+    expect(sdkMocks.signX402PaymentMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one session budget across payer instances", async () => {
+    const shared = new SessionBudgetTracker({ [USDC]: 6_000n });
+    const firstFetch = fetchQueue(json402(), jsonOk({ n: 1 }));
+    const secondFetch = fetchQueue(json402());
+    const first = sessionProvider().makeX402Payer({
+      fetchImpl: firstFetch.impl,
+      sessionBudget: shared,
+    });
+    const second = sessionProvider().makeX402Payer({
+      fetchImpl: secondFetch.impl,
+      sessionBudget: shared,
+    });
+
+    await first.request("https://api.example/paid", { maxPayment: 10_000n });
+    await expect(
+      second.request("https://api.example/paid", { maxPayment: 10_000n }),
     ).rejects.toThrow(X402BudgetExhaustedError);
     expect(sdkMocks.signX402PaymentMock).toHaveBeenCalledTimes(1);
   });

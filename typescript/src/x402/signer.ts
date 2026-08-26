@@ -63,10 +63,11 @@ export interface X402SignerOptions {
   maxValuePerCall?: Record<string, bigint>;
   /**
    * `{tokenAddress: totalBaseUnits}` cap on cumulative spend across all
-   * `signPayment` calls in this signer's lifetime. Independent of the
-   * per-call cap.
+   * `signPayment` calls in this signer's lifetime. Pass an existing
+   * {@link SessionBudgetTracker} to share one cumulative budget across
+   * request-scoped signer instances. Independent of the per-call cap.
    */
-  sessionBudget?: Record<string, bigint>;
+  sessionBudget?: Record<string, bigint> | SessionBudgetTracker;
 }
 
 /** Arguments to {@link X402Signer.signPayment}. */
@@ -139,7 +140,10 @@ export class X402Signer {
         this.#maxValue.set(toChecksumAddress(addr as `0x${string}`), cap);
       }
     }
-    this.#budget = new SessionBudgetTracker(opts.sessionBudget);
+    this.#budget =
+      opts.sessionBudget instanceof SessionBudgetTracker
+        ? opts.sessionBudget
+        : new SessionBudgetTracker(opts.sessionBudget);
   }
 
   get walletAddress(): string {

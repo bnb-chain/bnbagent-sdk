@@ -42,10 +42,10 @@ def _make_wallet(network: str):
     private_key = os.getenv("PRIVATE_KEY")
     if not private_key:
         sys.exit("PRIVATE_KEY is required for WALLET_KIND=evm (see .env.example)")
-    return EVMWalletProvider(
-        password=os.getenv("WALLET_PASSWORD", "demo-password"),
-        private_key=private_key,
-    )
+    wallet_password = os.getenv("WALLET_PASSWORD")
+    if not wallet_password:
+        sys.exit("WALLET_PASSWORD is required for WALLET_KIND=evm (see .env.example)")
+    return EVMWalletProvider(password=wallet_password, private_key=private_key)
 
 
 def main() -> None:

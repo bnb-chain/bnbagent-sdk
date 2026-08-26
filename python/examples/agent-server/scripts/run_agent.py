@@ -31,6 +31,6 @@ if __name__ == "__main__":
     # pass env file choice to service.py via env var before it loads dotenv
     os.environ.setdefault("ENV_FILE", args.env)
 
-    from service import PORT, app
+    from service import HOST, PORT, app
 
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
+    uvicorn.run(app, host=HOST, port=PORT)

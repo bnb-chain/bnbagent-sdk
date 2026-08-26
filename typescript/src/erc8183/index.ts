@@ -78,6 +78,7 @@ export {
 } from "./jobOps.js";
 export {
   DescriptionTooLongError,
+  QuoteSigningError,
   MAX_DESCRIPTION_BYTES,
   type MessageSigner,
   type QuoteSigner,

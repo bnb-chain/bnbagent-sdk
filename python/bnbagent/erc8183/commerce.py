@@ -301,12 +301,15 @@ class CommerceClient(ContractClientMixin):
     def get_job_funded_events(
         self,
         from_block: int,
-        to_block: str = "latest",
+        to_block: int | str = "latest",
         provider: str | None = None,
+        job_id: int | None = None,
     ) -> list[dict[str, Any]]:
         event_filter = {}
         if provider:
             event_filter["provider"] = Web3.to_checksum_address(provider)
+        if job_id is not None:
+            event_filter["jobId"] = job_id
         logs = self.contract.events.JobFunded().get_logs(
             from_block=from_block,
             to_block=to_block,

@@ -233,8 +233,8 @@ twak's x402 is a complete HTTP client - it discovers the 402 challenge, signs th
 ```python
 payer = wallet.make_x402_payer(          # -> TwakX402Payer
     session_budget=tracker,              # optional, shared with the signer path
-    expected_pay_to="0x...",             # optional recipient pin
-    expected_asset="0x...",              # optional token pin
+    expected_pay_to="0x...",             # required trusted recipient pin
+    expected_asset="0x...",              # required trusted token pin
 )
 quote = payer.quote(url)                 # read-only - NEVER creates a wallet
 result = payer.request(url, max_payment=100_000)

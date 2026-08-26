@@ -7,6 +7,7 @@ Requires `httpx` (optional dependency).
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -18,6 +19,26 @@ from .storage_provider import StorageProvider
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_MAX_IPFS_UPLOAD_BYTES = 8 * 1024 * 1024
+
+
+def _max_upload_bytes_from_env() -> int:
+    raw = os.getenv("STORAGE_MAX_UPLOAD_BYTES")
+    if raw is None:
+        return DEFAULT_MAX_IPFS_UPLOAD_BYTES
+    try:
+        value = int(raw)
+        if value <= 0:
+            raise ValueError
+        return value
+    except ValueError:
+        logger.warning(
+            "STORAGE_MAX_UPLOAD_BYTES=%r invalid, using %d",
+            raw,
+            DEFAULT_MAX_IPFS_UPLOAD_BYTES,
+        )
+        return DEFAULT_MAX_IPFS_UPLOAD_BYTES
+
 
 class IPFSStorageProvider(StorageProvider):
     """
@@ -27,6 +48,7 @@ class IPFSStorageProvider(StorageProvider):
         pinning_api_url: e.g. "https://api.pinata.cloud/pinning/pinJSONToIPFS"
         pinning_api_key: Bearer token (JWT) for the pinning service
         gateway_url: e.g. "https://gateway.pinata.cloud/ipfs/"
+        max_upload_bytes: Serialized pin request ceiling (default 8 MiB).
     """
 
     def __init__(
@@ -34,10 +56,14 @@ class IPFSStorageProvider(StorageProvider):
         pinning_api_url: str,
         pinning_api_key: str,
         gateway_url: str = "https://gateway.pinata.cloud/ipfs/",
+        max_upload_bytes: int = DEFAULT_MAX_IPFS_UPLOAD_BYTES,
     ):
+        if max_upload_bytes <= 0:
+            raise ValueError("max_upload_bytes must be > 0")
         self._pinning_url = pinning_api_url
         self._api_key = pinning_api_key
         self._gateway = gateway_url.rstrip("/")
+        self._max_upload_bytes = max_upload_bytes
 
     @classmethod
     def from_env(cls) -> IPFSStorageProvider:
@@ -45,9 +71,11 @@ class IPFSStorageProvider(StorageProvider):
         if not api_key:
             raise ValueError("STORAGE_API_KEY required for IPFSStorageProvider")
         return cls(
-            pinning_api_url=os.getenv("STORAGE_API_URL") or "https://api.pinata.cloud/pinning/pinJSONToIPFS",
+            pinning_api_url=os.getenv("STORAGE_API_URL")
+            or "https://api.pinata.cloud/pinning/pinJSONToIPFS",
             pinning_api_key=api_key,
             gateway_url=os.getenv("STORAGE_GATEWAY_URL") or "https://gateway.pinata.cloud/ipfs/",
+            max_upload_bytes=_max_upload_bytes_from_env(),
         )
 
     async def upload(self, data: dict, filename: str | None = None) -> str:
@@ -68,9 +96,15 @@ class IPFSStorageProvider(StorageProvider):
             "pinataContent": data,
             "pinataMetadata": {"name": pin_name},
         }
+        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if len(encoded) > self._max_upload_bytes:
+            raise StorageError(
+                f"IPFS upload payload is {len(encoded)} bytes; "
+                f"limit is {self._max_upload_bytes} bytes"
+            )
 
         async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(self._pinning_url, json=payload, headers=headers)
+            resp = await client.post(self._pinning_url, content=encoded, headers=headers)
             resp.raise_for_status()
             result = resp.json()
 

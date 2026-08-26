@@ -15,6 +15,7 @@ import { StorageProvider } from "./storageProvider.js";
 
 const DEFAULT_PINNING_URL = "https://api.pinata.cloud/pinning/pinJSONToIPFS";
 const DEFAULT_GATEWAY_URL = "https://gateway.pinata.cloud/ipfs/";
+const DEFAULT_MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 
 // CIDv0: Qm + 44 base58 chars; CIDv1: b + base32 (58+ chars)
 const CID_RE = /^(Qm[1-9A-HJ-NP-Za-km-z]{44}|b[a-z2-7]{58,})$/;
@@ -25,21 +26,28 @@ const CID_RE = /^(Qm[1-9A-HJ-NP-Za-km-z]{44}|b[a-z2-7]{58,})$/;
  * @param pinningApiUrl - e.g. "https://api.pinata.cloud/pinning/pinJSONToIPFS"
  * @param pinningApiKey - Bearer token (JWT) for the pinning service
  * @param gatewayUrl - e.g. "https://gateway.pinata.cloud/ipfs/"
+ * @param maxUploadBytes - Serialized pin request ceiling (default 8 MiB)
  */
 export class IPFSStorageProvider extends StorageProvider {
   private readonly pinningUrl: string;
   private readonly apiKey: string;
   private readonly gateway: string;
+  private readonly maxUploadBytes: number;
 
   constructor(
     pinningApiUrl: string,
     pinningApiKey: string,
     gatewayUrl: string = DEFAULT_GATEWAY_URL,
+    maxUploadBytes: number = DEFAULT_MAX_UPLOAD_BYTES,
   ) {
     super();
+    if (!Number.isInteger(maxUploadBytes) || maxUploadBytes <= 0) {
+      throw new Error("maxUploadBytes must be a positive integer");
+    }
     this.pinningUrl = pinningApiUrl;
     this.apiKey = pinningApiKey;
     this.gateway = gatewayUrl.replace(/\/+$/, "");
+    this.maxUploadBytes = maxUploadBytes;
   }
 
   static fromEnv(): IPFSStorageProvider {
@@ -51,6 +59,7 @@ export class IPFSStorageProvider extends StorageProvider {
       getEnv("STORAGE_API_URL", DEFAULT_PINNING_URL) as string,
       apiKey,
       getEnv("STORAGE_GATEWAY_URL", DEFAULT_GATEWAY_URL) as string,
+      IPFSStorageProvider.maxUploadBytesFromEnv(),
     );
   }
 
@@ -75,11 +84,18 @@ export class IPFSStorageProvider extends StorageProvider {
       pinataContent: data,
       pinataMetadata: { name: pinName },
     };
+    const body = JSON.stringify(payload);
+    const bodyBytes = Buffer.byteLength(body);
+    if (bodyBytes > this.maxUploadBytes) {
+      throw new StorageError(
+        `IPFS upload payload is ${bodyBytes} bytes; limit is ${this.maxUploadBytes} bytes`,
+      );
+    }
 
     const resp = await fetch(this.pinningUrl, {
       method: "POST",
       headers,
-      body: JSON.stringify(payload),
+      body,
       signal: AbortSignal.timeout(60_000),
     });
     if (!resp.ok) {
@@ -159,5 +175,16 @@ export class IPFSStorageProvider extends StorageProvider {
       return (job as Record<string, unknown>).id;
     }
     return undefined;
+  }
+
+  private static maxUploadBytesFromEnv(): number {
+    const raw = getEnv("STORAGE_MAX_UPLOAD_BYTES");
+    if (!raw) {
+      return DEFAULT_MAX_UPLOAD_BYTES;
+    }
+    const value = Number(raw);
+    return Number.isInteger(value) && value > 0
+      ? value
+      : DEFAULT_MAX_UPLOAD_BYTES;
   }
 }

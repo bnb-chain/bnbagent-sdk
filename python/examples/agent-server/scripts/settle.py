@@ -45,17 +45,30 @@ from bnbagent.wallets import EVMWalletProvider
 ROOT = Path(__file__).resolve().parent.parent  # examples/agent-server/
 
 
+def resolve_env_file(name: str) -> Path:
+    """Resolve a bare env filename and refuse traversal or symlink escapes."""
+    if not name or Path(name).name != name or "/" in name or "\\" in name:
+        raise ValueError("--env must be a bare file name inside examples/agent-server")
+    root = ROOT.resolve()
+    candidate = (root / name).resolve()
+    if candidate.parent != root:
+        raise ValueError("--env resolves outside examples/agent-server")
+    return candidate
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Settle a SUBMITTED ERC-8183 job (v1 operator helper).",
     )
     parser.add_argument("job_id", type=int, help="On-chain jobId to settle")
-    parser.add_argument(
-        "--env", default=".env", help="env file name relative to agent-server/"
-    )
+    parser.add_argument("--env", default=".env", help="env file name relative to agent-server/")
     args = parser.parse_args()
 
-    load_dotenv(ROOT / args.env)
+    try:
+        env_file = resolve_env_file(args.env)
+    except ValueError as exc:
+        parser.error(str(exc))
+    load_dotenv(env_file)
 
     wallet_password = os.getenv("WALLET_PASSWORD")
     private_key = os.getenv("PRIVATE_KEY")

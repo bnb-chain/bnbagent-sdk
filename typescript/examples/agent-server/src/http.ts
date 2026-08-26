@@ -88,12 +88,56 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   }
 }
 
-function clientIpOf(req: IncomingMessage): string {
-  const fwd = req.headers["x-forwarded-for"];
-  if (typeof fwd === "string" && fwd.length > 0) {
-    return fwd.split(",")[0]?.trim() ?? "unknown";
+function normalizeIp(value: string): string {
+  const ip = value.trim();
+  if (ip.startsWith("::ffff:")) {
+    return ip.slice("::ffff:".length);
   }
-  return req.socket.remoteAddress ?? "unknown";
+  if (ip.startsWith("[") && ip.endsWith("]")) {
+    return ip.slice(1, -1);
+  }
+  return ip;
+}
+
+/**
+ * Resolve the request IP without trusting client-controlled forwarding headers.
+ *
+ * `X-Forwarded-For` is considered only when the socket peer is explicitly
+ * trusted. The chain is then walked from right to left, returning the first
+ * untrusted hop. This is the same trust boundary used by production proxy-aware
+ * frameworks and prevents callers from minting fresh rate-limit buckets.
+ */
+export function clientIpOf(
+  req: IncomingMessage,
+  trustedProxyIps: ReadonlySet<string> = new Set(),
+): string {
+  const peer = normalizeIp(req.socket.remoteAddress ?? "unknown");
+  const trusted = new Set([...trustedProxyIps].map(normalizeIp));
+  if (!trusted.has(peer)) {
+    return peer;
+  }
+
+  const rawForwarded = req.headers["x-forwarded-for"];
+  const forwarded = Array.isArray(rawForwarded)
+    ? rawForwarded.join(",")
+    : rawForwarded;
+  if (!forwarded) {
+    return peer;
+  }
+
+  const hops = forwarded.split(",").map(normalizeIp).filter(Boolean);
+  for (let i = hops.length - 1; i >= 0; i -= 1) {
+    const hop = hops[i];
+    if (hop && !trusted.has(hop)) {
+      return hop;
+    }
+  }
+  return hops[0] ?? peer;
+}
+
+export interface RequestListenerOptions {
+  /** Exact socket peer IPs allowed to supply `X-Forwarded-For`. */
+  trustedProxyIps?: ReadonlySet<string>;
 }
 
 /**
@@ -104,7 +148,11 @@ function clientIpOf(req: IncomingMessage): string {
  * throw inside a handler becomes a 500 (`internal_error`) instead of crashing
  * the process.
  */
-export function makeRequestListener(routes: Route[]) {
+export function makeRequestListener(
+  routes: Route[],
+  options: RequestListenerOptions = {},
+) {
+  const trustedProxyIps = options.trustedProxyIps ?? new Set<string>();
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const url = new URL(req.url ?? "/", "http://localhost");
     const path = url.pathname;
@@ -129,7 +177,13 @@ export function makeRequestListener(routes: Route[]) {
           ? await readJsonBody(req)
           : undefined;
       try {
-        await r.handler({ req, res, params, body, clientIp: clientIpOf(req) });
+        await r.handler({
+          req,
+          res,
+          params,
+          body,
+          clientIp: clientIpOf(req, trustedProxyIps),
+        });
       } catch (error) {
         if (!res.headersSent) {
           sendJson(res, 500, {

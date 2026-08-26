@@ -41,7 +41,9 @@ TWA_FIELDS = [
 @pytest.fixture
 def wallet(tmp_path):
     return EVMWalletProvider(
-        password=PW, private_key=PK, wallets_dir=tmp_path / "wallets",
+        password=PW,
+        private_key=PK,
+        wallets_dir=tmp_path / "wallets",
     )
 
 
@@ -58,8 +60,10 @@ def _payload(*, to=None, value=500_000, from_addr=None):
     now = int(time.time())
     return {
         "domain": {
-            "name": "United Stables", "version": "1",
-            "chainId": BSC_MAINNET_CHAIN_ID, "verifyingContract": U_MAINNET,
+            "name": "United Stables",
+            "version": "1",
+            "chainId": BSC_MAINNET_CHAIN_ID,
+            "verifyingContract": U_MAINNET,
         },
         "types": {"EIP712Domain": EIP712DOMAIN_FIELDS, "TransferWithAuthorization": TWA_FIELDS},
         "message": {
@@ -83,6 +87,20 @@ def test_sign_payment_succeeds_for_u_token_within_budget(signer):
     assert signer.budget.spent(U_MAINNET) == p["message"]["value"]
 
 
+def test_missing_verifying_contract_uses_x402_error_contract(signer):
+    p = _payload(from_addr=signer.wallet_address)
+    del p["domain"]["verifyingContract"]
+    with pytest.raises(X402PolicyError, match="missing verifyingContract"):
+        signer.sign_payment(**p, expected_to=p["message"]["to"])
+
+
+def test_invalid_verifying_contract_uses_x402_error_contract(signer):
+    p = _payload(from_addr=signer.wallet_address)
+    p["domain"]["verifyingContract"] = "not-an-address"
+    with pytest.raises(X402PolicyError, match="invalid or missing verifyingContract"):
+        signer.sign_payment(**p, expected_to=p["message"]["to"])
+
+
 # ── Recipient mismatch ───────────────────────────────────────────────────
 
 
@@ -100,9 +118,7 @@ def test_recipient_check_is_case_insensitive(signer):
         to="0xaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaA",
         from_addr=signer.wallet_address,
     )
-    signed = signer.sign_payment(
-        **p, expected_to="0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-    )
+    signed = signer.sign_payment(**p, expected_to="0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
     assert "signature" in signed
 
 
@@ -176,8 +192,7 @@ def test_negative_value_via_int256_schema_is_rejected(signer):
     p["types"] = {
         "EIP712Domain": EIP712DOMAIN_FIELDS,
         "TransferWithAuthorization": [
-            {**f, "type": "int256"} if f["name"] == "value" else f
-            for f in TWA_FIELDS
+            {**f, "type": "int256"} if f["name"] == "value" else f for f in TWA_FIELDS
         ],
     }
     with pytest.raises((X402AmountExceededError, X402PolicyError)):
@@ -196,8 +211,7 @@ def test_int256_schema_rejected_through_the_x402_path(signer):
     p["types"] = {
         "EIP712Domain": EIP712DOMAIN_FIELDS,
         "TransferWithAuthorization": [
-            {**f, "type": "int256"} if f["name"] == "value" else f
-            for f in TWA_FIELDS
+            {**f, "type": "int256"} if f["name"] == "value" else f for f in TWA_FIELDS
         ],
     }
     with pytest.raises(X402PolicyError, match="canonical EIP-3009 field shape"):
@@ -293,6 +307,7 @@ def test_budget_not_consumed_when_underlying_wallet_rejects(wallet, tmp_path):
     with pytest.raises(X402PolicyError):
         signer.sign_payment(**p, expected_to=p["message"]["to"])
     from web3 import Web3
+
     assert signer.budget.spent(Web3.to_checksum_address("0x" + "1" * 40)) == 0
 
 
@@ -308,8 +323,10 @@ def test_wraps_wallet_policy_violation_as_x402_policy_error(wallet, tmp_path):
     )
     permit_payload = {
         "domain": {
-            "name": "United Stables", "version": "1",
-            "chainId": BSC_MAINNET_CHAIN_ID, "verifyingContract": U_MAINNET,
+            "name": "United Stables",
+            "version": "1",
+            "chainId": BSC_MAINNET_CHAIN_ID,
+            "verifyingContract": U_MAINNET,
         },
         "types": {
             "EIP712Domain": EIP712DOMAIN_FIELDS,
@@ -331,13 +348,15 @@ def test_wraps_wallet_policy_violation_as_x402_policy_error(wallet, tmp_path):
             "to": "0x" + "b" * 40,
             "from": signer.wallet_address,
             "value": 500_000,
-            "nonce": 0, "deadline": 2_000_000_000,
+            "nonce": 0,
+            "deadline": 2_000_000_000,
         },
     }
     with pytest.raises(X402PolicyError) as exc:
         signer.sign_payment(**permit_payload, expected_to="0x" + "b" * 40)
     # Original PolicyViolation chained
     from bnbagent.signing import PolicyViolation
+
     assert isinstance(exc.value.__cause__, PolicyViolation)
     assert exc.value.__cause__.primary_type == "Permit"
 
