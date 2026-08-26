@@ -9,7 +9,7 @@ See the [Altana capability reference](../../../docs/altana.md) for the complete 
 The Altana SDK is an **optional peer dependency** (GPL-3.0-or-later, ESM-only). Nothing GPL ships inside `@bnbagent/sdk`; the provider lazily `import()`s it on first backend use:
 
 ```bash
-pnpm add @altananetwork/sdk        # only if you use AltanaWalletProvider
+pnpm add -E @altananetwork/sdk@0.7.1  # only if you use AltanaWalletProvider
 ```
 
 ## Two modes
@@ -61,7 +61,7 @@ The serialized payload **contains the session private key** - mode 0600, never c
 
 ## ERC-8183 quotes from the session key
 
-`@altananetwork/sdk` 0.5.1's existing `signOrder` is sufficient for quote signing. `sessionQuoteSigner()` hashes the canonical negotiation hash with EIP-191 and returns Altana's wallet-level ERC-1271 envelope. The public quote still contains only `negotiation_hash` and `provider_sig`: it does not expose the session address, add a new signature scheme, or give the agent generic message-signing authority.
+The pinned `@altananetwork/sdk` 0.7.1 release provides `signOrder` for quote signing. `sessionQuoteSigner()` hashes the canonical negotiation hash with EIP-191 and returns Altana's wallet-level ERC-1271 envelope. The public quote still contains only `negotiation_hash` and `provider_sig`: it does not expose the session address, add a new signature scheme, or give the agent generic message-signing authority.
 
 The trusted environment approves the ERC-8183 Commerce/verifier as the session's signature checker once, alongside the session grant:
 
@@ -125,16 +125,16 @@ The SDK exposes no quote-revoke operation. Historical ERC-1271 verification requ
 | --- | --- | --- |
 | register admin key (auto, first execute ever) | ~$0.50 in native BNB | self-paid via relay |
 | register session key (each `grantSession`) | ~$0.50 in native BNB | self-paid |
-| ephemeral session (`grantSession({ register: false })`, SDK >= 0.5.0) | 0 - no registry entry, so no fee; invisible to `verify_authorization` | self-paid |
+| ephemeral session (`grantSession({ register: false })`, pinned SDK 0.7.1) | 0 - no registry entry, so no fee; invisible to `verify_authorization` | self-paid |
 | `registerSessionKey` (upgrade an ephemeral key later; idempotent) | ~$0.50 in native BNB (0 if already registered) | self-paid |
 | every `execute` | 0 | self-paid |
 | `revokeSession` / registry reads | 0 | gas / free |
 
 "Gasless" means the relay **fronts** gas and recovers it from the wallet in the same transaction - nothing is sponsored today, and MegaFuel does not participate in Altana-routed transactions.
 
-## x402 from the session key (`x402.pay`, SDK >= 0.4.0)
+## x402 from the session key (`x402.pay`, pinned SDK 0.7.1)
 
-Raw x402 signatures used to be a dead end here (confirmed on-chain: `ecrecover` yields the session key, and the Porto account's ERC-1271 rejects raw digests). `@altananetwork/sdk` >= 0.4.0 opens the supported path around both: `signX402Payment` produces an ERC-7739-nested ERC-1271 envelope, and `isValidSignature` answers only callers whitelisted via `approveSignatureChecker` - so the old dual-account workaround (separate x402 EOA) is retired. One-time setup, then the agent pays with the session alone:
+Raw x402 signatures used to be a dead end here (confirmed on-chain: `ecrecover` yields the session key, and the Porto account's ERC-1271 rejects raw digests). The pinned `@altananetwork/sdk` 0.7.1 release provides the supported path around both: `signX402Payment` produces an ERC-7739-nested ERC-1271 envelope, and `isValidSignature` answers only callers whitelisted via `approveSignatureChecker` - so the old dual-account workaround (separate x402 EOA) is retired. One-time setup, then the agent pays with the session alone:
 
 ```ts
 // admin, once per session
@@ -148,17 +148,17 @@ const result = await payer.request(url, { maxPayment: 1_000_000n });
 
 Security model: session **spend caps do not apply to Permit2 pulls** (the checker gate is independent of spend permissions), so the wallet→Permit2 allowance is the only on-chain ceiling on a leaked session key's x402 spending. Keep it bounded (`setPermit2Allowance`, sized like the old dedicated-EOA balance) and layer the in-process caps (`maxPayment`, `sessionBudget`) on top. Kill switches: `revokeX402SignatureChecker` (x402 only) or `revokeSession` (everything).
 
-x402 is also the textbook fit for **ephemeral sessions** (SDK >= 0.5.0): the facilitator verifies signatures through the account's ERC-1271, never the KeyStore registry, so `grantSession({ register: false })` buys the same payment power without the registration fee.
+x402 is also the textbook fit for **ephemeral sessions** in the pinned 0.7.1 release: the facilitator verifies signatures through the account's ERC-1271, never the KeyStore registry, so `grantSession({ register: false })` buys the same payment power without the registration fee.
 
-**Verification runbook (>= 0.4.0 is on npm):**
+**Verification runbook (supported and tested with 0.7.1):**
 
-1. `pnpm add -D @altananetwork/sdk@latest`, then add the x402 mirrors to `tests/altanaTypeCompat.test.ts` (see the note in `src/wallets/altana/types.ts`) - `pnpm check` arbitrates every assumed shape.
+1. `pnpm add -D -E @altananetwork/sdk@0.7.1`, then add the x402 mirrors to `tests/altanaTypeCompat.test.ts` (see the note in `src/wallets/altana/types.ts`) - `pnpm check` arbitrates every assumed shape.
 2. `pnpm exec tsx examples/altana/x402.ts` (mainnet, dust amounts; env: `PRIVATE_KEY`, `X402_ENDPOINT`, optional `X402_MAX_PAYMENT`) - runs setup + one paid request end-to-end.
 3. Receiving is unchanged: point `payTo` at the Altana wallet.
 
 ## Testnet: the official stack
 
-The Altana SDK ships the official BSC-testnet deployment as the `BNB_TESTNET` export - in this SDK, just `network: "bnb-testnet"` on the provider. The full lifecycle is E2E-verified against it (12/12, 2026-07-15). Use `@altananetwork/sdk` >= 0.5.1: the testnet relay was re-homed to `testnet-relay.altana.network` on 2026-07-15 and 0.5.1 is the first release pointing at it (0.5.0 still targets the dead old hostname). (The legacy functor stack and its `getKeys→getActiveKeys` RPC shim are retired; `testnet.ts` now only carries shared constants.)
+The pinned `@altananetwork/sdk` 0.7.1 release ships the official BSC-testnet deployment as the `BNB_TESTNET` export - in this SDK, just set `network: "bnb-testnet"` on the provider. The full lifecycle is E2E-verified against it (12/12, 2026-07-15). Version 0.7.1 uses the current `testnet-relay.altana.network` relay. (The legacy functor stack and its `getKeys→getActiveKeys` RPC shim are retired; `testnet.ts` now only carries shared constants.)
 
 ## Running the E2E
 
