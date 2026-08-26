@@ -94,13 +94,11 @@ export abstract class WalletProvider {
   static readonly kind: string = "custom";
 
   /**
-   * Whether this wallet's ERC-8183 `fund` execution bundles the
-   * payment-token approval itself (fund bundles approval: approve + deposit
-   * in one operation). `false` for pure signers — the SDK manages the
-   * allowance and sends a separate `approve` before `fund`. A
-   * self-broadcasting backend that owns the funding flow end-to-end (e.g.
-   * the twak CLI, whose `erc8183 fund` approves then deposits) sets this to
-   * `true` so the SDK skips its own allowance top-up.
+   * Whether this wallet owns the ERC-8183 funding allowance lifecycle.
+   * `false` for pure signers — the SDK manages the allowance and sends a
+   * separate `approve` before `fund`. A self-broadcasting backend sets this
+   * to `true` so the SDK skips its own allowance top-up; the backend may
+   * bundle approval or require a trusted admin to pre-provision it.
    */
   readonly fundBundlesApproval: boolean = false;
 

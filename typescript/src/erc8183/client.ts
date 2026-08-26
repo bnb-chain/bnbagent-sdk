@@ -420,9 +420,10 @@ export class ERC8183Client {
    * small-budget jobs; large-budget jobs always fall back to exact approve
    * so residual allowance is bounded.
    *
-   * A self-broadcasting backend (e.g. a wallet whose own `fund` bundles
-   * approve+deposit) sets `walletProvider.fundBundlesApproval` to the
-   * literal `true` to skip the SDK-side allowance management entirely.
+   * A self-broadcasting backend that owns the allowance lifecycle sets
+   * `walletProvider.fundBundlesApproval` to the literal `true` to skip the
+   * SDK-side allowance management entirely. The backend may bundle approval
+   * or require a trusted admin to pre-provision it.
    */
   async fund(
     jobId: bigint,

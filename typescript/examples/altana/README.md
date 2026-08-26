@@ -20,6 +20,9 @@ import {
   defaultAgentPermissions,
   serializeSession,
 } from "@bnbagent/sdk/wallets";
+import { getAddress as getDeployment } from "@bnbagent/sdk/networks";
+
+const { paymentToken, commerceProxy } = getDeployment(56);
 
 // ADMIN (holds the wallet's EOA key; grants/revokes sessions) -
 // run this wherever the admin key lives, NOT in the agent process.
@@ -33,6 +36,7 @@ const session = await admin.grantSession({
   }),
   expiry: Math.floor(Date.now() / 1000) + 86_400,
 });
+await admin.setErc8183Allowance(paymentToken, commerceProxy, 10n ** 18n);
 // Persist BYTE-EXACTLY (the chain hash-commits the granted bytes):
 fs.writeFileSync(".session.json", serializeSession(session), { mode: 0o600 });
 
@@ -44,7 +48,7 @@ const jobs = await ERC8183Client.create({
 });
 ```
 
-`defaultAgentPermissions` whitelists the five protocol targets (registry, commerce, router, policy, payment token) and **always** includes a small native spend cap - a session pays its own relay-recovered gas, and a grant without a native allowance reverts `NoSpendPermissions` on-chain (field-tested).
+`defaultAgentPermissions` whitelists selector-bound registry/Commerce/Router/Policy calls and **always** includes a small native spend cap. The payment token is spend-cap-only: session keys cannot call `approve`, so Commerce allowance must be provisioned by the admin with `setErc8183Allowance()` and kept no higher than the session token cap. Zero it when revoking the session.
 
 Session persistence env vars:
 
@@ -168,4 +172,4 @@ ALTANA_E2E=1
 pnpm -C typescript run e2e:altana
 ```
 
-12 steps: admin provider → 7702 bootstrap (idempotent) → grantSession (default agent permissions) → byte-exact serde round-trip → session provider → ERC-8004 register → ERC-8183 createJob → cancelOpen → bundled approve+fund (skipped if U < 0.1) → revoke + negative verification → fee accounting → cleanup. Exit 0 only when everything passes.
+12 steps: admin provider → 7702 bootstrap (idempotent) → bounded Commerce allowance + grantSession → byte-exact serde round-trip → session provider → ERC-8004 register → ERC-8183 createJob → cancelOpen → allowance-checked fund (skipped if U < 0.1) → revoke + negative verification → fee accounting → cleanup. Exit 0 only when everything passes.

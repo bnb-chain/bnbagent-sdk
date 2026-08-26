@@ -160,7 +160,7 @@ describe("defaultAgentPermissions", () => {
     expect(testnet).toBeDefined();
     expect(paymentToken).toBeDefined();
     if (!testnet || !paymentToken) return;
-    expect(permissions.calls).toHaveLength(17);
+    expect(permissions.calls).toHaveLength(16);
     expect(permissions.calls).toContainEqual({
       to: getAddress(testnet.registryContract),
       signature: "register(string,(string,bytes)[])",
@@ -169,10 +169,11 @@ describe("defaultAgentPermissions", () => {
       to: getAddress(testnet.commerceContract),
       signature: "submit(uint256,bytes32,bytes)",
     });
-    expect(permissions.calls).toContainEqual({
-      to: paymentToken,
-      signature: "approve(address,uint256)",
-    });
+    expect(
+      permissions.calls?.some(
+        (call) => "to" in call && call.to === paymentToken,
+      ),
+    ).toBe(false);
     expect(
       permissions.calls?.every((call) => "to" in call && "signature" in call),
     ).toBe(true);
@@ -213,8 +214,8 @@ describe("defaultAgentPermissions", () => {
         (call) => "to" in call && call.to === commerceOverride,
       ),
     ).not.toHaveLength(0);
-    expect(overridden.calls).toHaveLength(18);
-    expect(overridden.calls?.[17]).toEqual({
+    expect(overridden.calls).toHaveLength(17);
+    expect(overridden.calls?.[16]).toEqual({
       to: getAddress(`0x${"77".repeat(20)}`),
       signature: "safeMethod(uint256)",
     });
@@ -244,7 +245,7 @@ describe("defaultAgentPermissions", () => {
         paymentToken: TOKEN,
       },
     });
-    expect(full.calls).toHaveLength(17);
+    expect(full.calls).toHaveLength(16);
     expect(full.spend?.[0]?.token).toBe(TOKEN);
   });
 
@@ -274,5 +275,23 @@ describe("defaultAgentPermissions", () => {
         extraCalls: [{ signature: "transfer(address,uint256)" }] as never,
       }),
     ).toThrow(/must bind both to and signature/);
+  });
+
+  it("cannot opt the payment token back into session-call permissions", () => {
+    const paymentToken = BNB_CHAIN_ADDRESSES[97]?.paymentToken;
+    expect(paymentToken).toBeDefined();
+    if (!paymentToken) return;
+    expect(() =>
+      defaultAgentPermissions({
+        chainId: 97,
+        tokenSpend: { limit: 1n },
+        extraCalls: [
+          {
+            to: paymentToken,
+            signature: "approve(address,uint256)",
+          },
+        ],
+      }),
+    ).toThrow(/session calls to the payment token are forbidden/);
   });
 });

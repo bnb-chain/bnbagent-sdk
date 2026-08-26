@@ -196,6 +196,9 @@ import {
   defaultAgentPermissions,
   serializeSession,
 } from "@bnbagent/sdk/wallets";
+import { getAddress as getDeployment } from "@bnbagent/sdk/networks";
+
+const { paymentToken, commerceProxy } = getDeployment(56);
 
 // admin side - grant a scoped session (~$0.50-equiv BNB registration fee)
 const admin = new AltanaWalletProvider({
@@ -208,6 +211,9 @@ const session = await admin.grantSession({
   }),
   expiry: Math.floor(Date.now() / 1000) + 86_400,
 });
+// Session keys cannot approve tokens. Provision a bounded Commerce allowance
+// from the admin side, no higher than the session token cap; zero on revoke.
+await admin.setErc8183Allowance(paymentToken, commerceProxy, 10n ** 18n);
 writeFileSync(".session.json", serializeSession(session), { mode: 0o600 }); // byte-exact - required
 
 // agent side - ALTANA_SESSION_FILE=.session.json

@@ -1,6 +1,6 @@
 /**
  * `AltanaIntentExecutor` behavior (`src/wallets/altana/provider.ts`):
- * mechanical-call encoding, the erc8183.fund approve bundle, relay result
+ * mechanical-call encoding, the erc8183.fund allowance boundary, relay result
  * interpretation (receipt fetch / revert / FAILED / missing hash /
  * timeout), the nonce-race retry, admin-vs-session dispatch and the
  * provider-level serialization queue.
@@ -13,7 +13,6 @@
 
 import {
   type Hex,
-  decodeFunctionData,
   encodeFunctionData,
   encodeFunctionResult,
   getAddress,
@@ -100,6 +99,11 @@ const PAYMENT_TOKEN_SELECTOR = encodeFunctionData({
   functionName: "paymentToken",
   args: [],
 }).slice(0, 10);
+const ALLOWANCE_SELECTOR = encodeFunctionData({
+  abi: erc20Abi,
+  functionName: "allowance",
+  args: [WALLET, COMMERCE],
+}).slice(0, 10);
 
 function relayOk() {
   return {
@@ -155,8 +159,8 @@ function fundIntent(overrides: Partial<Intent> = {}): Intent {
   };
 }
 
-/** eth_call handler answering only commerce.paymentToken(); "0x" otherwise. */
-function paymentTokenHandler() {
+/** eth_call handler for commerce.paymentToken() and token.allowance(). */
+function paymentTokenHandler(allowance = 250n) {
   return (params: readonly unknown[]) => {
     const [{ data }] = params as [{ data: Hex }];
     if (data.toLowerCase().startsWith(PAYMENT_TOKEN_SELECTOR)) {
@@ -164,6 +168,13 @@ function paymentTokenHandler() {
         abi: agenticCommerceAbi,
         functionName: "paymentToken",
         result: FAKE_TOKEN,
+      });
+    }
+    if (data.toLowerCase().startsWith(ALLOWANCE_SELECTOR)) {
+      return encodeFunctionResult({
+        abi: erc20Abi,
+        functionName: "allowance",
+        result: allowance,
       });
     }
     return "0x";
@@ -418,22 +429,14 @@ describe("AltanaIntentExecutor — nonce races and dispatch", () => {
   });
 });
 
-describe("AltanaIntentExecutor — erc8183.fund approve bundling", () => {
-  it("prepends approve(commerce, expectedBudget) in the SAME relay batch", async () => {
+describe("AltanaIntentExecutor — erc8183.fund allowance boundary", () => {
+  it("checks the bounded allowance and relays only Commerce.fund", async () => {
     const { executor } = makeExecutor();
     await executor.execute(fundIntent());
 
     const batch = relayBatch();
-    expect(batch).toHaveLength(2);
-    expect(batch[0]?.to).toBe(FAKE_TOKEN);
-    expect(batch[0]?.value).toBe(0n);
-    const approve = decodeFunctionData({
-      abi: erc20Abi,
-      data: batch[0]?.data as Hex,
-    });
-    expect(approve.functionName).toBe("approve");
-    expect(approve.args).toEqual([COMMERCE, 250n]);
-    expect(batch[1]).toEqual({
+    expect(batch).toHaveLength(1);
+    expect(batch[0]).toEqual({
       to: COMMERCE,
       value: 0n,
       data: encodeFunctionData({
@@ -445,16 +448,15 @@ describe("AltanaIntentExecutor — erc8183.fund approve bundling", () => {
   });
 
   it("falls back to call.args[1] for the amount when kwargs lack expectedBudget", async () => {
-    const { executor } = makeExecutor();
-    await executor.execute(fundIntent({ kwargs: { jobId: 1n } }));
-    const approve = decodeFunctionData({
-      abi: erc20Abi,
-      data: relayBatch()[0]?.data as Hex,
-    });
-    expect(approve.args).toEqual([COMMERCE, 250n]);
+    const mock = mockPublicClient({ eth_call: paymentTokenHandler(249n) });
+    const { executor } = makeExecutor(makeAdminProvider(), mock);
+    await expect(
+      executor.execute(fundIntent({ kwargs: { jobId: 1n } })),
+    ).rejects.toThrow(/needs 250 token units.*allowance is 249/);
+    expect(sdkMocks.executeMock).not.toHaveBeenCalled();
   });
 
-  it("caches the paymentToken read: two funds, one eth_call", async () => {
+  it("caches paymentToken but rechecks allowance before every fund", async () => {
     const { executor, mock } = makeExecutor();
     await executor.execute(fundIntent());
     await executor.execute(fundIntent());
@@ -467,8 +469,16 @@ describe("AltanaIntentExecutor — erc8183.fund approve bundling", () => {
         ).startsWith(PAYMENT_TOKEN_SELECTOR),
     );
     expect(tokenReads).toHaveLength(1);
-    expect(relayBatch(0)).toHaveLength(2);
-    expect(relayBatch(1)).toHaveLength(2);
+    const allowanceReads = mock.calls.filter(
+      (call) =>
+        call.method === "eth_call" &&
+        String(
+          (call.params[0] as { data?: string } | undefined)?.data ?? "",
+        ).startsWith(ALLOWANCE_SELECTOR),
+    );
+    expect(allowanceReads).toHaveLength(2);
+    expect(relayBatch(0)).toHaveLength(1);
+    expect(relayBatch(1)).toHaveLength(1);
   });
 
   it("non-fund erc8183 intents stay a single relay call", async () => {

@@ -210,9 +210,21 @@ describe("AltanaWalletProvider — identity and capabilities", () => {
     }
   });
 
-  it("sets fundBundlesApproval to the literal true (the ERC8183Client.fund gate is ===)", () => {
+  it("owns the allowance lifecycle so ERC8183Client skips its signer-only approval path", () => {
     const provider = new AltanaWalletProvider({ privateKey: ADMIN_PK });
     expect(provider.fundBundlesApproval).toBe(true);
+  });
+
+  it("refuses ERC-8183 allowance provisioning from session mode", async () => {
+    const provider = new AltanaWalletProvider({ session: fakeSession() });
+    await expect(
+      provider.setErc8183Allowance(
+        getAddress(`0x${"dd".repeat(20)}`),
+        getAddress(`0x${"aa".repeat(20)}`),
+        1n,
+      ),
+    ).rejects.toThrow(/requires an admin-mode AltanaWalletProvider/);
+    expect(sdkMocks.executeMock).not.toHaveBeenCalled();
   });
 
   it("makeX402Payer: session mode returns a payer (x402.pay declared); admin mode refuses with the session path", () => {

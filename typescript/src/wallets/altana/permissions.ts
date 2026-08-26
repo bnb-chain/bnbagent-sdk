@@ -3,7 +3,9 @@
  *
  * Builds the call whitelist + spend caps an agent session needs to run the
  * SDK's protocol surface: the ERC-8004 registry, the ERC-8183 stack
- * (commerce / router / policy) and the payment token.
+ * (commerce / router / policy). The payment token is used only for the
+ * on-chain spend cap: session call permissions deliberately exclude ERC-20
+ * approvals because an allowance survives session expiry and revocation.
  *
  * The native spend entry is UNCONDITIONAL and load-bearing: an Altana
  * session pays its own relay-recovered gas out of the wallet, and that fee
@@ -92,10 +94,6 @@ const POLICY_SIGNATURES = {
   voteReject: "voteReject(uint256)",
 } as const;
 
-const PAYMENT_TOKEN_SIGNATURES = {
-  approve: "approve(address,uint256)",
-} as const;
-
 /** Options accepted by {@link defaultAgentPermissions}. */
 export interface DefaultAgentPermissionsOpts {
   /** Chain the session will operate on (56 / 97 for the built-in presets). */
@@ -177,9 +175,9 @@ function presetTargets(chainId: number): AgentPermissionTargets | null {
 /**
  * Build the default {@link AltanaSessionPermissions} for a bnbagent agent.
  *
- * Calls whitelist (in order): registry, commerce, router, policy,
- * paymentToken, then any `extraCalls`. Spend caps: the payment-token cap,
- * then the unconditional native allowance.
+ * Calls whitelist (in order): selector-bound registry, commerce, router,
+ * policy, then any `extraCalls`. The payment token is never a call target.
+ * Spend caps: the payment-token cap, then the unconditional native allowance.
  *
  * @throws {Error} when `chainId` has no built-in preset and `addresses`
  *   does not supply all five targets.
@@ -230,7 +228,6 @@ function compileAltanaPermissions(
     ]);
     allow(targets.router, Object.values(ROUTER_SIGNATURES));
     allow(targets.policy, [POLICY_SIGNATURES.dispute]);
-    allow(targets.paymentToken, [PAYMENT_TOKEN_SIGNATURES.approve]);
   }
   if (roles.has("seller")) {
     allow(targets.commerce, [COMMERCE_SIGNATURES.submit]);
@@ -255,8 +252,16 @@ function compileAltanaPermissions(
         "defaultAgentPermissions.extraCalls must bind both to and signature",
       );
     }
+    const to = toChecksumAddress(extra.to);
+    if (to === targets.paymentToken) {
+      throw new Error(
+        "session calls to the payment token are forbidden: provision Commerce " +
+          "allowances outside the session so they cannot outlive session " +
+          "expiry or revocation",
+      );
+    }
     calls.push({
-      to: toChecksumAddress(extra.to),
+      to,
       signature: extra.signature,
     });
   }
