@@ -39,7 +39,11 @@
 
 import { readFileSync, statSync } from "node:fs";
 import type { Abi, PublicClient } from "viem";
-import { encodeFunctionData, hashMessage } from "viem";
+import {
+  encodeFunctionData,
+  hashMessage,
+  getAddress as toChecksumAddress,
+} from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { erc20Abi } from "../../abis/erc20.js";
 import { getEnv } from "../../core/envUtil.js";
@@ -185,9 +189,9 @@ export class AltanaWalletProvider extends WalletProvider {
   static override readonly kind = "altana";
 
   /**
-   * Altana's `execute` runs approve + fund as one atomic relay batch (see
-   * {@link AltanaIntentExecutor}), so the SDK-side allowance management in
-   * `ERC8183Client.fund` must be skipped — that path would call
+   * Altana requires a trusted admin to pre-provision a bounded Commerce
+   * allowance (see {@link setErc8183Allowance}), so SDK-side allowance
+   * management in `ERC8183Client.fund` must be skipped — that path would call
    * `sendTx` → `signTransaction`, which this wallet does not have.
    */
   override readonly fundBundlesApproval = true;
@@ -661,6 +665,50 @@ export class AltanaWalletProvider extends WalletProvider {
     return result;
   }
 
+  /**
+   * Admin-only ERC-8183 setup: provision a bounded token allowance for the
+   * Commerce contract before handing a session key to an agent.
+   *
+   * Session permissions never include ERC-20 `approve`: an allowance created
+   * by a leaked session key would survive expiry/revocation and escape the
+   * session spend cap. Keep `amount` no higher than the session's token cap,
+   * and set it back to zero when the session is revoked.
+   */
+  async setErc8183Allowance(
+    token: `0x${string}`,
+    commerce: `0x${string}`,
+    amount: bigint,
+  ): Promise<AltanaExecuteResult> {
+    this.#requireAdmin("setErc8183Allowance");
+    if (amount < 0n) {
+      throw new Error(
+        `setErc8183Allowance amount must be non-negative, got ${amount}`,
+      );
+    }
+    const checkedToken = toChecksumAddress(token);
+    const checkedCommerce = toChecksumAddress(commerce);
+    const result = await this._relayExecute(
+      [
+        {
+          to: checkedToken,
+          value: 0n,
+          data: encodeFunctionData({
+            abi: erc20Abi,
+            functionName: "approve",
+            args: [checkedCommerce, amount],
+          }),
+        },
+      ],
+      "set ERC-8183 allowance",
+    );
+    if (result.status === "FAILED") {
+      throw new Error(
+        `Altana relay reported FAILED for setErc8183Allowance (callsId ${result.callsId})`,
+      );
+    }
+    return result;
+  }
+
   // ── Internal plumbing (shared by the executor; not public API) ─────────
 
   /**
@@ -983,11 +1031,9 @@ export class AltanaWalletProvider extends WalletProvider {
  *
  * Consumes the intent's mechanical `call` form (protocol-agnostic, like
  * `LocalExecutor`) with ONE semantic special case: an `erc8183.fund`
- * intent is prepended with an exact-amount `approve(commerce,
- * expectedBudget)` in the SAME relay batch, because `fund` pulls the
- * escrow via `transferFrom` and the wallet has no separate-signing path
- * for a standalone approve. `fund` consumes the entire approved amount,
- * so the allowance returns to zero — no USDT-style reset-to-zero hazard.
+ * intent verifies that a trusted admin pre-provisioned enough bounded token
+ * allowance for Commerce. Session keys can call `fund`, but can never create
+ * or enlarge an ERC-20 allowance that would outlive session revocation.
  *
  * The relay result carries no receipt, so the executor waits for one via
  * the context's PublicClient with the shared
@@ -1033,7 +1079,7 @@ export class AltanaIntentExecutor implements IntentExecutor {
         (call.args[1] as bigint | undefined);
       if (typeof amount !== "bigint") {
         throw new Error(
-          "erc8183.fund intent is missing its amount (kwargs.expectedBudget / call.args[1]); cannot build the bundled approve",
+          "erc8183.fund intent is missing its amount (kwargs.expectedBudget / call.args[1]); cannot verify the bounded Commerce allowance",
         );
       }
       const token = await this.#provider._paymentTokenFor(
@@ -1041,15 +1087,17 @@ export class AltanaIntentExecutor implements IntentExecutor {
         call.address,
         call.abi,
       );
-      calls.unshift({
-        to: token,
-        value: 0n,
-        data: encodeFunctionData({
-          abi: erc20Abi,
-          functionName: "approve",
-          args: [call.address, amount],
-        }),
+      const allowance = await this.#context.client.readContract({
+        address: token,
+        abi: erc20Abi,
+        functionName: "allowance",
+        args: [this.#provider.address, call.address],
       });
+      if (allowance < amount) {
+        throw new Error(
+          `erc8183.fund needs ${amount} token units but Commerce allowance is ${allowance}; provision a bounded allowance from an admin provider with setErc8183Allowance() before handing the session to the agent`,
+        );
+      }
     }
 
     const result = await this.#provider._relayExecute(calls, label);

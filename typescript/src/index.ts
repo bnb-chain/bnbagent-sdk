@@ -24,7 +24,7 @@
  *     import { LocalExecutor, UnsupportedWalletOperation } from "@bnbagent/sdk/wallets";
  *     import { check, EIP3009_TYPES } from "@bnbagent/sdk/signing";
  *     import { getAddress, BNB_CHAIN_ADDRESSES } from "@bnbagent/sdk/networks";
- *     import { SlidingWindowLimiter, RateLimitExceeded } from "@bnbagent/sdk/utils";
+ *     import { SlidingWindowLimiter, RateLimitExceeded, type RateLimiter } from "@bnbagent/sdk/utils";
  *
  * Mirrors `python/bnbagent/__init__.py`'s Tier 1 surface; see
  * `ARCHITECTURE.md` for the full protocol/module reference.

@@ -7,6 +7,7 @@ import os
 import time
 from typing import Any
 
+from web3 import Web3
 from web3.exceptions import ContractLogicError, TimeExhausted
 
 from ..exceptions import TransactionPendingError
@@ -14,6 +15,36 @@ from ..networks.addresses import BSC_MAINNET_CHAIN_ID, BSC_TESTNET_CHAIN_ID
 from .nonce_manager import NonceManager
 
 logger = logging.getLogger(__name__)
+
+
+def _is_ambiguous_send_error(error: Exception) -> bool:
+    text = str(error).lower()
+    return any(
+        marker in text
+        for marker in (
+            "429",
+            "too many requests",
+            "timeout",
+            "timed out",
+            "connection",
+            "network",
+            "already known",
+            "nonce too low",
+            "replacement transaction underpriced",
+        )
+    )
+
+
+def _raw_bytes(signed: Any) -> bytes:
+    raw = signed["rawTransaction"]
+    if isinstance(raw, str):
+        return bytes.fromhex(raw.removeprefix("0x"))
+    return bytes(raw)
+
+
+def _local_tx_hash(raw: bytes) -> tuple[bytes, str]:
+    digest = bytes(Web3.keccak(raw))
+    return digest, "0x" + digest.hex()
 
 MAX_RETRIES = 5
 RETRY_BASE_DELAY = 1.0
@@ -178,7 +209,8 @@ class ContractClientMixin:
         class_name = type(self).__name__
 
         for attempt in range(MAX_RETRIES):
-            nonce = nonce_mgr.get_nonce()
+            nonce = nonce_mgr.reserve()
+            local_hash_hex: str | None = None
             try:
                 # Fetch current gas price and add 20% buffer; floor at the
                 # per-chain minimum so a low ``eth_gasPrice`` reading on quiet
@@ -231,8 +263,25 @@ class ContractClientMixin:
                                 ) from preflight_err
 
                 signed = self._wallet_provider.sign_transaction(tx)
-                raw_tx = signed["rawTransaction"]
-                tx_hash = self.w3.eth.send_raw_transaction(raw_tx)
+                raw_tx = _raw_bytes(signed)
+                local_hash, local_hash_hex = _local_tx_hash(raw_tx)
+                try:
+                    tx_hash = self.w3.eth.send_raw_transaction(raw_tx)
+                except Exception as send_error:
+                    if _is_ambiguous_send_error(send_error):
+                        nonce_mgr.mark_broadcast(nonce, local_hash_hex)
+                        logger.warning(
+                            "[%s] send result is ambiguous (%s); tracking local "
+                            "tx hash %s without rebroadcast",
+                            class_name,
+                            send_error,
+                            local_hash_hex,
+                        )
+                        tx_hash = local_hash
+                    else:
+                        raise
+                else:
+                    nonce_mgr.mark_broadcast(nonce, local_hash_hex)
                 timeout = get_default_receipt_timeout()
                 try:
                     receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=timeout)
@@ -247,11 +296,15 @@ class ContractClientMixin:
                         tx_hash=tx_hash_hex, timeout_seconds=timeout
                     ) from exc
                 if receipt["status"] == 0:
+                    nonce_mgr.mark_finalized(nonce)
                     raise RuntimeError(
                         f"Transaction reverted on-chain: {receipt['transactionHash'].hex()}"
                     )
+                nonce_mgr.mark_finalized(nonce)
                 return {
-                    "transactionHash": receipt["transactionHash"].hex(),
+                    "transactionHash": (
+                        tx_hash.hex() if hasattr(tx_hash, "hex") else str(tx_hash)
+                    ),
                     "status": receipt["status"],
                     "receipt": receipt,
                 }
@@ -261,6 +314,19 @@ class ContractClientMixin:
             except Exception as e:
                 last_error = e
                 error_str = str(e).lower()
+
+                if nonce_mgr.state_of(nonce) is not None:
+                    if nonce_mgr.broadcast_hash(nonce) is not None:
+                        raise TransactionPendingError(
+                            tx_hash=local_hash_hex or nonce_mgr.broadcast_hash(nonce) or "",
+                            timeout_seconds=get_default_receipt_timeout(),
+                            message=(
+                                f"Transaction {local_hash_hex} may be broadcast, but "
+                                f"receipt reconciliation failed: {e}. Do not rebroadcast "
+                                "until its chain status is known."
+                            ),
+                        ) from e
+                    nonce_mgr.release(nonce)
 
                 # Nonce error -> re-sync and retry
                 if nonce_mgr.handle_error(e, nonce) and attempt < MAX_RETRIES - 1:
@@ -280,13 +346,6 @@ class ContractClientMixin:
                     time.sleep(delay)
                     continue
 
-                # Any other error path (preflight revert, receipt timeout,
-                # transient RPC failure): the cached nonce was already
-                # incremented in get_nonce() but the tx may not have been
-                # mined or even broadcast. Invalidate the cache so the next
-                # caller re-seeds from chain instead of leaving a permanent
-                # nonce gap that strands every subsequent tx in mempool.
-                nonce_mgr.reset()
                 raise
 
         raise last_error  # type: ignore

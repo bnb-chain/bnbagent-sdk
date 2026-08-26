@@ -32,12 +32,15 @@ import json
 import logging
 from typing import Any
 
+from web3 import Web3
+
 from ..config import NetworkConfig, resolve_network
 from ..core.abi_loader import create_web3
 from ..erc20.client import MinimalERC20Client
 from ..wallets.wallet_provider import WalletProvider
 from .commerce import CommerceClient
 from .policy import PolicyClient
+from .quote_verify import QuoteSignatureVerdict, verify_quote_signature
 from .router import RouterClient
 from .types import ZERO_ADDRESS, ZERO_REASON, Job, JobStatus, Verdict
 
@@ -182,6 +185,70 @@ class ERC8183Client:
 
     def token_allowance(self, owner: str, spender: str) -> int:
         return self._erc20_client().allowance(owner, spender)
+
+    def verify_negotiation_quote(
+        self,
+        envelope: dict[str, Any],
+        *,
+        expected_provider: str,
+        block_number: int | None = None,
+    ) -> QuoteSignatureVerdict:
+        """Verify a provider quote before the buyer creates or funds a job.
+
+        ``expected_provider`` is deliberately out-of-band: obtain it from a
+        trusted ERC-8004 discovery result or operator configuration, never from
+        ``envelope["provider_address"]``. The quote must be accepted, carry a
+        positive integer price in this Commerce contract's payment token, bind
+        this chain and Commerce address, and have a valid EIP-191/ERC-1271
+        provider signature.
+        """
+        response = envelope.get("response")
+        if not isinstance(response, dict):
+            return QuoteSignatureVerdict(valid=False, reason="quote response is missing")
+        if response.get("accepted") is not True:
+            return QuoteSignatureVerdict(valid=False, reason="quote is not accepted")
+        terms = response.get("terms")
+        if not isinstance(terms, dict):
+            return QuoteSignatureVerdict(valid=False, reason="quote terms are missing")
+
+        price = terms.get("price")
+        valid_price = (isinstance(price, int) and not isinstance(price, bool) and price > 0) or (
+            isinstance(price, str)
+            and price.isascii()
+            and price.isdecimal()
+            and not price.startswith("0")
+        )
+        if not valid_price:
+            return QuoteSignatureVerdict(
+                valid=False, reason="quote price must be a positive integer"
+            )
+
+        currency = terms.get("currency")
+        try:
+            currency_address = Web3.to_checksum_address(currency)
+            payment_token = Web3.to_checksum_address(self.payment_token)
+        except (TypeError, ValueError):
+            return QuoteSignatureVerdict(valid=False, reason="quote currency is invalid")
+        if currency_address != payment_token:
+            return QuoteSignatureVerdict(
+                valid=False, reason="quote currency does not match payment token"
+            )
+
+        signed_chain_id = envelope.get("chain_id")
+        if (
+            not isinstance(signed_chain_id, int)
+            or isinstance(signed_chain_id, bool)
+            or signed_chain_id != self.network.chain_id
+        ):
+            return QuoteSignatureVerdict(valid=False, reason="quote chain_id mismatch")
+
+        return verify_quote_signature(
+            envelope=envelope,
+            provider=expected_provider,
+            w3=self.w3,
+            expected_verifying_contract=self.commerce.address,
+            block_number=block_number,
+        )
 
     def approve_payment_token(self, spender: str, amount: int) -> dict[str, Any]:
         """Send ``approve(spender, amount)`` on the payment token."""
@@ -372,6 +439,59 @@ class ERC8183Client:
 
     def get_job_status(self, job_id: int) -> JobStatus:
         return self.commerce.get_job(job_id).status
+
+    def get_job_funded_block(
+        self,
+        job_id: int,
+        *,
+        negotiated_at: int,
+        quote_expires_at: int,
+    ) -> int | None:
+        """Return the ``JobFunded`` block inside a signed quote window.
+
+        Timestamp-to-block binary searches keep the indexed event query
+        narrow.  ``None`` means the job was not economically accepted while
+        the quote was valid and callers must fail closed.
+        """
+        if (
+            not isinstance(negotiated_at, int)
+            or isinstance(negotiated_at, bool)
+            or not isinstance(quote_expires_at, int)
+            or isinstance(quote_expires_at, bool)
+            or negotiated_at < 0
+            or quote_expires_at <= negotiated_at
+        ):
+            raise ValueError("invalid signed quote time window")
+
+        head_number = self.w3.eth.block_number
+        head = self.w3.eth.get_block(head_number)
+        if int(head["timestamp"]) < negotiated_at:
+            return None
+        from_block = self._first_block_at_or_after(negotiated_at, head_number)
+        to_block = (
+            head_number
+            if int(head["timestamp"]) < quote_expires_at
+            else self._first_block_at_or_after(quote_expires_at, head_number)
+        )
+        events = self.commerce.get_job_funded_events(
+            from_block,
+            to_block,
+            job_id=job_id,
+        )
+        return int(events[0]["blockNumber"]) if events else None
+
+    def _first_block_at_or_after(self, timestamp: int, head: int) -> int:
+        """Return the lowest block whose timestamp is at least ``timestamp``."""
+        low = 0
+        high = head
+        while low < high:
+            mid = (low + high) // 2
+            block = self.w3.eth.get_block(mid)
+            if int(block["timestamp"]) < timestamp:
+                low = mid + 1
+            else:
+                high = mid
+        return low
 
     def get_deliverable_url(self, job_id: int, *, hint_block: int | None = None) -> str | None:
         """Return the ``deliverable_url`` for a submitted job.

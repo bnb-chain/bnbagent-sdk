@@ -20,6 +20,12 @@
  *   attack from growing the limiter's memory without bound.
  */
 
+/** Injectable limiter contract for process-local or shared backends. */
+export interface RateLimiter {
+  /** Record a hit for `key`, or throw {@link RateLimitExceeded}. */
+  check(key: string): void | Promise<void>;
+}
+
 /**
  * Thrown by {@link SlidingWindowLimiter.check} when a key's window is full.
  *
@@ -45,7 +51,7 @@ const DEFAULT_MAX_KEYS = 10_000;
  * of tracked keys is hard-capped at `maxKeys`; once exceeded, the
  * least-recently-used key is evicted to reclaim memory.
  */
-export class SlidingWindowLimiter {
+export class SlidingWindowLimiter implements RateLimiter {
   private readonly maxRequestsValue: number;
   private readonly windowSecondsValue: number;
   private readonly maxKeysValue: number;

@@ -176,9 +176,10 @@ export interface AltanaX402PayerOptions {
   /**
    * `{tokenAddress: totalBaseUnits}` cumulative cap across this payer's
    * lifetime (same semantics as `X402Signer`'s `sessionBudget`). Missing
-   * token → no cumulative cap; `request`'s `maxPayment` still applies.
+   * token → no cumulative cap; `request`'s `maxPayment` still applies. Pass
+   * an existing tracker to share the cap across payer/signer instances.
    */
-  sessionBudget?: Record<string, bigint>;
+  sessionBudget?: Record<string, bigint> | SessionBudgetTracker;
   /**
    * Pin the payment token: only challenge routes whose `asset` equals
    * this address are considered, so no other token can leave the wallet
@@ -321,7 +322,10 @@ export class AltanaX402Payer implements X402Payer {
     opts: AltanaX402PayerOptions = {},
   ) {
     this.#provider = provider;
-    this.#budget = new SessionBudgetTracker(opts.sessionBudget);
+    this.#budget =
+      opts.sessionBudget instanceof SessionBudgetTracker
+        ? opts.sessionBudget
+        : new SessionBudgetTracker(opts.sessionBudget);
     this.#expectedAsset = opts.expectedAsset;
     this.#expectedPayTo = opts.expectedPayTo;
     this.#fetch = opts.fetchImpl ?? globalThis.fetch;

@@ -23,10 +23,12 @@ import {
   ERC8183JobOps,
   JobStatus,
   NegotiationHandler,
+  QuoteSigningError,
   fundedJobWatcher,
 } from "../../../src/erc8183/index.js";
 import {
   RateLimitExceeded,
+  type RateLimiter,
   SlidingWindowLimiter,
 } from "../../../src/utils/index.js";
 import { type Route, makeRequestListener, route, sendJson } from "./http.js";
@@ -56,6 +58,12 @@ export interface Erc8183ServerOpts {
   /** Extra routes to serve alongside the ERC-8183 ones (e.g. a `/search`
    * testing endpoint). */
   extraRoutes?: Route[];
+  /** Application-owned per-client limiter. Inject a shared backend when
+   * running multiple replicas; defaults to an in-memory limiter. */
+  negotiateLimiter?: RateLimiter;
+  /** Application-owned global limiter. Inject a shared backend when running
+   * multiple replicas; defaults to an in-memory limiter. */
+  globalNegotiateLimiter?: RateLimiter;
 }
 
 /** A configured ERC-8183 server, ready to `listen()`. */
@@ -79,8 +87,8 @@ const HTTP_STATUS: Record<string, number> = {
   not_found: 404,
   job_expired: 408,
   wrong_status: 409,
-  quote_expired: 410,
   description_invalid: 410,
+  quote_invalid: 400,
   submit_deadline_passed: 410,
   payload_too_large: 413,
   internal_error: 500,
@@ -99,6 +107,15 @@ function readIntEnv(name: string, fallback: number): number {
   }
   const value = Number(raw.trim());
   return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function readIpSetEnv(name: string): ReadonlySet<string> {
+  return new Set(
+    (process.env[name] ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
 }
 
 /**
@@ -160,10 +177,38 @@ export async function createErc8183Server(
     );
   }
 
-  const negotiateLimiter = new SlidingWindowLimiter(
-    readIntEnv("ERC8183_NEGOTIATE_RATE_LIMIT", 120),
-    readIntEnv("ERC8183_NEGOTIATE_RATE_WINDOW", 60),
-  );
+  const rateWindow = readIntEnv("ERC8183_NEGOTIATE_RATE_WINDOW", 60);
+  const negotiateLimiter =
+    opts.negotiateLimiter ??
+    new SlidingWindowLimiter(
+      readIntEnv("ERC8183_NEGOTIATE_RATE_LIMIT", 120),
+      rateWindow,
+    );
+  const globalNegotiateLimiter =
+    opts.globalNegotiateLimiter ??
+    new SlidingWindowLimiter(
+      readIntEnv("ERC8183_NEGOTIATE_GLOBAL_RATE_LIMIT", 1_200),
+      rateWindow,
+      1,
+    );
+  const environment = (
+    process.env.ENV ||
+    process.env.ENVIRONMENT ||
+    process.env.NODE_ENV ||
+    ""
+  )
+    .trim()
+    .toLowerCase();
+  if (
+    ["prod", "production", "live", "mainnet"].includes(environment) &&
+    (!opts.negotiateLimiter || !opts.globalNegotiateLimiter)
+  ) {
+    console.warn(
+      "[erc8183Server] production is using an in-memory negotiate limiter; " +
+        "this is safe only for one replica. Inject both limiter options or " +
+        "enforce an equivalent shared/edge limit before scaling out.",
+    );
+  }
 
   const routes: Route[] = [
     route("GET", `${prefix}/health`, ({ res }) =>
@@ -185,7 +230,8 @@ export async function createErc8183Server(
 
     route("POST", `${prefix}/negotiate`, async ({ res, body, clientIp }) => {
       try {
-        negotiateLimiter.check(clientIp);
+        await negotiateLimiter.check(clientIp);
+        await globalNegotiateLimiter.check("global");
       } catch (error) {
         if (error instanceof RateLimitExceeded) {
           return sendJson(res, 429, { error: "Too many requests" });
@@ -213,6 +259,12 @@ export async function createErc8183Server(
             error instanceof Error ? error.message : String(error)
           }`,
         );
+        if (error instanceof QuoteSigningError) {
+          return sendJson(res, 503, {
+            error: "Quote signer unavailable",
+            error_code: "quote_signing_unavailable",
+          });
+        }
         return sendJson(res, 500, { error: "Negotiation failed" });
       }
     }),
@@ -252,7 +304,9 @@ export async function createErc8183Server(
     ...(opts.extraRoutes ?? []),
   ];
 
-  const listener = makeRequestListener(routes);
+  const listener = makeRequestListener(routes, {
+    trustedProxyIps: readIpSetEnv("ERC8183_TRUSTED_PROXY_IPS"),
+  });
 
   // ── funded-job watcher ──
   const pollInterval =
@@ -295,7 +349,7 @@ export async function createErc8183Server(
     paymentToken,
     paymentTokenDecimals,
 
-    listen(port: number, host = "0.0.0.0"): Server {
+    listen(port: number, host = "127.0.0.1"): Server {
       const server = createServer((req, res) => {
         void listener(req, res);
       });

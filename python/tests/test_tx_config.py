@@ -33,6 +33,7 @@ def _le_pieces(*, gas_price=3_000_000_000, chain_id=BSC_TESTNET_CHAIN_ID, captur
     web3 = MagicMock()
     web3.eth.gas_price = gas_price
     web3.eth.chain_id = chain_id
+    web3.eth.get_transaction_count.return_value = 1
     web3.eth.call.return_value = b""  # pre-flight passes
     web3.eth.send_raw_transaction.return_value = b"\xab" * 32
     web3.eth.wait_for_transaction_receipt.return_value = {

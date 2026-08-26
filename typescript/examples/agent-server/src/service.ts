@@ -40,6 +40,10 @@ const storage = LocalStorageProvider.fromEnv();
 // const storage = IPFSStorageProvider.fromEnv();
 
 const PORT = Number(process.env.PORT ?? "8003");
+const HOST = process.env.HOST ?? "127.0.0.1";
+const ENABLE_DEBUG_SEARCH = /^(1|true|yes|on)$/i.test(
+  process.env.ENABLE_DEBUG_SEARCH?.trim() ?? "",
+);
 
 // ---------------------------------------------------------------------------
 // News search (DuckDuckGo lite over global fetch — no runtime dependency)
@@ -169,25 +173,56 @@ async function processTask(
 async function main(): Promise<void> {
   const config = ERC8183Config.fromEnv(storage);
 
-  // Direct /search endpoint for testing without ERC-8183.
-  const searchRoute = route("POST", "/search", async ({ res, body }) => {
-    const req = (body ?? {}) as { query?: string; max_results?: number };
-    if (!req.query) {
-      return sendJson(res, 400, { error: "query is required" });
-    }
-    const results = await searchNews(req.query, req.max_results ?? 10);
-    sendJson(res, 200, {
-      success: true,
-      query: req.query,
-      results_count: results.length,
-      results,
-    });
-  });
+  // Development-only direct /search endpoint. It is absent unless explicitly
+  // enabled; production callers should enter through the paid ERC-8183 flow.
+  const searchRoutes = ENABLE_DEBUG_SEARCH
+    ? [
+        route("POST", "/search", async ({ res, body }) => {
+          const req = (body ?? {}) as {
+            query?: unknown;
+            max_results?: unknown;
+          };
+          if (
+            typeof req.query !== "string" ||
+            req.query.length === 0 ||
+            req.query.length > 500
+          ) {
+            return sendJson(res, 400, {
+              error:
+                "query must be a non-empty string of at most 500 characters",
+            });
+          }
+          const maxResults = req.max_results ?? 10;
+          if (
+            typeof maxResults !== "number" ||
+            !Number.isInteger(maxResults) ||
+            maxResults < 1 ||
+            maxResults > 10
+          ) {
+            return sendJson(res, 400, {
+              error: "max_results must be an integer from 1 to 10",
+            });
+          }
+          try {
+            const results = await searchNews(req.query, maxResults);
+            return sendJson(res, 200, {
+              success: true,
+              query: req.query,
+              results_count: results.length,
+              results,
+            });
+          } catch (error) {
+            console.error("[blockchain-news] direct search failed", error);
+            return sendJson(res, 500, { error: "Search failed" });
+          }
+        }),
+      ]
+    : [];
 
   const server = await createErc8183Server({
     config,
     onJob: processTask,
-    extraRoutes: [searchRoute],
+    extraRoutes: searchRoutes,
   });
 
   console.log(`
@@ -206,14 +241,13 @@ ${"=".repeat(55)}
     POST /erc8183/negotiate      — Negotiation
     GET  /erc8183/job/{id}       — Job details
     GET  /erc8183/status         — Agent status
-  Direct (testing):
-    POST /search                 — Direct news search
+  Direct search:  ${ENABLE_DEBUG_SEARCH ? "POST /search (development only)" : "disabled"}
     GET  /erc8183/health         — Health check
 ${"=".repeat(55)}
 `);
 
-  server.listen(PORT);
-  console.info(`[blockchain-news] listening on http://localhost:${PORT}`);
+  server.listen(PORT, HOST);
+  console.info(`[blockchain-news] listening on http://${HOST}:${PORT}`);
 }
 
 main().catch((error) => {

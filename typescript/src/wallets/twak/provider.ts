@@ -115,6 +115,35 @@ export const TWAK_CHAIN_FOR_NETWORK: Readonly<Record<string, string>> = {
 
 const ZERO_ADDRESS = `0x${"00".repeat(20)}`;
 const ZERO_REASON = `0x${"00".repeat(32)}`;
+const SENSITIVE_QUERY_KEYS = new Set([
+  "apikey",
+  "api_key",
+  "access_token",
+  "auth",
+  "authorization",
+  "credential",
+  "key",
+  "password",
+  "secret",
+  "signature",
+  "token",
+]);
+
+function rejectSensitiveArgvUrl(url: string): void {
+  const parsed = new URL(url);
+  if (parsed.username || parsed.password) {
+    throw new Error(
+      "TWAK x402 URLs must not contain userinfo credentials; the CLI receives URLs through process argv",
+    );
+  }
+  for (const key of parsed.searchParams.keys()) {
+    if (SENSITIVE_QUERY_KEYS.has(key.toLowerCase())) {
+      throw new Error(
+        `TWAK x402 URL query parameter ${JSON.stringify(key)} may contain credentials; the CLI receives URLs through process argv`,
+      );
+    }
+  }
+}
 
 type CanonicalContractKey =
   | "registryContract"
@@ -820,6 +849,7 @@ export class TWAKProvider extends WalletProvider implements IntentExecutor {
     url: string,
     opts?: { method?: string; body?: string },
   ): Promise<Record<string, unknown>> {
+    rejectSensitiveArgvUrl(url);
     const args = ["x402", "quote", url];
     if (opts?.method && opts.method !== "GET") {
       args.push("--method", opts.method);
@@ -850,6 +880,7 @@ export class TWAKProvider extends WalletProvider implements IntentExecutor {
       autoApprove?: boolean;
     },
   ): Promise<Record<string, unknown>> {
+    rejectSensitiveArgvUrl(url);
     await this.#ensure();
     const args = [
       "x402",
@@ -886,7 +917,10 @@ export class TWAKProvider extends WalletProvider implements IntentExecutor {
    * cap precheck, session budget). `payerKwargs` are forwarded verbatim.
    */
   override makeX402Payer(payerKwargs?: Record<string, unknown>): TwakX402Payer {
-    return new TwakX402Payer(this, payerKwargs as TwakX402PayerOptions);
+    return new TwakX402Payer(
+      this,
+      payerKwargs as unknown as TwakX402PayerOptions,
+    );
   }
 
   // ── IntentExecutor ──

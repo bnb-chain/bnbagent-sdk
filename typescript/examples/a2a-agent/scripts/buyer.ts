@@ -27,10 +27,12 @@
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { getAddress } from "viem";
 import { AgentURIGenerator, ERC8004Agent } from "../../../src/erc8004/index.js";
 import {
   ERC8183Client,
   buildJobDescription,
+  verifyQuoteSignature,
 } from "../../../src/erc8183/index.js";
 import { EVMWalletProvider, loadEnv } from "../../../src/index.js";
 
@@ -39,8 +41,13 @@ loadEnv(ROOT);
 
 const NETWORK = process.env.NETWORK ?? "bsc-testnet";
 
-/** Seller base URL: ERC-8004 discovery when AGENT_ID is set; A2A_BASE_URL otherwise. */
-async function discoverBaseUrl(): Promise<string> {
+interface SellerDiscovery {
+  baseUrl: string;
+  expectedProvider?: string;
+}
+
+/** Seller endpoint + trusted wallet anchor from ERC-8004 discovery. */
+async function discoverSeller(): Promise<SellerDiscovery> {
   const agentId = process.env.AGENT_ID;
   if (agentId) {
     const key = process.env.BUYER_PRIVATE_KEY ?? process.env.PRIVATE_KEY;
@@ -67,15 +74,21 @@ async function discoverBaseUrl(): Promise<string> {
     for (const ep of services) {
       if (ep.name === "A2A" && ep.endpoint) {
         console.log(`[discover] agent ${agentId} → ${ep.endpoint}`);
-        return ep.endpoint;
+        return {
+          baseUrl: ep.endpoint,
+          expectedProvider: String(info.agentWallet),
+        };
       }
     }
     throw new Error(`agent ${agentId} has no A2A endpoint registered`);
   }
-  return (process.env.A2A_BASE_URL ?? "http://localhost:8010").replace(
-    /\/+$/,
-    "",
-  );
+  return {
+    baseUrl: (process.env.A2A_BASE_URL ?? "http://localhost:8010").replace(
+      /\/+$/,
+      "",
+    ),
+    expectedProvider: process.env.EXPECTED_PROVIDER_ADDRESS,
+  };
 }
 
 /**
@@ -195,7 +208,10 @@ async function negotiate(messageUrl: string): Promise<Quote> {
   return quote;
 }
 
-async function fundJob(quote: Quote): Promise<bigint | null> {
+async function fundJob(
+  quote: Quote,
+  discoveredProvider?: string,
+): Promise<bigint | null> {
   const buyerKey = process.env.BUYER_PRIVATE_KEY;
   if (!buyerKey) {
     console.log(
@@ -203,8 +219,14 @@ async function fundJob(quote: Quote): Promise<bigint | null> {
     );
     return null;
   }
+  const buyerPassword = process.env.BUYER_WALLET_PASSWORD;
+  if (!buyerPassword) {
+    throw new Error(
+      "BUYER_WALLET_PASSWORD is required when BUYER_PRIVATE_KEY is set",
+    );
+  }
   const wallet = new EVMWalletProvider({
-    password: process.env.BUYER_WALLET_PASSWORD ?? "demo-password",
+    password: buyerPassword,
     privateKey: buyerKey,
   });
   const client = await ERC8183Client.create({
@@ -212,8 +234,45 @@ async function fundJob(quote: Quote): Promise<bigint | null> {
     network: NETWORK,
   });
 
-  const provider = quote.provider_address;
-  const price = BigInt(quote.response.terms.price);
+  if (!discoveredProvider) {
+    throw new Error(
+      "On-chain funding requires a trusted provider anchor: set AGENT_ID for ERC-8004 discovery or EXPECTED_PROVIDER_ADDRESS for a direct A2A URL",
+    );
+  }
+  const provider = getAddress(quote.provider_address);
+  const expectedProvider = getAddress(discoveredProvider);
+  if (provider !== expectedProvider) {
+    throw new Error(
+      `Quote provider ${provider} does not match trusted provider ${expectedProvider}`,
+    );
+  }
+
+  const priceRaw = quote.response?.terms?.price;
+  if (typeof priceRaw !== "string" || !/^\d+$/.test(priceRaw)) {
+    throw new Error("Quote price must be a non-negative integer string");
+  }
+  const signedCurrency = quote.response?.terms?.currency;
+  if (typeof signedCurrency !== "string") {
+    throw new Error("Quote is missing its signed currency");
+  }
+  const paymentToken = await client.paymentToken();
+  if (getAddress(signedCurrency) !== getAddress(paymentToken)) {
+    throw new Error(
+      `Quote currency ${signedCurrency} does not match Commerce payment token ${paymentToken}`,
+    );
+  }
+
+  const verdict = await verifyQuoteSignature({
+    envelope: quote,
+    provider: expectedProvider,
+    publicClient: client.publicClient,
+    expectedVerifyingContract: client.commerce.address,
+  });
+  if (!verdict.valid) {
+    throw new Error(`Provider quote rejected: ${verdict.reason}`);
+  }
+
+  const price = BigInt(priceRaw);
   // Anchor the SAME signed terms on-chain so provider_sig stays verifiable:
   // EOA recovery or ERC-1271 verification resolves to job.provider.
   const description = buildJobDescription(quote);
@@ -264,9 +323,10 @@ async function checkStatus(messageUrl: string, jobId: bigint): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const messageUrl = await resolveMessageUrl(await discoverBaseUrl());
+  const discovery = await discoverSeller();
+  const messageUrl = await resolveMessageUrl(discovery.baseUrl);
   const quote = await negotiate(messageUrl);
-  const jobId = await fundJob(quote);
+  const jobId = await fundJob(quote, discovery.expectedProvider);
   if (jobId !== null) {
     await checkStatus(messageUrl, jobId);
   }

@@ -81,12 +81,6 @@ const KEYSTORE_READ_ABI = parseAbi([
 const FEE_ABI = parseAbi([
   "function getRegistrationFeeInWei() view returns (uint256)",
 ]);
-// The SDK's minimal erc20 ABI is function-only; the Approval assertion in
-// step 9 needs the event shape.
-const ERC20_APPROVAL_ABI = parseAbi([
-  "event Approval(address indexed owner, address indexed spender, uint256 value)",
-]);
-
 const HERE = fileURLToPath(new URL(".", import.meta.url));
 const SESSION_FILE = join(HERE, ".session.json");
 const FUND_AMOUNT = 10n ** 17n; // 0.1 U (18 decimals)
@@ -130,10 +124,9 @@ function assertStep(
 // ── Step 9: the escrow-funding lifecycle ─────────────────────────────────
 
 /**
- * createJob(provider) → registerJob → setBudget → fund(0.1 U) — the same
- * canonical order as `examples/client/*.ts` — asserting the fund landed
- * as ONE relay intent (Approval + JobFunded in the same receipt) and the
- * exact-amount allowance returned to zero.
+ * createJob(provider) → registerJob → setBudget → admin allowance →
+ * session fund(0.1 U) — asserting the session relay contains only the
+ * JobFunded operation and the exact-amount allowance returned to zero.
  *
  * Both kernel/router prerequisites were hit live before being encoded
  * here: setBudget refuses a provider-less job (`ProviderNotSet`,
@@ -146,6 +139,7 @@ async function fundLifecycle(
   expiredAt: bigint,
   eoa: `0x${string}`,
   publicClient: PublicClient,
+  adminProvider: AltanaWalletProvider,
 ): Promise<void> {
   const PROVIDER_SINK = "0x000000000000000000000000000000000000dEaD";
   const fundJob = await jobs.createJob({
@@ -158,13 +152,24 @@ async function fundLifecycle(
   }
   await jobs.registerJob(fundJob.jobId);
   await jobs.setBudget(fundJob.jobId, FUND_AMOUNT);
+  const allowance = await adminProvider.setErc8183Allowance(
+    U_TESTNET,
+    jobs.commerce.address,
+    FUND_AMOUNT,
+  );
+  if (allowance.transactionHash) {
+    await waitForReceiptAndInterpret(
+      publicClient,
+      allowance.transactionHash,
+      300,
+    );
+  }
   const funded = await jobs.fund(fundJob.jobId, FUND_AMOUNT);
 
-  // One relay intent ⇒ one tx whose receipt carries BOTH the U Approval
-  // and the commerce JobFunded (approve+fund same batch).
+  // The session relay may call Commerce.fund only. ERC-20 approval belongs
+  // to the trusted admin setup transaction above.
   const receiptLogs = funded.receipt?.logs ?? [];
   let jobFundedSeen = false;
-  let approvalSeen = false;
   for (const log of receiptLogs) {
     if (log.address.toLowerCase() === jobs.commerce.address.toLowerCase()) {
       try {
@@ -184,30 +189,6 @@ async function fundLifecycle(
         // other commerce event — ignore
       }
     }
-    if (log.address.toLowerCase() === U_TESTNET.toLowerCase()) {
-      try {
-        const decoded = decodeEventLog({
-          abi: ERC20_APPROVAL_ABI,
-          eventName: "Approval",
-          data: log.data,
-          topics: log.topics,
-        });
-        const args = decoded.args as {
-          owner: `0x${string}`;
-          spender: `0x${string}`;
-          value: bigint;
-        };
-        if (
-          args.owner.toLowerCase() === eoa.toLowerCase() &&
-          args.spender.toLowerCase() === jobs.commerce.address.toLowerCase() &&
-          args.value === FUND_AMOUNT
-        ) {
-          approvalSeen = true;
-        }
-      } catch {
-        // Transfer etc — ignore
-      }
-    }
   }
   const allowanceAfter = (await publicClient.readContract({
     address: U_TESTNET,
@@ -216,13 +197,10 @@ async function fundLifecycle(
     args: [eoa, jobs.commerce.address],
   })) as bigint;
   assertStep(
-    funded.status === 1 &&
-      jobFundedSeen &&
-      approvalSeen &&
-      allowanceAfter === 0n,
+    funded.status === 1 && jobFundedSeen && allowanceAfter === 0n,
     "9.fund",
-    `job ${fundJob.jobId} funded 0.1 U in ONE tx (${funded.transactionHash}): Approval+JobFunded in same receipt; allowance back to 0`,
-    `status=${funded.status} jobFunded=${jobFundedSeen} approval=${approvalSeen} allowance=${allowanceAfter}`,
+    `job ${fundJob.jobId} funded 0.1 U (${funded.transactionHash}): admin allowance consumed; session calldata contained only Commerce.fund`,
+    `status=${funded.status} jobFunded=${jobFundedSeen} allowance=${allowanceAfter}`,
   );
 }
 
@@ -489,7 +467,7 @@ async function main(): Promise<void> {
     );
     await snap("afterCancel");
 
-    // ── 9. fund: bundled approve+fund in ONE relay intent (needs ≥0.1 U) ─
+    // ── 9. fund: admin allowance + session-only fund (needs ≥0.1 U) ─────
     const uBalance = await uBalanceOf();
     if (uBalance < FUND_AMOUNT) {
       skip(
@@ -498,7 +476,13 @@ async function main(): Promise<void> {
       );
     } else {
       try {
-        await fundLifecycle(jobs, expiredAt, eoa, publicClient);
+        await fundLifecycle(
+          jobs,
+          expiredAt,
+          eoa,
+          publicClient,
+          adminProvider,
+        );
       } catch (error) {
         if (error instanceof StepFailure) {
           throw error;

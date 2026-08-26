@@ -113,7 +113,7 @@ class TransactionPendingError(BNBAgentError):
             message
             or (
                 f"Transaction {tx_hash} broadcast but not confirmed within "
-                f"{timeout_seconds}s; check later or retry safely."
+                f"{timeout_seconds}s; reconcile this hash before any rebroadcast."
             )
         )
 

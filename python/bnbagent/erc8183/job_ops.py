@@ -31,6 +31,8 @@ from ..storage.storage_provider import StorageProvider
 from ..wallets.wallet_provider import WalletProvider
 from .client import ERC8183Client
 from .config import ERC8183_ENV_PREFIX
+from .negotiation import NegotiationHandler, parse_job_description
+from .quote_verify import verify_quote_signature
 from .schema import SCHEMA_VERSION, DeliverableManifest
 from .types import JobStatus
 
@@ -100,6 +102,7 @@ ERR_PAYLOAD_TOO_LARGE = "payload_too_large"  # response/metadata size cap hit
 ERR_INTERNAL = "internal_error"  # unexpected failure (retryable)
 ERR_CHAIN_UNAVAILABLE = "chain_unavailable"  # transient chain/RPC trouble (retryable)
 ERR_TX_PENDING = "tx_pending"  # tx broadcast but unconfirmed (NOT retryable)
+ERR_QUOTE_INVALID = "quote_invalid"  # unsigned, tampered, or stale-at-funding quote
 
 
 def _exc_error_fields(exc: Exception) -> dict[str, Any]:
@@ -165,6 +168,9 @@ class ERC8183JobOps:
         ``verify_job`` to reject under-priced jobs (``budget_too_low``).
         Advertised decimals in those rejections are fetched dynamically
         from the payment token.
+    allow_unsigned_jobs
+        Compatibility escape hatch for legacy jobs. Defaults to ``False``;
+        signed quote verification is mandatory in production by default.
     """
 
     def __init__(
@@ -176,6 +182,7 @@ class ERC8183JobOps:
         storage_provider: StorageProvider | None = None,
         service_price: int = 0,
         agent_url: str | None = None,
+        allow_unsigned_jobs: bool = False,
     ) -> None:
         if wallet_provider is None and provider_address is None:
             raise ValueError(
@@ -193,6 +200,7 @@ class ERC8183JobOps:
         self._storage = storage_provider
         self._service_price = service_price
         self._agent_url = agent_url
+        self._allow_unsigned_jobs = allow_unsigned_jobs
 
         self._client: ERC8183Client | None = None
         self._deliverable_urls: dict[int, str] = {}
@@ -501,24 +509,140 @@ class ERC8183JobOps:
                     f"submit-deadline check: {exc}"
                 )
 
+            client = self._get_client()
             description = job_result.get("description", "")
+            quote_envelope: dict[str, Any] | None = None
+            has_structured_description = False
             if description:
-                from .negotiation import parse_job_description
-
                 try:
-                    # Fail closed on a malformed / type-confused description.
-                    # The negotiation quote TTL (quote_expires_at) is intentionally
-                    # NOT enforced here: verify_job only runs once a job is FUNDED
-                    # (price already escrowed on-chain), so re-checking the TTL post-
-                    # fund can only strand funds — it cannot undo the commit. The TTL
-                    # guards a signed quote pre-commit; after funding the budget check
-                    # below is the economic guard that matters.
-                    parse_job_description(description)
+                    parsed = parse_job_description(description)
+                    has_structured_description = parsed is not None
+                    if str(description).lstrip().startswith("{"):
+                        raw = json.loads(description)
+                        if isinstance(raw, dict):
+                            quote_envelope = raw
                 except Exception as exc:
                     return {
                         "valid": False,
                         "error": f"Malformed job description: {exc}",
                         "error_code": ERR_DESCRIPTION_INVALID,
+                    }
+
+            has_signature_material = quote_envelope is not None and (
+                "negotiation_hash" in quote_envelope or "provider_sig" in quote_envelope
+            )
+            if not self._allow_unsigned_jobs or has_signature_material:
+                if not has_structured_description or quote_envelope is None:
+                    return {
+                        "valid": False,
+                        "error": "Job description does not contain a signed negotiation quote",
+                        "error_code": ERR_QUOTE_INVALID,
+                    }
+                required = {
+                    "negotiation_hash",
+                    "provider_sig",
+                    "negotiated_at",
+                    "quote_expires_at",
+                    "chain_id",
+                }
+                if not required.issubset(quote_envelope):
+                    return {
+                        "valid": False,
+                        "error": (
+                            "Signed negotiation quote is missing hash, signature, "
+                            "negotiated time, expiry, or chain binding"
+                        ),
+                        "error_code": ERR_QUOTE_INVALID,
+                    }
+
+                negotiated_at = quote_envelope["negotiated_at"]
+                quote_expires_at = quote_envelope["quote_expires_at"]
+                if (
+                    not isinstance(negotiated_at, int)
+                    or isinstance(negotiated_at, bool)
+                    or negotiated_at < 0
+                    or not isinstance(quote_expires_at, int)
+                    or isinstance(quote_expires_at, bool)
+                    or quote_expires_at <= negotiated_at
+                    or quote_expires_at - negotiated_at
+                    > NegotiationHandler.MAX_QUOTE_TTL_SECONDS
+                ):
+                    return {
+                        "valid": False,
+                        "error": (
+                            "Signed negotiation quote window must be at most "
+                            f"{NegotiationHandler.MAX_QUOTE_TTL_SECONDS} seconds"
+                        ),
+                        "error_code": ERR_QUOTE_INVALID,
+                    }
+
+                funded_block = await asyncio.to_thread(
+                    client.get_job_funded_block,
+                    job_id,
+                    negotiated_at=negotiated_at,
+                    quote_expires_at=quote_expires_at,
+                )
+                if funded_block is None:
+                    return {
+                        "valid": False,
+                        "error": f"Job {job_id} was not funded inside the signed quote window",
+                        "error_code": ERR_QUOTE_INVALID,
+                    }
+
+                verdict = await asyncio.to_thread(
+                    verify_quote_signature,
+                    envelope=quote_envelope,
+                    provider=str(job_result.get("provider", "")),
+                    w3=client.w3,
+                    expected_verifying_contract=client.commerce.address,
+                    block_number=funded_block,
+                )
+                if not verdict.valid:
+                    return {
+                        "valid": False,
+                        "error": f"Provider quote rejected: {verdict.reason}",
+                        "error_code": ERR_QUOTE_INVALID,
+                    }
+
+                signed_price_raw = quote_envelope.get("price")
+                if not isinstance(signed_price_raw, str) or not signed_price_raw.isdigit():
+                    return {
+                        "valid": False,
+                        "error": "Signed negotiation quote contains an invalid price",
+                        "error_code": ERR_QUOTE_INVALID,
+                    }
+                signed_price = int(signed_price_raw)
+                funded_budget = int(job_result.get("budget", 0))
+                if funded_budget < signed_price:
+                    return {
+                        "valid": False,
+                        "error": (
+                            f"Job budget ({funded_budget}) is below signed quote price "
+                            f"({signed_price})"
+                        ),
+                        "error_code": ERR_BUDGET_TOO_LOW,
+                    }
+
+                signed_currency_raw = quote_envelope.get("currency")
+                try:
+                    if not isinstance(signed_currency_raw, str):
+                        raise ValueError("currency is not a string")
+                    signed_currency = Web3.to_checksum_address(signed_currency_raw)
+                except (TypeError, ValueError):
+                    return {
+                        "valid": False,
+                        "error": "Signed negotiation quote contains an invalid currency",
+                        "error_code": ERR_QUOTE_INVALID,
+                    }
+                payment_token = Web3.to_checksum_address(client.payment_token)
+                if signed_currency != payment_token:
+                    return {
+                        "valid": False,
+                        "error": (
+                            f"Signed quote currency ({signed_currency}) does not match "
+                            f"the Commerce payment token ({payment_token})"
+                        ),
+                        "error_code": ERR_QUOTE_INVALID,
                     }
 
             if self._service_price > 0:

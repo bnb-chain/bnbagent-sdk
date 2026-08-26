@@ -14,6 +14,7 @@ const HASH = `0x${"ab".repeat(32)}` as `0x${string}`;
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 /** Build a probe that answers per-URL from a lookup table. */
@@ -70,40 +71,96 @@ describe("resolveFallbackRpcUrls", () => {
       }),
     ).toEqual(["https://b.example"]);
   });
+
+  it("treats URLs on the same origin as one independent source", () => {
+    expect(
+      resolveFallbackRpcUrls({
+        chainId: BSC_TESTNET_CHAIN_ID,
+        fallbackRpcUrls: [
+          "https://rpc.example/key-a",
+          "https://rpc.example/key-b",
+          "https://other.example/rpc",
+        ],
+      }),
+    ).toEqual(["https://rpc.example/key-a", "https://other.example/rpc"]);
+  });
 });
 
 describe("confirmTxUnseen", () => {
   it("all unseen -> confirmed-unseen", async () => {
     const verdict = await confirmTxUnseen(HASH, {
       chainId: BSC_TESTNET_CHAIN_ID,
-      fallbackRpcUrls: ["u1", "u2"],
-      probe: tableProbe({ u1: "unseen", u2: "unseen" }),
+      fallbackRpcUrls: ["https://one.example", "https://two.example"],
+      probe: tableProbe({
+        "https://one.example": "unseen",
+        "https://two.example": "unseen",
+      }),
     });
     expect(verdict).toBe("confirmed-unseen");
   });
 
-  it("a single seen endpoint wins -> seen", async () => {
+  it("two independent seen endpoints agree -> seen", async () => {
     const verdict = await confirmTxUnseen(HASH, {
       chainId: BSC_TESTNET_CHAIN_ID,
-      fallbackRpcUrls: ["u1", "u2", "u3"],
-      probe: tableProbe({ u1: "unseen", u2: "seen", u3: "error" }),
+      fallbackRpcUrls: [
+        "https://one.example",
+        "https://two.example",
+        "https://three.example",
+      ],
+      probe: tableProbe({
+        "https://one.example": "seen",
+        "https://two.example": "seen",
+        "https://three.example": "error",
+      }),
     });
     expect(verdict).toBe("seen");
   });
 
-  it("mixed error + unseen -> confirmed-unseen (one authoritative answer suffices)", async () => {
+  it("one seen answer is inconclusive rather than authoritative", async () => {
     const verdict = await confirmTxUnseen(HASH, {
       chainId: BSC_TESTNET_CHAIN_ID,
-      fallbackRpcUrls: ["u1", "u2"],
-      probe: tableProbe({ u1: "error", u2: "unseen" }),
+      fallbackRpcUrls: ["https://one.example", "https://two.example"],
+      probe: tableProbe({
+        "https://one.example": "seen",
+        "https://two.example": "unseen",
+      }),
     });
-    expect(verdict).toBe("confirmed-unseen");
+    expect(verdict).toBe("inconclusive");
+  });
+
+  it("a single conflicting seen answer blocks a two-source unseen quorum", async () => {
+    const verdict = await confirmTxUnseen(HASH, {
+      chainId: BSC_TESTNET_CHAIN_ID,
+      fallbackRpcUrls: [
+        "https://one.example",
+        "https://two.example",
+        "https://three.example",
+      ],
+      probe: tableProbe({
+        "https://one.example": "unseen",
+        "https://two.example": "unseen",
+        "https://three.example": "seen",
+      }),
+    });
+    expect(verdict).toBe("inconclusive");
+  });
+
+  it("one unseen answer plus an error is inconclusive", async () => {
+    const verdict = await confirmTxUnseen(HASH, {
+      chainId: BSC_TESTNET_CHAIN_ID,
+      fallbackRpcUrls: ["https://one.example", "https://two.example"],
+      probe: tableProbe({
+        "https://one.example": "error",
+        "https://two.example": "unseen",
+      }),
+    });
+    expect(verdict).toBe("inconclusive");
   });
 
   it("all error -> inconclusive", async () => {
     const verdict = await confirmTxUnseen(HASH, {
       chainId: BSC_TESTNET_CHAIN_ID,
-      fallbackRpcUrls: ["u1", "u2"],
+      fallbackRpcUrls: ["https://one.example", "https://two.example"],
       probe: tableProbe({}),
     });
     expect(verdict).toBe("inconclusive");
@@ -112,7 +169,7 @@ describe("confirmTxUnseen", () => {
   it("a throwing probe counts as error, never rejects", async () => {
     const verdict = await confirmTxUnseen(HASH, {
       chainId: BSC_TESTNET_CHAIN_ID,
-      fallbackRpcUrls: ["u1"],
+      fallbackRpcUrls: ["https://one.example"],
       probe: async () => {
         throw new Error("boom");
       },
@@ -143,9 +200,27 @@ describe("confirmTxUnseen", () => {
     );
     await confirmTxUnseen(HASH, {
       chainId: BSC_TESTNET_CHAIN_ID,
-      fallbackRpcUrls: ["u1"],
+      fallbackRpcUrls: ["https://one.example"],
       probe,
     });
     expect(probe).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a transaction object whose hash differs from the query", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ result: { hash: `0x${"cd".repeat(32)}` } }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+    const verdict = await confirmTxUnseen(HASH, {
+      chainId: BSC_TESTNET_CHAIN_ID,
+      fallbackRpcUrls: ["https://one.example", "https://two.example"],
+    });
+    expect(verdict).toBe("inconclusive");
   });
 });

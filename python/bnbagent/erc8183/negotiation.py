@@ -57,6 +57,15 @@ class DescriptionTooLongError(ValueError):
     negotiation_hash / provider_sig, so the description is rejected instead."""
 
 
+class QuoteSigningError(RuntimeError):
+    """Raised when a configured quote signer cannot produce a signature.
+
+    An accepted quote must never be returned unsigned once the provider has
+    configured signing.  Callers may map this operational failure to a
+    retryable transport status such as HTTP 503.
+    """
+
+
 if TYPE_CHECKING:
     from ..wallets.protocols import MessageSigner
     from .client import ERC8183Client
@@ -754,18 +763,13 @@ class NegotiationHandler:
                     if isinstance(sig_bytes, (bytes, bytearray))
                     else str(sig_bytes)
                 )
+                if not provider_sig:
+                    raise ValueError("wallet provider returned an empty signature")
                 if provider_sig and not provider_sig.startswith("0x"):
                     provider_sig = "0x" + provider_sig
             except Exception as e:
-                # Signing failure is non-fatal: return the quote without a
-                # provider_sig, but log so operators can detect wallet issues.
-                logger.warning(
-                    "[NegotiationHandler] sign_message failed: %s; "
-                    "returning quote without provider_sig",
-                    e,
-                )
-                negotiation_hash = ""
-                provider_sig = ""
+                logger.error("[NegotiationHandler] quote signing failed: %s", e)
+                raise QuoteSigningError(f"quote signing failed: {e}") from e
 
         # Store negotiated_at in the response dict for build_job_description
         response_dict = response.to_dict()

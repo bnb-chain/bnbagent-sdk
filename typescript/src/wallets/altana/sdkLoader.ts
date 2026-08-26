@@ -12,6 +12,8 @@ import type { AltanaSdkModule } from "./types.js";
 
 /** The npm package the Altana provider binds to at runtime. */
 export const ALTANA_SDK_PACKAGE = "@altananetwork/sdk";
+/** Exact vendor release exercised by this repository's type and runtime tests. */
+export const ALTANA_SDK_TESTED_VERSION = "0.7.1";
 
 /** Host-supplied loader for the optional ESM-only Altana SDK package. */
 export type AltanaSdkImporter = () => Promise<unknown>;
@@ -34,6 +36,32 @@ function isModuleNotFound(error: unknown): boolean {
   );
 }
 
+function validateAltanaSdk(mod: unknown): AltanaSdkModule {
+  const candidate = mod as Record<string, unknown> | null;
+  const missing: string[] = [];
+  if (!candidate || typeof candidate.createClient !== "function") {
+    missing.push("createClient");
+  }
+  if (!candidate || typeof candidate.signerFromPrivateKey !== "function") {
+    missing.push("signerFromPrivateKey");
+  }
+  if (
+    !candidate ||
+    typeof candidate.BNB !== "object" ||
+    candidate.BNB === null
+  ) {
+    missing.push("BNB");
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `Incompatible ${ALTANA_SDK_PACKAGE} runtime: missing required export(s) ${missing.join(
+        ", ",
+      )}. Install the tested version exactly: pnpm add ${ALTANA_SDK_PACKAGE}@${ALTANA_SDK_TESTED_VERSION}`,
+    );
+  }
+  return candidate as unknown as AltanaSdkModule;
+}
+
 /**
  * Import `@altananetwork/sdk`, caching the module promise for the process
  * lifetime. A missing install is rewritten into an actionable error naming
@@ -43,7 +71,14 @@ function isModuleNotFound(error: unknown): boolean {
 export async function loadAltanaSdk(): Promise<AltanaSdkModule> {
   if (!cachedModule) {
     cachedModule = importAltanaSdkModule().then(
-      (mod) => mod as unknown as AltanaSdkModule,
+      (mod) => {
+        try {
+          return validateAltanaSdk(mod);
+        } catch (error) {
+          cachedModule = null;
+          throw error;
+        }
+      },
       (error: unknown) => {
         cachedModule = null;
         if (isModuleNotFound(error)) {

@@ -8,8 +8,8 @@
  *
  * 1. `ERC8183Client.fund` on a fundBundlesApproval wallet performs ZERO
  *    local signing/broadcast (`eth_sendRawTransaction` never appears) and
- *    ZERO SDK-side allowance management — one relay submission carrying
- *    approve + fund.
+ *    ZERO SDK-side allowance mutation — it checks a bounded allowance
+ *    provisioned by the admin, then relays only `fund`.
  * 2. `createJob` recovers the jobId from the receipt the executor fetched:
  *    the JobCreated log is decoded by emitting-contract address, so a
  *    same-topic0 decoy from another contract in the batch is ignored (the
@@ -106,6 +106,11 @@ const PAYMENT_TOKEN_SELECTOR = encodeFunctionData({
   functionName: "paymentToken",
   args: [],
 }).slice(0, 10);
+const ALLOWANCE_SELECTOR = encodeFunctionData({
+  abi: erc20Abi,
+  functionName: "allowance",
+  args: [getAddress(`0x${"11".repeat(20)}`), FAKE_COMMERCE],
+}).slice(0, 10);
 
 function fakeNetwork(): NetworkConfig {
   return {
@@ -144,7 +149,10 @@ function rpcLog(
   };
 }
 
-function makeMock(receiptLogs: unknown[] = []): MockPublicClient {
+function makeMock(
+  receiptLogs: unknown[] = [],
+  commerceAllowance = 250n,
+): MockPublicClient {
   const mock = mockPublicClient({
     eth_chainId: () => "0x61", // 97, must match fakeNetwork
     eth_call: (params) => {
@@ -154,6 +162,13 @@ function makeMock(receiptLogs: unknown[] = []): MockPublicClient {
           abi: agenticCommerceAbi,
           functionName: "paymentToken",
           result: FAKE_TOKEN,
+        });
+      }
+      if (data.toLowerCase().startsWith(ALLOWANCE_SELECTOR)) {
+        return encodeFunctionResult({
+          abi: erc20Abi,
+          functionName: "allowance",
+          result: commerceAllowance,
         });
       }
       return "0x";
@@ -195,7 +210,7 @@ beforeEach(() => {
 });
 
 describe("ERC8183Client over AltanaWalletProvider", () => {
-  it("fund(): no eth_sendRawTransaction, no allowance management — one relay batch of approve+fund", async () => {
+  it("fund(): checks an admin-provisioned allowance and relays only fund", async () => {
     const mock = makeMock();
     createPublicClientForMock.mockReturnValue(mock.client);
     const client = await ERC8183Client.create({
@@ -207,20 +222,51 @@ describe("ERC8183Client over AltanaWalletProvider", () => {
     expect(result.status).toBe(1);
 
     // Self-broadcasting all the way down: nothing was locally signed or
-    // broadcast, and the SDK never read allowance/decimals (that whole
-    // branch is skipped by fundBundlesApproval === true).
+    // broadcast. The executor reads the immutable payment token plus the
+    // pre-provisioned Commerce allowance, but never mutates that allowance.
     expect(
       mock.calls.filter((c) => c.method === "eth_sendRawTransaction"),
     ).toHaveLength(0);
     const ethCalls = mock.calls.filter((c) => c.method === "eth_call");
-    expect(ethCalls).toHaveLength(1); // exactly the paymentToken read
+    expect(ethCalls).toHaveLength(2); // paymentToken + allowance
 
-    // One relay submission carrying the atomic approve+fund batch.
+    // One relay submission carrying fund only — no session-key approve.
     expect(sdkMocks.executeMock).toHaveBeenCalledTimes(1);
     const { calls } = sdkMocks.executeMock.mock.calls[0]?.[0] as {
       calls: { to: `0x${string}`; data: Hex }[];
     };
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(1);
+    const fund = decodeFunctionData({
+      abi: agenticCommerceAbi,
+      data: calls[0]?.data as Hex,
+    });
+    expect(calls[0]?.to).toBe(FAKE_COMMERCE);
+    expect(fund.functionName).toBe("fund");
+    expect(fund.args).toEqual([7n, 250n, "0x"]);
+  });
+
+  it("fund(): refuses before relay when the bounded allowance is too small", async () => {
+    const mock = makeMock([], 249n);
+    createPublicClientForMock.mockReturnValue(mock.client);
+    const client = await ERC8183Client.create({
+      walletProvider: makeProvider(),
+      network: fakeNetwork(),
+    });
+
+    await expect(client.fund(7n, 250n)).rejects.toThrow(
+      /setErc8183Allowance\(\)/,
+    );
+    expect(sdkMocks.executeMock).not.toHaveBeenCalled();
+  });
+
+  it("admin provisions the Commerce allowance in a standalone bounded call", async () => {
+    const provider = makeProvider();
+    await provider.setErc8183Allowance(FAKE_TOKEN, FAKE_COMMERCE, 250n);
+
+    const { calls } = sdkMocks.executeMock.mock.calls[0]?.[0] as {
+      calls: { to: `0x${string}`; data: Hex }[];
+    };
+    expect(calls).toHaveLength(1);
     const approve = decodeFunctionData({
       abi: erc20Abi,
       data: calls[0]?.data as Hex,
@@ -228,13 +274,6 @@ describe("ERC8183Client over AltanaWalletProvider", () => {
     expect(calls[0]?.to).toBe(FAKE_TOKEN);
     expect(approve.functionName).toBe("approve");
     expect(approve.args).toEqual([FAKE_COMMERCE, 250n]);
-    const fund = decodeFunctionData({
-      abi: agenticCommerceAbi,
-      data: calls[1]?.data as Hex,
-    });
-    expect(calls[1]?.to).toBe(FAKE_COMMERCE);
-    expect(fund.functionName).toBe("fund");
-    expect(fund.args).toEqual([7n, 250n, "0x"]);
   });
 
   it("createJob(): recovers jobId from the fetched receipt by emitting-contract address", async () => {

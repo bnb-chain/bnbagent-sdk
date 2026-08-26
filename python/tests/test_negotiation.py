@@ -11,6 +11,7 @@ from bnbagent.erc8183.negotiation import (
     NegotiationRequest,
     NegotiationResponse,
     NegotiationResult,
+    QuoteSigningError,
     ReasonCode,
     TermSpecification,
     _sanitize_for_claim,
@@ -800,7 +801,7 @@ class TestChainBindingRoundtrip:
 
 
 class TestSigningFailureLogging:
-    """Audit I03: signing failures must produce a log entry."""
+    """Configured signing is fail-closed and observable to operators."""
 
     def _make_handler(self, **kwargs):
         defaults = dict(
@@ -810,23 +811,34 @@ class TestSigningFailureLogging:
         defaults.update(kwargs)
         return NegotiationHandler(**defaults)
 
-    def test_signing_failure_is_logged(self, caplog):
+    def test_signing_failure_is_logged_and_rejected(self, caplog):
         mock_wallet = MagicMock()
         mock_wallet.sign_message.side_effect = RuntimeError("hardware key offline")
         handler = self._make_handler(wallet_provider=mock_wallet, chain_id=97)
 
-        with caplog.at_level("WARNING"):
-            result = handler.negotiate(
+        with caplog.at_level("ERROR"), pytest.raises(
+            QuoteSigningError, match="quote signing failed: hardware key offline"
+        ):
+            handler.negotiate(
                 {
                     "task_description": "Get news",
                     "terms": {"deliverables": "summary", "quality_standards": "accurate"},
                 }
             )
 
-        # Quote still returned but without sig.
-        assert result.accepted is True
-        assert result.negotiation_hash == ""
-        assert result.provider_sig == ""
         # The failure must be visible to operators.
-        assert "sign_message failed" in caplog.text
+        assert "quote signing failed" in caplog.text
         assert "hardware key offline" in caplog.text
+
+    def test_empty_signature_is_rejected(self):
+        mock_wallet = MagicMock()
+        mock_wallet.sign_message.return_value = {"signature": b""}
+        handler = self._make_handler(wallet_provider=mock_wallet, chain_id=97)
+
+        with pytest.raises(QuoteSigningError, match="empty signature"):
+            handler.negotiate(
+                {
+                    "task_description": "Get news",
+                    "terms": {"deliverables": "summary", "quality_standards": "accurate"},
+                }
+            )

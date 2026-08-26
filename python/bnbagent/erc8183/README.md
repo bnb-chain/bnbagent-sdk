@@ -187,7 +187,7 @@ OptimisticPolicy surface:
 
 Single-round negotiation processor. `negotiate(request) → NegotiationResult`; `build_job_description(result)` produces a Schema v1 JSON anchor with `negotiation_hash` + `provider_sig`; `parse_job_description` recovers the structured form.
 
-**Chain binding (recommended).** When `chain_id` and `verifying_contract` are passed to the handler, both fields are embedded in the signed JSON content so `provider_sig` cannot be replayed across EVM chains or commerce contracts. Use `NegotiationHandler.from_erc8183_client(client, service_price=..., wallet_provider=...)` to populate both automatically from the live `ERC8183Client` (both serving examples do this). Wallet-signing failures inside `negotiate()` log at `WARNING` level so operators can detect wallet outages (the quote is still returned, but without `provider_sig`).
+**Chain binding (recommended).** When `chain_id` and `verifying_contract` are passed to the handler, both fields are embedded in the signed JSON content so `provider_sig` cannot be replayed across EVM chains or commerce contracts. Use `NegotiationHandler.from_erc8183_client(client, service_price=..., wallet_provider=...)` to populate both automatically from the live `ERC8183Client` (both serving examples do this). When a wallet is configured, `negotiate()` fails closed with `QuoteSigningError` if signing fails or returns an empty signature. The failure is logged at `ERROR`, and no accepted unsigned quote is returned.
 
 ### Types (`erc8183.types`)
 

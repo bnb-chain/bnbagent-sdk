@@ -11,7 +11,7 @@
  * and the chain-binding anti-replay invariants (chain_id + checksummed
  * verifying_contract embedded in signed content, different chain_id ->
  * different hash, on-chain round-trip re-keccak reproduces the signed hash,
- * sign_message failure -> unsigned quote + warning).
+ * signing failure -> fail-closed error).
  */
 
 import { getAddress, keccak256, toBytes } from "viem";
@@ -26,6 +26,7 @@ import {
   NegotiationResponse,
   NegotiationResult,
   type QuoteSigner,
+  QuoteSigningError,
   ReasonCode,
   TermSpecification,
   buildDescriptionContent,
@@ -987,17 +988,17 @@ describe("ChainBindingRoundtrip", () => {
 });
 
 describe("SigningFailureLogging", () => {
-  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
   afterEach(() => {
-    warnSpy.mockRestore();
+    errorSpy.mockRestore();
   });
 
-  it("logs and returns an unsigned quote when signing fails (non-fatal)", async () => {
+  it("logs and fails closed when wallet signing fails", async () => {
     const wallet: MessageSigner = {
       address: "0x0000000000000000000000000000000000dEaD",
       signMessage: vi.fn(async () => {
@@ -1012,17 +1013,32 @@ describe("SigningFailureLogging", () => {
       now: () => FIXED_NOW,
     });
 
-    const result = await handler.negotiate(basicRequest());
-
-    // Quote still returned but without sig.
-    expect(result.accepted).toBe(true);
-    expect(result.negotiationHash).toBe("");
-    expect(result.providerSig).toBe("");
+    await expect(handler.negotiate(basicRequest())).rejects.toBeInstanceOf(
+      QuoteSigningError,
+    );
 
     // The failure must be visible to operators.
-    const warnedText = warnSpy.mock.calls.map((c) => c.join(" ")).join("\n");
-    expect(warnedText).toContain("sign_message failed");
-    expect(warnedText).toContain("hardware key offline");
+    const loggedText = errorSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(loggedText).toContain("quote signing failed");
+    expect(loggedText).toContain("hardware key offline");
+  });
+
+  it("fails closed when a wallet provider returns an empty signature", async () => {
+    const wallet: MessageSigner = {
+      address: "0x0000000000000000000000000000000000dEaD",
+      signMessage: vi.fn(async () => ({ signature: "" })),
+    };
+    const handler = new NegotiationHandler({
+      servicePrice: "20000000000000000000",
+      currency: "0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
+      walletProvider: wallet,
+      chainId: 97,
+      now: () => FIXED_NOW,
+    });
+
+    await expect(handler.negotiate(basicRequest())).rejects.toThrow(
+      /empty signature/,
+    );
   });
 
   it("fails closed when the quote-specific signer cannot sign", async () => {
@@ -1043,6 +1059,6 @@ describe("SigningFailureLogging", () => {
     await expect(handler.negotiate(basicRequest())).rejects.toThrow(
       /quote signing failed: session unavailable/,
     );
-    expect(warnSpy).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledOnce();
   });
 });

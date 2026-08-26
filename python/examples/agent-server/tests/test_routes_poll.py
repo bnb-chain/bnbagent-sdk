@@ -5,11 +5,14 @@ job whose execution fails transiently (5xx / exception) must be re-attempted
 from the loop's retry queue; permanent failures (4xx) must not retry.
 """
 
+import logging
 import time
 from unittest.mock import AsyncMock, MagicMock
 
 from erc8183_server import create_erc8183_app
 from fastapi.testclient import TestClient
+
+from bnbagent.utils import RateLimitExceeded
 
 
 def _fake_state(job_ops):
@@ -158,3 +161,53 @@ class TestResponseRoute:
     def test_missing_error_code_defaults_to_404(self, monkeypatch):
         http = self._http({"success": False, "error": "No storage configured"}, monkeypatch)
         assert http.get("/erc8183/job/1/response").status_code == 404
+
+
+class TestLimiterInjection:
+    def _http(self, monkeypatch, per_ip, global_limit):
+        state = _fake_state(MagicMock(agent_address="0x" + "aa" * 20))
+        state.config.effective_commerce_address = "0x" + "11" * 20
+        state.config.effective_router_address = "0x" + "22" * 20
+        state.config.effective_policy_address = "0x" + "33" * 20
+        state.config.service_price = "1"
+        quote = MagicMock()
+        quote.to_dict.return_value = {"accepted": True}
+        state.negotiation_handler.negotiate.return_value = quote
+        monkeypatch.setattr("erc8183_server.create_erc8183_state", lambda config: state)
+        return TestClient(
+            create_erc8183_app(
+                config=MagicMock(),
+                negotiate_limiter=per_ip,
+                global_negotiate_limiter=global_limit,
+            )
+        )
+
+    def test_awaits_injected_shared_limiters(self, monkeypatch):
+        per_ip = MagicMock()
+        per_ip.check = AsyncMock(return_value=None)
+        global_limit = MagicMock()
+        global_limit.check = AsyncMock(return_value=None)
+        http = self._http(monkeypatch, per_ip, global_limit)
+
+        assert http.post("/erc8183/negotiate", json={"terms": {}}).status_code == 200
+        per_ip.check.assert_awaited_once()
+        global_limit.check.assert_awaited_once_with("global")
+
+    def test_injected_limiter_rejection_maps_to_429(self, monkeypatch):
+        per_ip = MagicMock()
+        per_ip.check.side_effect = RateLimitExceeded("shared limit")
+        global_limit = MagicMock()
+        http = self._http(monkeypatch, per_ip, global_limit)
+
+        assert http.post("/erc8183/negotiate", json={"terms": {}}).status_code == 429
+        global_limit.check.assert_not_called()
+
+    def test_production_warns_when_default_is_process_local(self, monkeypatch, caplog):
+        monkeypatch.setenv("ENV", "production")
+        monkeypatch.setattr(
+            "erc8183_server.create_erc8183_state",
+            lambda config: _fake_state(MagicMock(agent_address="0x" + "aa" * 20)),
+        )
+        with caplog.at_level(logging.WARNING):
+            create_erc8183_app(config=MagicMock())
+        assert "safe only for one replica" in caplog.text

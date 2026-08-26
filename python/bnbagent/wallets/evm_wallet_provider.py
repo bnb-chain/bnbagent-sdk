@@ -99,7 +99,6 @@ class EVMWalletProvider(WalletProvider):
                 "Password is required for wallet encryption. Please provide a secure password."
             )
 
-        self._password = password
         self._persist = persist
         self._wallets_dir = Path(wallets_dir) if wallets_dir else _WALLETS_DIR
         self._account: LocalAccount | None = None
@@ -107,9 +106,9 @@ class EVMWalletProvider(WalletProvider):
         self._signing_policy = signing_policy or SigningPolicy.strict_default()
 
         if private_key:
-            self._import_private_key(private_key)
+            self._import_private_key(private_key, password)
         elif persist:
-            self._load_wallet(address)
+            self._load_wallet(address, password)
         else:
             raise ValueError("private_key is required when persist=False (in-memory-only mode)")
 
@@ -156,7 +155,7 @@ class EVMWalletProvider(WalletProvider):
 
     # ── Private key import ──
 
-    def _import_private_key(self, private_key: str) -> None:
+    def _import_private_key(self, private_key: str, password: str) -> None:
         """Import and encrypt a private key."""
         try:
             if private_key.startswith("0x"):
@@ -168,7 +167,7 @@ class EVMWalletProvider(WalletProvider):
             self._source = "imported"
 
             if self._persist:
-                self._save_keystore()
+                self._save_keystore(password)
                 logger.info(
                     "Private key imported and encrypted: %s (PRIVATE_KEY can be removed from env)",
                     self._account.address,
@@ -178,23 +177,23 @@ class EVMWalletProvider(WalletProvider):
 
     # ── Load from disk ──
 
-    def _load_wallet(self, address: str | None) -> None:
+    def _load_wallet(self, address: str | None, password: str) -> None:
         """Load a wallet from keystore, or create a new one if none exists."""
         if address:
-            self._load_keystore(address)
+            self._load_keystore(address, password)
         else:
             wallets = self.list_wallets(self._wallets_dir)
             if len(wallets) == 1:
-                self._load_keystore(wallets[0])
+                self._load_keystore(wallets[0], password)
             elif len(wallets) > 1:
                 raise ValueError(
                     f"Multiple wallets found in {self._wallets_dir}: {wallets}. "
                     "Set WALLET_ADDRESS to specify which one to use."
                 )
             else:
-                self._create_wallet()
+                self._create_wallet(password)
 
-    def _load_keystore(self, address: str) -> None:
+    def _load_keystore(self, address: str, password: str) -> None:
         """Load and decrypt a keystore file by address."""
         ks_path = self._wallets_dir / f"{address}.json"
         if not ks_path.is_file():
@@ -203,7 +202,7 @@ class EVMWalletProvider(WalletProvider):
         try:
             with open(ks_path) as f:
                 keystore = json.load(f)
-            private_key = Account.decrypt(keystore, self._password)
+            private_key = Account.decrypt(keystore, password)
             self._account = Account.from_key(private_key)
             self._source = "loaded_keystore"
             logger.info("Wallet loaded from keystore: %s", self._account.address)
@@ -212,25 +211,25 @@ class EVMWalletProvider(WalletProvider):
         except Exception as e:
             raise RuntimeError(f"Failed to load keystore {ks_path}: {e}") from e
 
-    def _create_wallet(self) -> None:
+    def _create_wallet(self, password: str) -> None:
         """Generate a new wallet and save encrypted."""
         try:
             self._account = Account.create()
             self._source = "created_new"
             if self._persist:
-                self._save_keystore()
+                self._save_keystore(password)
             logger.info("Created new wallet: %s", self._account.address)
         except Exception as e:
             raise RuntimeError(f"Failed to create wallet: {e}") from e
 
     # ── Save to disk ──
 
-    def _save_keystore(self) -> None:
+    def _save_keystore(self, password: str) -> None:
         """Save wallet as ~/.bnbagent/wallets/<address>.json (Keystore V3)."""
         self._wallets_dir.mkdir(parents=True, exist_ok=True)
         os.chmod(self._wallets_dir, 0o700)
 
-        keystore = Account.encrypt(self._account.key, self._password)
+        keystore = Account.encrypt(self._account.key, password)
         ks_path = self._wallets_dir / f"{self._account.address}.json"
 
         # Atomic write
@@ -255,16 +254,19 @@ class EVMWalletProvider(WalletProvider):
 
     # ── Public API ──
 
+    def _require_account(self) -> LocalAccount:
+        if self._account is None:
+            raise RuntimeError("Wallet has been destroyed")
+        return self._account
+
     @property
     def address(self) -> str:
         """Get the wallet address."""
-        if self._account is None:
-            raise RuntimeError("Account not initialized")
-        return self._account.address
+        return self._require_account().address
 
     def sign_transaction(self, transaction: dict[str, Any]) -> dict[str, Any]:
         """Sign a transaction. Returns dict with 'rawTransaction', 'hash', 'r', 's', 'v'."""
-        signed_txn = self._account.sign_transaction(transaction)
+        signed_txn = self._require_account().sign_transaction(transaction)
         return {
             "rawTransaction": signed_txn.raw_transaction,
             "hash": signed_txn.hash,
@@ -276,7 +278,7 @@ class EVMWalletProvider(WalletProvider):
     def sign_message(self, message: str) -> dict[str, Any]:
         """Sign a message using EIP-191 personal sign."""
         signable_message = encode_defunct(text=message)
-        signed_message = self._account.sign_message(signable_message)
+        signed_message = self._require_account().sign_message(signable_message)
         return {
             "messageHash": signed_message.message_hash,
             "r": signed_message.r,
@@ -340,7 +342,7 @@ class EVMWalletProvider(WalletProvider):
         # eth_account expects ``types`` without the EIP712Domain entry — it adds
         # its own. Drop it if the caller included it (a common convention).
         message_types = {k: v for k, v in types.items() if k != "EIP712Domain"}
-        signed = self._account.sign_typed_data(
+        signed = self._require_account().sign_typed_data(
             domain_data=domain,
             message_types=message_types,
             message_data=message,
@@ -356,11 +358,24 @@ class EVMWalletProvider(WalletProvider):
     def export_private_key(self) -> str:
         """Export the private key in hex format. Handle with extreme care."""
         logger.warning("Exporting private key — never share or expose it!")
-        return f"0x{self._account.key.hex()}"
+        return f"0x{self._require_account().key.hex()}"
 
-    def export_keystore(self) -> dict[str, Any]:
-        """Export the wallet as Keystore V3 JSON (MetaMask/Geth compatible)."""
-        return Account.encrypt(self._account.key, self._password)
+    def export_keystore(self, password: str) -> dict[str, Any]:
+        """Export as Keystore V3 using a caller-supplied encryption password.
+
+        Passwords are intentionally not retained after construction.
+        """
+        if not password:
+            raise ValueError("password is required for keystore export")
+        return Account.encrypt(self._require_account().key, password)
+
+    def destroy(self) -> None:
+        """Release the live local account reference after signing is complete.
+
+        Python cannot guarantee physical memory erasure of objects owned by
+        ``eth_account``; this is a best-effort lifetime reduction, not an HSM.
+        """
+        self._account = None
 
     def get_wallet_info(self) -> dict[str, str]:
         """Get wallet information (address only, no sensitive data)."""

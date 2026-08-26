@@ -30,11 +30,15 @@ load_dotenv(Path(__file__).resolve().parent.parent / env_file)
 def main():
     wallet_kind = os.getenv("WALLET_KIND", "evm").lower()
     private_key = os.getenv("PRIVATE_KEY")
-    wallet_password = os.getenv("WALLET_PASSWORD", "demo-password")
+    wallet_password = os.getenv("WALLET_PASSWORD")
 
     if wallet_kind != "twak" and not private_key:
         print("Error: PRIVATE_KEY environment variable is required for WALLET_KIND=evm")
         print("Set it in .env at the project root")
+        sys.exit(1)
+    if wallet_kind != "twak" and not wallet_password:
+        print("Error: WALLET_PASSWORD is required for WALLET_KIND=evm")
+        print("Set a strong, unique value in .env at the project root")
         sys.exit(1)
 
     agent_name = os.getenv("AGENT_NAME", "blockchain-news")

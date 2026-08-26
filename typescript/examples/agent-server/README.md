@@ -38,7 +38,19 @@ pnpm example:agent-server
 # or: pnpm exec tsx examples/agent-server/src/service.ts
 ```
 
-Startup banner shows wallet address, contract addresses, price, and storage backend. The server listens on `PORT` (default 8003) and starts the funded-job poll loop.
+Startup banner shows wallet address, contract addresses, price, and storage backend. The server listens on `HOST`/`PORT` (defaults `127.0.0.1:8003`) and starts the funded-job poll loop.
+
+The unauthenticated `POST /search` helper is absent by default. Enable it only
+for local development with `ENABLE_DEBUG_SEARCH=1`; do not expose it publicly.
+When running behind a reverse proxy, list the proxy's exact socket IP in
+`ERC8183_TRUSTED_PROXY_IPS`. Forwarding headers from every other peer are
+ignored. A process-wide negotiate limit complements the per-IP limit.
+
+The built-in limiters are process-local and are suitable for one replica.
+For multiple replicas, pass application-owned `negotiateLimiter` and
+`globalNegotiateLimiter` implementations to `createErc8183Server()` (async
+shared backends are supported), or enforce equivalent limits at a trusted
+edge. Production emits a warning when either default remains in use.
 
 ### One-time ERC-8004 registration
 
@@ -74,7 +86,7 @@ scripts/
 | GET | `/erc8183/job/:id/verify` | Job verification |
 | GET | `/erc8183/status` | Agent status (wallet, contracts, price) |
 | GET | `/erc8183/health` | Health check |
-| POST | `/search` | Direct news search (testing, no ERC-8183) |
+| POST | `/search` | Development-only news search (`ENABLE_DEBUG_SEARCH=1`) |
 
 ## Storage backends
 

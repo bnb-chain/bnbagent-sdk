@@ -62,6 +62,25 @@ AGENT_DESCRIPTION = os.getenv(
 BASE_URL = os.getenv("A2A_BASE_URL", "http://localhost:8010").rstrip("/")
 SERVICE_PRICE = os.getenv("ERC8183_SERVICE_PRICE", "1000000000000000000")  # 1 token
 
+
+def _positive_int_env(name: str, fallback: int) -> int:
+    try:
+        value = int(os.getenv(name, str(fallback)))
+        return value if value > 0 else fallback
+    except ValueError:
+        logger.warning("%s is invalid; using %s", name, fallback)
+        return fallback
+
+
+def _positive_float_env(name: str, fallback: float) -> float:
+    try:
+        value = float(os.getenv(name, str(fallback)))
+        return value if value > 0 else fallback
+    except ValueError:
+        logger.warning("%s is invalid; using %s", name, fallback)
+        return fallback
+
+
 # WALLET_KIND switches the provider wallet (evm | twak). Everything below —
 # quote signing, job reads — is wallet-polymorphic, so this is the only line
 # that changes per kind.
@@ -77,8 +96,11 @@ else:
     _private_key = os.getenv("PRIVATE_KEY")
     if not _private_key:
         raise SystemExit("PRIVATE_KEY is required for WALLET_KIND=evm (see .env.example)")
+    _wallet_password = os.getenv("WALLET_PASSWORD")
+    if not _wallet_password:
+        raise SystemExit("WALLET_PASSWORD is required for WALLET_KIND=evm (see .env.example)")
     wallet = EVMWalletProvider(
-        password=os.getenv("WALLET_PASSWORD", "demo-password"),
+        password=_wallet_password,
         private_key=_private_key,
     )
 
@@ -94,8 +116,31 @@ negotiation_handler = NegotiationHandler(
     verifying_contract=client.commerce.address,
 )
 
-# Every accepted negotiate burns a wallet signature — throttle it.
-negotiate_limiter = SlidingWindowLimiter(max_requests=30, window_seconds=60.0)
+# Every accepted negotiate burns a wallet signature — apply the same env-driven
+# limits as the HTTP serving example plus a process-wide IP-rotation ceiling.
+_rate_window = _positive_float_env("ERC8183_NEGOTIATE_RATE_WINDOW", 60.0)
+negotiate_limiter = SlidingWindowLimiter(
+    max_requests=_positive_int_env("ERC8183_NEGOTIATE_RATE_LIMIT", 120),
+    window_seconds=_rate_window,
+    max_keys=_positive_int_env("ERC8183_RATE_LIMIT_MAX_KEYS", 10_000),
+)
+global_negotiate_limiter = SlidingWindowLimiter(
+    max_requests=_positive_int_env("ERC8183_NEGOTIATE_GLOBAL_RATE_LIMIT", 1_200),
+    window_seconds=_rate_window,
+    max_keys=1,
+)
+if (
+    os.getenv("ENV") or os.getenv("ENVIRONMENT") or os.getenv("NODE_ENV") or ""
+).strip().lower() in {
+    "prod",
+    "production",
+    "live",
+    "mainnet",
+}:
+    logger.warning(
+        "Production is using process-local A2A rate limits; this is safe only "
+        "for one replica. Enforce an equivalent shared or edge limit before scaling out."
+    )
 
 # ── A2A surface ──
 
@@ -197,6 +242,7 @@ async def a2a_endpoint(request: Request):
         client_ip = request.client.host if request.client else "unknown"
         try:
             negotiate_limiter.check(client_ip)
+            global_negotiate_limiter.check("global")
         except RateLimitExceeded:
             return _rpc_error(req_id, -32000, "Rate limited, retry later")
         terms = data.get("terms")

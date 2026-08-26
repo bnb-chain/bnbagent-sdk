@@ -1,5 +1,6 @@
 """Tests for IPFSStorageProvider — IPFS pinning service storage."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -81,8 +82,20 @@ class TestIPFSStorageProvider:
             _url = await provider.upload({"data": 1}, filename="job-5.json")
 
         call_kwargs = mock_client.post.call_args
-        payload = call_kwargs[1]["json"]
+        payload = json.loads(call_kwargs[1]["content"])
         assert payload["pinataMetadata"]["name"] == "job-5"
+
+    @pytest.mark.asyncio
+    async def test_upload_rejects_oversize_payload_before_http(self):
+        provider = IPFSStorageProvider(
+            pinning_api_url="https://api.pinata.cloud/pinning/pinJSONToIPFS",
+            pinning_api_key="test-jwt-token",
+            max_upload_bytes=64,
+        )
+        with patch("bnbagent.storage.ipfs_storage_provider.httpx.AsyncClient") as mock_client:
+            with pytest.raises(StorageError, match="limit is 64 bytes"):
+                await provider.upload({"data": "x" * 100})
+        mock_client.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_upload_missing_cid_raises(self):

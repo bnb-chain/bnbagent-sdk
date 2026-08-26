@@ -33,7 +33,7 @@ from pathlib import Path
 from ddgs import DDGS
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Load .env from project root (one level up from src/)
 env_file = os.path.basename(os.environ.get("ENV_FILE", ".env"))
@@ -72,6 +72,13 @@ _storage = LocalStorageProvider.from_env()
 
 config = ERC8183Config.from_env(storage=_storage)
 PORT = int(os.getenv("PORT", "8003"))
+HOST = os.getenv("HOST", "127.0.0.1")
+ENABLE_DEBUG_SEARCH = os.getenv("ENABLE_DEBUG_SEARCH", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 # ---------------------------------------------------------------------------
 # Core news search function
@@ -178,8 +185,8 @@ app.mount("/erc8183", erc8183_app)
 
 
 class SearchRequest(BaseModel):
-    query: str
-    max_results: int = 10
+    query: str = Field(min_length=1, max_length=500)
+    max_results: int = Field(default=10, ge=1, le=10)
 
 
 class NewsItem(BaseModel):
@@ -203,43 +210,42 @@ async def root():
         "service": "Blockchain News Agent",
         "agent_address": erc8183_app.state.erc8183.job_ops.agent_address,
         "endpoints": {
-            "search": "/search",
+            **({"search": "/search"} if ENABLE_DEBUG_SEARCH else {}),
             "erc8183_status": "/erc8183/status",
             "erc8183_health": "/erc8183/health",
         },
     }
 
 
-@app.post("/search", response_model=SearchResponse)
-async def search_endpoint(request: SearchRequest):
-    """
-    Direct HTTP search endpoint (for testing).
-    For production, use ERC-8183 protocol via /erc8183/* endpoints.
-    """
-    try:
-        raw_results = search_news(request.query, request.max_results)
+if ENABLE_DEBUG_SEARCH:
 
-        results = []
-        for r in raw_results:
-            results.append(
-                NewsItem(
-                    title=r.get("title", ""),
-                    body=r.get("body", r.get("snippet", "")),
-                    url=r.get("url", r.get("href", "")),
-                    date=r.get("date", ""),
-                    source=r.get("source", ""),
+    @app.post("/search", response_model=SearchResponse)
+    async def search_endpoint(request: SearchRequest):
+        """Development-only direct search; production callers use ERC-8183."""
+        try:
+            raw_results = search_news(request.query, request.max_results)
+
+            results = []
+            for r in raw_results:
+                results.append(
+                    NewsItem(
+                        title=r.get("title", ""),
+                        body=r.get("body", r.get("snippet", "")),
+                        url=r.get("url", r.get("href", "")),
+                        date=r.get("date", ""),
+                        source=r.get("source", ""),
+                    )
                 )
+
+            return SearchResponse(
+                success=True,
+                query=request.query,
+                results_count=len(results),
+                results=results,
             )
-
-        return SearchResponse(
-            success=True,
-            query=request.query,
-            results_count=len(results),
-            results=results,
-        )
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        except Exception as exc:
+            logger.exception("Direct search failed")
+            raise HTTPException(status_code=500, detail="Search failed") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -267,9 +273,9 @@ if __name__ == "__main__":
 
   App endpoints:
     GET  /              — Service info
-    POST /search          — Direct news search
+    Direct search:  {"POST /search (development only)" if ENABLE_DEBUG_SEARCH else "disabled"}
     GET  /erc8183/health     — Health check
 {"=" * 55}
 """)
 
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
+    uvicorn.run(app, host=HOST, port=PORT)

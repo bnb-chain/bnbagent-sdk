@@ -143,7 +143,7 @@ Production wallet provider backed by a local private key with Keystore V3 encryp
 | --- | --- |
 | `__init__(password, private_key=None, persist=True)` | Import a key or load/create an encrypted wallet. |
 | `export_private_key()` | Return the hex private key (handle with care). |
-| `export_keystore()` | Return the Keystore V3 JSON dict. |
+| `export_keystore(password)` | Return a Keystore V3 JSON dict encrypted with the supplied password. The provider does not retain its construction password. |
 | `get_wallet_info()` | Return `{"address": "0x..."}` (no secrets). |
 
 Constructor behavior:
@@ -233,8 +233,8 @@ twak's x402 is a complete HTTP client - it discovers the 402 challenge, signs th
 ```python
 payer = wallet.make_x402_payer(          # -> TwakX402Payer
     session_budget=tracker,              # optional, shared with the signer path
-    expected_pay_to="0x...",             # optional recipient pin
-    expected_asset="0x...",              # optional token pin
+    expected_pay_to="0x...",             # required trusted recipient pin
+    expected_asset="0x...",              # required trusted token pin
 )
 quote = payer.quote(url)                 # read-only - NEVER creates a wallet
 result = payer.request(url, max_payment=100_000)

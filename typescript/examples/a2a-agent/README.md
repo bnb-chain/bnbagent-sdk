@@ -41,6 +41,13 @@ pnpm exec tsx examples/a2a-agent/scripts/buyer.ts
 
 Without `BUYER_PRIVATE_KEY` the buyer stops after printing the signed quote - a fully chain-free first run. With it, the buyer funds a real job on `bsc-testnet`; pair it with a funded-job watcher (see `../agent-server`) to complete the sell side.
 
+Signed-quote traffic is controlled by `ERC8183_NEGOTIATE_RATE_LIMIT`,
+`ERC8183_NEGOTIATE_GLOBAL_RATE_LIMIT`, and `ERC8183_NEGOTIATE_RATE_WINDOW`,
+with defaults `120`, `1200`, and `60` seconds respectively.
+These example counters are process-local. Before running multiple production
+replicas, enforce equivalent per-client and global limits in a shared backend
+or at a trusted edge; production startup warns about this boundary.
+
 ## Skills
 
 | Skill id | Input data part | Result data part |

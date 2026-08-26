@@ -32,10 +32,10 @@ classifiers = [
     "Topic :: Internet",
 ]
 dependencies = [
-    "web3>=6.15.0",
-    "eth-account>=0.10.0",
-    "python-dotenv>=1.0.0",
-    "requests>=2.31.0",
+    "web3>=6.15.0,<8",
+    "eth-account>=0.10.0,<0.14",
+    "python-dotenv>=1.0.0,<2",
+    "requests>=2.31.0,<3",
 ]
 
 [project.urls]
@@ -46,10 +46,10 @@ Issues = "https://github.com/bnb-chain/bnbagent-sdk/issues"
 
 [project.optional-dependencies]
 ipfs = [
-    "httpx>=0.25.0",
+    "httpx>=0.25.0,<1",
 ]
 turnkey = [
-    "cryptography>=42.0.0",
+    "cryptography>=42.0.0,<51",
 ]
 dev = [
     "pytest>=7.4.0",

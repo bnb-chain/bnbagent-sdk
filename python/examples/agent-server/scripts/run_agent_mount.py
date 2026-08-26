@@ -7,8 +7,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import uvicorn
-from service_mount import app
+from service_mount import HOST, app
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8003"))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host=HOST, port=port)

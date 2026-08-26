@@ -401,8 +401,8 @@ class TestRetryAndNonceManagement:
         web3.eth.wait_for_transaction_receipt.return_value = ok_receipt
         return ci, web3, wallet_provider, fn, sent_hash
 
-    def test_retries_on_nonce_too_low(self):
-        """Nonce-too-low error must trigger NonceManager re-sync and retry."""
+    def test_send_nonce_conflict_is_not_blindly_rebroadcast(self):
+        """A send-time nonce conflict is ambiguous and tracks the local hash."""
         ci, web3, wallet_provider, fn, sent_hash = self._setup_for_retry()
         # First send fails with nonce error, second succeeds.
         web3.eth.send_raw_transaction.side_effect = [
@@ -410,13 +410,12 @@ class TestRetryAndNonceManagement:
             sent_hash,
         ]
         result = ci._execute_transaction(fn, description="retry-nonce")
-        assert web3.eth.send_raw_transaction.call_count == 2
+        assert web3.eth.send_raw_transaction.call_count == 1
         assert "transactionHash" in result
-        # NonceManager re-syncs by calling get_transaction_count again.
-        assert web3.eth.get_transaction_count.call_count >= 2
+        wallet_provider.sign_transaction.assert_called_once()
 
-    def test_retries_on_rate_limit(self):
-        """429 must trigger exponential backoff and retry."""
+    def test_send_rate_limit_is_ambiguous_and_not_rebroadcast(self):
+        """A send-time 429 may follow acceptance, so it is never retried."""
         ci, web3, wallet_provider, fn, sent_hash = self._setup_for_retry()
         web3.eth.send_raw_transaction.side_effect = [
             Exception("HTTP 429: too many requests"),
@@ -424,9 +423,27 @@ class TestRetryAndNonceManagement:
         ]
         with patch("bnbagent.wallets.local_executor.time.sleep") as mock_sleep:
             result = ci._execute_transaction(fn, description="retry-429")
-        assert web3.eth.send_raw_transaction.call_count == 2
-        mock_sleep.assert_called_once()  # one backoff between the two attempts
+        assert web3.eth.send_raw_transaction.call_count == 1
+        mock_sleep.assert_not_called()
         assert "transactionHash" in result
+
+    def test_prebroadcast_rate_limit_reuses_same_nonce(self):
+        """A 429 during preflight is safe to retry with the same nonce."""
+        ci, web3, wallet_provider, fn, sent_hash = self._setup_for_retry()
+        web3.eth.call.side_effect = [
+            Exception("HTTP 429: too many requests"),
+            b"",
+        ]
+        web3.eth.send_raw_transaction.return_value = sent_hash
+
+        with patch("bnbagent.wallets.local_executor.time.sleep") as mock_sleep:
+            result = ci._execute_transaction(fn, description="preflight-429")
+
+        assert "transactionHash" in result
+        assert web3.eth.send_raw_transaction.call_count == 1
+        mock_sleep.assert_called_once()
+        nonces = [call.args[0]["nonce"] for call in fn.build_transaction.call_args_list]
+        assert nonces == [1, 1]
 
     def test_no_retry_on_unrelated_error(self):
         """Generic non-retryable error must raise immediately and reset nonce cache."""

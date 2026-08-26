@@ -196,6 +196,9 @@ import {
   defaultAgentPermissions,
   serializeSession,
 } from "@bnbagent/sdk/wallets";
+import { getAddress as getDeployment } from "@bnbagent/sdk/networks";
+
+const { paymentToken, commerceProxy } = getDeployment(56);
 
 // admin side - grant a scoped session (~$0.50-equiv BNB registration fee)
 const admin = new AltanaWalletProvider({
@@ -208,6 +211,9 @@ const session = await admin.grantSession({
   }),
   expiry: Math.floor(Date.now() / 1000) + 86_400,
 });
+// Session keys cannot approve tokens. Provision a bounded Commerce allowance
+// from the admin side, no higher than the session token cap; zero on revoke.
+await admin.setErc8183Allowance(paymentToken, commerceProxy, 10n ** 18n);
 writeFileSync(".session.json", serializeSession(session), { mode: 0o600 }); // byte-exact - required
 
 // agent side - ALTANA_SESSION_FILE=.session.json
@@ -228,7 +234,13 @@ See the [Altana capability reference](../docs/altana.md) for the supported surfa
 
 ### Sponsored relay fallback
 
-For local EVM signing, a sponsored transaction hash must become visible to the chain before the SDK trusts it. If the primary RPC never sees the hash, the SDK asks fallback RPCs, then self-pays the same intent when the relay drop is confirmed or the secondary check is inconclusive. A hash seen by any fallback RPC is treated as pending and is never resent. `RelaySubmissionUnverifiedError`, `RelayFallbackFailedError`, and `RelayRejectedError` preserve the distinct outcomes for callers; `BNBAGENT_USE_PAYMASTER=0` disables sponsorship when you want to self-pay from the start.
+For local EVM signing, a sponsored transaction hash must become visible to the chain before the SDK trusts it. If the primary RPC never sees the hash, the SDK asks fallback RPCs from distinct origins. A same-nonce self-pay is allowed only when at least two origins agree the relay transaction is absent; two agreeing that it is present suppress the fallback, and every weaker or conflicting result fails closed with `RelaySubmissionUnverifiedError`. Custom `BNBAGENT_FALLBACK_RPC_URLS` remain supported, but entries that share an origin count as one source. Custom endpoints form part of the operator's trust boundary: choose independently operated origins, because an operator-supplied quorum can authorize the fallback. `BNBAGENT_USE_PAYMASTER=0` disables sponsorship when you want to self-pay from the start.
+
+`EVMWalletProvider` does not retain its construction password. Pass a password
+explicitly to `exportKeystore(password)`, and call `destroy()` when local
+signing is finished. The live private key necessarily remains in process
+memory until then; use a remote or scoped wallet backend for higher-value
+deployments.
 
 ## Environment variables
 
@@ -259,7 +271,7 @@ None of these are read automatically - call `loadEnv()` (from `@bnbagent/sdk`) a
 | `BNBAGENT_RECEIPT_TIMEOUT` | `getDefaultReceiptTimeout` | Default transaction-receipt wait, in seconds. |
 | `BNBAGENT_USE_PAYMASTER` | `resolveNetwork` | `1` forces sponsorship, `0` self-pays, and unset inherits the network preset. |
 | `BNBAGENT_RELAY_UNSEEN_TIMEOUT` | `getRelayUnseenTimeout` | Seconds an unseen sponsored hash may remain invisible before fallback handling; `0` disables the early abort. |
-| `BNBAGENT_FALLBACK_RPC_URLS` | relay verifier | Comma-separated RPC endpoints used to confirm whether a relay-returned hash is unseen; overrides the built-in BSC endpoint list. |
+| `BNBAGENT_FALLBACK_RPC_URLS` | relay verifier | Comma-separated RPC endpoints used to confirm whether a relay-returned hash is unseen; overrides the built-in BSC endpoint list. A decisive result requires two distinct URL origins. |
 
 ## Parity with the Python SDK
 

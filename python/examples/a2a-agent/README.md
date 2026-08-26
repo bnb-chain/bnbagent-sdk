@@ -36,7 +36,14 @@ uv run python scripts/register.py     # prints AGENT_ID → put it in .env
 uv run python scripts/buyer.py
 ```
 
-Without `BUYER_PRIVATE_KEY` the buyer stops after printing the signed quote - a fully chain-free first run. With it, the buyer funds a real job on `bsc-testnet`; pair it with a funded-job watcher (see `examples/agent-server` or the headless 15-liner in the repo README) to complete the sell side.
+Without `BUYER_PRIVATE_KEY` the buyer stops after printing the signed quote - a fully chain-free first run. With it, set `EXPECTED_PROVIDER_ADDRESS` from trusted ERC-8004 discovery or operator configuration; the buyer verifies the signed quote, payment token, chain, and Commerce contract before its first on-chain write, then funds a real job on `bsc-testnet`. Never copy the expected provider from the quote itself. Pair it with a funded-job watcher (see `examples/agent-server` or the headless 15-liner in the repo README) to complete the sell side.
+
+Signed-quote traffic is controlled by `ERC8183_NEGOTIATE_RATE_LIMIT`,
+`ERC8183_NEGOTIATE_GLOBAL_RATE_LIMIT`, and `ERC8183_NEGOTIATE_RATE_WINDOW`,
+with defaults `120`, `1200`, and `60` seconds respectively.
+These example counters are process-local. Before running multiple production
+replicas, enforce equivalent per-client and global limits in a shared backend
+or at a trusted edge; production startup warns about this boundary.
 
 ## Skills
 

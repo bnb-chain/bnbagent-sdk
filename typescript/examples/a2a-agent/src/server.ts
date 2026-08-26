@@ -63,6 +63,16 @@ const SERVICE_PRICE =
   process.env.ERC8183_SERVICE_PRICE ?? "1000000000000000000";
 const PORT = Number(new URL(BASE_URL).port || "8010");
 
+function positiveIntEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name]?.trim());
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function positiveNumberEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name]?.trim());
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 // ── A2A surface (agent card) ──
 
 const AGENT_CARD = {
@@ -181,7 +191,10 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
 // ── Boot ──
 
 async function main(): Promise<void> {
-  const walletPassword = process.env.WALLET_PASSWORD ?? "demo-password";
+  const walletPassword = process.env.WALLET_PASSWORD;
+  if (!walletPassword) {
+    throw new Error("WALLET_PASSWORD is required (see .env.example)");
+  }
   const privateKey = process.env.PRIVATE_KEY;
   if (!privateKey) {
     throw new Error("PRIVATE_KEY is required (see .env.example)");
@@ -202,8 +215,33 @@ async function main(): Promise<void> {
       walletProvider: wallet,
     },
   );
-  // Every accepted negotiate burns a wallet signature — throttle it.
-  const negotiateLimiter = new SlidingWindowLimiter(30, 60);
+  // Every accepted negotiate burns a wallet signature — apply the same
+  // env-driven limits as the HTTP serving example plus a global ceiling.
+  const rateWindow = positiveNumberEnv("ERC8183_NEGOTIATE_RATE_WINDOW", 60);
+  const negotiateLimiter = new SlidingWindowLimiter(
+    positiveIntEnv("ERC8183_NEGOTIATE_RATE_LIMIT", 120),
+    rateWindow,
+    positiveIntEnv("ERC8183_RATE_LIMIT_MAX_KEYS", 10_000),
+  );
+  const globalNegotiateLimiter = new SlidingWindowLimiter(
+    positiveIntEnv("ERC8183_NEGOTIATE_GLOBAL_RATE_LIMIT", 1_200),
+    rateWindow,
+    1,
+  );
+  const environment = (
+    process.env.ENV ||
+    process.env.ENVIRONMENT ||
+    process.env.NODE_ENV ||
+    ""
+  )
+    .trim()
+    .toLowerCase();
+  if (["prod", "production", "live", "mainnet"].includes(environment)) {
+    console.warn(
+      "Production is using process-local A2A rate limits; this is safe only " +
+        "for one replica. Enforce an equivalent shared or edge limit before scaling out.",
+    );
+  }
 
   const server = createServer((req, res) => {
     void handle(req, res).catch((error) => {
@@ -266,6 +304,7 @@ async function main(): Promise<void> {
       const clientIp = req.socket.remoteAddress ?? "unknown";
       try {
         negotiateLimiter.check(clientIp);
+        globalNegotiateLimiter.check("global");
       } catch (error) {
         if (error instanceof RateLimitExceeded) {
           return rpcError(res, reqId, -32000, "Rate limited, retry later");

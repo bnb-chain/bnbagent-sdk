@@ -75,9 +75,9 @@ export interface LocalExecutorOpts {
   relayUnseenTimeout?: number | null;
   /**
    * When a sponsored broadcast is accepted by the relay but never observed
-   * on-chain, re-sign the same nonce and self-pay it directly. Defaults to
-   * `true`; set `false` to keep the old "fail loudly, spend nothing" behavior
-   * (also the seam tests use to pin the raw unverified surface).
+   * on-chain, permit a same-nonce self-pay only after an independent RPC
+   * quorum confirms it absent. Defaults to `true`; an inconclusive quorum
+   * always fails closed, and `false` disables the fallback entirely.
    */
   selfPayFallback?: boolean;
   /**
@@ -214,7 +214,7 @@ export class LocalExecutor implements IntentExecutor {
             );
             if (verdict === "seen") {
               console.warn(
-                `[LocalExecutor] primary RPC never saw relay tx ${sponsored.hash}, but a fallback RPC can see it; waiting out the receipt instead of self-paying.`,
+                `[LocalExecutor] primary RPC never saw relay tx ${sponsored.hash}, but the fallback RPC quorum can see it; waiting out the receipt instead of self-paying.`,
               );
               return await waitForReceiptAndInterpret(
                 this.client,
@@ -225,8 +225,9 @@ export class LocalExecutor implements IntentExecutor {
             error.secondaryRpcResult = verdict;
             if (verdict === "inconclusive") {
               console.warn(
-                `[LocalExecutor] no fallback RPC endpoint could corroborate that relay tx ${sponsored.hash} is unseen; proceeding with the self-pay fallback anyway.`,
+                `[LocalExecutor] fallback RPC quorum could not determine whether relay tx ${sponsored.hash} is visible; refusing the self-pay fallback to avoid an unverified second broadcast.`,
               );
+              throw error;
             }
             return await this.selfPayAfterUnverifiedRelay(
               sponsored,

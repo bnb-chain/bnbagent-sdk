@@ -23,11 +23,11 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from bnbagent.core.config import get_env
-from bnbagent.erc8183 import ERC8183JobOps
+from bnbagent.erc8183 import ERC8183JobOps, QuoteSigningError
 from bnbagent.erc8183.config import ERC8183_ENV_PREFIX, ERC8183Config
 from bnbagent.erc8183.negotiation import NegotiationHandler
 from bnbagent.storage import LocalStorageProvider, StorageProvider
-from bnbagent.utils import RateLimitExceeded, SlidingWindowLimiter
+from bnbagent.utils import RateLimiter, RateLimitExceeded, SlidingWindowLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -120,11 +120,15 @@ def _build_negotiate_limiter() -> SlidingWindowLimiter:
     raw_window = get_env("NEGOTIATE_RATE_WINDOW", "60.0", prefix=ERC8183_ENV_PREFIX) or "60.0"
     try:
         max_requests = int(raw_max)
+        if max_requests <= 0:
+            raise ValueError
     except ValueError:
         logger.warning(f"[ERC-8183] ERC8183_NEGOTIATE_RATE_LIMIT={raw_max!r} invalid, using 120")
         max_requests = 120
     try:
         window_seconds = float(raw_window)
+        if window_seconds <= 0:
+            raise ValueError
     except ValueError:
         logger.warning(
             f"[ERC-8183] ERC8183_NEGOTIATE_RATE_WINDOW={raw_window!r} invalid, using 60.0"
@@ -133,6 +137,8 @@ def _build_negotiate_limiter() -> SlidingWindowLimiter:
     raw_max_keys = get_env("RATE_LIMIT_MAX_KEYS", "10000", prefix=ERC8183_ENV_PREFIX) or "10000"
     try:
         max_keys = int(raw_max_keys)
+        if max_keys <= 0:
+            raise ValueError
     except ValueError:
         logger.warning(
             f"[ERC-8183] ERC8183_RATE_LIMIT_MAX_KEYS={raw_max_keys!r} invalid, using 10000"
@@ -140,6 +146,26 @@ def _build_negotiate_limiter() -> SlidingWindowLimiter:
         max_keys = 10_000
     return SlidingWindowLimiter(
         max_requests=max_requests, window_seconds=window_seconds, max_keys=max_keys
+    )
+
+
+def _build_global_negotiate_limiter(window_seconds: float) -> SlidingWindowLimiter:
+    """Build a process-wide ceiling that cannot be bypassed by IP rotation."""
+    raw_max = get_env("NEGOTIATE_GLOBAL_RATE_LIMIT", "1200", prefix=ERC8183_ENV_PREFIX) or "1200"
+    try:
+        max_requests = int(raw_max)
+        if max_requests <= 0:
+            raise ValueError
+    except ValueError:
+        logger.warning(
+            "[ERC-8183] ERC8183_NEGOTIATE_GLOBAL_RATE_LIMIT=%r invalid, using 1200",
+            raw_max,
+        )
+        max_requests = 1_200
+    return SlidingWindowLimiter(
+        max_requests=max_requests,
+        window_seconds=window_seconds,
+        max_keys=1,
     )
 
 
@@ -151,8 +177,8 @@ _HTTP_STATUS = {
     "not_found": 404,
     "job_expired": 408,
     "wrong_status": 409,
-    "quote_expired": 410,
     "description_invalid": 410,
+    "quote_invalid": 400,
     "submit_deadline_passed": 410,
     "payload_too_large": 413,
     "internal_error": 500,
@@ -164,9 +190,33 @@ def _http_status(result: dict, default: int) -> int:
     return _HTTP_STATUS.get(result.get("error_code"), default)
 
 
-def _create_erc8183_routes(state: ERC8183State) -> APIRouter:
+def _is_production() -> bool:
+    env = (
+        get_env("ENV") or get_env("ENVIRONMENT") or get_env("NODE_ENV") or ""
+    ).strip().lower()
+    return env in {"prod", "production", "live", "mainnet"}
+
+
+async def _check_limiter(limiter: RateLimiter, key: str) -> None:
+    result = limiter.check(key)
+    if inspect.isawaitable(result):
+        await result
+
+
+def _create_erc8183_routes(
+    state: ERC8183State,
+    *,
+    negotiate_limiter: RateLimiter | None = None,
+    global_negotiate_limiter: RateLimiter | None = None,
+) -> APIRouter:
     router = APIRouter(tags=["ERC-8183"])
-    negotiate_limiter = _build_negotiate_limiter()
+    default_limiter = _build_negotiate_limiter()
+    negotiate_limiter = default_limiter if negotiate_limiter is None else negotiate_limiter
+    global_negotiate_limiter = (
+        _build_global_negotiate_limiter(default_limiter.window_seconds)
+        if global_negotiate_limiter is None
+        else global_negotiate_limiter
+    )
 
     @router.get("/job/{job_id}")
     async def get_job(job_id: int):
@@ -199,7 +249,8 @@ def _create_erc8183_routes(state: ERC8183State) -> APIRouter:
     async def negotiate(request: Request):
         client_ip = request.client.host if request.client else "unknown"
         try:
-            negotiate_limiter.check(client_ip)
+            await _check_limiter(negotiate_limiter, client_ip)
+            await _check_limiter(global_negotiate_limiter, "global")
         except RateLimitExceeded:
             # The SDK limiter is transport-agnostic; this HTTP shell maps it to 429.
             raise HTTPException(status_code=429, detail="Too many requests") from None
@@ -216,6 +267,15 @@ def _create_erc8183_routes(state: ERC8183State) -> APIRouter:
         try:
             result = state.negotiation_handler.negotiate(body)
             return JSONResponse(result.to_dict())
+        except QuoteSigningError as exc:
+            logger.error("[ERC-8183] Quote signing unavailable: %s", exc)
+            return JSONResponse(
+                {
+                    "error": "Quote signer unavailable",
+                    "error_code": "quote_signing_unavailable",
+                },
+                status_code=503,
+            )
         except Exception as exc:
             logger.error(f"[ERC-8183] Negotiation failed: {exc}")
             return JSONResponse({"error": "Negotiation failed"}, status_code=500)
@@ -247,6 +307,8 @@ def create_erc8183_app(
     task_metadata: dict[str, Any] | None = None,
     prefix: str = "/erc8183",
     funded_poll_interval: float | None = None,
+    negotiate_limiter: RateLimiter | None = None,
+    global_negotiate_limiter: RateLimiter | None = None,
 ) -> FastAPI:
     """Create a FastAPI application for an ERC-8183 provider agent.
 
@@ -266,7 +328,16 @@ def create_erc8183_app(
     funded_poll_interval
         Seconds between funded-job poll passes. Falls back to the
         ``ERC8183_FUNDED_POLL_INTERVAL`` env var (default ``30``).
+    negotiate_limiter, global_negotiate_limiter
+        Optional application-owned limiters. Inject a shared backend for a
+        multi-replica deployment; the defaults are process-local.
     """
+    if _is_production() and (negotiate_limiter is None or global_negotiate_limiter is None):
+        logger.warning(
+            "[ERC-8183] production is using an in-memory negotiate limiter; "
+            "this is safe only for one replica. Inject both limiter arguments "
+            "or enforce an equivalent shared/edge limit before scaling out."
+        )
     state = create_erc8183_state(config)
     effective_poll_interval = funded_poll_interval or float(
         get_env("FUNDED_POLL_INTERVAL", "30.0", prefix=ERC8183_ENV_PREFIX) or "30.0"
@@ -427,7 +498,11 @@ def create_erc8183_app(
         lifespan=erc8183_lifespan,
     )
 
-    router = _create_erc8183_routes(state=state)
+    router = _create_erc8183_routes(
+        state=state,
+        negotiate_limiter=negotiate_limiter,
+        global_negotiate_limiter=global_negotiate_limiter,
+    )
     erc8183_app.include_router(router, prefix=prefix)
 
     if prefix:

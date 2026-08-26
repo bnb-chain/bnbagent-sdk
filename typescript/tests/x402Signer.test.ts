@@ -479,6 +479,25 @@ describe("X402Signer — interleaved-async budget correctness", () => {
   });
 });
 
+describe("X402Signer — shared budget tracker", () => {
+  it("enforces one cumulative cap across request-scoped signer instances", async () => {
+    const cap = 1_000_000n;
+    const shared = new SessionBudgetTracker({ [U_MAINNET]: cap });
+    const first = new X402Signer(wallet, { sessionBudget: shared });
+    const second = new X402Signer(wallet, { sessionBudget: shared });
+    expect(first.budget).toBe(shared);
+    expect(second.budget).toBe(shared);
+
+    const p1 = payload({ value: 600_000n, fromAddr: first.walletAddress });
+    await first.signPayment({ ...p1, expectedTo: p1.message.to });
+    const p2 = payload({ value: 600_000n, fromAddr: second.walletAddress });
+    await expect(
+      second.signPayment({ ...p2, expectedTo: p2.message.to }),
+    ).rejects.toThrow(X402BudgetExhaustedError);
+    expect(shared.spent(U_MAINNET)).toBe(600_000n);
+  });
+});
+
 // ── SessionBudgetTracker unit tests ──────────────────────────────────────
 
 describe("SessionBudgetTracker", () => {

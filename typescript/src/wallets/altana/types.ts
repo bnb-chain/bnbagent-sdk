@@ -10,11 +10,12 @@
  * assignability against the real package (a devDependency) so any drift
  * fails `pnpm typecheck` instead of surfacing at runtime.
  *
- * Mirrored from `@altananetwork/sdk@0.5.0` `dist/*.d.ts` (config, client,
+ * Mirrored and compatibility-checked against `@altananetwork/sdk@0.7.1`
+ * `dist/*.d.ts` (config, client,
  * balances, registerSessionKey, internal/{signer,sessions,types,relay}).
- * Surfaces newer than the 0.3.3 peer floor are segregated into their own
+ * Historically versioned surfaces remain segregated into their own
  * interfaces (`…X402` for 0.4.0, `…050` for 0.5.0) and duck-checked at
- * runtime, so older installs keep every pre-existing path working.
+ * runtime as defense in depth for the exact supported release.
  */
 
 import type { Chain } from "viem";

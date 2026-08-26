@@ -125,6 +125,89 @@ class TestTokenCache:
         facade.commerce.payment_token.assert_called_once()
 
 
+class TestVerifyNegotiationQuote:
+    def test_binds_provider_currency_chain_and_commerce(self, facade):
+        facade.commerce.payment_token.return_value = FAKE_TOKEN
+        quote = {
+            "response": {
+                "accepted": True,
+                "terms": {"price": "1000", "currency": FAKE_TOKEN},
+            },
+            "chain_id": 12345,
+            "negotiation_hash": "0x" + "11" * 32,
+            "provider_sig": "0x" + "22" * 65,
+        }
+        expected = MagicMock(valid=True)
+        with patch(
+            "bnbagent.erc8183.client.verify_quote_signature", return_value=expected
+        ) as verify:
+            assert (
+                facade.verify_negotiation_quote(quote, expected_provider=FAKE_ADDRESS) is expected
+            )
+        verify.assert_called_once_with(
+            envelope=quote,
+            provider=FAKE_ADDRESS,
+            w3=facade.w3,
+            expected_verifying_contract=FAKE_COMMERCE,
+            block_number=None,
+        )
+
+    def test_rejects_currency_mismatch_before_signature_rpc(self, facade):
+        facade.commerce.payment_token.return_value = FAKE_TOKEN
+        quote = {
+            "response": {
+                "accepted": True,
+                "terms": {
+                    "price": "1000",
+                    "currency": "0x" + "11" * 20,
+                }
+            },
+            "chain_id": 12345,
+        }
+        with patch("bnbagent.erc8183.client.verify_quote_signature") as verify:
+            verdict = facade.verify_negotiation_quote(quote, expected_provider=FAKE_ADDRESS)
+        assert verdict.valid is False
+        assert verdict.reason == "quote currency does not match payment token"
+        verify.assert_not_called()
+
+    @pytest.mark.parametrize("price", [True, 0, -1, "0", "1.5", "1e3", None])
+    def test_rejects_invalid_price(self, facade, price):
+        facade.commerce.payment_token.return_value = FAKE_TOKEN
+        quote = {
+            "response": {
+                "accepted": True,
+                "terms": {"price": price, "currency": FAKE_TOKEN},
+            },
+            "chain_id": 12345,
+        }
+        verdict = facade.verify_negotiation_quote(quote, expected_provider=FAKE_ADDRESS)
+        assert verdict.valid is False
+        assert verdict.reason == "quote price must be a positive integer"
+
+    def test_rejects_noncanonical_top_level_accepted(self, facade):
+        quote = {
+            "accepted": True,
+            "response": {"terms": {"price": "1000", "currency": FAKE_TOKEN}},
+        }
+        verdict = facade.verify_negotiation_quote(quote, expected_provider=FAKE_ADDRESS)
+        assert verdict.valid is False
+        assert verdict.reason == "quote is not accepted"
+
+    @pytest.mark.parametrize("chain_id", [None, True, 56])
+    def test_requires_exact_chain_binding(self, facade, chain_id):
+        facade.commerce.payment_token.return_value = FAKE_TOKEN
+        quote = {
+            "response": {
+                "accepted": True,
+                "terms": {"price": "1000", "currency": FAKE_TOKEN},
+            },
+            "chain_id": chain_id,
+        }
+        verdict = facade.verify_negotiation_quote(quote, expected_provider=FAKE_ADDRESS)
+        assert verdict.valid is False
+        assert verdict.reason == "quote chain_id mismatch"
+
+
 class TestCreateJob:
     def test_defaults_to_router_as_evaluator_and_hook(self, facade):
         facade.commerce.create_job.return_value = {"jobId": 1}
@@ -315,6 +398,42 @@ class TestReads:
             hook=FAKE_ROUTER,
         )
         assert facade.get_job_status(1) == JobStatus.FUNDED
+
+    def test_get_job_funded_block_queries_signed_window(self, facade):
+        facade.w3.eth.block_number = 10
+        facade.w3.eth.get_block.side_effect = lambda number: {
+            "timestamp": int(number) * 10
+        }
+        facade.commerce.get_job_funded_events.return_value = [{"blockNumber": 6}]
+
+        block = facade.get_job_funded_block(
+            7,
+            negotiated_at=25,
+            quote_expires_at=75,
+        )
+
+        assert block == 6
+        facade.commerce.get_job_funded_events.assert_called_once_with(
+            3,
+            8,
+            job_id=7,
+        )
+
+    def test_get_job_funded_block_fails_closed_without_event(self, facade):
+        facade.w3.eth.block_number = 10
+        facade.w3.eth.get_block.side_effect = lambda number: {
+            "timestamp": int(number) * 10
+        }
+        facade.commerce.get_job_funded_events.return_value = []
+
+        assert (
+            facade.get_job_funded_block(
+                7,
+                negotiated_at=25,
+                quote_expires_at=75,
+            )
+            is None
+        )
 
     def test_get_verdict_delegates_to_policy(self, facade):
         from bnbagent.erc8183.types import Verdict

@@ -94,7 +94,7 @@ The SDK wraps this as the delegated `TwakX402Payer` (`wallet.make_x402_payer(**k
 | `x402 quote <url>` | `--method`, `--body` | read-only challenge discovery (no wallet, no chain) |
 | `x402 request <url>` | `--method`, `--body`, `--max-payment`, `--prefer-network`, `--prefer-method <eip3009\|permit2-exact>`, `--prefer-asset`, `--yes`, `--auto-approve` | discover → pay → return endpoint body |
 
-Because the EIP-712 payload is built, signed, and discarded inside the twak process, `SigningPolicy` cannot run on this path. `TwakX402Payer` enforces an equivalent **five-point precheck** on the quoted terms before paying:
+Because the EIP-712 payload is built, signed, and discarded inside the twak process, `SigningPolicy` cannot run on this path. Every payer must be constructed with trusted `expectedPayTo` / `expectedAsset` anchors; neither check is optional. `TwakX402Payer` then enforces a **five-point precheck** on the quoted terms before paying:
 
 1. `payTo` byte-equals the caller's committed recipient;
 2. `asset` equals the expected token (the asset address _is_ the EIP-712 `verifyingContract` for EIP-3009 - the domain allowlist relocated to the quote);
@@ -106,6 +106,7 @@ An optional `SessionBudgetTracker` reserves the quoted amount before the call an
 
 ## Current boundaries
 
+- **Shared-host process visibility:** twak v0.20.0 accepts message text, agent URIs, x402 URLs, and request bodies only as CLI arguments, so a co-resident local user may observe them in the process list. Do not use TWAK for sensitive workloads on shared/multi-tenant hosts; use the EVM keystore backend there until upstream supports stdin payloads. The SDK rejects x402 URLs containing userinfo or credential-like query keys (`token`, `secret`, `password`, `signature`, and similar), but ordinary URL/body/message content remains visible by upstream design.
 - **x402 `request` is mainnet-only** so far - testnet routes are rejected as "no supported route" (`quote` works on both).
 - **Custom targets:** ERC-8004 supports a registry override through `ERC8004_REGISTRY_ADDRESS`, and the SDK requires it to match the intent target. Custom ERC-8183 contracts remain unsupported because twak v0.20.0 has no Commerce/Router/Policy target option; those intents fail closed.
 - **Paymaster:** twak v0.20.0 added `--paymaster-url <url>` on every erc8004/erc8183 write (the URL is used verbatim as the MegaFuel endpoint, on `bsc` and `bsctestnet` alike). When the SDK context carries a paymaster - `ERC8183Client` builds one on sponsored testnet networks, `ERC8004Agent` per its network config - `TWAKProvider` forwards its URL and twak attempts sponsorship. The paymaster still decides eligibility per sender, target, and method; rejection or RPC failure falls back to self-paid gas. Without an explicit endpoint, twak keeps its own defaults: mainnet uses the Trust gateway, while `bsctestnet` has no default paymaster - pre-fund it with testnet BNB.

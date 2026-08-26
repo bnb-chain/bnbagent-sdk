@@ -37,6 +37,9 @@ const SCRYPT_N = 262_144;
 const SCRYPT_R = 8;
 const SCRYPT_P = 1;
 const DK_LEN = 32;
+const MAX_PBKDF2_ITERATIONS = 1_000_000;
+const MIN_SALT_BYTES = 16;
+const MAX_SALT_BYTES = 64;
 
 /** Scrypt KDF parameters as stored in a Keystore V3 file. */
 export interface ScryptKdfParams {
@@ -71,8 +74,100 @@ export interface KeystoreV3 {
 }
 
 function randomUuidV4(): string {
-  // Available globally in Node >=20 and browsers; avoids an extra dependency.
-  return crypto.randomUUID();
+  const bytes = randomBytes(16);
+  bytes[6] = ((bytes[6] as number) & 0x0f) | 0x40;
+  bytes[8] = ((bytes[8] as number) & 0x3f) | 0x80;
+  const hex = bytesToHex(bytes);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function assertIntegerInRange(
+  value: unknown,
+  name: string,
+  min: number,
+  max: number,
+): asserts value is number {
+  if (!Number.isSafeInteger(value) || (value as number) < min) {
+    throw new Error(`${name} must be an integer >= ${min}`);
+  }
+  if ((value as number) > max) {
+    throw new Error(`${name} exceeds supported maximum ${max}`);
+  }
+}
+
+function assertHexBytes(
+  value: unknown,
+  name: string,
+  minBytes: number,
+  maxBytes = minBytes,
+): asserts value is string {
+  if (
+    typeof value !== "string" ||
+    value.length % 2 !== 0 ||
+    !/^[0-9a-fA-F]+$/.test(value)
+  ) {
+    throw new Error(`${name} must be hexadecimal`);
+  }
+  const bytes = value.length / 2;
+  if (bytes < minBytes || bytes > maxBytes) {
+    const expected =
+      minBytes === maxBytes
+        ? `${minBytes} bytes`
+        : `${minBytes}-${maxBytes} bytes`;
+    throw new Error(`${name} must be ${expected}`);
+  }
+}
+
+/** Validate all attacker-controlled fields before invoking a costly KDF. */
+function validateKeystoreForDecrypt(keystore: KeystoreV3): void {
+  if (keystore?.version !== 3) {
+    throw new Error(
+      `unsupported keystore version: ${String(keystore?.version)}`,
+    );
+  }
+  const c = keystore.crypto;
+  if (!c || typeof c !== "object") {
+    throw new Error("keystore crypto section is required");
+  }
+  if (c.cipher !== "aes-128-ctr") {
+    throw new Error(`unsupported keystore cipher: ${String(c.cipher)}`);
+  }
+  assertHexBytes(c.cipherparams?.iv, "crypto.cipherparams.iv", 16);
+  assertHexBytes(c.ciphertext, "crypto.ciphertext", 32);
+  assertHexBytes(c.mac, "crypto.mac", 32);
+
+  const params = c.kdfparams;
+  if (!params || typeof params !== "object") {
+    throw new Error("crypto.kdfparams is required");
+  }
+  assertIntegerInRange(params.dklen, "crypto.kdfparams.dklen", DK_LEN, DK_LEN);
+  assertHexBytes(
+    params.salt,
+    "crypto.kdfparams.salt",
+    MIN_SALT_BYTES,
+    MAX_SALT_BYTES,
+  );
+
+  if (c.kdf === "scrypt") {
+    const scryptParams = params as ScryptKdfParams & { N?: number };
+    const n = scryptParams.n ?? scryptParams.N;
+    assertIntegerInRange(n, "scrypt n", 2, SCRYPT_N);
+    if ((n & (n - 1)) !== 0) {
+      throw new Error("scrypt n must be a power of two");
+    }
+    assertIntegerInRange(scryptParams.r, "scrypt r", 1, SCRYPT_R);
+    assertIntegerInRange(scryptParams.p, "scrypt p", 1, SCRYPT_P);
+    return;
+  }
+  if (c.kdf === "pbkdf2") {
+    const pbkdf2Params = params as Pbkdf2KdfParams;
+    if (pbkdf2Params.prf !== "hmac-sha256") {
+      throw new Error(`unsupported pbkdf2 prf: ${String(pbkdf2Params.prf)}`);
+    }
+    assertIntegerInRange(pbkdf2Params.c, "pbkdf2 c", 1, MAX_PBKDF2_ITERATIONS);
+    return;
+  }
+  throw new Error(`unsupported kdf: ${String(c.kdf)}`);
 }
 
 function deriveKey(
@@ -176,6 +271,7 @@ export function decryptKeystoreV3(
   keystore: KeystoreV3,
   password: string,
 ): Uint8Array {
+  validateKeystoreForDecrypt(keystore);
   const { crypto: c } = keystore;
   const dk = deriveKey(password, c.kdf, c.kdfparams);
   const ciphertext = hexToBytes(c.ciphertext);

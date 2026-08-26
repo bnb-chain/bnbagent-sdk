@@ -7,7 +7,7 @@ now estimates on-chain with a 20% buffer (mirroring erc8004) and only
 falls back to ``DEFAULT_GAS_FALLBACK`` when estimation is unavailable.
 """
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from web3.exceptions import ContractLogicError
@@ -202,3 +202,37 @@ class TestSendTxReceiptTimeoutPending:
         assert ei.value.tx_hash == FAKE_TX_HASH
         # broadcast happened exactly once — no retry of an in-flight tx
         assert mock_web3.eth.send_raw_transaction.call_count == 1
+
+
+class TestSendTxNonceLifecycle:
+    def test_prebroadcast_429_retries_with_same_nonce(self, client, mock_web3):
+        fn = _make_fn()
+        mock_web3.eth.call.side_effect = [
+            Exception("HTTP 429: too many requests"),
+            b"",
+        ]
+
+        with patch("bnbagent.core.contract_mixin.time.sleep") as sleep:
+            result = client._send_tx(fn)
+
+        assert result["status"] == 1
+        assert mock_web3.eth.send_raw_transaction.call_count == 1
+        sleep.assert_called_once()
+        assert [call.args[0]["nonce"] for call in fn.build_transaction.call_args_list] == [
+            0,
+            0,
+        ]
+
+    def test_send_time_429_tracks_local_hash_without_rebroadcast(
+        self, client, mock_web3
+    ):
+        fn = _make_fn()
+        mock_web3.eth.send_raw_transaction.side_effect = Exception(
+            "HTTP 429: too many requests"
+        )
+
+        result = client._send_tx(fn)
+
+        assert result["status"] == 1
+        assert mock_web3.eth.send_raw_transaction.call_count == 1
+        assert mock_web3.eth.wait_for_transaction_receipt.call_count == 1

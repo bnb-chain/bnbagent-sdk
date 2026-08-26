@@ -16,16 +16,18 @@ from __future__ import annotations
 from .client import DEFAULT_APPROVE_FLOOR_UNITS, ERC8183Client
 from .commerce import CommerceClient
 from .constants import get_erc8183_config
-from .job_ops import ERC8183JobOps, funded_job_watcher
+from .job_ops import ERR_QUOTE_INVALID, ERC8183JobOps, funded_job_watcher
 from .negotiation import (
     NegotiationHandler,
     NegotiationRequest,
     NegotiationResponse,
     NegotiationResult,
+    QuoteSigningError,
     ReasonCode,
     TermSpecification,
 )
 from .policy import PolicyClient
+from .quote_verify import QuoteSignatureVerdict, verify_quote_signature
 from .router import RouterClient
 from .schema import SCHEMA_VERSION, DeliverableManifest, JobDescription
 from .types import (
@@ -60,6 +62,7 @@ __all__ = [
     "ReasonCode",
     "NegotiationHandler",
     "NegotiationResult",
+    "QuoteSigningError",
     # Schema
     "JobDescription",
     "DeliverableManifest",
@@ -67,6 +70,9 @@ __all__ = [
     # Headless provider primitives
     "ERC8183JobOps",
     "funded_job_watcher",
+    "ERR_QUOTE_INVALID",
+    "QuoteSignatureVerdict",
+    "verify_quote_signature",
     # Per-network defaults
     "get_erc8183_config",
 ]

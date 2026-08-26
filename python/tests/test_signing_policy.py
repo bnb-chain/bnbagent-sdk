@@ -542,6 +542,24 @@ def test_from_dict_rejects_malformed_domain_entry():
         SigningPolicy.from_dict({"domain_allowlist": ["not-a-pair"]})
 
 
+def test_from_dict_refuses_unknown_domain_bypass_in_production(monkeypatch):
+    monkeypatch.setenv("ENV", "production")
+    with pytest.raises(RuntimeError, match="indicates production"):
+        SigningPolicy.from_dict({"allow_unknown_domain": True})
+
+
+def test_from_dict_break_glass_is_out_of_band(monkeypatch):
+    monkeypatch.setenv("ENV", "production")
+    policy = SigningPolicy.from_dict({"allow_unknown_domain": True}, allow_in_production=True)
+    assert policy.allow_unknown_domain is True
+
+
+@pytest.mark.parametrize("value", ["false", "true", 0, 1, None])
+def test_from_dict_rejects_non_boolean_unknown_domain(value):
+    with pytest.raises(ValueError, match="allow_unknown_domain must be a boolean"):
+        SigningPolicy.from_dict({"allow_unknown_domain": value})
+
+
 # ── __str__ ──────────────────────────────────────────────────────────────
 
 

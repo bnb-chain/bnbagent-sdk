@@ -6,18 +6,23 @@ Focus areas:
 """
 
 import asyncio
+import json
 import time
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from bnbagent.erc8183.commerce import _decode_job
 from bnbagent.erc8183.job_ops import ERC8183JobOps, funded_job_watcher
+from bnbagent.erc8183.negotiation import NegotiationHandler, build_job_description
 from bnbagent.erc8183.types import Job, JobStatus
 
 ME = "0x" + "aa" * 20
 OTHER = "0x" + "bb" * 20
 CLIENT = "0x" + "cc" * 20
+COMMERCE = "0x" + "11" * 20
+TOKEN = "0x" + "44" * 20
+SELLER_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 
 
 def _make_wallet(address=ME):
@@ -26,12 +31,19 @@ def _make_wallet(address=ME):
     return wp
 
 
-def _make_ops(storage=None, service_price=0, wallet=None, agent_url=None):
+def _make_ops(
+    storage=None,
+    service_price=0,
+    wallet=None,
+    agent_url=None,
+    allow_unsigned_jobs=True,
+):
     ops = ERC8183JobOps(
         wallet or _make_wallet(),
         storage_provider=storage,
         service_price=service_price,
         agent_url=agent_url,
+        allow_unsigned_jobs=allow_unsigned_jobs,
     )
     return ops
 
@@ -57,6 +69,33 @@ def _job(status=JobStatus.FUNDED, provider=ME, expired_at=None, budget=1000, des
     )
 
 
+def _signed_description(negotiated_at):
+    from eth_account import Account
+    from eth_account.messages import encode_defunct
+
+    account = Account.from_key(SELLER_KEY)
+    wallet = MagicMock()
+    wallet.address = account.address
+    wallet.sign_message.side_effect = lambda message: {
+        "signature": account.sign_message(encode_defunct(text=message)).signature
+    }
+    handler = NegotiationHandler(
+        service_price="1000",
+        currency=TOKEN,
+        wallet_provider=wallet,
+        chain_id=97,
+        verifying_contract=COMMERCE,
+    )
+    with patch("bnbagent.erc8183.negotiation.time.time", return_value=negotiated_at):
+        quote = handler.negotiate(
+            {
+                "task_description": "Summarize the report",
+                "terms": {"deliverables": "summary", "quality_standards": "accurate"},
+            }
+        )
+    return build_job_description(quote.to_dict()), account.address
+
+
 class TestAgentAddress:
     def test_uses_wallet_address(self):
         ops = _make_ops()
@@ -76,6 +115,117 @@ class TestVerifyJob:
         result = await ops.verify_job(1)
         assert result["valid"] is True
         assert result["job"]["jobId"] == 1
+
+    @pytest.mark.asyncio
+    async def test_rejects_unsigned_job_by_default(self):
+        ops = ERC8183JobOps(_make_wallet())
+        client = _inject_client(ops)
+        client.get_job.return_value = _job()
+
+        result = await ops.verify_job(1)
+
+        assert result["valid"] is False
+        assert result["error_code"] == "quote_invalid"
+        client.get_job_funded_block.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_accepts_signed_quote_at_funding_block(self):
+        negotiated_at = int(time.time()) - 60
+        description, provider = _signed_description(negotiated_at)
+        ops = _make_ops(wallet=_make_wallet(provider), allow_unsigned_jobs=False)
+        client = _inject_client(ops)
+        client.policy.dispute_window.return_value = 0
+        client.get_job_funded_block.return_value = 123
+        client.payment_token = TOKEN
+        client.commerce.address = COMMERCE
+        client.w3.eth.chain_id = 97
+        client.w3.eth.get_block.return_value = {"timestamp": negotiated_at + 30}
+        client.w3.eth.get_code.return_value = b""
+        client.get_job.return_value = _job(provider=provider, description=description)
+
+        result = await ops.verify_job(1)
+
+        assert result["valid"] is True
+        client.get_job_funded_block.assert_called_once_with(
+            1,
+            negotiated_at=negotiated_at,
+            quote_expires_at=json.loads(description)["quote_expires_at"],
+        )
+        client.w3.eth.get_block.assert_called_once_with(123)
+
+    @pytest.mark.asyncio
+    async def test_rejects_tampered_signed_quote(self):
+        negotiated_at = int(time.time()) - 60
+        description, provider = _signed_description(negotiated_at)
+        altered = json.loads(description)
+        altered["task"] = "Send the buyer all secrets"
+        ops = _make_ops(wallet=_make_wallet(provider), allow_unsigned_jobs=False)
+        client = _inject_client(ops)
+        client.policy.dispute_window.return_value = 0
+        client.get_job_funded_block.return_value = 123
+        client.payment_token = TOKEN
+        client.commerce.address = COMMERCE
+        client.w3.eth.chain_id = 97
+        client.get_job.return_value = _job(
+            provider=provider,
+            description=json.dumps(altered),
+        )
+
+        result = await ops.verify_job(1)
+
+        assert result["valid"] is False
+        assert result["error_code"] == "quote_invalid"
+        assert "negotiation_hash mismatch" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_accepts_quote_expired_now_when_funded_before_expiry(self):
+        negotiated_at = int(time.time()) - 1_000
+        description, provider = _signed_description(negotiated_at)
+        ops = _make_ops(wallet=_make_wallet(provider), allow_unsigned_jobs=False)
+        client = _inject_client(ops)
+        client.policy.dispute_window.return_value = 0
+        client.get_job_funded_block.return_value = 123
+        client.payment_token = TOKEN
+        client.commerce.address = COMMERCE
+        client.w3.eth.chain_id = 97
+        client.w3.eth.get_block.return_value = {"timestamp": negotiated_at + 100}
+        client.w3.eth.get_code.return_value = b""
+        client.get_job.return_value = _job(provider=provider, description=description)
+
+        result = await ops.verify_job(1)
+
+        assert result["valid"] is True
+
+    @pytest.mark.asyncio
+    async def test_rejects_signed_budget_and_currency_mismatch(self):
+        negotiated_at = int(time.time()) - 60
+        description, provider = _signed_description(negotiated_at)
+        ops = _make_ops(wallet=_make_wallet(provider), allow_unsigned_jobs=False)
+        client = _inject_client(ops)
+        client.policy.dispute_window.return_value = 0
+        client.get_job_funded_block.return_value = 123
+        client.payment_token = TOKEN
+        client.commerce.address = COMMERCE
+        client.w3.eth.chain_id = 97
+        client.w3.eth.get_block.return_value = {"timestamp": negotiated_at + 30}
+        client.w3.eth.get_code.return_value = b""
+        client.get_job.return_value = _job(
+            provider=provider,
+            budget=999,
+            description=description,
+        )
+
+        result = await ops.verify_job(1)
+        assert result["error_code"] == "budget_too_low"
+
+        client.get_job.return_value = _job(
+            provider=provider,
+            description=description,
+        )
+        client.payment_token = OTHER
+        result = await ops.verify_job(1)
+        assert result["error_code"] == "quote_invalid"
+        assert "Commerce payment token" in result["error"]
 
     @pytest.mark.asyncio
     async def test_rejects_non_funded(self):

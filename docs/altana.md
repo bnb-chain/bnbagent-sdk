@@ -14,14 +14,17 @@ Altana support is currently available only in the TypeScript SDK.
 pnpm add @altananetwork/sdk
 ```
 
-The supported peer range is `>=0.3.3 <0.6.0`. Some provider features require a newer version:
+The supported and tested release is exactly `0.7.1`:
 
-| Feature | Minimum `@altananetwork/sdk` version |
-| --- | --- |
-| Mainnet execution and registered sessions | `0.3.3` |
-| ERC-8183 quote signing, x402 payments, and native balance reads | `0.4.0` |
-| `bnb-testnet`, ERC-20 balance reads, ephemeral sessions, and `registerSessionKey` | `0.5.0` |
-| Current BSC testnet relay endpoint | `0.5.1` |
+```bash
+pnpm add @altananetwork/sdk@0.7.1
+```
+
+The repository pins that version in its lockfile, checks the mirrored vendor
+types during `pnpm typecheck`, and validates the required runtime exports when
+the optional module is loaded. Treat every vendor-version change as a security
+change: review its source and changelog, regenerate the lockfile, then run the
+Altana type-compatibility, unit, and testnet E2E suites before changing the pin.
 
 ## Admin and session modes
 
@@ -79,7 +82,7 @@ The provider does not expose `sign.message`, `sign.transaction`, or `sign.typed_
 
 ## Session permissions
 
-`defaultAgentPermissions(...)` creates the normal BNBAgent grant. It allows calls to the ERC-8004 registry, the ERC-8183 Commerce, Router, and Policy contracts, and the payment token. It also adds the requested token spending limit and a native BNB allowance for relay-recovered gas.
+`defaultAgentPermissions(...)` creates the normal BNBAgent grant. It allows selector-bound calls to the ERC-8004 registry and ERC-8183 Commerce, Router, and Policy contracts. The payment token is present only in the spend cap; the session receives no ERC-20 `approve` permission because an allowance created by a leaked key would survive session expiry/revocation.
 
 The native allowance is required. A session without native spend permission cannot pay the relay-recovered gas and fails on-chain with `NoSpendPermissions`.
 
@@ -98,7 +101,13 @@ The provider supports all write intents currently emitted by the TypeScript SDK:
 | ERC-8183 Router | `register_job`, `settle`, `mark_expired` |
 | ERC-8183 Policy | `dispute`, `vote_reject` |
 
-Reads continue through the SDK's public RPC client. Writes are encoded by the protocol client and submitted through the Altana relay. For `erc8183.fund`, `AltanaIntentExecutor` batches the exact ERC-20 approval and the funding call into one atomic relay execution.
+Reads continue through the SDK's public RPC client. Writes are encoded by the protocol client and submitted through the Altana relay. Before handing the session to the agent, the admin must provision a bounded Commerce allowance no larger than the session token cap:
+
+```ts
+await admin.setErc8183Allowance(paymentToken, commerceAddress, sessionTokenCap);
+```
+
+`erc8183.fund` checks that allowance and relays only the Commerce `fund` call. Zero the allowance from the admin provider when revoking the session.
 
 ## ERC-8183 quote signing
 
