@@ -401,18 +401,20 @@ class TestRetryAndNonceManagement:
         web3.eth.wait_for_transaction_receipt.return_value = ok_receipt
         return ci, web3, wallet_provider, fn, sent_hash
 
-    def test_send_nonce_conflict_is_not_blindly_rebroadcast(self):
-        """A send-time nonce conflict is ambiguous and tracks the local hash."""
+    def test_send_nonce_too_low_resyncs_and_retries(self):
+        """A send-time "nonce too low" is a deterministic rejection (the tx
+        never entered the mempool): re-sync the nonce and retry, never track
+        the local hash as an ambiguous broadcast (audit R2 M01)."""
         ci, web3, wallet_provider, fn, sent_hash = self._setup_for_retry()
-        # First send fails with nonce error, second succeeds.
+        # First send is rejected outright, retry with re-synced nonce succeeds.
         web3.eth.send_raw_transaction.side_effect = [
             Exception("nonce too low"),
             sent_hash,
         ]
         result = ci._execute_transaction(fn, description="retry-nonce")
-        assert web3.eth.send_raw_transaction.call_count == 1
+        assert web3.eth.send_raw_transaction.call_count == 2
         assert "transactionHash" in result
-        wallet_provider.sign_transaction.assert_called_once()
+        assert wallet_provider.sign_transaction.call_count == 2
 
     def test_send_rate_limit_is_ambiguous_and_not_rebroadcast(self):
         """A send-time 429 may follow acceptance, so it is never retried."""

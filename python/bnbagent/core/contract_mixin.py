@@ -17,22 +17,26 @@ from .nonce_manager import NonceManager
 logger = logging.getLogger(__name__)
 
 
+# Errors after which the transaction MAY have been accepted by the node, so
+# the nonce must be pinned BROADCAST and the local hash tracked. "nonce too
+# low" must NOT be listed here: it is a deterministic rejection (the tx never
+# entered the mempool) and has to fall through to NonceManager.handle_error()
+# so the stale local nonce is re-synced from chain and the send retried.
+AMBIGUOUS_SEND_ERROR_MARKERS = (
+    "429",
+    "too many requests",
+    "timeout",
+    "timed out",
+    "connection",
+    "network",
+    "already known",
+    "replacement transaction underpriced",
+)
+
+
 def _is_ambiguous_send_error(error: Exception) -> bool:
     text = str(error).lower()
-    return any(
-        marker in text
-        for marker in (
-            "429",
-            "too many requests",
-            "timeout",
-            "timed out",
-            "connection",
-            "network",
-            "already known",
-            "nonce too low",
-            "replacement transaction underpriced",
-        )
-    )
+    return any(marker in text for marker in AMBIGUOUS_SEND_ERROR_MARKERS)
 
 
 def _raw_bytes(signed: Any) -> bytes:
