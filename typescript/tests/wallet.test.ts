@@ -48,6 +48,12 @@ const PBKDF2_FIXTURE_PATH = join(
   "keystore-pbkdf2-interop.json",
 );
 
+const LIGHTKDF_FIXTURE_PATH = join(
+  fileURLToPath(new URL(".", import.meta.url)),
+  "fixtures",
+  "keystore-lightkdf-interop.json",
+);
+
 let wdir: string;
 
 beforeEach(() => {
@@ -470,6 +476,27 @@ describe("keystore interop — Python eth_account -> TS", () => {
     Object.assign(fixture.crypto.kdfparams, { n: 2 ** 30 });
     expect(() => decryptKeystoreV3(fixture, "test-password")).toThrow(
       /scrypt n exceeds supported maximum/,
+    );
+  });
+
+  it("decrypts a geth light-KDF keystore (n=4096, r=8, p=6) — audit R2 M02", () => {
+    // Fixture matches `geth --lightkdf` (LightScryptN=4096, LightScryptP=6);
+    // p must not be pinned to the write-side default of 1.
+    const fixture = JSON.parse(
+      readFileSync(LIGHTKDF_FIXTURE_PATH, "utf8"),
+    ) as KeystoreV3;
+    expect((fixture.crypto.kdfparams as { p: number }).p).toBe(6);
+    const recovered = decryptKeystoreV3(fixture, "test-password");
+    expect(toHexString(recovered)).toBe("ab".repeat(32));
+  });
+
+  it("rejects scrypt p above the interop ceiling before running its KDF", () => {
+    const fixture = JSON.parse(
+      readFileSync(LIGHTKDF_FIXTURE_PATH, "utf8"),
+    ) as KeystoreV3;
+    Object.assign(fixture.crypto.kdfparams, { p: 33 });
+    expect(() => decryptKeystoreV3(fixture, "test-password")).toThrow(
+      /scrypt p exceeds supported maximum/,
     );
   });
 
