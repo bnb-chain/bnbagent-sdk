@@ -36,6 +36,11 @@ function passwordBytes(password: string): Uint8Array {
 const SCRYPT_N = 262_144;
 const SCRYPT_R = 8;
 const SCRYPT_P = 1;
+// Decrypt-side ceiling, deliberately wider than the write-side default above:
+// geth's light-KDF preset (`geth --lightkdf`) writes p=6, so pinning p to the
+// write default rejects valid wallets (audit R2 M02). DoS cost stays bounded
+// by SCRYPT_N/SCRYPT_R (memory scales with n*r; p is a small linear factor).
+const SCRYPT_P_MAX = 32;
 const DK_LEN = 32;
 const MAX_PBKDF2_ITERATIONS = 1_000_000;
 const MIN_SALT_BYTES = 16;
@@ -156,7 +161,7 @@ function validateKeystoreForDecrypt(keystore: KeystoreV3): void {
       throw new Error("scrypt n must be a power of two");
     }
     assertIntegerInRange(scryptParams.r, "scrypt r", 1, SCRYPT_R);
-    assertIntegerInRange(scryptParams.p, "scrypt p", 1, SCRYPT_P);
+    assertIntegerInRange(scryptParams.p, "scrypt p", 1, SCRYPT_P_MAX);
     return;
   }
   if (c.kdf === "pbkdf2") {

@@ -30,6 +30,7 @@ from web3.contract.contract import ContractFunction
 from web3.exceptions import TimeExhausted
 
 from ..core.contract_mixin import (
+    AMBIGUOUS_SEND_ERROR_MARKERS,
     DEFAULT_RECEIPT_TIMEOUT,  # noqa: F401  — re-exported for back-compat
     MAX_RETRIES,
     MIN_GAS_PRICE_WEI,
@@ -76,20 +77,7 @@ def _signed_transaction_hash(raw_transaction: bytes) -> tuple[bytes, str]:
 def _is_ambiguous_broadcast_error(error: Exception) -> bool:
     """Whether a send failure may have happened after node acceptance."""
     text = str(error).lower()
-    return any(
-        marker in text
-        for marker in (
-            "429",
-            "too many requests",
-            "timeout",
-            "timed out",
-            "connection",
-            "network",
-            "already known",
-            "nonce too low",
-            "replacement transaction underpriced",
-        )
-    )
+    return any(marker in text for marker in AMBIGUOUS_SEND_ERROR_MARKERS)
 
 
 class LocalExecutor(IntentExecutor):

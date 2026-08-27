@@ -236,3 +236,45 @@ class TestSendTxNonceLifecycle:
         assert result["status"] == 1
         assert mock_web3.eth.send_raw_transaction.call_count == 1
         assert mock_web3.eth.wait_for_transaction_receipt.call_count == 1
+
+
+class TestNonceTooLowResync:
+    """Audit R2 M01 regression: "nonce too low" is a deterministic rejection
+    (the tx never entered the mempool) and must re-sync + retry via
+    NonceManager.handle_error(), never be pinned BROADCAST as an ambiguous
+    send result."""
+
+    def test_nonce_too_low_is_not_ambiguous(self):
+        from bnbagent.core.contract_mixin import (
+            AMBIGUOUS_SEND_ERROR_MARKERS,
+            _is_ambiguous_send_error,
+        )
+        from bnbagent.wallets.local_executor import _is_ambiguous_broadcast_error
+
+        assert "nonce too low" not in AMBIGUOUS_SEND_ERROR_MARKERS
+        err = Exception("nonce too low: next nonce 5, tx nonce 2")
+        assert not _is_ambiguous_send_error(err)
+        assert not _is_ambiguous_broadcast_error(err)
+
+    def test_stale_local_nonce_resyncs_and_retries(self, client, mock_web3):
+        from tests.conftest import FAKE_TX_HASH
+
+        fn = _make_fn()
+        # Local view is stale (chain already at 5): seed reserve() with 2,
+        # then handle_error()'s re-sync reads 5.
+        mock_web3.eth.get_transaction_count.side_effect = [2, 5]
+        mock_web3.eth.send_raw_transaction.side_effect = [
+            Exception("nonce too low: next nonce 5, tx nonce 2"),
+            bytes.fromhex(FAKE_TX_HASH[2:]),
+        ]
+
+        result = client._send_tx(fn)
+
+        assert result["status"] == 1
+        assert mock_web3.eth.send_raw_transaction.call_count == 2
+        assert [
+            call.args[0]["nonce"] for call in fn.build_transaction.call_args_list
+        ] == [2, 5]
+        # the rejected nonce was released, not pinned BROADCAST
+        nonce_mgr = NonceManager.for_account(mock_web3, FAKE_ADDRESS)
+        assert nonce_mgr.broadcast_hash(2) is None
