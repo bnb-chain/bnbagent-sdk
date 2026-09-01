@@ -19,14 +19,22 @@ import json
 import logging
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from web3 import Web3
 
-from ..config import NetworkConfig
+from ..config import NetworkConfig, resolve_network
 from ..core.config import get_env
 from ..exceptions import RpcRangeLimitError, TransactionPendingError
+from ..networks import (
+    AssetId,
+    PaymentAsset,
+    get_asset,
+    get_asset_by_address,
+    list_assets,
+    parse_asset_id,
+)
 from ..storage.storage_provider import StorageProvider
 from ..wallets.wallet_provider import WalletProvider
 from .client import ERC8183Client
@@ -103,6 +111,7 @@ ERR_INTERNAL = "internal_error"  # unexpected failure (retryable)
 ERR_CHAIN_UNAVAILABLE = "chain_unavailable"  # transient chain/RPC trouble (retryable)
 ERR_TX_PENDING = "tx_pending"  # tx broadcast but unconfirmed (NOT retryable)
 ERR_QUOTE_INVALID = "quote_invalid"  # unsigned, tampered, or stale-at-funding quote
+ERR_JOB_TOKEN_MISMATCH = "job_token_mismatch"  # quote/job/catalog token mismatch
 
 
 def _exc_error_fields(exc: Exception) -> dict[str, Any]:
@@ -164,10 +173,15 @@ class ERC8183JobOps:
     storage_provider
         Optional off-chain storage for deliverable payloads.
     service_price
-        Minimum acceptable budget in token raw units. Used by
+        Legacy minimum acceptable budget in the Commerce default token's raw
+        units. Non-default jobs fail closed when this compatibility option is
+        used. Used by
         ``verify_job`` to reject under-priced jobs (``budget_too_low``).
         Advertised decimals in those rejections are fetched dynamically
         from the payment token.
+    service_prices
+        Canonical AssetId to atomic-unit minimum budget. Use this for
+        multi-token sellers; values remain integers and are never rescaled.
     allow_unsigned_jobs
         Compatibility escape hatch for legacy jobs. Defaults to ``False``;
         signed quote verification is mandatory in production by default.
@@ -181,6 +195,7 @@ class ERC8183JobOps:
         provider_address: str | None = None,
         storage_provider: StorageProvider | None = None,
         service_price: int = 0,
+        service_prices: Mapping[AssetId | str, int] | None = None,
         agent_url: str | None = None,
         allow_unsigned_jobs: bool = False,
     ) -> None:
@@ -199,6 +214,7 @@ class ERC8183JobOps:
         self._network = network
         self._storage = storage_provider
         self._service_price = service_price
+        self._service_prices = self._validate_service_prices(network, service_prices)
         self._agent_url = agent_url
         self._allow_unsigned_jobs = allow_unsigned_jobs
 
@@ -207,6 +223,46 @@ class ERC8183JobOps:
         self._last_known_counter: int = 0
         self._startup_scan_done: bool = False
         self._pending_open_ids: set[int] = set()
+
+    @staticmethod
+    def _validate_service_prices(
+        network: str | NetworkConfig,
+        service_prices: Mapping[AssetId | str, int] | None,
+    ) -> dict[AssetId, int] | None:
+        if service_prices is None:
+            return None
+        if not service_prices:
+            raise ValueError("service_prices must contain at least one canonical AssetId")
+
+        chain_id = resolve_network(network).chain_id
+        validated: dict[AssetId, int] = {}
+        for raw_asset_id, price in service_prices.items():
+            asset_id = parse_asset_id(raw_asset_id)
+            get_asset(chain_id, asset_id)
+            if asset_id in validated:
+                raise ValueError(f"duplicate service price for AssetId {asset_id.value}")
+            if not isinstance(price, int) or isinstance(price, bool) or price < 0:
+                raise ValueError(
+                    f"service price for {asset_id.value} must be a non-negative integer"
+                )
+            validated[asset_id] = price
+        return validated
+
+    @staticmethod
+    def _job_token_error() -> dict[str, Any]:
+        return {
+            "valid": False,
+            "error": "Job payment token does not match the signed quote and seller catalog",
+            "error_code": ERR_JOB_TOKEN_MISMATCH,
+        }
+
+    def _resolve_job_asset(self, client: ERC8183Client, job_token: str) -> PaymentAsset | None:
+        chain_id = client.network.chain_id
+        try:
+            list_assets(chain_id)
+        except KeyError:
+            return None
+        return get_asset_by_address(chain_id, job_token)
 
     # -------------------------------------------------------- URL resolution
 
@@ -510,6 +566,31 @@ class ERC8183JobOps:
                 )
 
             client = self._get_client()
+            try:
+                job_token = Web3.to_checksum_address(
+                    await asyncio.to_thread(client.job_payment_token, job_id)
+                )
+                job_asset = self._resolve_job_asset(client, job_token)
+            except (KeyError, TypeError, ValueError):
+                return self._job_token_error()
+
+            if self._service_prices is None:
+                try:
+                    if job_token != Web3.to_checksum_address(client.payment_token):
+                        return self._job_token_error()
+                except (TypeError, ValueError):
+                    return self._job_token_error()
+                effective_service_price = self._service_price
+            else:
+                if job_asset is None or job_asset.asset_id not in self._service_prices:
+                    return self._job_token_error()
+                expected_catalog_token = get_asset(
+                    client.network.chain_id, job_asset.asset_id
+                ).address
+                if job_token != expected_catalog_token:
+                    return self._job_token_error()
+                effective_service_price = self._service_prices[job_asset.asset_id]
+
             description = job_result.get("description", "")
             quote_envelope: dict[str, Any] | None = None
             has_structured_description = False
@@ -564,8 +645,7 @@ class ERC8183JobOps:
                     or not isinstance(quote_expires_at, int)
                     or isinstance(quote_expires_at, bool)
                     or quote_expires_at <= negotiated_at
-                    or quote_expires_at - negotiated_at
-                    > NegotiationHandler.MAX_QUOTE_TTL_SECONDS
+                    or quote_expires_at - negotiated_at > NegotiationHandler.MAX_QUOTE_TTL_SECONDS
                 ):
                     return {
                         "valid": False,
@@ -634,29 +714,25 @@ class ERC8183JobOps:
                         "error": "Signed negotiation quote contains an invalid currency",
                         "error_code": ERR_QUOTE_INVALID,
                     }
-                payment_token = Web3.to_checksum_address(client.payment_token)
-                if signed_currency != payment_token:
-                    return {
-                        "valid": False,
-                        "error": (
-                            f"Signed quote currency ({signed_currency}) does not match "
-                            f"the Commerce payment token ({payment_token})"
-                        ),
-                        "error_code": ERR_QUOTE_INVALID,
-                    }
+                if signed_currency != job_token:
+                    return self._job_token_error()
 
-            if self._service_price > 0:
+            if effective_service_price > 0:
                 budget = job_result.get("budget", 0)
-                if budget < self._service_price:
-                    decimals = await asyncio.to_thread(self._get_client().token_decimals)
+                if budget < effective_service_price:
+                    decimals = (
+                        job_asset.decimals
+                        if job_asset is not None
+                        else await asyncio.to_thread(client.token_decimals, job_token)
+                    )
                     return {
                         "valid": False,
                         "error": (
                             f"Job budget ({budget}) is below agent's"
-                            f" service price ({self._service_price})"
+                            f" service price ({effective_service_price})"
                         ),
                         "error_code": ERR_BUDGET_TOO_LOW,
-                        "service_price": str(self._service_price),
+                        "service_price": str(effective_service_price),
                         "decimals": decimals,
                     }
 

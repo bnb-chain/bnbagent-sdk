@@ -173,7 +173,90 @@ class TestVerifyNegotiationQuote:
         assert verdict.reason == "quote currency does not match payment token"
         verify.assert_not_called()
 
-    @pytest.mark.parametrize("price", [True, 0, -1, "0", "1.5", "1e3", None])
+    def test_explicit_expected_currency_checks_request_and_response(self, facade):
+        selected = "0x" + "12" * 20
+        quote = {
+            "request": {"terms": {"currency": selected}},
+            "response": {
+                "accepted": True,
+                "terms": {"price": "0", "currency": selected},
+            },
+            "chain_id": 12345,
+        }
+        expected = MagicMock(valid=True)
+        with patch(
+            "bnbagent.erc8183.client.verify_quote_signature", return_value=expected
+        ) as verify:
+            verdict = facade.verify_negotiation_quote(
+                quote,
+                expected_provider=FAKE_ADDRESS,
+                expected_currency=selected.lower(),
+            )
+        assert verdict is expected
+        verify.assert_called_once()
+        facade.commerce.payment_token.assert_not_called()
+
+    def test_rejects_request_response_currency_mismatch_before_signature(self, facade):
+        selected = "0x" + "12" * 20
+        quote = {
+            "request": {"terms": {"currency": "0x" + "13" * 20}},
+            "response": {
+                "accepted": True,
+                "terms": {"price": "1", "currency": selected},
+            },
+            "chain_id": 12345,
+        }
+        with patch("bnbagent.erc8183.client.verify_quote_signature") as verify:
+            verdict = facade.verify_negotiation_quote(
+                quote,
+                expected_provider=FAKE_ADDRESS,
+                expected_currency=selected,
+            )
+        assert verdict.valid is False
+        assert verdict.reason == "quote request currency mismatch"
+        verify.assert_not_called()
+
+    def test_explicit_expected_currency_requires_request_binding(self, facade):
+        selected = "0x" + "12" * 20
+        quote = {
+            "response": {
+                "accepted": True,
+                "terms": {"price": "1", "currency": selected},
+            },
+            "chain_id": 12345,
+        }
+
+        verdict = facade.verify_negotiation_quote(
+            quote,
+            expected_provider=FAKE_ADDRESS,
+            expected_currency=selected,
+        )
+
+        assert verdict.valid is False
+        assert verdict.reason == "quote request currency is missing"
+
+    def test_expected_asset_id_is_resolved_on_current_chain(self, facade):
+        selected = get_asset(97, AssetId.TEST_USDC).address
+        facade.network.chain_id = 97
+        quote = {
+            "request": {"terms": {"currency": selected.lower()}},
+            "response": {
+                "accepted": True,
+                "terms": {"price": "1", "currency": selected},
+            },
+            "chain_id": 97,
+        }
+        expected = MagicMock(valid=True)
+        with patch("bnbagent.erc8183.client.verify_quote_signature", return_value=expected):
+            verdict = facade.verify_negotiation_quote(
+                quote,
+                expected_provider=FAKE_ADDRESS,
+                expected_currency=AssetId.TEST_USDC,
+            )
+
+        assert verdict is expected
+
+    @pytest.mark.parametrize("price", [True, -1, "00", "01", "1.5", "1e3", None])
     def test_rejects_invalid_price(self, facade, price):
         facade.commerce.payment_token.return_value = FAKE_TOKEN
         quote = {
@@ -185,7 +268,7 @@ class TestVerifyNegotiationQuote:
         }
         verdict = facade.verify_negotiation_quote(quote, expected_provider=FAKE_ADDRESS)
         assert verdict.valid is False
-        assert verdict.reason == "quote price must be a positive integer"
+        assert verdict.reason == "quote price must be a non-negative integer"
 
     def test_rejects_noncanonical_top_level_accepted(self, facade):
         quote = {

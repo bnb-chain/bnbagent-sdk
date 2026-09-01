@@ -224,6 +224,28 @@ class TestNegotiationResponse:
         resp = NegotiationResponse.from_dict(d)
         assert resp.quote_expires_at == exp
 
+    def test_optional_structured_details_roundtrip(self):
+        data = {
+            "accepted": False,
+            "reason_code": ReasonCode.UNSUPPORTED,
+            "reason": "Requested payment token is unavailable",
+            "details": {"supported_assets": ["TEST_USDC", "TEST_USDT"]},
+        }
+
+        response = NegotiationResponse.from_dict(data)
+
+        assert response.to_dict() == data
+
+    def test_legacy_wire_without_details_still_parses(self):
+        response = NegotiationResponse.from_dict(
+            {"accepted": False, "reason_code": ReasonCode.UNSUPPORTED}
+        )
+
+        assert response.to_dict() == {
+            "accepted": False,
+            "reason_code": ReasonCode.UNSUPPORTED,
+        }
+
     def test_compute_hash_deterministic(self):
         resp = NegotiationResponse(accepted=False, reason_code="0x01")
         h1 = resp.compute_hash()
@@ -816,8 +838,9 @@ class TestSigningFailureLogging:
         mock_wallet.sign_message.side_effect = RuntimeError("hardware key offline")
         handler = self._make_handler(wallet_provider=mock_wallet, chain_id=97)
 
-        with caplog.at_level("ERROR"), pytest.raises(
-            QuoteSigningError, match="quote signing failed: hardware key offline"
+        with (
+            caplog.at_level("ERROR"),
+            pytest.raises(QuoteSigningError, match="quote signing failed: hardware key offline"),
         ):
             handler.negotiate(
                 {

@@ -38,8 +38,13 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+from web3 import Web3
+
+from ..networks import AssetId, PaymentAsset, get_asset, get_asset_by_address, parse_asset_id
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +235,7 @@ class NegotiationResponse:
 
     reason_code: str | None = None
     reason: str | None = None
+    details: dict[str, object] | None = None
 
     def to_dict(self) -> dict:
         """Return the response content (without hash)."""
@@ -244,6 +250,8 @@ class NegotiationResponse:
             result["reason_code"] = self.reason_code
         if self.reason is not None:
             result["reason"] = self.reason
+        if self.details is not None:
+            result["details"] = self.details
         return result
 
     def to_envelope(self) -> dict:
@@ -294,6 +302,7 @@ class NegotiationResponse:
             quote_expires_at=data.get("quote_expires_at"),
             reason_code=data.get("reason_code"),
             reason=data.get("reason"),
+            details=data.get("details"),
         )
 
     @classmethod
@@ -585,6 +594,10 @@ class NegotiationHandler:
         self._quote_ttl_seconds = quote_ttl_seconds
         self._chain_id = chain_id
         self._verifying_contract = verifying_contract
+        self._multi_asset = False
+        self._erc8183_client: ERC8183Client | None = None
+        self._configured_offers: dict[str, tuple[PaymentAsset, str]] = {}
+        self._active_offers: dict[str, tuple[PaymentAsset, str]] = {}
 
         if wallet_provider is not None and chain_id is None:
             logger.warning(
@@ -641,6 +654,112 @@ class NegotiationHandler:
             verifying_contract=erc8183_client.commerce.address,
         )
 
+    @classmethod
+    def from_erc8183_client_multi(
+        cls,
+        erc8183_client: ERC8183Client,
+        service_prices: Mapping[AssetId | str, str],
+        estimated_completion_seconds: int = 120,
+        require_quality_standards: bool = True,
+        wallet_provider: MessageSigner | None = None,
+        quote_ttl_seconds: int = 300,
+    ) -> NegotiationHandler:
+        """Build a catalog-bound multi-asset seller and load its active snapshot.
+
+        Mapping keys are canonical :class:`AssetId` values, never UI symbols or
+        token addresses. Values are non-negative atomic-unit integer strings.
+        Commerce support is checked immediately and can be refreshed later.
+        """
+        if not service_prices:
+            raise ValueError("service_prices must contain at least one canonical AssetId")
+
+        chain_id = erc8183_client.network.chain_id
+        configured: dict[str, tuple[PaymentAsset, str]] = {}
+        seen_ids: set[AssetId] = set()
+        for raw_asset_id, atomic_price in service_prices.items():
+            asset_id = parse_asset_id(raw_asset_id)
+            if asset_id in seen_ids:
+                raise ValueError(f"duplicate service price for AssetId {asset_id.value}")
+            if (
+                not isinstance(atomic_price, str)
+                or not atomic_price.isascii()
+                or not atomic_price.isdecimal()
+                or (atomic_price != "0" and atomic_price.startswith("0"))
+            ):
+                raise ValueError(
+                    f"service price for {asset_id.value} must be a non-negative integer string"
+                )
+            asset = get_asset(chain_id, asset_id)
+            configured[asset.address.lower()] = (asset, atomic_price)
+            seen_ids.add(asset_id)
+
+        default_currency = Web3.to_checksum_address(erc8183_client.payment_token)
+        # The fixed Buyer default must itself be a known asset on cataloged networks.
+        get_asset_by_address(chain_id, default_currency)
+        handler = cls(
+            service_price="0",
+            currency=default_currency,
+            estimated_completion_seconds=estimated_completion_seconds,
+            require_quality_standards=require_quality_standards,
+            wallet_provider=wallet_provider,
+            quote_ttl_seconds=quote_ttl_seconds,
+            chain_id=chain_id,
+            verifying_contract=erc8183_client.commerce.address,
+        )
+        handler._multi_asset = True
+        handler._erc8183_client = erc8183_client
+        handler._configured_offers = configured
+        handler.refresh_payment_tokens()
+        return handler
+
+    def refresh_payment_tokens(self) -> tuple[AssetId, ...]:
+        """Refresh active Commerce offers, clearing stale state on any failure."""
+        if not self._multi_asset or self._erc8183_client is None:
+            return ()
+
+        self._active_offers = {}
+        refreshed: dict[str, tuple[PaymentAsset, str]] = {}
+        try:
+            for address, offer in self._configured_offers.items():
+                if self._erc8183_client.is_payment_token_supported(offer[0].address):
+                    refreshed[address] = offer
+        except Exception as exc:
+            raise RuntimeError("payment-token refresh failed; active offers cleared") from exc
+        self._active_offers = refreshed
+        return tuple(offer[0].asset_id for offer in refreshed.values())
+
+    def _supported_details(self) -> dict[str, object]:
+        if not self._multi_asset:
+            return {"supported_assets": []}
+        return {
+            "supported_assets": [offer[0].asset_id.value for offer in self._active_offers.values()]
+        }
+
+    @staticmethod
+    def _currencies_equal(left: str, right: str) -> bool:
+        try:
+            return Web3.to_checksum_address(left) == Web3.to_checksum_address(right)
+        except (TypeError, ValueError):
+            return left == right
+
+    def _select_offer(self, requested_currency: str | None) -> tuple[str, str] | None:
+        if not self._multi_asset:
+            if requested_currency is not None and not self._currencies_equal(
+                requested_currency, self._currency
+            ):
+                return None
+            return self._currency, self._service_price
+
+        selected = requested_currency or self._currency
+        try:
+            selected_address = Web3.to_checksum_address(selected)
+        except (TypeError, ValueError):
+            return None
+        offer = self._active_offers.get(selected_address.lower())
+        if offer is None:
+            return None
+        return offer[0].address, offer[1]
+
     @staticmethod
     def _ensure_hex_prefix(h: str) -> str:
         """Ensure hash has 0x prefix."""
@@ -691,19 +810,32 @@ class NegotiationHandler:
                 reason="quality_standards is required in terms.",
             )
 
+        offer = self._select_offer(req.terms.currency)
+        if offer is None:
+            return self._reject(
+                request_data=req.to_dict(),
+                request_hash=request_hash,
+                reason_code=ReasonCode.UNSUPPORTED,
+                reason="Requested payment token is unavailable",
+                details=self._supported_details(),
+            )
+        selected_currency, configured_price = offer
+
         # Per-request overrides fall back to the construction-time defaults.
         if price is not None:
-            try:
-                if int(price) < 0:
-                    raise ValueError
-            except (TypeError, ValueError):
+            if (
+                not isinstance(price, str)
+                or not price.isascii()
+                or not price.isdecimal()
+                or (price != "0" and price.startswith("0"))
+            ):
                 return self._reject(
                     request_data=req.to_dict(),
                     request_hash=request_hash,
                     reason_code=ReasonCode.AMBIGUOUS_TERMS,
                     reason=f"price must be a non-negative integer string, got {price!r}",
                 )
-        effective_price = price if price is not None else self._service_price
+        effective_price = price if price is not None else configured_price
         effective_eta = (
             estimated_completion_seconds
             if estimated_completion_seconds is not None
@@ -718,7 +850,7 @@ class NegotiationHandler:
             quality_standards=req.terms.quality_standards,
             success_criteria=req.terms.success_criteria,
             price=effective_price,
-            currency=self._currency,
+            currency=selected_currency,
         )
 
         response = NegotiationResponse(
@@ -818,12 +950,14 @@ class NegotiationHandler:
         reason_code: str,
         reason: str,
         request_hash: str = "",
+        details: dict[str, object] | None = None,
     ) -> NegotiationResult:
         """Build a rejection response."""
         response = NegotiationResponse(
             accepted=False,
             reason_code=reason_code,
             reason=reason,
+            details=details,
         )
         response_hash = self._ensure_hex_prefix(response.compute_hash()) if request_hash else ""
         return NegotiationResult(

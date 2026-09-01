@@ -251,6 +251,7 @@ class ERC8183Client:
         envelope: dict[str, Any],
         *,
         expected_provider: str,
+        expected_currency: TokenReference | None = None,
         block_number: int | None = None,
     ) -> QuoteSignatureVerdict:
         """Verify a provider quote before the buyer creates or funds a job.
@@ -258,9 +259,10 @@ class ERC8183Client:
         ``expected_provider`` is deliberately out-of-band: obtain it from a
         trusted ERC-8004 discovery result or operator configuration, never from
         ``envelope["provider_address"]``. The quote must be accepted, carry a
-        positive integer price in this Commerce contract's payment token, bind
-        this chain and Commerce address, and have a valid EIP-191/ERC-1271
-        provider signature.
+        non-negative integer price in the expected payment token, bind this
+        chain and Commerce address, and have a valid EIP-191/ERC-1271 provider
+        signature. ``expected_currency`` is required for an explicit Buyer
+        selection; omitting it preserves the Commerce-default compatibility path.
         """
         response = envelope.get("response")
         if not isinstance(response, dict):
@@ -272,27 +274,54 @@ class ERC8183Client:
             return QuoteSignatureVerdict(valid=False, reason="quote terms are missing")
 
         price = terms.get("price")
-        valid_price = (isinstance(price, int) and not isinstance(price, bool) and price > 0) or (
+        valid_price = (isinstance(price, int) and not isinstance(price, bool) and price >= 0) or (
             isinstance(price, str)
             and price.isascii()
             and price.isdecimal()
-            and not price.startswith("0")
+            and (price == "0" or not price.startswith("0"))
         )
         if not valid_price:
             return QuoteSignatureVerdict(
-                valid=False, reason="quote price must be a positive integer"
+                valid=False, reason="quote price must be a non-negative integer"
             )
 
         currency = terms.get("currency")
         try:
             currency_address = Web3.to_checksum_address(currency)
-            payment_token = Web3.to_checksum_address(self.payment_token)
-        except (TypeError, ValueError):
-            return QuoteSignatureVerdict(valid=False, reason="quote currency is invalid")
-        if currency_address != payment_token:
-            return QuoteSignatureVerdict(
-                valid=False, reason="quote currency does not match payment token"
+            expected_address = (
+                Web3.to_checksum_address(self.payment_token)
+                if expected_currency is None
+                else self._resolve_token_address(expected_currency)
             )
+        except (KeyError, TypeError, ValueError):
+            return QuoteSignatureVerdict(valid=False, reason="quote currency is invalid")
+        if currency_address != expected_address:
+            return QuoteSignatureVerdict(
+                valid=False,
+                reason=(
+                    "quote currency does not match payment token"
+                    if expected_currency is None
+                    else "quote response currency mismatch"
+                ),
+            )
+
+        request = envelope.get("request")
+        request_terms = request.get("terms") if isinstance(request, dict) else None
+        request_currency = (
+            request_terms.get("currency") if isinstance(request_terms, dict) else None
+        )
+        if expected_currency is not None and request_currency is None:
+            return QuoteSignatureVerdict(valid=False, reason="quote request currency is missing")
+        if request_currency is not None:
+            try:
+                if Web3.to_checksum_address(request_currency) != expected_address:
+                    return QuoteSignatureVerdict(
+                        valid=False, reason="quote request currency mismatch"
+                    )
+            except (TypeError, ValueError):
+                return QuoteSignatureVerdict(
+                    valid=False, reason="quote request currency is invalid"
+                )
 
         signed_chain_id = envelope.get("chain_id")
         if (
