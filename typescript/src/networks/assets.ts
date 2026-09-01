@@ -65,6 +65,9 @@ export class AssetCatalog {
       }
 
       const address = toChecksumAddress(input.address);
+      if (address !== input.address) {
+        throw new Error(`catalog address is not checksummed: ${input.address}`);
+      }
       const addressKey = `${input.chainId}:${address.toLowerCase()}`;
       if (this.#byAddress.has(addressKey)) {
         throw new Error(

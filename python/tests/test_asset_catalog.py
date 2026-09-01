@@ -172,6 +172,20 @@ def test_catalog_constructor_rejects_duplicate_key_and_duplicate_address():
         asset_catalog((first, duplicate_address))
 
 
+def test_catalog_constructor_rejects_noncanonical_id_and_nonchecksum_address():
+    asset_catalog = _api("AssetCatalog")
+    asset_id = _api("AssetId")
+    first = _api("get_asset")(56, asset_id.U)
+
+    invalid_id = replace(first, asset_id="NOT_CANONICAL")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="canonical AssetId"):
+        asset_catalog((invalid_id,))
+
+    lowercase_address = replace(first, address=first.address.lower())
+    with pytest.raises(ValueError, match="not checksummed"):
+        asset_catalog((lowercase_address,))
+
+
 def test_asset_amount_conversion_uses_exact_non_negative_decimal_strings():
     asset_id = _api("AssetId")
     to_asset_atomic = _api("to_asset_atomic")

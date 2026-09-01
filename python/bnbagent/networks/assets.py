@@ -64,6 +64,8 @@ class AssetCatalog:
         by_chain: dict[int, list[PaymentAsset]] = {}
 
         for asset in assets:
+            if not isinstance(asset.asset_id, AssetId):
+                raise ValueError(f"asset_id must be a canonical AssetId: {asset.asset_id!r}")
             key = (asset.chain_id, asset.asset_id)
             if key in by_key:
                 raise ValueError(

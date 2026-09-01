@@ -5,6 +5,7 @@ import {
   AssetId,
   BSC_MAINNET_CHAIN_ID,
   BSC_TESTNET_CHAIN_ID,
+  type PaymentAsset,
   getAddress,
   getAsset,
   getAssetByAddress,
@@ -152,6 +153,26 @@ describe("asset catalog", () => {
           { ...first, assetId: AssetId.BINANCE_PEG_USDC },
         ]),
     ).toThrow("duplicate catalog address");
+  });
+
+  it("rejects non-canonical ids and non-checksummed addresses", () => {
+    const first = getAsset(56, AssetId.U);
+
+    expect(
+      () =>
+        new AssetCatalog([
+          { ...first, assetId: "NOT_CANONICAL" } as unknown as PaymentAsset,
+        ]),
+    ).toThrow("canonical AssetId");
+    expect(
+      () =>
+        new AssetCatalog([
+          {
+            ...first,
+            address: first.address.toLowerCase() as `0x${string}`,
+          },
+        ]),
+    ).toThrow("not checksummed");
   });
 
   it("converts exact non-negative decimal strings to bigint atomic amounts", () => {
