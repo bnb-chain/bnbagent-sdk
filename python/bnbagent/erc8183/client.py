@@ -36,6 +36,7 @@ from web3 import Web3
 
 from ..config import NetworkConfig, resolve_network
 from ..core.abi_loader import create_web3
+from ..core.contract_mixin import READ_ONLY_MESSAGE
 from ..erc20.client import MinimalERC20Client
 from ..exceptions import JobPaymentTokenMismatchError
 from ..networks import AssetId, get_asset, get_asset_by_address, list_assets, parse_asset_id
@@ -147,6 +148,8 @@ class ERC8183Client:
         # Cached token state (populated lazily and keyed by checksum address).
         self._payment_token_address: str | None = None
         self._erc20_clients: dict[str, MinimalERC20Client] = {}
+        self._token_decimals: dict[str, int] = {}
+        self._token_symbols: dict[str, str] = {}
         self._token_metadata: dict[str, TokenMetadata] = {}
 
     @staticmethod
@@ -208,11 +211,10 @@ class ERC8183Client:
         address = self._resolve_token_address(token)
         metadata = self._token_metadata.get(address)
         if metadata is None:
-            client = self._erc20_client(address)
             metadata = TokenMetadata(
                 address=address,
-                decimals=client.decimals(),
-                symbol=client.symbol(),
+                decimals=self.token_decimals(address),
+                symbol=self.token_symbol(address),
             )
             self._token_metadata[address] = metadata
         return metadata
@@ -226,11 +228,17 @@ class ERC8183Client:
     def approve_token(self, token: TokenReference, spender: str, amount: int) -> dict[str, Any]:
         return self._erc20_client(token).approve(spender, amount)
 
-    def token_decimals(self) -> int:
-        return self.token_metadata(self.payment_token).decimals
+    def token_decimals(self, token: TokenReference | None = None) -> int:
+        address = self.payment_token if token is None else self._resolve_token_address(token)
+        if address not in self._token_decimals:
+            self._token_decimals[address] = self._erc20_client(address).decimals()
+        return self._token_decimals[address]
 
-    def token_symbol(self) -> str:
-        return self.token_metadata(self.payment_token).symbol
+    def token_symbol(self, token: TokenReference | None = None) -> str:
+        address = self.payment_token if token is None else self._resolve_token_address(token)
+        if address not in self._token_symbols:
+            self._token_symbols[address] = self._erc20_client(address).symbol()
+        return self._token_symbols[address]
 
     def token_balance(self, address: str | None = None) -> int:
         return self._erc20_client().balance_of(address or self.address)
@@ -427,6 +435,8 @@ class ERC8183Client:
             raise ValueError("amount must be >= 0")
         if approve_floor is not None and approve_floor < 0:
             raise ValueError("approve_floor must be >= 0")
+        if not self._wallet_provider or not self.address:
+            raise RuntimeError(READ_ONLY_MESSAGE)
 
         actual_token = self.job_payment_token(job_id)
         if expected_token is not None:

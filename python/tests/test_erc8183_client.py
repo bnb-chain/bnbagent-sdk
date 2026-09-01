@@ -314,10 +314,31 @@ class TestFund:
         erc20.approve.assert_called_once_with(FAKE_COMMERCE, 1_000)
 
     def test_negative_amount_rejected_before_any_chain_or_funding_action(self, facade):
+        facade._wallet_provider = None
+        facade.address = None
         with pytest.raises(ValueError, match="amount must be >= 0"):
             facade.fund(job_id=1, amount=-1)
         facade.commerce.job_payment_token.assert_not_called()
         facade.commerce.fund.assert_not_called()
+
+    @pytest.mark.parametrize("amount", [0, 5])
+    @pytest.mark.parametrize("missing", ["wallet", "address"])
+    def test_read_only_fund_fails_before_any_rpc_or_funding_action(self, facade, amount, missing):
+        if missing == "wallet":
+            facade._wallet_provider = None
+        else:
+            facade.address = None
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"wallet_provider is required for write operations \(client is read-only\)",
+        ):
+            facade.fund(job_id=1, amount=amount)
+
+        facade.commerce.job_payment_token.assert_not_called()
+        facade.commerce.payment_token.assert_not_called()
+        facade.commerce.fund.assert_not_called()
+        assert facade._erc20_clients == {}
 
     def test_expected_token_mismatch_fails_typed_before_erc20_or_fund(self, facade):
         erc20 = self._prime(facade, current_allowance=0)

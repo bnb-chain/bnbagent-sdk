@@ -201,3 +201,67 @@ class TestPerTokenHelpers:
         assert facade.token_allowance(FAKE_ADDRESS, FAKE_COMMERCE) == 8
         assert facade.approve_payment_token(FAKE_COMMERCE, 7) == {"status": 1}
         assert erc20_cls.call_count == 1
+
+    def test_default_decimals_and_symbol_have_independent_rpc_caches(self, multi_facade):
+        facade, erc20_cls = multi_facade
+        facade.commerce.payment_token.return_value = CUSTOM_TOKEN
+        erc20 = MagicMock()
+        erc20.decimals.return_value = 18
+        erc20.symbol.side_effect = RuntimeError("symbol unavailable")
+        erc20_cls.return_value = erc20
+
+        assert facade.token_decimals() == 18
+        assert facade.token_decimals() == 18
+        erc20.decimals.assert_called_once_with()
+        erc20.symbol.assert_not_called()
+
+        with pytest.raises(RuntimeError, match="symbol unavailable"):
+            facade.token_symbol()
+        assert facade.token_decimals() == 18
+        erc20.decimals.assert_called_once_with()
+
+    def test_arbitrary_token_symbol_isolated_from_decimals_failure(self, multi_facade):
+        facade, erc20_cls = multi_facade
+        erc20 = MagicMock()
+        erc20.decimals.side_effect = RuntimeError("decimals unavailable")
+        erc20.symbol.return_value = "CUSTOM"
+        erc20_cls.return_value = erc20
+
+        assert facade.token_symbol(CUSTOM_TOKEN) == "CUSTOM"
+        assert facade.token_symbol(CUSTOM_TOKEN_CHECKSUM) == "CUSTOM"
+        erc20.symbol.assert_called_once_with()
+        erc20.decimals.assert_not_called()
+
+        with pytest.raises(RuntimeError, match="decimals unavailable"):
+            facade.token_decimals(CUSTOM_TOKEN)
+        assert facade.token_symbol(CUSTOM_TOKEN) == "CUSTOM"
+        erc20.symbol.assert_called_once_with()
+
+    def test_combined_metadata_reuses_independent_caches(self, multi_facade):
+        facade, erc20_cls = multi_facade
+        erc20 = MagicMock()
+        erc20.decimals.return_value = 6
+        erc20.symbol.return_value = "USDC"
+        erc20_cls.return_value = erc20
+
+        assert facade.token_decimals(CUSTOM_TOKEN) == 6
+        metadata = facade.token_metadata(CUSTOM_TOKEN_CHECKSUM)
+        assert facade.token_metadata(CUSTOM_TOKEN) is metadata
+        assert (metadata.decimals, metadata.symbol) == (6, "USDC")
+        erc20.decimals.assert_called_once_with()
+        erc20.symbol.assert_called_once_with()
+
+    def test_combined_metadata_preserves_successful_partial_cache_on_retry(self, multi_facade):
+        facade, erc20_cls = multi_facade
+        erc20 = MagicMock()
+        erc20.decimals.return_value = 6
+        erc20.symbol.side_effect = [RuntimeError("temporary symbol failure"), "USDC"]
+        erc20_cls.return_value = erc20
+
+        with pytest.raises(RuntimeError, match="temporary symbol failure"):
+            facade.token_metadata(CUSTOM_TOKEN)
+        metadata = facade.token_metadata(CUSTOM_TOKEN_CHECKSUM)
+
+        assert (metadata.decimals, metadata.symbol) == (6, "USDC")
+        erc20.decimals.assert_called_once_with()
+        assert erc20.symbol.call_count == 2
