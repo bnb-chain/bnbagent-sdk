@@ -3,8 +3,8 @@
 The ABI JSONs are language-neutral (shared with the TypeScript SDK), so the
 single source of truth lives at the repo-root ``abis/``. At build time
 ``python/hatch_build.py`` vendors a copy into ``bnbagent/abis/`` so an installed
-wheel/sdist ships them. This loader reads that in-package copy when present and
-falls back to the repo-root ``abis/`` for an editable / source checkout.
+wheel/sdist ships them. A source checkout reads the repo-root single source of
+truth first; an installed distribution falls back to its in-package copy.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ _REPO_ABIS = Path(__file__).resolve().parents[3] / "abis"
 
 
 def _abis_dir() -> Path:
-    return _PKG_ABIS if _PKG_ABIS.is_dir() else _REPO_ABIS
+    return _REPO_ABIS if _REPO_ABIS.is_dir() else _PKG_ABIS
 
 
 def load_abi(name: str) -> list:

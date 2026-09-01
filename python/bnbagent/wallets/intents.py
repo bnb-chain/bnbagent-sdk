@@ -35,6 +35,7 @@ ERC8004_SET_METADATA = "erc8004.set_metadata"
 ERC8004_SET_AGENT_URI = "erc8004.set_agent_uri"
 
 ERC8183_CREATE_JOB = "erc8183.create_job"
+ERC8183_CREATE_JOB_WITH_TOKEN = "erc8183.create_job_with_token"
 ERC8183_SET_PROVIDER = "erc8183.set_provider"
 ERC8183_SET_BUDGET = "erc8183.set_budget"
 ERC8183_FUND = "erc8183.fund"

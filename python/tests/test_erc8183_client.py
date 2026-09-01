@@ -4,17 +4,19 @@ Covers:
 - Construction via ``(wallet_provider, network)``; ``NetworkConfig`` accepted directly.
 - Wallet-provider requirement (raw private keys never reach the facade).
 - Lazy payment-token caching.
-- Fund approval floor strategy.
+- Job-token-authoritative funding and exact-by-default approvals.
 - create_job defaults Router as evaluator + hook.
 """
 
 from unittest.mock import MagicMock, patch
 
 import pytest
+from web3 import Web3
 
 from bnbagent.config import NetworkConfig
 from bnbagent.erc8183 import ERC8183Client
 from bnbagent.erc8183.client import DEFAULT_APPROVE_FLOOR_UNITS
+from bnbagent.networks import AssetId, get_asset
 from tests.conftest import FAKE_ADDRESS
 
 FAKE_COMMERCE = "0x" + "aa" * 20
@@ -120,8 +122,9 @@ class TestInit:
 class TestTokenCache:
     def test_payment_token_caches(self, facade):
         facade.commerce.payment_token.return_value = FAKE_TOKEN
-        assert facade.payment_token == FAKE_TOKEN
-        assert facade.payment_token == FAKE_TOKEN
+        expected = Web3.to_checksum_address(FAKE_TOKEN)
+        assert facade.payment_token == expected
+        assert facade.payment_token == expected
         facade.commerce.payment_token.assert_called_once()
 
 
@@ -160,7 +163,7 @@ class TestVerifyNegotiationQuote:
                 "terms": {
                     "price": "1000",
                     "currency": "0x" + "11" * 20,
-                }
+                },
             },
             "chain_id": 12345,
         }
@@ -277,52 +280,93 @@ class TestRegisterJob:
 
 
 class TestFund:
-    """Approval-floor strategy in ``ERC8183Client.fund``."""
+    """Job-token-authoritative funding and bounded approval behavior."""
 
-    def _prime(self, facade, current_allowance=0, decimals=18):
+    def _prime(self, facade, current_allowance=0, token=FAKE_TOKEN):
+        checksum_token = Web3.to_checksum_address(token)
         facade.commerce.payment_token.return_value = FAKE_TOKEN
-        facade._payment_token_address = FAKE_TOKEN
+        facade.commerce.job_payment_token.return_value = token
+        facade._payment_token_address = Web3.to_checksum_address(FAKE_TOKEN)
 
         erc20 = MagicMock()
         erc20.allowance.return_value = current_allowance
-        erc20.decimals.return_value = decimals
-        erc20.symbol.return_value = "USDT"
         erc20.approve.return_value = {"status": 1}
-        facade._erc20 = erc20
+        facade._erc20_clients[checksum_token] = erc20
         facade.commerce.fund.return_value = {"status": 1}
         return erc20
 
     def test_skips_approve_when_allowance_sufficient(self, facade):
         erc20 = self._prime(facade, current_allowance=10_000)
         facade.fund(job_id=1, amount=5_000)
+        facade.commerce.job_payment_token.assert_called_once_with(1)
         erc20.approve.assert_not_called()
         facade.commerce.fund.assert_called_once_with(1, 5_000)
 
-    def test_approves_default_floor_when_amount_below_floor(self, facade):
-        erc20 = self._prime(facade, current_allowance=0, decimals=6)
-        facade.fund(job_id=1, amount=1 * 10**6)
-        erc20.approve.assert_called_once_with(FAKE_COMMERCE, DEFAULT_APPROVE_FLOOR_UNITS * 10**6)
-
-    def test_approves_exact_amount_when_above_default_floor(self, facade):
-        erc20 = self._prime(facade, current_allowance=0, decimals=6)
-        big = 500 * 10**6
-        facade.fund(job_id=1, amount=big)
-        erc20.approve.assert_called_once_with(FAKE_COMMERCE, big)
-
-    def test_approve_floor_zero_means_exact(self, facade):
-        erc20 = self._prime(facade, current_allowance=0, decimals=6)
-        facade.fund(job_id=1, amount=5, approve_floor=0)
+    def test_default_approval_is_exact_amount(self, facade):
+        erc20 = self._prime(facade, current_allowance=0)
+        facade.fund(job_id=1, amount=5)
         erc20.approve.assert_called_once_with(FAKE_COMMERCE, 5)
 
-    def test_approve_floor_custom(self, facade):
-        erc20 = self._prime(facade, current_allowance=0, decimals=6)
+    def test_explicit_legacy_approve_floor_is_opt_in(self, facade):
+        assert DEFAULT_APPROVE_FLOOR_UNITS == 100
+        erc20 = self._prime(facade, current_allowance=0)
         facade.fund(job_id=1, amount=5, approve_floor=1_000)
         erc20.approve.assert_called_once_with(FAKE_COMMERCE, 1_000)
 
-    def test_approve_floor_negative_rejected(self, facade):
-        self._prime(facade, current_allowance=0)
-        with pytest.raises(ValueError, match="approve_floor must be >= 0"):
-            facade.fund(job_id=1, amount=5, approve_floor=-1)
+    def test_negative_amount_rejected_before_any_chain_or_funding_action(self, facade):
+        with pytest.raises(ValueError, match="amount must be >= 0"):
+            facade.fund(job_id=1, amount=-1)
+        facade.commerce.job_payment_token.assert_not_called()
+        facade.commerce.fund.assert_not_called()
+
+    def test_expected_token_mismatch_fails_typed_before_erc20_or_fund(self, facade):
+        erc20 = self._prime(facade, current_allowance=0)
+        expected = "0x" + "11" * 20
+
+        with pytest.raises(Exception) as exc_info:
+            facade.fund(job_id=7, amount=5, expected_token=expected)
+
+        error = exc_info.value
+        assert type(error).__name__ == "JobPaymentTokenMismatchError"
+        assert error.job_id == 7
+        assert error.expected_token == Web3.to_checksum_address(expected)
+        assert error.actual_token == Web3.to_checksum_address(FAKE_TOKEN)
+        erc20.balance_of.assert_not_called()
+        erc20.allowance.assert_not_called()
+        erc20.approve.assert_not_called()
+        facade.commerce.fund.assert_not_called()
+
+    def test_expected_asset_id_is_resolved_for_current_chain(self, facade):
+        import dataclasses
+
+        facade.network = dataclasses.replace(facade.network, chain_id=97)
+        token = get_asset(97, AssetId.TEST_USDC).address
+        erc20 = self._prime(facade, current_allowance=10, token=token)
+
+        facade.fund(job_id=3, amount=5, expected_token=AssetId.TEST_USDC)
+
+        erc20.allowance.assert_called_once_with(facade.address, FAKE_COMMERCE)
+        facade.commerce.fund.assert_called_once_with(3, 5)
+
+    def test_job_bound_non_default_token_is_authoritative(self, facade):
+        token = "0x" + "12" * 20
+        erc20 = self._prime(facade, current_allowance=0, token=token)
+
+        facade.fund(job_id=2, amount=99)
+
+        erc20.allowance.assert_called_once_with(facade.address, FAKE_COMMERCE)
+        erc20.approve.assert_called_once_with(FAKE_COMMERCE, 99)
+        facade.commerce.payment_token.assert_not_called()
+
+    def test_zero_amount_reads_job_token_but_skips_allowance_and_approve(self, facade):
+        erc20 = self._prime(facade, current_allowance=0)
+
+        facade.fund(job_id=1, amount=0)
+
+        facade.commerce.job_payment_token.assert_called_once_with(1)
+        erc20.allowance.assert_not_called()
+        erc20.approve.assert_not_called()
+        facade.commerce.fund.assert_called_once_with(1, 0)
 
     def test_bundled_approval_wallet_skips_allowance_management(self, facade):
         """fund_bundles_approval=True (literally) → straight to commerce.fund;
@@ -330,7 +374,8 @@ class TestFund:
         own fund operation bundles approve+deposit, e.g. twak)."""
         erc20 = self._prime(facade, current_allowance=0)
         facade._wallet_provider.fund_bundles_approval = True
-        facade.fund(job_id=1, amount=5_000)
+        facade.fund(job_id=1, amount=5_000, expected_token=FAKE_TOKEN)
+        facade.commerce.job_payment_token.assert_called_once_with(1)
         erc20.allowance.assert_not_called()
         erc20.approve.assert_not_called()
         facade.commerce.fund.assert_called_once_with(1, 5_000)
@@ -401,9 +446,7 @@ class TestReads:
 
     def test_get_job_funded_block_queries_signed_window(self, facade):
         facade.w3.eth.block_number = 10
-        facade.w3.eth.get_block.side_effect = lambda number: {
-            "timestamp": int(number) * 10
-        }
+        facade.w3.eth.get_block.side_effect = lambda number: {"timestamp": int(number) * 10}
         facade.commerce.get_job_funded_events.return_value = [{"blockNumber": 6}]
 
         block = facade.get_job_funded_block(
@@ -421,9 +464,7 @@ class TestReads:
 
     def test_get_job_funded_block_fails_closed_without_event(self, facade):
         facade.w3.eth.block_number = 10
-        facade.w3.eth.get_block.side_effect = lambda number: {
-            "timestamp": int(number) * 10
-        }
+        facade.w3.eth.get_block.side_effect = lambda number: {"timestamp": int(number) * 10}
         facade.commerce.get_job_funded_events.return_value = []
 
         assert (

@@ -13,7 +13,8 @@ Public surface:
 
 from __future__ import annotations
 
-from .client import DEFAULT_APPROVE_FLOOR_UNITS, ERC8183Client
+from ..exceptions import JobPaymentTokenMismatchError
+from .client import DEFAULT_APPROVE_FLOOR_UNITS, ERC8183Client, TokenMetadata
 from .commerce import CommerceClient
 from .constants import get_erc8183_config
 from .job_ops import ERR_QUOTE_INVALID, ERC8183JobOps, funded_job_watcher
@@ -47,6 +48,8 @@ __all__ = [
     "RouterClient",
     "PolicyClient",
     "DEFAULT_APPROVE_FLOOR_UNITS",
+    "TokenMetadata",
+    "JobPaymentTokenMismatchError",
     # Types
     "Job",
     "JobStatus",

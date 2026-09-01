@@ -14,7 +14,7 @@ The `erc8183` module implements **ERC-8183**, an agentic commerce stack built on
 ERC8183Client (facade)  ──┬──►  CommerceClient  ──►  AgenticCommerceUpgradeable
                        ├──►  RouterClient    ──►  EvaluatorRouterUpgradeable
                        ├──►  PolicyClient    ──►  OptimisticPolicy
-                       └──►  MinimalERC20    ──►  Payment token (immutable on kernel)
+                       └──►  MinimalERC20    ──►  Per-job payment token
 ```
 
 Most callers only use `ERC8183Client`. The sub-clients are exposed as attributes for advanced workflows (direct `admin` calls, batch reads, etc.).
@@ -52,20 +52,43 @@ job_id = res["jobId"]
 
 erc8183.register_job(job_id)            # bind OptimisticPolicy
 erc8183.set_budget(job_id, budget)
-erc8183.fund(job_id, budget)            # floor-based auto-approval
+erc8183.fund(job_id, budget)            # exact auto-approval for the job token
 
 # ... provider submits, dispute window elapses ...
 erc8183.settle(job_id)
 assert erc8183.get_job_status(job_id) == JobStatus.COMPLETED
 ```
 
-Fund approval strategy (`fund(..., approve_floor=...)`):
+`fund` 授权策略：
 
-- `None` (default) → approve `max(amount, 100 * 10**decimals)` (stablecoin-friendly floor; residual allowance bounded).
-- `0` → approve exactly `amount`.
-- `X` → approve `max(amount, X)`.
+- 默认只授权 job 预算的精确 `amount`；已有 allowance 足够时不发送 approve。
+- `approve_floor=X` 是显式的旧行为 opt-in，授权 `max(amount, X)`；不会再默认授权 100 个 token。
+- `amount == 0` 仍会读取并核对 job token，但不会读取 allowance 或发送 approve。
 
-If the existing allowance already covers `amount`, no approve is sent.
+### 多资产 job（U / USDC / USDT）
+
+`AssetId` 是 SDK 内部身份；`USDC` / `USDT` 这类 UI symbol 不会在客户端层静默解析。
+创建新 job 时可传当前网络的 canonical AssetId 或 catalog 地址：
+
+```python
+from bnbagent.networks import AssetId
+
+result = erc8183.create_job_with_token(
+    asset=AssetId.TEST_USDC,
+    provider=provider_addr,
+    expired_at=expired_at,
+    description="task",
+)
+job_id = result["jobId"]
+erc8183.register_job(job_id)
+erc8183.set_budget(job_id, 1_000_000)  # TEST_USDC: 6 decimals
+erc8183.fund(job_id, 1_000_000, expected_token=AssetId.TEST_USDC)
+```
+
+`fund` 每次都先读取链上 `jobPaymentToken(jobId)`。若 `expected_token` 与链上值不一致，
+会在 balance、allowance、approve 或 fund 之前抛出 `JobPaymentTokenMismatchError`。
+自广播钱包也必须先通过此校验。直接地址可用于读取链上已绑定的自定义 token metadata；
+catalog AssetId 只能在其登记网络中解析。
 
 #### Custom networks / RPCs
 
@@ -143,9 +166,10 @@ High-level facade. Most useful methods:
 | Method | Purpose |
 | --- | --- |
 | `create_job(...)` | Create a job; defaults `evaluator` and `hook` to the Router. Returns `{jobId, transactionHash, receipt}`. |
+| `create_job_with_token(asset=..., ...)` | 使用当前网络 canonical AssetId 或 catalog 地址创建 token-bound job。 |
 | `register_job(job_id, policy=None)` | Bind the configured policy (or override) to a job on the Router. |
 | `set_budget(job_id, amount)` | Set the escrow amount. Client **or** provider, any amount - `amount == 0` is a zero-price (free) job: `fund(0)` moves no tokens and the provider verifies the funded budget against its signed quote before working. |
-| `fund(job_id, amount, *, approve_floor=None)` | Approves (if needed) and funds. See floor strategy above. `amount == 0` (a zero-price job) moves no tokens and skips the ERC-20 approve entirely. |
+| `fund(job_id, amount, *, expected_token=None, approve_floor=None)` | 先核对链上 job token，默认精确授权并入金；`approve_floor` 仅为显式旧行为 opt-in。 |
 | `submit(job_id, deliverable, opt_params)` | Provider submits 32-byte `deliverable` (`DeliverableManifest.manifest_hash()`, keccak256 of canonical manifest JSON); `opt_params` dict (must contain `deliverable_url`) is serialized to JSON and forwarded as `optParams`. |
 | `cancel_open(job_id, reason=...)` | Client cancels while OPEN; no escrow moved. |
 | `claim_refund(job_id)` | Refund via expiry. Non-pausable, non-hookable. |
@@ -159,13 +183,15 @@ High-level facade. Most useful methods:
 | `inflight_job_count()` | Number of jobs the Router currently tracks as in-flight. |
 | `dispute_quorum_snapshot(job_id)` | Reject-quorum snapshotted at `dispute()` time. |
 
-Token helpers: `payment_token` (cached address), `token_decimals()`, `token_symbol()`, `token_balance(address=None)`, `token_allowance(owner, spender)`, `approve_payment_token(spender, amount)`.
+默认 token 兼容 helper：`payment_token`、`token_decimals()`、`token_symbol()`、`token_balance(address=None)`、`token_allowance(owner, spender)`、`approve_payment_token(spender, amount)`。
+
+多 token helper：`job_payment_token(job_id)`、`is_payment_token_supported(token)`、`token_metadata(token)`、`token_balance_for(token, address=None)`、`token_allowance_for(token, owner, spender)`、`approve_token(token, spender, amount)`。所有地址返回 checksum 格式，metadata 与 ERC-20 client 按 checksum address 缓存。
 
 Sub-clients: `erc8183.commerce`, `erc8183.router`, `erc8183.policy` (instances of `CommerceClient`, `RouterClient`, `PolicyClient`).
 
 ### `CommerceClient`
 
-1:1 wrapper over `AgenticCommerceUpgradeable`: `create_job`, `set_provider`, `set_budget`, `fund`, `submit`, `complete`, `reject`, `claim_refund`, `get_job`, `payment_token`, `platform_fee_bp`, `platform_treasury`, `get_jobs_batch` (Multicall3), plus event helpers (`get_job_funded_events`, `get_job_created_events`, `get_deliverable_url`).
+1:1 wrapper over `AgenticCommerceUpgradeable`: `create_job`, `create_job_with_token`, `set_provider`, `set_budget`, `fund`, `submit`, `complete`, `reject`, `claim_refund`, `get_job`, `payment_token`, `job_payment_token`, `is_payment_token_supported`, `platform_fee_bp`, `platform_treasury`, `get_jobs_batch` (Multicall3), plus event helpers (`get_job_funded_events`, `get_job_created_events`, `get_deliverable_url`).
 
 ### `RouterClient`
 
