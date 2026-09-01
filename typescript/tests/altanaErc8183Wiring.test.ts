@@ -106,6 +106,11 @@ const PAYMENT_TOKEN_SELECTOR = encodeFunctionData({
   functionName: "paymentToken",
   args: [],
 }).slice(0, 10);
+const JOB_PAYMENT_TOKEN_SELECTOR = encodeFunctionData({
+  abi: agenticCommerceAbi,
+  functionName: "jobPaymentToken",
+  args: [7n],
+}).slice(0, 10);
 const ALLOWANCE_SELECTOR = encodeFunctionData({
   abi: erc20Abi,
   functionName: "allowance",
@@ -161,6 +166,13 @@ function makeMock(
         return encodeFunctionResult({
           abi: agenticCommerceAbi,
           functionName: "paymentToken",
+          result: FAKE_TOKEN,
+        });
+      }
+      if (data.toLowerCase().startsWith(JOB_PAYMENT_TOKEN_SELECTOR)) {
+        return encodeFunctionResult({
+          abi: agenticCommerceAbi,
+          functionName: "jobPaymentToken",
           result: FAKE_TOKEN,
         });
       }
@@ -224,11 +236,13 @@ describe("ERC8183Client over AltanaWalletProvider", () => {
     // Self-broadcasting all the way down: nothing was locally signed or
     // broadcast. The executor reads the immutable payment token plus the
     // pre-provisioned Commerce allowance, but never mutates that allowance.
+    // The facade first validates the authoritative job token; the current
+    // Altana executor then performs its existing default-token allowance read.
     expect(
       mock.calls.filter((c) => c.method === "eth_sendRawTransaction"),
     ).toHaveLength(0);
     const ethCalls = mock.calls.filter((c) => c.method === "eth_call");
-    expect(ethCalls).toHaveLength(2); // paymentToken + allowance
+    expect(ethCalls).toHaveLength(3); // jobPaymentToken + paymentToken + allowance
 
     // One relay submission carrying fund only — no session-key approve.
     expect(sdkMocks.executeMock).toHaveBeenCalledTimes(1);

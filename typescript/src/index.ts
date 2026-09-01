@@ -43,6 +43,7 @@ export {
   NetworkError,
   RpcRangeLimitError,
   JobError,
+  JobPaymentTokenMismatchError,
   NegotiationError,
   TransactionPendingError,
   RelaySubmissionUnverifiedError,
@@ -83,6 +84,7 @@ export { TurnkeyWalletProvider } from "./wallets/turnkey/index.js";
 
 // ERC-8183 — only essential public API
 export { ERC8183Client } from "./erc8183/client.js";
+export type { TokenMetadata, TokenReference } from "./erc8183/client.js";
 export { JobStatus, Verdict } from "./erc8183/types.js";
 
 // Signing policy

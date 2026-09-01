@@ -21,6 +21,7 @@ export {
   CommerceClient,
   type CommerceClientOpts,
   type CreateJobOpts,
+  type CreateJobWithTokenOpts,
   type CreateJobResult,
   type JobCreatedEvent,
   type JobFundedEvent,
@@ -43,11 +44,14 @@ export {
   ERC8183_PAYMASTER_CHAIN_IDS,
   ERC8183Client,
   type CreateJobFacadeOpts,
+  type CreateJobWithTokenFacadeOpts,
   type ERC8183ClientCreateOpts,
   type FundOpts,
   type GetJobFundedBlockOpts,
   type GetDeliverableUrlFacadeOpts,
   type SubmitOptParams,
+  type TokenMetadata,
+  type TokenReference,
 } from "./client.js";
 export { ERC8183Config, type ERC8183ConfigOpts } from "./config.js";
 export {
@@ -106,3 +110,4 @@ export {
   type VerifyQuoteSignatureOpts,
   verifyQuoteSignature,
 } from "./quoteVerify.js";
+export { JobPaymentTokenMismatchError } from "../errors.js";
