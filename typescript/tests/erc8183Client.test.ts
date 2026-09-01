@@ -93,11 +93,9 @@ vi.mock("../src/core/paymaster.js", async (importOriginal) => {
   return { ...actual, Paymaster: PaymasterMock };
 });
 
-const {
-  ERC8183Client,
-  DEFAULT_APPROVE_FLOOR_UNITS,
-  ERC8183_PAYMASTER_CHAIN_IDS,
-} = await import("../src/erc8183/client.js");
+const { ERC8183Client, ERC8183_PAYMASTER_CHAIN_IDS } = await import(
+  "../src/erc8183/client.js"
+);
 
 function fakeNetwork(overrides: Partial<NetworkConfig> = {}): NetworkConfig {
   return {
@@ -714,7 +712,7 @@ describe("ERC8183Client.registerJob", () => {
   });
 });
 
-describe("ERC8183Client.fund: approval floor strategy", () => {
+describe("ERC8183Client.fund: job-token approval strategy", () => {
   async function primedClient(opts: {
     allowance?: bigint;
     decimals?: number;
@@ -803,7 +801,7 @@ describe("ERC8183Client.fund: approval floor strategy", () => {
     expect(decoded.args).toEqual([FAKE_COMMERCE, 1n * 10n ** 6n]);
   });
 
-  it("approves the exact amount when it is above the default floor", async () => {
+  it("approves a large amount exactly by default", async () => {
     const { client, wallet } = await primedClient({
       allowance: 0n,
       decimals: 6,

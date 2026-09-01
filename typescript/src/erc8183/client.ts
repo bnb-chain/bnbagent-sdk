@@ -63,10 +63,11 @@ import {
 } from "./types.js";
 
 /**
- * Default floor for auto-approval in {@link ERC8183Client.fund}, expressed
- * in whole token units. Multiplied by `10 ** tokenDecimals()` at call time.
- * Assumes a stablecoin payment token; non-stable deployments should pass
- * `approveFloor: 0n` (exact) or a custom floor.
+ * Legacy convenience value for callers constructing an explicit
+ * `approveFloor`. {@link ERC8183Client.fund} defaults to exact approval and
+ * never applies this constant automatically. `approveFloor` is an atomic-unit
+ * `bigint`; callers wanting a floor of 100 whole tokens must multiply this
+ * value by `10n ** BigInt(tokenDecimals)` themselves.
  */
 export const DEFAULT_APPROVE_FLOOR_UNITS = 100n;
 
