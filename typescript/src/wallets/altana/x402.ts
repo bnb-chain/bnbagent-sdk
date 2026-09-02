@@ -183,7 +183,7 @@ function exactPermit2RouteMatches(
   >,
   trustedSpenders: ReadonlySet<string>,
 ): boolean {
-  const { option, raw } = candidate;
+  const { raw } = candidate;
   const extra =
     typeof raw.extra === "object" &&
     raw.extra !== null &&
@@ -191,16 +191,25 @@ function exactPermit2RouteMatches(
       ? (raw.extra as Record<string, unknown>)
       : null;
   if (extra === null) return false;
+  const rawAmount = raw.amount ?? raw.maxAmountRequired;
+  if (
+    (raw.amount !== undefined && raw.maxAmountRequired !== undefined) ||
+    typeof rawAmount !== "string" ||
+    !/^[1-9]\d*$/.test(rawAmount)
+  ) {
+    return false;
+  }
   try {
     const spender = getAddress(String(extra.spenderAddress ?? ""));
     return (
-      option.scheme === expected.scheme &&
-      option.network === expected.network &&
-      getAddress(option.asset) === getAddress(expected.asset) &&
-      option.amount === expected.amount &&
-      getAddress(option.payTo) === getAddress(expected.payTo) &&
-      option.maxTimeoutSeconds === expected.maxTimeoutSeconds &&
-      option.transferMethod === expected.transferMethod &&
+      raw.scheme === expected.scheme &&
+      raw.network === expected.network &&
+      typeof raw.asset === "string" &&
+      getAddress(raw.asset) === getAddress(expected.asset) &&
+      BigInt(rawAmount) === expected.amount &&
+      typeof raw.payTo === "string" &&
+      getAddress(raw.payTo) === getAddress(expected.payTo) &&
+      raw.maxTimeoutSeconds === expected.maxTimeoutSeconds &&
       extra.assetTransferMethod === expected.transferMethod &&
       extra.name === expected.name &&
       extra.version === expected.version &&
@@ -210,6 +219,61 @@ function exactPermit2RouteMatches(
   } catch {
     return false;
   }
+}
+
+/** Stable, lossless-for-JSON encoding used only to compare resource bindings. */
+function canonicalJson(value: unknown): string | null {
+  if (value === null) return "null";
+  if (typeof value === "string" || typeof value === "boolean") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? JSON.stringify(value) : null;
+  }
+  if (Array.isArray(value)) {
+    const encoded = value.map(canonicalJson);
+    return encoded.every((entry): entry is string => entry !== null)
+      ? `[${encoded.join(",")}]`
+      : null;
+  }
+  if (typeof value !== "object" || value === null) return null;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return null;
+  const entries: string[] = [];
+  for (const key of Object.keys(value).sort()) {
+    const encoded = canonicalJson((value as Record<string, unknown>)[key]);
+    if (encoded === null) return null;
+    entries.push(`${JSON.stringify(key)}:${encoded}`);
+  }
+  return `{${entries.join(",")}}`;
+}
+
+function exactResourceMatches(
+  actual: unknown,
+  expected: ExpectedX402Route["resource"],
+): boolean {
+  const resourceHasValidKnownFields = (value: unknown): boolean => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return false;
+    }
+    const record = value as Record<string, unknown>;
+    return (
+      typeof record.url === "string" &&
+      record.url.length > 0 &&
+      (record.description === undefined ||
+        typeof record.description === "string") &&
+      (record.mimeType === undefined || typeof record.mimeType === "string")
+    );
+  };
+  if (
+    !resourceHasValidKnownFields(actual) ||
+    !resourceHasValidKnownFields(expected)
+  ) {
+    return false;
+  }
+  const actualCanonical = canonicalJson(actual);
+  const expectedCanonical = canonicalJson(expected);
+  return actualCanonical !== null && actualCanonical === expectedCanonical;
 }
 
 /** Constructor options for {@link AltanaX402Payer}. */
@@ -423,6 +487,14 @@ export class AltanaX402Payer implements X402Payer {
     ) {
       throw new X402NoPayableRouteError("invalid expected x402 route binding");
     }
+    if (
+      expected.resource.url !== url ||
+      !exactResourceMatches(expected.resource, expected.resource)
+    ) {
+      throw new X402NoPayableRouteError(
+        "invalid expected x402 resource binding",
+      );
+    }
     let trustedSpenders: Set<string>;
     try {
       trustedSpenders = new Set(
@@ -478,9 +550,12 @@ export class AltanaX402Payer implements X402Payer {
     };
     const first = await this.#fetch(url, init);
     if (first.status !== 402) {
-      await first.text();
+      const response = await parseBody(first);
+      if (first.ok) {
+        return { paid: false, cacheHit: true, response };
+      }
       throw new X402NoPayableRouteError(
-        `exact x402 request expected HTTP 402, got ${first.status}`,
+        `exact x402 request expected HTTP 402 or 2xx, got ${first.status}`,
       );
     }
     const parsed = await parseBody(first);
@@ -497,6 +572,11 @@ export class AltanaX402Payer implements X402Payer {
     if (challengeBody.x402Version !== expected.x402Version) {
       throw new X402NoPayableRouteError(
         "x402 challenge version does not match the exact route binding",
+      );
+    }
+    if (!exactResourceMatches(challengeBody.resource, expected.resource)) {
+      throw new X402NoPayableRouteError(
+        "x402 challenge resource does not match the exact route binding",
       );
     }
     const { routes } = parseX402Challenge(url, challengeBody);
@@ -537,6 +617,7 @@ export class AltanaX402Payer implements X402Payer {
       }
       const transaction = transactionFromResponse(paid);
       return {
+        paid: true,
         success: true,
         response: await parseBody(paid),
         amount: expected.amount,

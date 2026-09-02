@@ -11,7 +11,7 @@
 
 import { decodeFunctionData, getAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { erc20Abi } from "../src/abis/erc20.js";
 import {
   PAYMENT_SIGNATURE_HEADER,
@@ -371,6 +371,11 @@ describe("AltanaX402Payer.request", () => {
 });
 
 describe("AltanaX402Payer.requestExact", () => {
+  const exactResource = {
+    url: "https://api.example/paid",
+    description: "paid",
+    mimeType: "application/json",
+  };
   const exactEntry = {
     scheme: "exact",
     network: "eip155:56" as const,
@@ -399,12 +404,13 @@ describe("AltanaX402Payer.requestExact", () => {
     version: "1",
     spenderAddress: B402_PROXY,
     trustedSpenders: [B402_PROXY],
+    resource: exactResource,
   };
 
   it("validates and signs one exact Permit2 route from the same challenge", async () => {
     const challenge = {
       x402Version: 2,
-      resource: { url: "https://api.example/paid", description: "paid" },
+      resource: exactResource,
       accepts: [exactEntry],
     };
     const { impl } = fetchQueue(json402(challenge), jsonOk({ data: "paid" }));
@@ -416,6 +422,7 @@ describe("AltanaX402Payer.requestExact", () => {
     });
 
     expect(result).toMatchObject({
+      paid: true,
       success: true,
       amount: 5000n,
       asset: USDC,
@@ -424,6 +431,9 @@ describe("AltanaX402Payer.requestExact", () => {
       transferMethod: "permit2-exact",
       spenderAddress: B402_PROXY,
     });
+    if (result.paid && result.transferMethod === "permit2-exact") {
+      expectTypeOf(result.spenderAddress).toEqualTypeOf<string>();
+    }
     expect(sdkMocks.signX402PaymentMock).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -437,6 +447,8 @@ describe("AltanaX402Payer.requestExact", () => {
   it.each([
     ["amount", { amount: "5001" }],
     ["scheme", { scheme: "permit2-exact" }],
+    ["missing scheme", { scheme: undefined }],
+    ["unsafe numeric amount", { amount: 5000 }],
     ["x402Version", {}, 1],
     ["timeout", { maxTimeoutSeconds: 301 }],
     [
@@ -458,7 +470,7 @@ describe("AltanaX402Payer.requestExact", () => {
       const { impl } = fetchQueue(
         json402({
           x402Version: version,
-          resource: { url: "https://api.example/paid" },
+          resource: exactResource,
           accepts: [{ ...exactEntry, ...entryPatch }],
         }),
       );
@@ -473,6 +485,87 @@ describe("AltanaX402Payer.requestExact", () => {
       expect(sdkMocks.signX402PaymentMock).not.toHaveBeenCalled();
     },
   );
+
+  it("rejects any signed resource drift before signing", async () => {
+    const { impl } = fetchQueue(
+      json402({
+        x402Version: 2,
+        resource: { ...exactResource, description: "drifted" },
+        accepts: [exactEntry],
+      }),
+    );
+    const payer = sessionProvider().makeX402Payer({ fetchImpl: impl });
+
+    await expect(
+      payer.requestExact("https://api.example/paid", {
+        expectedRoute,
+        maxPayment: 5000n,
+      }),
+    ).rejects.toThrow(X402NoPayableRouteError);
+    expect(sdkMocks.signX402PaymentMock).not.toHaveBeenCalled();
+  });
+
+  it.each([false, 0, ""])(
+    "returns a verbatim paid:false result for an unchallenged 2xx body %#",
+    async (body) => {
+      const response = new Response(
+        typeof body === "string" ? body : JSON.stringify(body),
+        { status: 200 },
+      );
+      const { impl } = fetchQueue(response);
+      const payer = sessionProvider().makeX402Payer({ fetchImpl: impl });
+
+      const result = await payer.requestExact("https://api.example/paid", {
+        expectedRoute,
+        maxPayment: 5000n,
+      });
+
+      expect(result).toEqual({ paid: false, cacheHit: true, response: body });
+      expect(sdkMocks.signX402PaymentMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not reserve session budget for a paid:false cache hit", async () => {
+    const { impl } = fetchQueue(
+      jsonOk({ cached: true }),
+      json402({
+        x402Version: 2,
+        resource: exactResource,
+        accepts: [exactEntry],
+      }),
+      jsonOk({ paid: true }),
+    );
+    const payer = sessionProvider().makeX402Payer({
+      fetchImpl: impl,
+      sessionBudget: { [USDC]: 5000n },
+    });
+
+    await expect(
+      payer.requestExact("https://api.example/paid", {
+        expectedRoute,
+        maxPayment: 5000n,
+      }),
+    ).resolves.toMatchObject({ paid: false, cacheHit: true });
+    await expect(
+      payer.requestExact("https://api.example/paid", {
+        expectedRoute,
+        maxPayment: 5000n,
+      }),
+    ).resolves.toMatchObject({ paid: true, amount: 5000n });
+  });
+
+  it("rejects an unchallenged non-2xx response", async () => {
+    const { impl } = fetchQueue(new Response("down", { status: 503 }));
+    const payer = sessionProvider().makeX402Payer({ fetchImpl: impl });
+
+    await expect(
+      payer.requestExact("https://api.example/paid", {
+        expectedRoute,
+        maxPayment: 5000n,
+      }),
+    ).rejects.toThrow(/expected HTTP 402 or 2xx, got 503/);
+    expect(sdkMocks.signX402PaymentMock).not.toHaveBeenCalled();
+  });
 
   it("rejects an expected proxy outside the explicit trust root", async () => {
     const { impl } = fetchQueue(

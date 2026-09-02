@@ -138,6 +138,22 @@ export interface X402PaymentResult {
 
 export type X402TransferMethod = "eip3009" | "permit2-exact";
 
+export type X402ResourceValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly X402ResourceValue[]
+  | { readonly [key: string]: X402ResourceValue };
+
+/** Complete resource object copied from the caller-verified challenge. */
+export interface ExpectedX402Resource {
+  readonly url: string;
+  readonly description?: string;
+  readonly mimeType?: string;
+  readonly [key: string]: X402ResourceValue | undefined;
+}
+
 interface ExpectedX402RouteBase {
   readonly x402Version: 2;
   readonly scheme: "exact";
@@ -146,6 +162,8 @@ interface ExpectedX402RouteBase {
   readonly amount: bigint;
   readonly payTo: string;
   readonly maxTimeoutSeconds: number;
+  /** Every JSON field is bound; key order is ignored during comparison. */
+  readonly resource: ExpectedX402Resource;
 }
 
 export type ExpectedX402Route =
@@ -162,15 +180,36 @@ export type ExpectedX402Route =
       readonly trustedSpenders: readonly string[];
     });
 
-export interface X402ExactPaymentResult extends X402PaymentResult {
+export interface X402ExactNoPaymentResult {
+  readonly paid: false;
+  readonly cacheHit: true;
+  /** The unchallenged successful endpoint response body, verbatim. */
+  readonly response: unknown;
+}
+
+interface X402ExactPaidResultBase extends X402PaymentResult {
+  readonly paid: true;
   readonly success: true;
   readonly amount: bigint;
   readonly asset: string;
   readonly network: `eip155:${number}`;
   readonly payTo: string;
-  readonly transferMethod: X402TransferMethod;
-  readonly spenderAddress?: string;
 }
+
+export interface X402ExactEip3009PaymentResult extends X402ExactPaidResultBase {
+  readonly transferMethod: "eip3009";
+  readonly spenderAddress?: never;
+}
+
+export interface X402ExactPermit2PaymentResult extends X402ExactPaidResultBase {
+  readonly transferMethod: "permit2-exact";
+  readonly spenderAddress: string;
+}
+
+export type X402ExactPaymentResult =
+  | X402ExactNoPaymentResult
+  | X402ExactEip3009PaymentResult
+  | X402ExactPermit2PaymentResult;
 
 export interface X402ExactRequestOptions {
   readonly expectedRoute: ExpectedX402Route;
