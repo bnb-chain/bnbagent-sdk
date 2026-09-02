@@ -42,6 +42,15 @@ class EIP3009Domain:
 
 
 @dataclass(frozen=True)
+class B402Kind:
+    """Exact B402 scheme identity for one transfer method."""
+
+    method: B402TransferMethod
+    name: str
+    version: str
+
+
+@dataclass(frozen=True)
 class PaymentAsset:
     """Immutable metadata for one canonical asset on one network."""
 
@@ -53,6 +62,9 @@ class PaymentAsset:
     b402_methods: tuple[B402TransferMethod, ...]
     eip3009_domain: EIP3009Domain | None
     is_default: bool
+    # A trailing default preserves direct construction compatibility. An
+    # AssetCatalog still rejects missing identities for declared methods.
+    b402_kinds: tuple[B402Kind, ...] = ()
 
 
 class AssetCatalog:
@@ -75,6 +87,8 @@ class AssetCatalog:
 
             if not Web3.is_checksum_address(asset.address):
                 raise ValueError(f"catalog address is not checksummed: {asset.address}")
+
+            self._validate_b402_metadata(asset)
             address_key = (asset.chain_id, asset.address.lower())
             if address_key in by_address:
                 raise ValueError(
@@ -91,6 +105,48 @@ class AssetCatalog:
         self._by_chain: Mapping[int, tuple[PaymentAsset, ...]] = MappingProxyType(
             {chain_id: tuple(chain_assets) for chain_id, chain_assets in by_chain.items()}
         )
+
+    @staticmethod
+    def _validate_b402_metadata(asset: PaymentAsset) -> None:
+        supported_methods = frozenset(("eip3009", "permit2-exact"))
+        methods = asset.b402_methods
+        if not isinstance(methods, tuple):
+            raise ValueError("b402_methods must be an immutable tuple")
+        if len(set(methods)) != len(methods):
+            raise ValueError("duplicate B402 method in asset catalog")
+        if any(method not in supported_methods for method in methods):
+            raise ValueError("unknown B402 method in asset catalog")
+
+        kinds = asset.b402_kinds
+        if not isinstance(kinds, tuple) or any(not isinstance(kind, B402Kind) for kind in kinds):
+            raise ValueError("b402_kinds must be an immutable tuple of B402Kind")
+        kind_methods = tuple(kind.method for kind in kinds)
+        if len(set(kind_methods)) != len(kind_methods):
+            raise ValueError("duplicate B402 kind identity in asset catalog")
+        if any(kind.method not in supported_methods for kind in kinds):
+            raise ValueError("unknown B402 kind method in asset catalog")
+        if any(not kind.name or not kind.version for kind in kinds):
+            raise ValueError("B402 kind name and version must be non-empty")
+
+        missing = set(methods).difference(kind_methods)
+        if missing:
+            raise ValueError(f"missing B402 kind identity for method={sorted(missing)[0]}")
+        extra = set(kind_methods).difference(methods)
+        if extra:
+            raise ValueError(f"extra B402 kind identity for method={sorted(extra)[0]}")
+
+        eip3009_kind = next((kind for kind in kinds if kind.method == "eip3009"), None)
+        if eip3009_kind is None:
+            if asset.eip3009_domain is not None:
+                raise ValueError("EIP-3009 domain requires an eip3009 B402 method")
+        elif asset.eip3009_domain is None or (
+            eip3009_kind.name,
+            eip3009_kind.version,
+        ) != (
+            asset.eip3009_domain.name,
+            asset.eip3009_domain.version,
+        ):
+            raise ValueError("EIP-3009 kind must match eip3009_domain exactly")
 
     def _require_chain(self, chain_id: int) -> None:
         if chain_id not in self._by_chain:
@@ -142,6 +198,10 @@ ASSET_CATALOG = AssetCatalog(
             b402_methods=("eip3009", "permit2-exact"),
             eip3009_domain=_DOMAIN,
             is_default=True,
+            b402_kinds=(
+                B402Kind("eip3009", "United Stables", "1"),
+                B402Kind("permit2-exact", "United Stables", "1"),
+            ),
         ),
         PaymentAsset(
             chain_id=BSC_MAINNET_CHAIN_ID,
@@ -152,6 +212,7 @@ ASSET_CATALOG = AssetCatalog(
             b402_methods=("permit2-exact",),
             eip3009_domain=None,
             is_default=False,
+            b402_kinds=(B402Kind("permit2-exact", "USD Coin", "1"),),
         ),
         PaymentAsset(
             chain_id=BSC_MAINNET_CHAIN_ID,
@@ -162,6 +223,7 @@ ASSET_CATALOG = AssetCatalog(
             b402_methods=("permit2-exact",),
             eip3009_domain=None,
             is_default=False,
+            b402_kinds=(B402Kind("permit2-exact", "Tether USD", "1"),),
         ),
         PaymentAsset(
             chain_id=BSC_TESTNET_CHAIN_ID,
@@ -172,6 +234,7 @@ ASSET_CATALOG = AssetCatalog(
             b402_methods=("eip3009",),
             eip3009_domain=_DOMAIN,
             is_default=True,
+            b402_kinds=(B402Kind("eip3009", "United Stables", "1"),),
         ),
         PaymentAsset(
             chain_id=BSC_TESTNET_CHAIN_ID,
@@ -182,6 +245,7 @@ ASSET_CATALOG = AssetCatalog(
             b402_methods=("permit2-exact",),
             eip3009_domain=None,
             is_default=False,
+            b402_kinds=(B402Kind("permit2-exact", "USD Coin", "1"),),
         ),
         PaymentAsset(
             chain_id=BSC_TESTNET_CHAIN_ID,
@@ -192,6 +256,7 @@ ASSET_CATALOG = AssetCatalog(
             b402_methods=("permit2-exact",),
             eip3009_domain=None,
             is_default=False,
+            b402_kinds=(B402Kind("permit2-exact", "USDT Token", "1"),),
         ),
     )
 )

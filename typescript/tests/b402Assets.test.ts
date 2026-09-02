@@ -30,6 +30,7 @@ describe("resolveB402Asset", () => {
         address: catalog.address,
         decimals,
         b402Methods: methods,
+        b402Kinds: catalog.b402Kinds,
         eip3009Domain: catalog.eip3009Domain,
         isDefault,
       });
@@ -251,6 +252,7 @@ describe("requireB402WalletRoute", () => {
     const mutable = {
       ...expected,
       b402Methods: [...expected.b402Methods],
+      b402Kinds: expected.b402Kinds.map((kind) => ({ ...kind })),
       eip3009Domain:
         expected.eip3009Domain === null ? null : { ...expected.eip3009Domain },
     };
@@ -258,11 +260,17 @@ describe("requireB402WalletRoute", () => {
     const route = requireB402WalletRoute("evm-local", mutable, "eip3009");
     mutable.address = getAsset(56, AssetId.BINANCE_PEG_USDC).address;
     mutable.b402Methods.length = 0;
+    const mutableKind = mutable.b402Kinds[0];
+    if (mutableKind === undefined) {
+      throw new Error("missing fixture B402 kind");
+    }
+    mutableKind.name = "Forged Token";
 
     expect(route.expectedAsset).toEqual(expected);
     expect(route.expectedAsset).not.toBe(mutable);
     expect(route.expectedAsset.address).toBe(expected.address);
     expect(route.expectedAsset.b402Methods).toEqual(expected.b402Methods);
+    expect(route.expectedAsset.b402Kinds).toEqual(expected.b402Kinds);
     expect(Object.isFrozen(route.expectedAsset)).toBe(true);
   });
 
@@ -272,6 +280,7 @@ describe("requireB402WalletRoute", () => {
       isDefault: expected.isDefault,
       eip3009Domain: expected.eip3009Domain,
       b402Methods: expected.b402Methods,
+      b402Kinds: expected.b402Kinds,
       decimals: expected.decimals,
       address: expected.address,
       symbol: expected.symbol,
@@ -285,6 +294,22 @@ describe("requireB402WalletRoute", () => {
     expect(route.expectedAsset).toEqual(expected);
     expect(route.expectedAsset).not.toBe(fabricated);
     expect(Object.isFrozen(route.expectedAsset)).toBe(true);
+  });
+
+  it("rejects forged B402 kind identity metadata", () => {
+    const expected = resolveB402Asset(97, AssetId.TEST_USDT);
+    const originalKind = expected.b402Kinds[0];
+    if (originalKind === undefined) {
+      throw new Error("missing fixture B402 kind");
+    }
+    const forged = {
+      ...expected,
+      b402Kinds: [{ ...originalKind, name: "Tether USD" }],
+    };
+
+    expect(() =>
+      requireB402WalletRoute("altana", forged, "permit2-exact"),
+    ).toThrow(UnsupportedWalletRouteError);
   });
 });
 

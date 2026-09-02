@@ -21,6 +21,7 @@ export {
 } from "./assets.js";
 export type {
   AssetAlias,
+  B402Kind,
   B402TransferMethod,
   EIP3009Domain,
   PaymentAsset,

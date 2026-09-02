@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 from typing import Any
 
 import pytest
@@ -29,6 +29,9 @@ def _snapshot() -> list[dict[str, object]]:
                     "address": asset.address,
                     "decimals": asset.decimals,
                     "b402_methods": asset.b402_methods,
+                    "b402_kinds": tuple(
+                        (kind.method, kind.name, kind.version) for kind in asset.b402_kinds
+                    ),
                     "eip3009_domain": (
                         None
                         if asset.eip3009_domain is None
@@ -52,6 +55,10 @@ def test_asset_catalog_snapshot_matches_locked_bsc_matrix():
             "address": "0xcE24439F2D9C6a2289F741120FE202248B666666",
             "decimals": 18,
             "b402_methods": ("eip3009", "permit2-exact"),
+            "b402_kinds": (
+                ("eip3009", "United Stables", "1"),
+                ("permit2-exact", "United Stables", "1"),
+            ),
             "eip3009_domain": ("United Stables", "1"),
             "is_default": True,
         },
@@ -62,6 +69,7 @@ def test_asset_catalog_snapshot_matches_locked_bsc_matrix():
             "address": "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
             "decimals": 18,
             "b402_methods": ("permit2-exact",),
+            "b402_kinds": (("permit2-exact", "USD Coin", "1"),),
             "eip3009_domain": None,
             "is_default": False,
         },
@@ -72,6 +80,7 @@ def test_asset_catalog_snapshot_matches_locked_bsc_matrix():
             "address": "0x55d398326f99059fF775485246999027B3197955",
             "decimals": 18,
             "b402_methods": ("permit2-exact",),
+            "b402_kinds": (("permit2-exact", "Tether USD", "1"),),
             "eip3009_domain": None,
             "is_default": False,
         },
@@ -82,6 +91,7 @@ def test_asset_catalog_snapshot_matches_locked_bsc_matrix():
             "address": "0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
             "decimals": 18,
             "b402_methods": ("eip3009",),
+            "b402_kinds": (("eip3009", "United Stables", "1"),),
             "eip3009_domain": ("United Stables", "1"),
             "is_default": True,
         },
@@ -92,6 +102,7 @@ def test_asset_catalog_snapshot_matches_locked_bsc_matrix():
             "address": "0xEC1C60D64a06896Df296438c12edD14E974FDE47",
             "decimals": 6,
             "b402_methods": ("permit2-exact",),
+            "b402_kinds": (("permit2-exact", "USD Coin", "1"),),
             "eip3009_domain": None,
             "is_default": False,
         },
@@ -102,6 +113,7 @@ def test_asset_catalog_snapshot_matches_locked_bsc_matrix():
             "address": "0x337610d27c682E347C9cD60BD4b3b107C9d34dDd",
             "decimals": 18,
             "b402_methods": ("permit2-exact",),
+            "b402_kinds": (("permit2-exact", "USDT Token", "1"),),
             "eip3009_domain": None,
             "is_default": False,
         },
@@ -116,6 +128,14 @@ def test_catalog_addresses_are_checksummed_and_reverse_lookup_is_case_insensitiv
         resolved = get_asset_by_address(int(row["chain_id"]), address.lower())
         assert resolved.address == address
         assert resolved.asset_id.value == row["asset_id"]
+
+
+def test_b402_kind_identity_snapshot_is_deeply_immutable():
+    first = _api("get_asset")(56, _api("AssetId").U)
+
+    assert isinstance(first.b402_kinds, tuple)
+    with pytest.raises(FrozenInstanceError):
+        first.b402_kinds[0].name = "Forged Token"  # type: ignore[misc]
 
 
 def test_friendly_aliases_are_resolved_only_with_network_context():
@@ -184,6 +204,59 @@ def test_catalog_constructor_rejects_noncanonical_id_and_nonchecksum_address():
     lowercase_address = replace(first, address=first.address.lower())
     with pytest.raises(ValueError, match="not checksummed"):
         asset_catalog((lowercase_address,))
+
+
+def test_catalog_constructor_requires_exactly_one_kind_per_b402_method():
+    asset_catalog = _api("AssetCatalog")
+    b402_kind = _api("B402Kind")
+    first = _api("get_asset")(56, _api("AssetId").U)
+
+    with pytest.raises(ValueError, match="missing B402 kind"):
+        asset_catalog((replace(first, b402_kinds=first.b402_kinds[:1]),))
+    with pytest.raises(ValueError, match="duplicate B402 kind"):
+        asset_catalog((replace(first, b402_kinds=first.b402_kinds * 2),))
+    with pytest.raises(ValueError, match="extra B402 kind"):
+        asset_catalog(
+            (
+                replace(
+                    first,
+                    b402_methods=("eip3009",),
+                    b402_kinds=(
+                        first.b402_kinds[0],
+                        b402_kind("permit2-exact", "United Stables", "1"),
+                    ),
+                ),
+            )
+        )
+
+
+def test_catalog_constructor_rejects_duplicate_methods_and_eip3009_mismatch():
+    asset_catalog = _api("AssetCatalog")
+    b402_kind = _api("B402Kind")
+    first = _api("get_asset")(56, _api("AssetId").U)
+
+    with pytest.raises(ValueError, match="duplicate B402 method"):
+        asset_catalog(
+            (
+                replace(
+                    first,
+                    b402_methods=("eip3009", "eip3009"),
+                    b402_kinds=(first.b402_kinds[0],),
+                ),
+            )
+        )
+    with pytest.raises(ValueError, match="EIP-3009 kind must match"):
+        asset_catalog(
+            (
+                replace(
+                    first,
+                    b402_kinds=(
+                        b402_kind("eip3009", "Wrong Token", "1"),
+                        first.b402_kinds[1],
+                    ),
+                ),
+            )
+        )
 
 
 def test_asset_amount_conversion_uses_exact_non_negative_decimal_strings():

@@ -4,6 +4,7 @@ import { getAddress as toChecksumAddress } from "viem";
 import { knownPaymentTokens } from "../networks/addresses.js";
 import {
   type AssetId,
+  type B402Kind,
   type B402TransferMethod,
   type PaymentAsset,
   getAsset,
@@ -19,6 +20,7 @@ export interface ExpectedB402Asset {
   readonly address: `0x${string}`;
   readonly decimals: number;
   readonly b402Methods: readonly B402TransferMethod[];
+  readonly b402Kinds: readonly B402Kind[];
   readonly eip3009Domain: Readonly<{ name: string; version: string }> | null;
   readonly isDefault: boolean;
 }
@@ -92,6 +94,7 @@ export function resolveB402Asset(
     address: catalog.address,
     decimals: catalog.decimals,
     b402Methods: catalog.b402Methods,
+    b402Kinds: catalog.b402Kinds,
     eip3009Domain: catalog.eip3009Domain,
     isDefault: catalog.isDefault,
   });
@@ -125,6 +128,9 @@ export function requireB402WalletRoute(
           expectedAsset.eip3009Domain.name &&
         catalogExpected.eip3009Domain.version ===
           expectedAsset.eip3009Domain.version;
+  const providedKinds = Array.isArray(expectedAsset.b402Kinds)
+    ? expectedAsset.b402Kinds
+    : [];
   const catalogMatches =
     addressResolved &&
     catalogExpected.network === expectedAsset.network &&
@@ -138,6 +144,16 @@ export function requireB402WalletRoute(
     catalogExpected.b402Methods.every(
       (method, index) => method === expectedAsset.b402Methods[index],
     ) &&
+    catalogExpected.b402Kinds.length === providedKinds.length &&
+    catalogExpected.b402Kinds.every((kind, index) => {
+      const provided = providedKinds[index];
+      return (
+        provided !== undefined &&
+        kind.method === provided.method &&
+        kind.name === provided.name &&
+        kind.version === provided.version
+      );
+    }) &&
     domainMatches;
   const methodSupported = catalogExpected.b402Methods.includes(
     transferMethod as B402TransferMethod,

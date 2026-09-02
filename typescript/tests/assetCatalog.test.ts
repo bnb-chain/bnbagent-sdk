@@ -25,10 +25,19 @@ function snapshot() {
       address: asset.address,
       decimals: asset.decimals,
       b402Methods: [...asset.b402Methods],
+      b402Kinds: asset.b402Kinds.map((kind) => ({ ...kind })),
       eip3009Domain: asset.eip3009Domain ?? null,
       isDefault: asset.isDefault,
     })),
   );
+}
+
+function kindAt(asset: PaymentAsset, index: number) {
+  const kind = asset.b402Kinds[index];
+  if (kind === undefined) {
+    throw new Error(`missing fixture B402 kind at index ${index}`);
+  }
+  return kind;
 }
 
 describe("asset catalog", () => {
@@ -41,6 +50,14 @@ describe("asset catalog", () => {
         address: "0xcE24439F2D9C6a2289F741120FE202248B666666",
         decimals: 18,
         b402Methods: ["eip3009", "permit2-exact"],
+        b402Kinds: [
+          { method: "eip3009", name: "United Stables", version: "1" },
+          {
+            method: "permit2-exact",
+            name: "United Stables",
+            version: "1",
+          },
+        ],
         eip3009Domain: { name: "United Stables", version: "1" },
         isDefault: true,
       },
@@ -51,6 +68,9 @@ describe("asset catalog", () => {
         address: "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
         decimals: 18,
         b402Methods: ["permit2-exact"],
+        b402Kinds: [
+          { method: "permit2-exact", name: "USD Coin", version: "1" },
+        ],
         eip3009Domain: null,
         isDefault: false,
       },
@@ -61,6 +81,9 @@ describe("asset catalog", () => {
         address: "0x55d398326f99059fF775485246999027B3197955",
         decimals: 18,
         b402Methods: ["permit2-exact"],
+        b402Kinds: [
+          { method: "permit2-exact", name: "Tether USD", version: "1" },
+        ],
         eip3009Domain: null,
         isDefault: false,
       },
@@ -71,6 +94,9 @@ describe("asset catalog", () => {
         address: "0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
         decimals: 18,
         b402Methods: ["eip3009"],
+        b402Kinds: [
+          { method: "eip3009", name: "United Stables", version: "1" },
+        ],
         eip3009Domain: { name: "United Stables", version: "1" },
         isDefault: true,
       },
@@ -81,6 +107,9 @@ describe("asset catalog", () => {
         address: "0xEC1C60D64a06896Df296438c12edD14E974FDE47",
         decimals: 6,
         b402Methods: ["permit2-exact"],
+        b402Kinds: [
+          { method: "permit2-exact", name: "USD Coin", version: "1" },
+        ],
         eip3009Domain: null,
         isDefault: false,
       },
@@ -91,6 +120,9 @@ describe("asset catalog", () => {
         address: "0x337610d27c682E347C9cD60BD4b3b107C9d34dDd",
         decimals: 18,
         b402Methods: ["permit2-exact"],
+        b402Kinds: [
+          { method: "permit2-exact", name: "USDT Token", version: "1" },
+        ],
         eip3009Domain: null,
         isDefault: false,
       },
@@ -107,6 +139,13 @@ describe("asset catalog", () => {
         address: row.address,
       });
     }
+  });
+
+  it("deep-freezes each B402 kind identity", () => {
+    const first = getAsset(56, AssetId.U);
+
+    expect(Object.isFrozen(first.b402Kinds)).toBe(true);
+    expect(first.b402Kinds.every((kind) => Object.isFrozen(kind))).toBe(true);
   });
 
   it("resolves friendly aliases only with network context", () => {
@@ -173,6 +212,57 @@ describe("asset catalog", () => {
           },
         ]),
     ).toThrow("not checksummed");
+  });
+
+  it("requires exactly one kind identity per B402 method", () => {
+    const first = getAsset(56, AssetId.U);
+
+    expect(
+      () => new AssetCatalog([{ ...first, b402Kinds: [kindAt(first, 0)] }]),
+    ).toThrow("missing B402 kind");
+    expect(
+      () =>
+        new AssetCatalog([
+          { ...first, b402Kinds: [...first.b402Kinds, ...first.b402Kinds] },
+        ]),
+    ).toThrow("duplicate B402 kind");
+    expect(
+      () =>
+        new AssetCatalog([
+          {
+            ...first,
+            b402Methods: ["eip3009"],
+            b402Kinds: [kindAt(first, 0), kindAt(first, 1)],
+          },
+        ]),
+    ).toThrow("extra B402 kind");
+  });
+
+  it("rejects duplicate methods and EIP-3009/domain identity mismatch", () => {
+    const first = getAsset(56, AssetId.U);
+
+    expect(
+      () =>
+        new AssetCatalog([
+          {
+            ...first,
+            b402Methods: ["eip3009", "eip3009"],
+            b402Kinds: [kindAt(first, 0)],
+          },
+        ]),
+    ).toThrow("duplicate B402 method");
+    expect(
+      () =>
+        new AssetCatalog([
+          {
+            ...first,
+            b402Kinds: [
+              { method: "eip3009", name: "Wrong Token", version: "1" },
+              kindAt(first, 1),
+            ],
+          },
+        ]),
+    ).toThrow("EIP-3009 kind must match");
   });
 
   it("converts exact non-negative decimal strings to bigint atomic amounts", () => {

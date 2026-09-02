@@ -15,6 +15,7 @@ from bnbagent.x402 import resolve_b402_asset
 expected = resolve_b402_asset("eip155:97", AssetId.TEST_USDC)
 assert expected.symbol == "USDC"
 assert expected.decimals == 6
+assert expected.b402_kinds[0].name == "USD Coin"
 ```
 
 TypeScript：
@@ -24,6 +25,7 @@ import { AssetId } from "@bnbagent/sdk/networks";
 import { resolveB402Asset } from "@bnbagent/sdk/x402";
 
 const expected = resolveB402Asset("eip155:97", AssetId.TEST_USDC);
+const kind = expected.b402Kinds[0]; // permit2-exact / USD Coin / 1
 ```
 
 输入网络只能是 BSC Mainnet/Testnet 的 chain id（`56`/`97`）或规范 CAIP-2
@@ -34,6 +36,10 @@ const expected = resolveB402Asset("eip155:97", AssetId.TEST_USDC);
 
 金额仍保留为 atomic units：Python `int`、TypeScript `bigint`。helper 不做浮点或 USD
 换算。
+
+服务端 `/supported` 的 B402 Scheme 必须用 catalog 中逐 method 的 `method + name + version`
+精确匹配；symbol 只用于 UI 展示，不能代替链上 token name，也不能用于推断 Permit2 identity。
+例如 Mainnet USDT 是 `Tether USD / 1`，Testnet USDT 是 `USDT Token / 1`。
 
 ## 首期钱包矩阵
 

@@ -41,6 +41,7 @@ def test_resolve_b402_asset_snapshot(
         expected.address,
         expected.decimals,
         expected.b402_methods,
+        expected.b402_kinds,
         expected.is_default,
     ) == (
         f"eip155:{catalog.chain_id}",
@@ -50,6 +51,7 @@ def test_resolve_b402_asset_snapshot(
         catalog.address,
         decimals,
         methods,
+        catalog.b402_kinds,
         is_default,
     )
     with pytest.raises(FrozenInstanceError):
@@ -245,6 +247,7 @@ def test_route_normalizes_string_enum_identity_to_catalog_object() -> None:
         b402_methods=expected.b402_methods,
         eip3009_domain=expected.eip3009_domain,
         is_default=expected.is_default,
+        b402_kinds=expected.b402_kinds,
     )
 
     route = x402.require_b402_wallet_route("evm-local", fabricated, "eip3009")
@@ -262,6 +265,18 @@ def test_typed_error_uses_canonical_identity_for_fabricated_string_enum() -> Non
         x402.require_b402_wallet_route("evm-local", fabricated, "permit2-exact")
 
     assert raised.value.asset_id is AssetId.U
+
+
+def test_route_rejects_forged_b402_kind_identity() -> None:
+    expected = x402.resolve_b402_asset(97, AssetId.TEST_USDT)
+    forged_kind = replace(expected.b402_kinds[0], name="Tether USD")
+
+    with pytest.raises(x402.UnsupportedWalletRouteError):
+        x402.require_b402_wallet_route(
+            "altana",
+            replace(expected, b402_kinds=(forged_kind,)),
+            "permit2-exact",
+        )
 
 
 def test_payment_option_derives_same_expected_asset_and_keeps_atomic_amount() -> None:

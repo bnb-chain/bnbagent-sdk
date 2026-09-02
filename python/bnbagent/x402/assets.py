@@ -10,6 +10,7 @@ from web3 import Web3
 
 from ..networks import (
     AssetId,
+    B402Kind,
     B402TransferMethod,
     EIP3009Domain,
     get_asset,
@@ -37,6 +38,7 @@ class ExpectedB402Asset:
     b402_methods: tuple[B402TransferMethod, ...]
     eip3009_domain: EIP3009Domain | None
     is_default: bool
+    b402_kinds: tuple[B402Kind, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -89,6 +91,7 @@ def resolve_b402_asset(network: str | int, asset: AssetId | str) -> ExpectedB402
         b402_methods=catalog.b402_methods,
         eip3009_domain=catalog.eip3009_domain,
         is_default=catalog.is_default,
+        b402_kinds=catalog.b402_kinds,
     )
 
 
@@ -126,6 +129,7 @@ def require_b402_wallet_route(
         and expected_asset.decimals == catalog_expected.decimals
         and expected_asset.b402_methods == catalog_expected.b402_methods
         and expected_asset.eip3009_domain == catalog_expected.eip3009_domain
+        and expected_asset.b402_kinds == catalog_expected.b402_kinds
         and expected_asset.is_default == catalog_expected.is_default
     )
     method_supported = transfer_method in catalog_expected.b402_methods
