@@ -103,10 +103,20 @@ export function requireB402WalletRoute(
   expectedAsset: ExpectedB402Asset,
   transferMethod: string,
 ): B402WalletRoute {
-  const catalogExpected = resolveB402Asset(
-    expectedAsset.network,
-    expectedAsset.assetId,
-  );
+  let addressResolved = true;
+  let catalogExpected: ExpectedB402Asset;
+  try {
+    catalogExpected = resolveB402Asset(
+      expectedAsset.network,
+      expectedAsset.address,
+    );
+  } catch {
+    addressResolved = false;
+    catalogExpected = resolveB402Asset(
+      expectedAsset.chainId,
+      expectedAsset.assetId,
+    );
+  }
   const domainMatches =
     catalogExpected.eip3009Domain === null
       ? expectedAsset.eip3009Domain === null
@@ -116,6 +126,7 @@ export function requireB402WalletRoute(
         catalogExpected.eip3009Domain.version ===
           expectedAsset.eip3009Domain.version;
   const catalogMatches =
+    addressResolved &&
     catalogExpected.network === expectedAsset.network &&
     catalogExpected.chainId === expectedAsset.chainId &&
     catalogExpected.assetId === expectedAsset.assetId &&
@@ -128,7 +139,7 @@ export function requireB402WalletRoute(
       (method, index) => method === expectedAsset.b402Methods[index],
     ) &&
     domainMatches;
-  const methodSupported = expectedAsset.b402Methods.includes(
+  const methodSupported = catalogExpected.b402Methods.includes(
     transferMethod as B402TransferMethod,
   );
   const delegated = DELEGATED_WALLETS.has(walletKind);
@@ -138,24 +149,24 @@ export function requireB402WalletRoute(
     catalogMatches &&
     LOCAL_WALLETS.has(walletKind) &&
     transferMethod === "eip3009" &&
-    expectedAsset.eip3009Domain !== null &&
+    catalogExpected.eip3009Domain !== null &&
     knownPaymentTokens().has(
-      `${expectedAsset.chainId}:${expectedAsset.address}`,
+      `${catalogExpected.chainId}:${catalogExpected.address}`,
     );
 
   if (!supportedDelegated && !supportedLocalEip3009) {
     throw new UnsupportedWalletRouteError({
       walletKind,
-      network: expectedAsset.network,
-      chainId: expectedAsset.chainId,
-      assetId: expectedAsset.assetId,
+      network: catalogExpected.network,
+      chainId: catalogExpected.chainId,
+      assetId: catalogExpected.assetId,
       transferMethod,
     });
   }
 
   return Object.freeze({
     walletKind,
-    expectedAsset,
+    expectedAsset: catalogExpected,
     transferMethod: transferMethod as B402TransferMethod,
     delegated,
   });

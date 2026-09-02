@@ -231,13 +231,60 @@ describe("requireB402WalletRoute", () => {
 
   it("rejects manually forged expected metadata", () => {
     const expected = resolveB402Asset(56, AssetId.U);
-    expect(() =>
+    let caught: unknown;
+    try {
       requireB402WalletRoute(
         "evm-local",
         { ...expected, symbol: "USDC" },
         "eip3009",
-      ),
-    ).toThrow(UnsupportedWalletRouteError);
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(UnsupportedWalletRouteError);
+    expect((caught as UnsupportedWalletRouteError).assetId).toBe(AssetId.U);
+    expect((caught as UnsupportedWalletRouteError).network).toBe("eip155:56");
+  });
+
+  it("returns immutable catalog metadata instead of a mutable input clone", () => {
+    const expected = resolveB402Asset(56, AssetId.U);
+    const mutable = {
+      ...expected,
+      b402Methods: [...expected.b402Methods],
+      eip3009Domain:
+        expected.eip3009Domain === null ? null : { ...expected.eip3009Domain },
+    };
+
+    const route = requireB402WalletRoute("evm-local", mutable, "eip3009");
+    mutable.address = getAsset(56, AssetId.BINANCE_PEG_USDC).address;
+    mutable.b402Methods.length = 0;
+
+    expect(route.expectedAsset).toEqual(expected);
+    expect(route.expectedAsset).not.toBe(mutable);
+    expect(route.expectedAsset.address).toBe(expected.address);
+    expect(route.expectedAsset.b402Methods).toEqual(expected.b402Methods);
+    expect(Object.isFrozen(route.expectedAsset)).toBe(true);
+  });
+
+  it("returns canonical metadata for a fabricated structural identity", () => {
+    const expected = resolveB402Asset(56, AssetId.U);
+    const fabricated = {
+      isDefault: expected.isDefault,
+      eip3009Domain: expected.eip3009Domain,
+      b402Methods: expected.b402Methods,
+      decimals: expected.decimals,
+      address: expected.address,
+      symbol: expected.symbol,
+      assetId: "U" as typeof AssetId.U,
+      chainId: expected.chainId,
+      network: expected.network,
+    };
+
+    const route = requireB402WalletRoute("evm-local", fabricated, "eip3009");
+
+    expect(route.expectedAsset).toEqual(expected);
+    expect(route.expectedAsset).not.toBe(fabricated);
+    expect(Object.isFrozen(route.expectedAsset)).toBe(true);
   });
 });
 

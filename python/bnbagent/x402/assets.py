@@ -15,6 +15,7 @@ from ..networks import (
     get_asset,
     get_asset_by_address,
     known_payment_tokens,
+    parse_asset_id,
 )
 from .errors import UnsupportedWalletRouteError
 
@@ -98,11 +99,36 @@ def require_b402_wallet_route(
 ) -> B402WalletRoute:
     """Validate a wallet route for exactly ``expected_asset`` or raise typed unsupported."""
 
-    # Re-resolve the canonical identity so manually constructed metadata cannot
-    # smuggle an unverified EIP-3009 domain or method into the capability gate.
-    catalog_expected = resolve_b402_asset(expected_asset.network, expected_asset.asset_id)
-    catalog_matches = catalog_expected == expected_asset
-    method_supported = transfer_method in expected_asset.b402_methods
+    # Address + network are the route's on-wire identity. Re-resolve them so a
+    # caller-owned object can never smuggle mutable metadata or a str-enum
+    # lookalike into the validated route. If the address itself is malformed,
+    # resolve the claimed canonical identity only to produce a stable typed
+    # refusal; it still cannot make ``catalog_matches`` true.
+    address_resolved = True
+    try:
+        catalog_expected = resolve_b402_asset(expected_asset.network, expected_asset.address)
+    except (KeyError, TypeError, ValueError):
+        address_resolved = False
+        catalog_expected = resolve_b402_asset(expected_asset.chain_id, expected_asset.asset_id)
+
+    try:
+        provided_asset_id = parse_asset_id(expected_asset.asset_id)
+    except (TypeError, ValueError):
+        provided_asset_id = None
+
+    catalog_matches = (
+        address_resolved
+        and expected_asset.network == catalog_expected.network
+        and expected_asset.chain_id == catalog_expected.chain_id
+        and provided_asset_id is catalog_expected.asset_id
+        and expected_asset.symbol == catalog_expected.symbol
+        and expected_asset.address == catalog_expected.address
+        and expected_asset.decimals == catalog_expected.decimals
+        and expected_asset.b402_methods == catalog_expected.b402_methods
+        and expected_asset.eip3009_domain == catalog_expected.eip3009_domain
+        and expected_asset.is_default == catalog_expected.is_default
+    )
+    method_supported = transfer_method in catalog_expected.b402_methods
 
     delegated = wallet_kind in _DELEGATED_WALLETS
     supported = False
@@ -112,23 +138,23 @@ def require_b402_wallet_route(
         catalog_matches
         and wallet_kind in _LOCAL_WALLETS
         and transfer_method == "eip3009"
-        and expected_asset.eip3009_domain is not None
-        and (expected_asset.chain_id, expected_asset.address) in known_payment_tokens()
+        and catalog_expected.eip3009_domain is not None
+        and (catalog_expected.chain_id, catalog_expected.address) in known_payment_tokens()
     ):
         supported = True
 
     if not supported:
         raise UnsupportedWalletRouteError(
             wallet_kind=wallet_kind,
-            network=expected_asset.network,
-            chain_id=expected_asset.chain_id,
-            asset_id=expected_asset.asset_id,
+            network=catalog_expected.network,
+            chain_id=catalog_expected.chain_id,
+            asset_id=catalog_expected.asset_id,
             transfer_method=transfer_method,
         )
 
     return B402WalletRoute(
         wallet_kind=wallet_kind,
-        expected_asset=expected_asset,
+        expected_asset=catalog_expected,
         transfer_method=cast(B402TransferMethod, transfer_method),
         delegated=delegated,
     )

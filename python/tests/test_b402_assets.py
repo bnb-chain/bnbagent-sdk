@@ -107,7 +107,8 @@ def test_evm_local_and_turnkey_allow_only_verified_known_eip3009_u(
 
     for wallet_kind in ("evm-local", "turnkey"):
         route = x402.require_b402_wallet_route(wallet_kind, expected, "eip3009")
-        assert route.expected_asset is expected
+        assert route.expected_asset == expected
+        assert route.expected_asset is not expected
         assert route.transfer_method == "eip3009"
         assert route.delegated is False
 
@@ -174,7 +175,8 @@ def test_delegated_wallets_allow_only_catalog_declared_routes(
 
     route = x402.require_b402_wallet_route(wallet_kind, expected, method)
 
-    assert route.expected_asset is expected
+    assert route.expected_asset == expected
+    assert route.expected_asset is not expected
     assert route.transfer_method == method
     assert route.delegated is True
 
@@ -224,8 +226,42 @@ def test_unknown_wallet_is_typed_unsupported() -> None:
 def test_route_helper_rejects_manually_forged_expected_metadata() -> None:
     expected = x402.resolve_b402_asset(56, AssetId.U)
 
-    with pytest.raises(x402.UnsupportedWalletRouteError):
+    with pytest.raises(x402.UnsupportedWalletRouteError) as raised:
         x402.require_b402_wallet_route("evm-local", replace(expected, symbol="USDC"), "eip3009")
+
+    assert raised.value.asset_id is AssetId.U
+    assert raised.value.network == "eip155:56"
+
+
+def test_route_normalizes_string_enum_identity_to_catalog_object() -> None:
+    expected = x402.resolve_b402_asset(56, AssetId.U)
+    fabricated = x402.ExpectedB402Asset(
+        network=expected.network,
+        chain_id=expected.chain_id,
+        asset_id="U",  # type: ignore[arg-type]
+        symbol=expected.symbol,
+        address=expected.address,
+        decimals=expected.decimals,
+        b402_methods=expected.b402_methods,
+        eip3009_domain=expected.eip3009_domain,
+        is_default=expected.is_default,
+    )
+
+    route = x402.require_b402_wallet_route("evm-local", fabricated, "eip3009")
+
+    assert route.expected_asset == expected
+    assert route.expected_asset is not fabricated
+    assert route.expected_asset.asset_id is AssetId.U
+
+
+def test_typed_error_uses_canonical_identity_for_fabricated_string_enum() -> None:
+    expected = x402.resolve_b402_asset(56, AssetId.U)
+    fabricated = replace(expected, asset_id="U")  # type: ignore[arg-type]
+
+    with pytest.raises(x402.UnsupportedWalletRouteError) as raised:
+        x402.require_b402_wallet_route("evm-local", fabricated, "permit2-exact")
+
+    assert raised.value.asset_id is AssetId.U
 
 
 def test_payment_option_derives_same_expected_asset_and_keeps_atomic_amount() -> None:
