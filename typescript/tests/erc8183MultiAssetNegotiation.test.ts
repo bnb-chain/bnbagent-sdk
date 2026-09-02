@@ -212,4 +212,43 @@ describe("multi-asset ERC-8183 negotiation", () => {
       true,
     );
   });
+
+  it("keeps an explicit USD1 offer immutable and returns alternatives instead of switching", async () => {
+    const usd1 = getAsset(56, AssetId.USD1);
+    const mainU = getAsset(56, AssetId.U);
+    const mainClient = {
+      network: { chainId: 56 },
+      commerce: { address: COMMERCE },
+      isPaymentTokenSupported: vi.fn(async () => true),
+    } as unknown as ERC8183Client;
+    const handler = await NegotiationHandler.fromErc8183ClientMulti(
+      mainClient,
+      { servicePrices: { [AssetId.USD1]: "100000000000000000" } },
+    );
+
+    expect(
+      (await handler.negotiate(request(usd1.address.toLowerCase()))).response
+        .terms,
+    ).toMatchObject({
+      currency: usd1.address,
+      price: "100000000000000000",
+    });
+    for (const currency of [
+      mainU.address,
+      "0x0000000000000000000000000000000000000000",
+    ]) {
+      expect(
+        (await handler.negotiate(request(currency))).response,
+      ).toMatchObject({
+        accepted: false,
+        reason_code: ReasonCode.UNSUPPORTED,
+        details: { supported_assets: [AssetId.USD1] },
+      });
+    }
+    expect((await handler.negotiate(request())).response).toMatchObject({
+      accepted: false,
+      reason_code: ReasonCode.UNSUPPORTED,
+      details: { supported_assets: [AssetId.USD1] },
+    });
+  });
 });

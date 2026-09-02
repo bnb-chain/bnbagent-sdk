@@ -7,7 +7,7 @@ from dataclasses import FrozenInstanceError, replace
 import pytest
 
 import bnbagent.x402 as x402
-from bnbagent.networks import AssetId, get_asset
+from bnbagent.networks import AssetId, get_asset, known_eip3009_payment_tokens
 from bnbagent.x402 import X402Payer, X402PaymentOption
 
 
@@ -66,7 +66,7 @@ def test_resolve_b402_asset_accepts_only_same_chain_catalog_asset(
     try:
         catalog = get_asset(chain_id, asset_id)
     except KeyError:
-        with pytest.raises(KeyError, match="not available"):
+        with pytest.raises(KeyError, match=r"(?:not )?available"):
             x402.resolve_b402_asset(chain_id, asset_id)
     else:
         assert x402.resolve_b402_asset(chain_id, catalog.address).asset_id is asset_id
@@ -113,6 +113,25 @@ def test_evm_local_and_turnkey_allow_only_verified_known_eip3009_u(
         assert route.expected_asset is not expected
         assert route.transfer_method == "eip3009"
         assert route.delegated is False
+
+
+def test_active_usd1_allows_local_eip3009_but_keeps_permit2_and_placeholder_closed() -> None:
+    usd1 = x402.resolve_b402_asset("eip155:56", AssetId.USD1)
+
+    assert known_eip3009_payment_tokens() == frozenset(
+        {
+            (56, get_asset(56, AssetId.U).address),
+            (56, usd1.address),
+            (97, get_asset(97, AssetId.TEST_U).address),
+        }
+    )
+    route = x402.require_b402_wallet_route("evm-local", usd1, "eip3009")
+    assert route.transfer_method == "eip3009"
+    assert route.delegated is False
+    with pytest.raises(x402.UnsupportedWalletRouteError):
+        x402.require_b402_wallet_route("evm-local", usd1, "permit2-exact")
+    with pytest.raises(KeyError, match="unavailable"):
+        x402.resolve_b402_asset("eip155:97", AssetId.TEST_USD1)
 
 
 @pytest.mark.parametrize("chain_id", [56, 97])

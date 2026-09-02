@@ -24,6 +24,7 @@ from bnbagent.signing import (
 
 U_MAINNET = get_address(BSC_MAINNET_CHAIN_ID).payment_token
 U_TESTNET = get_address(BSC_TESTNET_CHAIN_ID).payment_token
+USD1_MAINNET = get_asset(BSC_MAINNET_CHAIN_ID, AssetId.USD1)
 
 EIP712DOMAIN_FIELDS = [
     {"name": "name", "type": "string"},
@@ -103,6 +104,45 @@ def test_strict_default_allows_u_testnet_transfer_with_authorization():
         domain_overrides={"chainId": BSC_TESTNET_CHAIN_ID, "verifyingContract": U_TESTNET},
     )
     assert pt == "TransferWithAuthorization"
+
+
+def test_strict_default_allows_only_catalog_declared_eip3009_usd1_domains():
+    policy = SigningPolicy.strict_default()
+    assert policy.domain_allowlist == frozenset(
+        {
+            (BSC_MAINNET_CHAIN_ID, U_MAINNET),
+            (BSC_MAINNET_CHAIN_ID, USD1_MAINNET.address),
+            (BSC_TESTNET_CHAIN_ID, U_TESTNET),
+        }
+    )
+    assert (
+        _twa_call(
+            policy,
+            domain_overrides={
+                "name": "World Liberty Financial USD",
+                "chainId": BSC_MAINNET_CHAIN_ID,
+                "verifyingContract": USD1_MAINNET.address,
+            },
+        )
+        == "TransferWithAuthorization"
+    )
+    with pytest.raises(PolicyViolation, match="not in allowlist"):
+        _twa_call(
+            policy,
+            domain_overrides={
+                "chainId": BSC_TESTNET_CHAIN_ID,
+                "verifyingContract": USD1_MAINNET.address,
+            },
+        )
+    with pytest.raises(PolicyViolation, match="not in allowlist"):
+        _twa_call(
+            policy,
+            domain_overrides={"verifyingContract": "0x" + "1" * 40},
+        )
+    assert (
+        BSC_TESTNET_CHAIN_ID,
+        "0x0000000000000000000000000000000000000000",
+    ) not in policy.domain_allowlist
 
 
 def test_strict_default_rejects_unknown_verifying_contract():
@@ -595,7 +635,7 @@ def test_str_contains_canonical_sections():
     p = SigningPolicy.strict_default()
     s = str(p)
     assert "SigningPolicy(" in s
-    assert "domain_allowlist (2 entries)" in s
+    assert "domain_allowlist (3 entries)" in s
     assert "TransferWithAuthorization" in s
     assert "Permit" in s
     assert "allow_unknown_domain=False" in s

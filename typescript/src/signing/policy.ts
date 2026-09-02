@@ -11,7 +11,7 @@
  */
 
 import { getAddress as toChecksumAddress } from "viem";
-import { knownPaymentTokens } from "../networks/addresses.js";
+import { knownEip3009PaymentTokens } from "../networks/assets.js";
 import { toIntStrict } from "./checks.js";
 
 // ── Canonical EIP-712 primary types ─────────────────────────────────────
@@ -196,7 +196,7 @@ export class SigningPolicy {
    * Recommended fail-closed default for direct-SDK callers.
    *
    * Defaults are deliberately narrow:
-   * - domain: only the U-token deployments registered in `../networks`;
+   * - domain: only active catalog assets verified for EIP-3009;
    * - allowlist: only EIP-3009 `TransferWithAuthorization` and
    *   `ReceiveWithAuthorization` — the well-understood single-use
    *   authorisation pattern x402 uses;
@@ -210,7 +210,7 @@ export class SigningPolicy {
    */
   static strictDefault(): SigningPolicy {
     return new SigningPolicy({
-      domainAllowlist: knownPaymentTokens(),
+      domainAllowlist: knownEip3009PaymentTokens(),
       primaryTypeAllowlist: EIP3009_TYPES,
       primaryTypeDenylist: PERMIT_UNBOUNDED_TYPES,
       validityRequiredPrimaryTypes: EIP3009_TYPES,

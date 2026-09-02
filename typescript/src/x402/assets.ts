@@ -1,7 +1,6 @@
 /** Strict B402 expected-asset resolution and wallet-route capabilities. */
 
 import { getAddress as toChecksumAddress } from "viem";
-import { knownPaymentTokens } from "../networks/addresses.js";
 import {
   type AssetId,
   type B402Kind,
@@ -9,6 +8,7 @@ import {
   type CatalogPaymentAsset,
   getAsset,
   getAssetByAddress,
+  knownEip3009PaymentTokens,
 } from "../networks/assets.js";
 import { UnsupportedWalletRouteError } from "./errors.js";
 
@@ -166,7 +166,7 @@ export function requireB402WalletRoute(
     LOCAL_WALLETS.has(walletKind) &&
     transferMethod === "eip3009" &&
     catalogExpected.eip3009Domain !== null &&
-    knownPaymentTokens().has(
+    knownEip3009PaymentTokens().has(
       `${catalogExpected.chainId}:${catalogExpected.address}`,
     );
 

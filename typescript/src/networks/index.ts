@@ -15,6 +15,7 @@ export {
   getAsset,
   getAssetByAddress,
   getAssetMetadata,
+  knownEip3009PaymentTokens,
   listAssets,
   parseAssetId,
   PaymentAssetUnavailableError,

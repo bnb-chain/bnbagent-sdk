@@ -460,6 +460,27 @@ export function listAssets(chainId: number): readonly CatalogPaymentAsset[] {
   return ASSET_CATALOG.list(chainId);
 }
 
+/**
+ * EIP-712 domain keys for active catalog assets verified for EIP-3009.
+ *
+ * This deliberately derives from the asset catalog instead of the legacy
+ * deployment-address registry: only assets declaring both a verified domain
+ * and the EIP-3009 B402 route may enter a signing allowlist.
+ */
+export function knownEip3009PaymentTokens(): ReadonlySet<string> {
+  return new Set(
+    [BSC_MAINNET_CHAIN_ID, BSC_TESTNET_CHAIN_ID].flatMap((chainId) =>
+      listAssets(chainId)
+        .filter(
+          (asset) =>
+            asset.eip3009Domain !== null &&
+            asset.b402Methods.includes("eip3009"),
+        )
+        .map((asset) => `${chainId}:${asset.address}`),
+    ),
+  );
+}
+
 const DECIMAL_AMOUNT = /^[0-9]+(?:\.[0-9]+)?$/;
 
 export function toAssetAtomic(

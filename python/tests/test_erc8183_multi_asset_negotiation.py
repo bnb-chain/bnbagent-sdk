@@ -12,6 +12,9 @@ COMMERCE = "0xA206c0517b6371c6638Cd9e4A42cC9F02A33B0de"
 TEST_U = get_asset(CHAIN_ID, AssetId.TEST_U)
 TEST_USDC = get_asset(CHAIN_ID, AssetId.TEST_USDC)
 TEST_USDT = get_asset(CHAIN_ID, AssetId.TEST_USDT)
+MAINNET_CHAIN_ID = 56
+MAINNET_U = get_asset(MAINNET_CHAIN_ID, AssetId.U)
+MAINNET_USD1 = get_asset(MAINNET_CHAIN_ID, AssetId.USD1)
 
 
 def _request(currency: str | None = None) -> dict:
@@ -153,6 +156,36 @@ def test_omitted_currency_uses_catalog_default_not_commerce_payment_token():
     assert omitted.accepted is False
     assert omitted.response["details"] == {"supported_assets": [AssetId.TEST_USDC.value]}
     assert explicit.accepted is True
+
+
+def test_explicit_usd1_offer_is_immutable_and_returns_alternatives_instead_of_switching():
+    client = MagicMock()
+    client.network.chain_id = MAINNET_CHAIN_ID
+    client.commerce.address = COMMERCE
+    client.is_payment_token_supported.return_value = True
+    handler = NegotiationHandler.from_erc8183_client_multi(
+        erc8183_client=client,
+        service_prices={AssetId.USD1: "100000000000000000"},
+    )
+
+    accepted = handler.negotiate(_request(MAINNET_USD1.address.lower()))
+    assert accepted.accepted is True
+    assert accepted.response["terms"] == {
+        "deliverables": "summary",
+        "quality_standards": "accurate",
+        "evaluation_required": True,
+        "evaluator_type": "uma_oov3",
+        "price": "100000000000000000",
+        "currency": MAINNET_USD1.address,
+    }
+    for currency in (MAINNET_U.address, "0x0000000000000000000000000000000000000000"):
+        rejected = handler.negotiate(_request(currency))
+        assert rejected.accepted is False
+        assert rejected.response["reason_code"] == ReasonCode.UNSUPPORTED
+        assert rejected.response["details"] == {"supported_assets": [AssetId.USD1.value]}
+    omitted = handler.negotiate(_request())
+    assert omitted.accepted is False
+    assert omitted.response["details"] == {"supported_assets": [AssetId.USD1.value]}
 
 
 def test_multi_constructor_fails_closed_without_exactly_one_catalog_default():

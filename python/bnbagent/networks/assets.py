@@ -408,6 +408,16 @@ def list_assets(chain_id: int) -> tuple[PaymentAsset, ...]:
     return ASSET_CATALOG.list(chain_id)
 
 
+def known_eip3009_payment_tokens() -> frozenset[tuple[int, str]]:
+    """Active catalog EIP-3009 ``(chain_id, checksum_address)`` domains."""
+    return frozenset(
+        (chain_id, asset.address)
+        for chain_id in (BSC_MAINNET_CHAIN_ID, BSC_TESTNET_CHAIN_ID)
+        for asset in list_assets(chain_id)
+        if asset.eip3009_domain is not None and "eip3009" in asset.b402_methods
+    )
+
+
 def to_asset_atomic(chain_id: int, asset_id: AssetId | str, amount: str) -> int:
     """Convert a plain non-negative decimal string to exact atomic units."""
     if not isinstance(amount, str):

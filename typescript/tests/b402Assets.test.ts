@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { AssetId, getAsset } from "../src/networks/assets.js";
+import {
+  AssetId,
+  getAsset,
+  knownEip3009PaymentTokens,
+} from "../src/networks/assets.js";
 import {
   UnsupportedWalletRouteError,
   X402SignerError,
@@ -49,7 +53,7 @@ describe("resolveB402Asset", () => {
           );
         } catch (error) {
           expect(() => resolveB402Asset(chainId, assetId)).toThrow(
-            "not available",
+            /(?:not )?available/,
           );
           expect(error).toBeInstanceOf(Error);
         }
@@ -106,6 +110,29 @@ describe("requireB402WalletRoute", () => {
       }
     },
   );
+
+  it("enables active USD1 EIP-3009 locally while keeping Permit2 and the test placeholder closed", () => {
+    const usd1 = resolveB402Asset("eip155:56", AssetId.USD1);
+
+    expect([...knownEip3009PaymentTokens()].sort()).toEqual(
+      [
+        `56:${getAsset(56, AssetId.U).address}`,
+        `56:${usd1.address}`,
+        `97:${getAsset(97, AssetId.TEST_U).address}`,
+      ].sort(),
+    );
+
+    expect(requireB402WalletRoute("evm-local", usd1, "eip3009")).toMatchObject({
+      transferMethod: "eip3009",
+      delegated: false,
+    });
+    expect(() =>
+      requireB402WalletRoute("evm-local", usd1, "permit2-exact"),
+    ).toThrow(UnsupportedWalletRouteError);
+    expect(() => resolveB402Asset("eip155:97", AssetId.TEST_USD1)).toThrow(
+      "unavailable",
+    );
+  });
 
   it.each([
     [56, AssetId.BINANCE_PEG_USDC],

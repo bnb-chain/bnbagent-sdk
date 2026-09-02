@@ -15,7 +15,7 @@ from ..networks import (
     EIP3009Domain,
     get_asset,
     get_asset_by_address,
-    known_payment_tokens,
+    known_eip3009_payment_tokens,
     parse_asset_id,
 )
 from .errors import UnsupportedWalletRouteError
@@ -143,7 +143,8 @@ def require_b402_wallet_route(
         and wallet_kind in _LOCAL_WALLETS
         and transfer_method == "eip3009"
         and catalog_expected.eip3009_domain is not None
-        and (catalog_expected.chain_id, catalog_expected.address) in known_payment_tokens()
+        and (catalog_expected.chain_id, catalog_expected.address)
+        in known_eip3009_payment_tokens()
     ):
         supported = True
 
