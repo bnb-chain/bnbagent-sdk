@@ -72,6 +72,7 @@ const FAKE_POLICY = getAddress(`0x${"cc".repeat(20)}`);
 const FAKE_TOKEN = getAddress(`0x${"dd".repeat(20)}`);
 const CUSTOM_TOKEN_INPUT = "0x1234567890abcdef1234567890abcdef12345678";
 const CUSTOM_TOKEN = getAddress(CUSTOM_TOKEN_INPUT);
+const TEST_TOKEN_DIFFERENT = getAddress(`0x${"12".repeat(20)}`);
 const WALLET_ADDRESS = getAddress(`0x${"99".repeat(20)}`);
 
 const { createPublicClientForMock, PaymasterMock } = vi.hoisted(() => ({
@@ -520,6 +521,148 @@ describe("ERC8183Client: token cache", () => {
     await expect(
       client.isPaymentTokenSupported(usdc.toLowerCase()),
     ).resolves.toBe(false);
+  });
+});
+
+describe("ERC8183Client.verifyNegotiationQuote", () => {
+  const selected = getAsset(97, AssetId.TEST_USDC).address;
+
+  function quote(opts: {
+    requestCurrency?: unknown;
+    responseCurrency?: unknown;
+    price?: unknown;
+    chainId?: unknown;
+  }): Record<string, unknown> {
+    const requestTerms: Record<string, unknown> = {};
+    if (opts.requestCurrency !== undefined) {
+      requestTerms.currency = opts.requestCurrency;
+    }
+    return {
+      request: { terms: requestTerms },
+      response: {
+        accepted: true,
+        terms: {
+          price: Object.hasOwn(opts, "price") ? opts.price : "0",
+          currency: opts.responseCurrency ?? selected,
+        },
+      },
+      chain_id: opts.chainId ?? 97,
+    };
+  }
+
+  it("binds explicit AssetId to both request and response currency", async () => {
+    const { client } = await buildClient({
+      network: fakeNetwork({ chainId: 97 }),
+    });
+    const verdict = await client.verifyNegotiationQuote(
+      quote({ requestCurrency: selected.toLowerCase() }),
+      { expectedProvider: WALLET_ADDRESS, expectedCurrency: AssetId.TEST_USDC },
+    );
+    expect(verdict).toEqual({
+      valid: false,
+      reason: "missing or invalid negotiation_hash",
+    });
+    await expect(
+      client.verifyNegotiationQuote(
+        quote({ requestCurrency: AssetId.TEST_USDC }),
+        {
+          expectedProvider: WALLET_ADDRESS,
+          expectedCurrency: AssetId.TEST_USDC,
+        },
+      ),
+    ).resolves.toEqual({
+      valid: false,
+      reason: "missing or invalid negotiation_hash",
+    });
+  });
+
+  it("requires explicit request currency and rejects request/response drift", async () => {
+    const { client } = await buildClient({
+      network: fakeNetwork({ chainId: 97 }),
+    });
+    await expect(
+      client.verifyNegotiationQuote(quote({}), {
+        expectedProvider: WALLET_ADDRESS,
+        expectedCurrency: AssetId.TEST_USDC,
+      }),
+    ).resolves.toEqual({
+      valid: false,
+      reason: "quote request currency is missing",
+    });
+    await expect(
+      client.verifyNegotiationQuote(
+        quote({
+          requestCurrency: TEST_TOKEN_DIFFERENT,
+          responseCurrency: selected,
+        }),
+        { expectedProvider: WALLET_ADDRESS, expectedCurrency: selected },
+      ),
+    ).resolves.toEqual({
+      valid: false,
+      reason: "quote request currency mismatch",
+    });
+    await expect(
+      client.verifyNegotiationQuote(
+        quote({
+          requestCurrency: selected,
+          responseCurrency: TEST_TOKEN_DIFFERENT,
+        }),
+        { expectedProvider: WALLET_ADDRESS, expectedCurrency: selected },
+      ),
+    ).resolves.toEqual({
+      valid: false,
+      reason: "quote response currency mismatch",
+    });
+  });
+
+  it.each([true, -1, "00", "01", "1.5", "1e3", null, {}, []])(
+    "rejects malformed quote price %j",
+    async (price) => {
+      const { client } = await buildClient({
+        network: fakeNetwork({ chainId: 97 }),
+      });
+      await expect(
+        client.verifyNegotiationQuote(
+          quote({ requestCurrency: selected, price }),
+          { expectedProvider: WALLET_ADDRESS, expectedCurrency: selected },
+        ),
+      ).resolves.toEqual({
+        valid: false,
+        reason: "quote price must be a non-negative integer",
+      });
+    },
+  );
+
+  it("preserves the old no-currency path against Commerce paymentToken", async () => {
+    const results = defaultResults();
+    results.paymentToken = FAKE_TOKEN;
+    const { client } = await buildClient({ results });
+    const verdict = await client.verifyNegotiationQuote(
+      quote({ responseCurrency: FAKE_TOKEN, chainId: 97 }),
+      { expectedProvider: WALLET_ADDRESS },
+    );
+    expect(verdict).toEqual({
+      valid: false,
+      reason: "missing or invalid negotiation_hash",
+    });
+  });
+
+  it("fails closed on cross-chain expected AssetId and chain binding", async () => {
+    const { client } = await buildClient({
+      network: fakeNetwork({ chainId: 97 }),
+    });
+    await expect(
+      client.verifyNegotiationQuote(quote({ requestCurrency: selected }), {
+        expectedProvider: WALLET_ADDRESS,
+        expectedCurrency: AssetId.BINANCE_PEG_USDC,
+      }),
+    ).resolves.toMatchObject({ valid: false });
+    await expect(
+      client.verifyNegotiationQuote(
+        quote({ requestCurrency: selected, chainId: 56 }),
+        { expectedProvider: WALLET_ADDRESS, expectedCurrency: selected },
+      ),
+    ).resolves.toEqual({ valid: false, reason: "quote chain_id mismatch" });
   });
 });
 

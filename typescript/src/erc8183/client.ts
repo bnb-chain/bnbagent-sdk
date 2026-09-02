@@ -53,6 +53,7 @@ import type { WalletProvider } from "../wallets/walletProvider.js";
 import { CommerceClient, type CreateJobResult } from "./commerce.js";
 import { resolveErc8183Network } from "./constants.js";
 import { PolicyClient } from "./policy.js";
+import { type QuoteSigVerdict, verifyQuoteSignature } from "./quoteVerify.js";
 import { RouterClient } from "./router.js";
 import {
   type Job,
@@ -146,6 +147,16 @@ export interface GetDeliverableUrlFacadeOpts {
 export interface GetJobFundedBlockOpts {
   negotiatedAt: number;
   quoteExpiresAt: number;
+}
+
+/** Trusted Buyer-side expectations for provider quote verification. */
+export interface VerifyNegotiationQuoteOpts {
+  /** Provider obtained out-of-band (for example from ERC-8004 discovery). */
+  expectedProvider: string;
+  /** Explicit Buyer selection. Omit only for the legacy Commerce-default path. */
+  expectedCurrency?: TokenReference;
+  /** Historical acceptance block for ERC-1271 and expiry verification. */
+  blockNumber?: bigint;
 }
 
 /**
@@ -426,6 +437,103 @@ export class ERC8183Client {
     amount: bigint,
   ): Promise<TxResult> {
     return this.approveToken(await this.paymentToken(), spender, amount);
+  }
+
+  /**
+   * Verify a provider quote before creating or funding a job.
+   *
+   * Explicit asset selection binds request, response and expected token. The
+   * compatibility path without `expectedCurrency` still checks the Commerce
+   * default token. Signature, chain and Commerce bindings remain mandatory.
+   */
+  async verifyNegotiationQuote(
+    envelope: Record<string, unknown>,
+    opts: VerifyNegotiationQuoteOpts,
+  ): Promise<QuoteSigVerdict> {
+    const response = envelope.response;
+    if (
+      response === null ||
+      typeof response !== "object" ||
+      Array.isArray(response)
+    ) {
+      return { valid: false, reason: "quote response is missing" };
+    }
+    const responseRecord = response as Record<string, unknown>;
+    if (responseRecord.accepted !== true) {
+      return { valid: false, reason: "quote is not accepted" };
+    }
+    const terms = responseRecord.terms;
+    if (terms === null || typeof terms !== "object" || Array.isArray(terms)) {
+      return { valid: false, reason: "quote terms are missing" };
+    }
+    const termsRecord = terms as Record<string, unknown>;
+    const price = termsRecord.price;
+    if (typeof price !== "string" || !/^(0|[1-9][0-9]*)$/.test(price)) {
+      return {
+        valid: false,
+        reason: "quote price must be a non-negative integer",
+      };
+    }
+
+    let expectedAddress: `0x${string}`;
+    let responseCurrency: `0x${string}`;
+    try {
+      expectedAddress =
+        opts.expectedCurrency === undefined
+          ? await this.paymentToken()
+          : this.resolveTokenAddress(opts.expectedCurrency);
+      if (typeof termsRecord.currency !== "string") throw new Error();
+      responseCurrency = getAddress(termsRecord.currency);
+    } catch {
+      return { valid: false, reason: "quote currency is invalid" };
+    }
+    if (responseCurrency !== expectedAddress) {
+      return {
+        valid: false,
+        reason:
+          opts.expectedCurrency === undefined
+            ? "quote currency does not match payment token"
+            : "quote response currency mismatch",
+      };
+    }
+
+    const request = envelope.request;
+    const requestTerms =
+      request !== null && typeof request === "object" && !Array.isArray(request)
+        ? (request as Record<string, unknown>).terms
+        : undefined;
+    const requestCurrency =
+      requestTerms !== null &&
+      typeof requestTerms === "object" &&
+      !Array.isArray(requestTerms)
+        ? (requestTerms as Record<string, unknown>).currency
+        : undefined;
+    if (opts.expectedCurrency !== undefined && requestCurrency === undefined) {
+      return { valid: false, reason: "quote request currency is missing" };
+    }
+    if (requestCurrency !== undefined) {
+      try {
+        if (
+          typeof requestCurrency !== "string" ||
+          this.resolveTokenAddress(requestCurrency) !== expectedAddress
+        ) {
+          return { valid: false, reason: "quote request currency mismatch" };
+        }
+      } catch {
+        return { valid: false, reason: "quote request currency is invalid" };
+      }
+    }
+
+    if (envelope.chain_id !== this.network.chainId) {
+      return { valid: false, reason: "quote chain_id mismatch" };
+    }
+    return verifyQuoteSignature({
+      envelope,
+      provider: getAddress(opts.expectedProvider),
+      publicClient: this.client,
+      expectedVerifyingContract: this.commerce.address,
+      blockNumber: opts.blockNumber,
+    });
   }
 
   // ----------------------------------------------------------------- writes
