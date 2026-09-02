@@ -125,6 +125,7 @@ def _is_cli_parser_error(message: str, *, flag: str | None = None) -> bool:
         "unknown command",
         "unknown option",
         "unknown argument",
+        "unknown flag",
         "unrecognized option",
         "unrecognized argument",
         "unexpected option",

@@ -90,6 +90,7 @@ function isCliParserError(message: string, flag?: string): boolean {
     "unknown command",
     "unknown option",
     "unknown argument",
+    "unknown flag",
     "unrecognized option",
     "unrecognized argument",
     "unexpected option",

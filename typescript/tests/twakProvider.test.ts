@@ -215,6 +215,8 @@ describe("TWAKProvider — token-bound ERC-8183 creation", () => {
     "Error: Unknown option '--payment-token'",
     "error: unrecognized option '--payment-token'",
     "error: unexpected argument '--payment-token' found",
+    "error: unknown flag: --payment-token",
+    "Error: Unknown flag '--payment-token'",
   ])(
     "maps an old CLI surface (%s) to typed upgrade guidance",
     async (cliError) => {
@@ -235,6 +237,8 @@ describe("TWAKProvider — token-bound ERC-8183 creation", () => {
   it.each([
     "execution reverted: UnsupportedPaymentToken",
     "execution reverted: unknown command opcode",
+    "execution reverted: memo contains unknown flag: --payment-token",
+    "error: unknown flag: --some-other-flag",
   ])(
     "keeps genuine transaction failure (%s) in the normal classification",
     async (transactionError) => {

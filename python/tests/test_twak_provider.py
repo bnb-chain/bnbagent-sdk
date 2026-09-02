@@ -256,6 +256,8 @@ def test_create_job_with_token_passes_exact_payment_token_to_twak():
         "Error: Unknown option '--payment-token'",
         "error: unrecognized option '--payment-token'",
         "error: unexpected argument '--payment-token' found",
+        "error: unknown flag: --payment-token",
+        "Error: Unknown flag '--payment-token'",
     ],
 )
 def test_create_job_with_token_old_twak_maps_unknown_surface_to_typed_upgrade_error(cli_error):
@@ -277,6 +279,8 @@ def test_create_job_with_token_old_twak_maps_unknown_surface_to_typed_upgrade_er
     [
         "execution reverted: UnsupportedPaymentToken",
         "execution reverted: unknown command opcode",
+        "execution reverted: memo contains unknown flag: --payment-token",
+        "error: unknown flag: --some-other-flag",
     ],
 )
 def test_create_job_with_token_transaction_error_keeps_runtime_classification(
