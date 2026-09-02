@@ -49,11 +49,12 @@ create-job → set-budget → register-job → fund → submit → settle
 
 Constraints: (1) `register-job` must precede `fund` or the Router-as-hook reverts `PolicyNotSet()`; (2) `--evaluator` and `--hook` must both be the Router (`RouterNotEvaluator()` / `HookRequired()`); (3) `submit` requires `now ≤ expiredAt − disputeWindow` (`SubmissionTooLate()`) - pick ~30 days.
 
-All 13 write intents dispatch to twak on the canonical contract stack. Every kernel write carries a trailing `bytes optParams`, passed through raw via `--opt-params` (v0.19.0); on `submit` the SDK encodes `{"deliverable_url": …}` there, which the policy re-emits in `JobInitialised` for off-chain evaluators.
+All 14 write intents dispatch to twak on the canonical contract stack. Every kernel write carries a trailing `bytes optParams`, passed through raw via `--opt-params` (v0.19.0); on `submit` the SDK encodes `{"deliverable_url": …}` there, which the policy re-emits in `JobInitialised` for off-chain evaluators.
 
 | SDK intent | twak command | Solidity |
 | --- | --- | --- |
 | `erc8183.create_job` | `create-job --provider --evaluator --expires-at --description [--hook]` | `AgenticCommerce.createJob(...) → uint256 jobId` |
+| `erc8183.create_job_with_token` | `create-job --provider --evaluator --expires-at --description [--hook] --payment-token <address>` | `AgenticCommerce.createJobWithToken(...) → uint256 jobId` |
 | `erc8183.set_provider` | `set-provider <id> --provider [--opt-params]` | `setProvider(uint256, address, bytes)` |
 | `erc8183.set_budget` | `set-budget <id> --amount [--opt-params]` | `setBudget(uint256, uint256, bytes)` |
 | `erc8183.fund` | `fund <id> --expected-budget [--opt-params]` | ERC-20 `approve` **then** `fund(uint256, uint256 expectedBudget, bytes)` |
@@ -105,6 +106,8 @@ Because the EIP-712 payload is built, signed, and discarded inside the twak proc
 An optional `SessionBudgetTracker` reserves the quoted amount before the call and rolls back on failure (the CLI surfaces no settlement receipt).
 
 ## Current boundaries
+
+- **TWAK 多币种创建尚未做 live CLI 验证：** SDK 会原样传递已校验的 token checksum 地址，不会退化到旧 `createJob`。如安装的 CLI 不识别 `--payment-token`，SDK 返回 typed `UnsupportedWalletOperation` 并要求升级；发布前仍需针对目标 TWAK 版本做真实命令和链上验证。
 
 - **Shared-host process visibility:** twak v0.20.0 accepts message text, agent URIs, x402 URLs, and request bodies only as CLI arguments, so a co-resident local user may observe them in the process list. Do not use TWAK for sensitive workloads on shared/multi-tenant hosts; use the EVM keystore backend there until upstream supports stdin payloads. The SDK rejects x402 URLs containing userinfo or credential-like query keys (`token`, `secret`, `password`, `signature`, and similar), but ordinary URL/body/message content remains visible by upstream design.
 - **x402 `request` is mainnet-only** so far - testnet routes are rejected as "no supported route" (`quote` works on both).

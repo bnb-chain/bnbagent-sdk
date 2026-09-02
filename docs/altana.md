@@ -84,6 +84,19 @@ The provider does not expose `sign.message`, `sign.transaction`, or `sign.typed_
 
 `defaultAgentPermissions(...)` creates the normal BNBAgent grant. It allows selector-bound calls to the ERC-8004 registry and ERC-8183 Commerce, Router, and Policy contracts. The payment token is present only in the spend cap; the session receives no ERC-20 `approve` permission because an allowance created by a leaked key would survive session expiry/revocation.
 
+多币种买家应使用 `tokenSpends`为 catalog 中的每个 checksum token 分别配置上限；旧 `tokenSpend` 仍表示默认 U 的单币种上限，两者不能同时传入。Buyer 权限只新增精确的 `createJobWithToken(address,address,uint256,string,address,address)` selector，不会开放 Commerce target-wide 权限，也不会给 session ERC-20 `approve` 权限。
+
+```ts
+permissions: defaultAgentPermissions({
+  chainId: 56,
+  tokenSpends: [
+    { token: u.address, limit: uBudget },
+    { token: usdc.address, limit: usdcBudget },
+    { token: usdt.address, limit: usdtBudget },
+  ],
+})
+```
+
 The native allowance is required. A session without native spend permission cannot pay the relay-recovered gas and fails on-chain with `NoSpendPermissions`.
 
 Custom contract deployments are supported because Altana executes the intent's pre-encoded call. A session must include every custom target in its call permissions, and the BNBAgent protocol configuration must point to the same addresses.
@@ -97,7 +110,7 @@ The provider supports all write intents currently emitted by the TypeScript SDK:
 | Protocol | Intents |
 | --- | --- |
 | ERC-8004 | `register`, `set_metadata`, `set_agent_uri` |
-| ERC-8183 Commerce | `create_job`, `set_provider`, `set_budget`, `fund`, `submit`, `complete`, `reject`, `claim_refund` |
+| ERC-8183 Commerce | `create_job`, `create_job_with_token`, `set_provider`, `set_budget`, `fund`, `submit`, `complete`, `reject`, `claim_refund` |
 | ERC-8183 Router | `register_job`, `settle`, `mark_expired` |
 | ERC-8183 Policy | `dispute`, `vote_reject` |
 
@@ -107,7 +120,7 @@ Reads continue through the SDK's public RPC client. Writes are encoded by the pr
 await admin.setErc8183Allowance(paymentToken, commerceAddress, sessionTokenCap);
 ```
 
-`erc8183.fund` checks that allowance and relays only the Commerce `fund` call. Zero the allowance from the admin provider when revoking the session.
+每个 token 都需由 admin 对同一 Commerce 单独设置 bounded allowance；`erc8183.fund` 使用链上 job token 检查对应 allowance，然后只 relay Commerce `fund` 调用。session 撤销时应将这些 allowance 逐个清零。Altana session 的 B402 Permit2 路径保持原有的 delegated 安全边界；本次不为 evm-local/Turnkey 开放 Permit2 raw typed-data 签名。
 
 ## ERC-8183 quote signing
 

@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  AssetId,
   BSC_MAINNET_CHAIN_ID,
   BSC_TESTNET_CHAIN_ID,
   getAddress,
+  getAsset,
 } from "../src/networks/index.js";
 import {
   EIP3009_TYPES,
@@ -115,6 +117,18 @@ describe("SigningPolicy.strictDefault", () => {
     expect(caught?.chainId).toBe(BSC_MAINNET_CHAIN_ID);
   });
 
+  it.each([AssetId.BINANCE_PEG_USDC, AssetId.BINANCE_PEG_USDT])(
+    "does not treat catalog stablecoin %s as an EIP-3009 domain",
+    (assetId) => {
+      const token = getAsset(BSC_MAINNET_CHAIN_ID, assetId);
+      expect(() =>
+        twaCall(SigningPolicy.strictDefault(), {
+          domainOverrides: { verifyingContract: token.address },
+        }),
+      ).toThrow(/not in allowlist/);
+    },
+  );
+
   it("rejects unknown chainId", () => {
     const p = SigningPolicy.strictDefault();
     expect(() => twaCall(p, { domainOverrides: { chainId: 1 } })).toThrow(
@@ -163,6 +177,29 @@ describe("SigningPolicy.strictDefault", () => {
     expect(() => check(p, domain, types, {}, { now: NOW })).toThrow(
       /denylisted/,
     );
+  });
+
+  it("rejects Permit2 SignatureTransfer primary types by default", () => {
+    const token = getAsset(BSC_MAINNET_CHAIN_ID, AssetId.BINANCE_PEG_USDC);
+    const domain = {
+      name: "Permit2",
+      version: "1",
+      chainId: BSC_MAINNET_CHAIN_ID,
+      verifyingContract: token.address,
+    };
+    const types = {
+      EIP712Domain: EIP712DOMAIN_FIELDS,
+      PermitTransferFrom: [{ name: "nonce", type: "uint256" }],
+    };
+    expect(() =>
+      check(
+        SigningPolicy.strictDefault(),
+        domain,
+        types,
+        { nonce: 1 },
+        { now: NOW },
+      ),
+    ).toThrow(/not in allowlist/);
   });
 
   it("denylist takes precedence over allowlist", () => {

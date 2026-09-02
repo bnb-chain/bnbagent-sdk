@@ -7,7 +7,9 @@ import pytest
 from bnbagent.networks import (
     BSC_MAINNET_CHAIN_ID,
     BSC_TESTNET_CHAIN_ID,
+    AssetId,
     get_address,
+    get_asset,
 )
 from bnbagent.signing import (
     EIP3009_TYPES,
@@ -111,6 +113,16 @@ def test_strict_default_rejects_unknown_verifying_contract():
     assert exc.value.chain_id == BSC_MAINNET_CHAIN_ID
 
 
+@pytest.mark.parametrize("asset_id", [AssetId.BINANCE_PEG_USDC, AssetId.BINANCE_PEG_USDT])
+def test_strict_default_does_not_treat_catalog_stablecoins_as_eip3009(asset_id):
+    token = get_asset(BSC_MAINNET_CHAIN_ID, asset_id)
+    with pytest.raises(PolicyViolation, match="not in allowlist"):
+        _twa_call(
+            SigningPolicy.strict_default(),
+            domain_overrides={"verifyingContract": token.address},
+        )
+
+
 def test_strict_default_rejects_unknown_chain_id():
     p = SigningPolicy.strict_default()
     # chain_id 1 (Ethereum mainnet) — U mainnet address but wrong chain
@@ -151,6 +163,22 @@ def test_strict_default_rejects_permit2_permit_single():
     types = {"EIP712Domain": EIP712DOMAIN_FIELDS, "PermitSingle": PERMIT_FIELDS}
     with pytest.raises(PolicyViolation, match="denylisted"):
         check(p, domain, types, {}, now=NOW)
+
+
+def test_strict_default_rejects_permit2_signature_transfer_primary_type():
+    token = get_asset(BSC_MAINNET_CHAIN_ID, AssetId.BINANCE_PEG_USDC)
+    domain = {
+        "name": "Permit2",
+        "version": "1",
+        "chainId": BSC_MAINNET_CHAIN_ID,
+        "verifyingContract": token.address,
+    }
+    types = {
+        "EIP712Domain": EIP712DOMAIN_FIELDS,
+        "PermitTransferFrom": [{"name": "nonce", "type": "uint256"}],
+    }
+    with pytest.raises(PolicyViolation, match="not in allowlist"):
+        check(SigningPolicy.strict_default(), domain, types, {"nonce": 1}, now=NOW)
 
 
 def test_denylist_takes_precedence_over_allowlist():

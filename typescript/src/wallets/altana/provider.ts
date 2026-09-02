@@ -1082,13 +1082,28 @@ export class AltanaIntentExecutor implements IntentExecutor {
           "erc8183.fund intent is missing its amount (kwargs.expectedBudget / call.args[1]); cannot verify the bounded Commerce allowance",
         );
       }
-      const token = await this.#provider._paymentTokenFor(
-        this.#context.client,
-        call.address,
-        call.abi,
-      );
+      const jobId =
+        (intent.kwargs?.jobId as bigint | undefined) ??
+        (call.args[0] as bigint | undefined);
+      if (typeof jobId !== "bigint") {
+        throw new Error(
+          "erc8183.fund intent is missing jobId (kwargs.jobId / call.args[0]); cannot resolve the authoritative job payment token",
+        );
+      }
+      const token = await this.#context.client.readContract({
+        address: call.address,
+        abi: call.abi,
+        functionName: "jobPaymentToken",
+        args: [jobId],
+      });
+      if (typeof token !== "string") {
+        throw new Error(
+          `erc8183.fund jobPaymentToken(${jobId}) returned a non-address value`,
+        );
+      }
+      const checkedToken = toChecksumAddress(token);
       const allowance = await this.#context.client.readContract({
-        address: token,
+        address: checkedToken,
         abi: erc20Abi,
         functionName: "allowance",
         args: [this.#provider.address, call.address],

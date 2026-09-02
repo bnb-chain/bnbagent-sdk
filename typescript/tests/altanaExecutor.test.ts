@@ -90,6 +90,7 @@ const SESSION_PK: `0x${string}` = `0x${"b2".repeat(32)}`;
 const WALLET = getAddress(`0x${"11".repeat(20)}`);
 const COMMERCE = getAddress(`0x${"aa".repeat(20)}`);
 const FAKE_TOKEN = getAddress(`0x${"dd".repeat(20)}`);
+const JOB_TOKEN = getAddress(`0x${"ee".repeat(20)}`);
 const CALLS_ID: `0x${string}` = `0x${"ca".repeat(32)}`;
 const SET_VALUE_ABI = parseAbi(["function setValue(uint256 x) returns (bool)"]);
 const TARGET = getAddress(`0x${"22".repeat(20)}`);
@@ -98,6 +99,11 @@ const PAYMENT_TOKEN_SELECTOR = encodeFunctionData({
   abi: agenticCommerceAbi,
   functionName: "paymentToken",
   args: [],
+}).slice(0, 10);
+const JOB_PAYMENT_TOKEN_SELECTOR = encodeFunctionData({
+  abi: agenticCommerceAbi,
+  functionName: "jobPaymentToken",
+  args: [1n],
 }).slice(0, 10);
 const ALLOWANCE_SELECTOR = encodeFunctionData({
   abi: erc20Abi,
@@ -159,7 +165,7 @@ function fundIntent(overrides: Partial<Intent> = {}): Intent {
   };
 }
 
-/** eth_call handler for commerce.paymentToken() and token.allowance(). */
+/** eth_call handler for commerce token views and token.allowance(). */
 function paymentTokenHandler(allowance = 250n) {
   return (params: readonly unknown[]) => {
     const [{ data }] = params as [{ data: Hex }];
@@ -167,6 +173,13 @@ function paymentTokenHandler(allowance = 250n) {
       return encodeFunctionResult({
         abi: agenticCommerceAbi,
         functionName: "paymentToken",
+        result: FAKE_TOKEN,
+      });
+    }
+    if (data.toLowerCase().startsWith(JOB_PAYMENT_TOKEN_SELECTOR)) {
+      return encodeFunctionResult({
+        abi: agenticCommerceAbi,
+        functionName: "jobPaymentToken",
         result: FAKE_TOKEN,
       });
     }
@@ -447,6 +460,44 @@ describe("AltanaIntentExecutor — erc8183.fund allowance boundary", () => {
     });
   });
 
+  it("checks allowance on the facade-verified job token, not legacy paymentToken", async () => {
+    const seenTargets: string[] = [];
+    const mock = mockPublicClient({
+      eth_call: (params) => {
+        const [{ data, to }] = params as [{ data: Hex; to: string }];
+        seenTargets.push(to);
+        if (data.toLowerCase().startsWith(PAYMENT_TOKEN_SELECTOR)) {
+          return encodeFunctionResult({
+            abi: agenticCommerceAbi,
+            functionName: "paymentToken",
+            result: FAKE_TOKEN,
+          });
+        }
+        if (data.toLowerCase().startsWith(JOB_PAYMENT_TOKEN_SELECTOR)) {
+          return encodeFunctionResult({
+            abi: agenticCommerceAbi,
+            functionName: "jobPaymentToken",
+            result: JOB_TOKEN,
+          });
+        }
+        if (data.toLowerCase().startsWith(ALLOWANCE_SELECTOR)) {
+          return encodeFunctionResult({
+            abi: erc20Abi,
+            functionName: "allowance",
+            result: 250n,
+          });
+        }
+        return "0x";
+      },
+    });
+    const { executor } = makeExecutor(makeAdminProvider(), mock);
+
+    await executor.execute(fundIntent());
+
+    expect(seenTargets).toContain(JOB_TOKEN);
+    expect(seenTargets).not.toContain(FAKE_TOKEN);
+  });
+
   it("falls back to call.args[1] for the amount when kwargs lack expectedBudget", async () => {
     const mock = mockPublicClient({ eth_call: paymentTokenHandler(249n) });
     const { executor } = makeExecutor(makeAdminProvider(), mock);
@@ -456,7 +507,7 @@ describe("AltanaIntentExecutor — erc8183.fund allowance boundary", () => {
     expect(sdkMocks.executeMock).not.toHaveBeenCalled();
   });
 
-  it("caches paymentToken but rechecks allowance before every fund", async () => {
+  it("rechecks the job token and allowance before every fund", async () => {
     const { executor, mock } = makeExecutor();
     await executor.execute(fundIntent());
     await executor.execute(fundIntent());
@@ -466,9 +517,9 @@ describe("AltanaIntentExecutor — erc8183.fund allowance boundary", () => {
         call.method === "eth_call" &&
         String(
           (call.params[0] as { data?: string } | undefined)?.data ?? "",
-        ).startsWith(PAYMENT_TOKEN_SELECTOR),
+        ).startsWith(JOB_PAYMENT_TOKEN_SELECTOR),
     );
-    expect(tokenReads).toHaveLength(1);
+    expect(tokenReads).toHaveLength(2);
     const allowanceReads = mock.calls.filter(
       (call) =>
         call.method === "eth_call" &&
