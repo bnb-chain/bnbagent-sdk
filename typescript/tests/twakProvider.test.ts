@@ -213,7 +213,8 @@ describe("TWAKProvider — token-bound ERC-8183 creation", () => {
   it.each([
     "error: unknown option '--payment-token'",
     "Error: Unknown option '--payment-token'",
-    "error: unknown command 'create-job'",
+    "error: unrecognized option '--payment-token'",
+    "error: unexpected argument '--payment-token' found",
   ])(
     "maps an old CLI surface (%s) to typed upgrade guidance",
     async (cliError) => {
@@ -231,26 +232,36 @@ describe("TWAKProvider — token-bound ERC-8183 creation", () => {
     },
   );
 
-  it("keeps genuine transaction failures in the normal error classification", async () => {
-    const calls = installRouter((args) =>
-      args[0] === "wallet" && args[1] === "status"
-        ? STATUS_OK
-        : {
-            code: 1,
-            stdout: JSON.stringify({
-              success: false,
-              error: "execution reverted: UnsupportedPaymentToken",
-            }),
-          },
-    );
+  it.each([
+    "execution reverted: UnsupportedPaymentToken",
+    "execution reverted: unknown command opcode",
+  ])(
+    "keeps genuine transaction failure (%s) in the normal classification",
+    async (transactionError) => {
+      const calls = installRouter((args) =>
+        args[0] === "wallet" && args[1] === "status"
+          ? STATUS_OK
+          : {
+              code: 1,
+              stdout: JSON.stringify({
+                success: false,
+                error: transactionError,
+              }),
+            },
+      );
 
-    const promise = new TWAKProvider().execute(intent());
-    await expect(promise).rejects.toThrow("UnsupportedPaymentToken");
-    await expect(promise).rejects.not.toBeInstanceOf(
-      UnsupportedWalletOperation,
-    );
-    expect(calls.some((call) => call.includes("--payment-token"))).toBe(true);
-  });
+      let thrown: unknown;
+      try {
+        await new TWAKProvider().execute(intent());
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(Error);
+      expect(thrown).not.toBeInstanceOf(UnsupportedWalletOperation);
+      expect((thrown as Error).message).toContain(transactionError);
+      expect(calls.some((call) => call.includes("--payment-token"))).toBe(true);
+    },
+  );
 });
 
 // ── address, identity pin, existence ──

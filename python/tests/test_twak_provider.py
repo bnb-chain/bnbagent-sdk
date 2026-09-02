@@ -254,7 +254,8 @@ def test_create_job_with_token_passes_exact_payment_token_to_twak():
     [
         "error: unknown option '--payment-token'",
         "Error: Unknown option '--payment-token'",
-        "error: unknown command 'create-job'",
+        "error: unrecognized option '--payment-token'",
+        "error: unexpected argument '--payment-token' found",
     ],
 )
 def test_create_job_with_token_old_twak_maps_unknown_surface_to_typed_upgrade_error(cli_error):
@@ -271,7 +272,16 @@ def test_create_job_with_token_old_twak_maps_unknown_surface_to_typed_upgrade_er
     assert any("--payment-token" in call for call in calls)
 
 
-def test_create_job_with_token_transaction_error_keeps_runtime_classification():
+@pytest.mark.parametrize(
+    "transaction_error",
+    [
+        "execution reverted: UnsupportedPaymentToken",
+        "execution reverted: unknown command opcode",
+    ],
+)
+def test_create_job_with_token_transaction_error_keeps_runtime_classification(
+    transaction_error,
+):
     calls = []
 
     def run(cmd, **kwargs):
@@ -280,11 +290,11 @@ def test_create_job_with_token_transaction_error_keeps_runtime_classification():
             return _completed(cmd, {"agentWallet": "configured"})
         return _completed(
             cmd,
-            {"success": False, "error": "execution reverted: UnsupportedPaymentToken"},
+            {"success": False, "error": transaction_error},
             returncode=1,
         )
 
-    with pytest.raises(RuntimeError, match="UnsupportedPaymentToken"):
+    with pytest.raises(RuntimeError, match=transaction_error):
         _execute(TWAKProvider(), _create_job_with_token_intent(), run)
     assert any("--payment-token" in call for call in calls)
 

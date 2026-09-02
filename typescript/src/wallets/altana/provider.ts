@@ -1074,20 +1074,29 @@ export class AltanaIntentExecutor implements IntentExecutor {
     ];
 
     if (intent.name === ERC8183_FUND) {
-      const amount =
-        (intent.kwargs?.expectedBudget as bigint | undefined) ??
-        (call.args[1] as bigint | undefined);
-      if (typeof amount !== "bigint") {
+      const jobId = call.args[0];
+      const amount = call.args[1];
+      if (intent.kwargs?.jobId !== undefined && intent.kwargs.jobId !== jobId) {
         throw new Error(
-          "erc8183.fund intent is missing its amount (kwargs.expectedBudget / call.args[1]); cannot verify the bounded Commerce allowance",
+          "erc8183.fund kwargs.jobId must exactly match call.args[0]",
         );
       }
-      const jobId =
-        (intent.kwargs?.jobId as bigint | undefined) ??
-        (call.args[0] as bigint | undefined);
+      if (
+        intent.kwargs?.expectedBudget !== undefined &&
+        intent.kwargs.expectedBudget !== amount
+      ) {
+        throw new Error(
+          "erc8183.fund kwargs.expectedBudget must exactly match call.args[1]",
+        );
+      }
+      if (typeof amount !== "bigint") {
+        throw new Error(
+          "erc8183.fund call.args[1] must be a bigint amount; cannot verify the bounded Commerce allowance",
+        );
+      }
       if (typeof jobId !== "bigint") {
         throw new Error(
-          "erc8183.fund intent is missing jobId (kwargs.jobId / call.args[0]); cannot resolve the authoritative job payment token",
+          "erc8183.fund call.args[0] must be a bigint jobId; cannot resolve the authoritative job payment token",
         );
       }
       const token = await this.#context.client.readContract({

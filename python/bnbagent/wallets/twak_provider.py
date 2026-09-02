@@ -118,6 +118,29 @@ from .wallet_provider import WalletProvider
 
 logger = logging.getLogger(__name__)
 
+
+def _is_cli_parser_error(message: str, *, flag: str | None = None) -> bool:
+    """Match explicit CLI-parser diagnostics, never transaction/revert text."""
+    prefixes = (
+        "unknown command",
+        "unknown option",
+        "unknown argument",
+        "unrecognized option",
+        "unrecognized argument",
+        "unexpected option",
+        "unexpected argument",
+    )
+    for line in message.lower().splitlines():
+        detail = line.strip()
+        if detail.startswith("twak command failed (") and "): " in detail:
+            detail = detail.split("): ", 1)[1]
+        if detail.startswith("error:"):
+            detail = detail.removeprefix("error:").strip()
+        if detail.startswith(prefixes) and (flag is None or flag.lower() in detail):
+            return True
+    return False
+
+
 DEFAULT_TWAK_BIN = "twak"
 DEFAULT_TIMEOUT = 120  # seconds per CLI invocation
 
@@ -384,8 +407,8 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         # "unknown command/option" means the installed twak predates the
         # command surface this provider targets — point at the upgrade, not
         # at the (irrelevant) setup steps.
-        combined = f"{stderr} {stdout}"
-        if "unknown command" in combined or "unknown option" in combined:
+        combined = f"{stderr}\n{stdout}"
+        if _is_cli_parser_error(combined):
             hint = (
                 "The installed twak CLI does not recognise this command/option "
                 "— upgrade twak to >= v0.20.0 (`npm install -g @trustwallet/cli`)."
@@ -929,10 +952,7 @@ class TWAKProvider(WalletProvider, IntentExecutor):
             data = self._run([*args, *self._paymaster_args(), "--chain", self._chain])
         except RuntimeError as exc:
             message = str(exc)
-            normalized_message = message.lower()
-            if "unknown command" in normalized_message or (
-                "unknown option" in normalized_message and "--payment-token" in normalized_message
-            ):
+            if _is_cli_parser_error(message, flag="--payment-token"):
                 raise UnsupportedWalletOperation(
                     "erc8183.create_job_with_token",
                     reason=(

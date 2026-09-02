@@ -443,6 +443,25 @@ describe("AltanaIntentExecutor — nonce races and dispatch", () => {
 });
 
 describe("AltanaIntentExecutor — erc8183.fund allowance boundary", () => {
+  it.each([
+    ["jobId", { jobId: 99n, expectedBudget: 250n }],
+    ["expectedBudget", { jobId: 1n, expectedBudget: 999n }],
+  ])(
+    "rejects a kwargs/call %s mismatch before any read or relay",
+    async (_field, kwargs) => {
+      const { executor, mock } = makeExecutor();
+
+      await expect(executor.execute(fundIntent({ kwargs }))).rejects.toThrow(
+        /must exactly match call\.args/,
+      );
+
+      expect(mock.calls.filter((call) => call.method === "eth_call")).toEqual(
+        [],
+      );
+      expect(sdkMocks.executeMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("checks the bounded allowance and relays only Commerce.fund", async () => {
     const { executor } = makeExecutor();
     await executor.execute(fundIntent());

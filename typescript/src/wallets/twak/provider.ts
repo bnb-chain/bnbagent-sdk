@@ -85,6 +85,32 @@ import type { SignatureResult } from "../walletProvider.js";
 import { WalletProvider } from "../walletProvider.js";
 import { TwakX402Payer, type TwakX402PayerOptions } from "./x402.js";
 
+function isCliParserError(message: string, flag?: string): boolean {
+  const prefixes = [
+    "unknown command",
+    "unknown option",
+    "unknown argument",
+    "unrecognized option",
+    "unrecognized argument",
+    "unexpected option",
+    "unexpected argument",
+  ];
+  return message
+    .toLowerCase()
+    .split(/\r?\n/u)
+    .some((line) => {
+      let detail = line.trim().replace(/^error:\s*/u, "");
+      if (detail.startsWith("twak command failed (")) {
+        detail = detail.split("): ", 2)[1] ?? detail;
+      }
+      detail = detail.replace(/^error:\s*/u, "");
+      return (
+        prefixes.some((prefix) => detail.startsWith(prefix)) &&
+        (flag === undefined || detail.includes(flag.toLowerCase()))
+      );
+    });
+}
+
 /** Default per-CLI-invocation timeout. */
 export const DEFAULT_TWAK_TIMEOUT_MS = 120_000;
 
@@ -617,13 +643,11 @@ export class TWAKProvider extends WalletProvider implements IntentExecutor {
     }
     // "unknown command/option" means the installed twak predates the
     // command surface this provider targets — point at the upgrade.
-    const combined = `${stderr} ${stdout}`;
-    const hint =
-      combined.includes("unknown command") ||
-      combined.includes("unknown option")
-        ? "The installed twak CLI does not recognise this command/option — " +
-          "upgrade twak to >= v0.20.0 (`npm install @trustwallet/cli`)."
-        : SETUP_HINT;
+    const combined = `${stderr}\n${stdout}`;
+    const hint = isCliParserError(combined)
+      ? "The installed twak CLI does not recognise this command/option — " +
+        "upgrade twak to >= v0.20.0 (`npm install @trustwallet/cli`)."
+      : SETUP_HINT;
     return `twak command failed (${redact(cmd)}): ${detail || "<no output>"}. ${hint}`;
   }
 
@@ -1210,12 +1234,8 @@ async function handleCreateJobWithToken(
   try {
     data = await p._run([...args, ...p._paymasterArgs(), "--chain", p.chain]);
   } catch (error) {
-    const message = String(error).toLowerCase();
-    if (
-      message.includes("unknown command") ||
-      (message.includes("unknown option") &&
-        message.includes("--payment-token"))
-    ) {
+    const message = String(error);
+    if (isCliParserError(message, "--payment-token")) {
       throw new UnsupportedWalletOperation("erc8183.create_job_with_token", {
         reason:
           "upgrade twak to a version that supports the --payment-token capability; the installed CLI cannot safely create a token-bound job",
