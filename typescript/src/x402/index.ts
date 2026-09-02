@@ -1,5 +1,6 @@
 export { SessionBudgetTracker } from "./budget.js";
 export {
+  UnsupportedWalletRouteError,
   X402AmountExceededError,
   X402BudgetExhaustedError,
   X402NoPayableRouteError,
@@ -7,7 +8,13 @@ export {
   X402RecipientMismatchError,
   X402SignerError,
 } from "./errors.js";
-export { paymentOptionFromCli, quoteFromCli } from "./payer.js";
+export {
+  expectedAssetFromPaymentOption,
+  paymentOptionFromCli,
+  quoteFromCli,
+} from "./payer.js";
+export { requireB402WalletRoute, resolveB402Asset } from "./assets.js";
+export type { B402WalletRoute, ExpectedB402Asset } from "./assets.js";
 export type {
   X402PaymentOption,
   X402PaymentResult,

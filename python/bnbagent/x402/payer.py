@@ -20,6 +20,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+from .assets import ExpectedB402Asset, resolve_b402_asset
+
 
 @dataclass(frozen=True)
 class X402PaymentOption:
@@ -68,6 +70,14 @@ class X402PaymentOption:
         )
 
 
+def expected_asset_from_payment_option(
+    option: X402PaymentOption,
+) -> ExpectedB402Asset:
+    """Resolve the option's exact ``network + asset`` through the catalog."""
+
+    return resolve_b402_asset(option.network, option.asset)
+
+
 @dataclass(frozen=True)
 class X402Quote:
     """A parsed 402 challenge: the resource plus its payable routes.
@@ -93,8 +103,7 @@ class X402Quote:
             description=resource.get("description"),
             mime_type=resource.get("mimeType"),
             accepts=tuple(
-                X402PaymentOption.from_cli(entry)
-                for entry in data.get("accepts") or ()
+                X402PaymentOption.from_cli(entry) for entry in data.get("accepts") or ()
             ),
             summary=data.get("summary"),
             raw=data,
@@ -137,9 +146,7 @@ class X402Payer(Protocol):
     all. Implementations may accept extra keyword arguments.
     """
 
-    def quote(
-        self, url: str, *, method: str = "GET", body: str | None = None
-    ) -> X402Quote:
+    def quote(self, url: str, *, method: str = "GET", body: str | None = None) -> X402Quote:
         """Fetch the 402 challenge for ``url`` without paying."""
         ...
 

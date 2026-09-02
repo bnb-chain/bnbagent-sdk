@@ -12,6 +12,9 @@
  * data types and the CLI-shaped parse helpers are ported here.
  */
 
+import { resolveB402Asset } from "./assets.js";
+import type { ExpectedB402Asset } from "./assets.js";
+
 /**
  * One payable route from a 402 challenge (a quote `accepts` entry).
  *
@@ -76,6 +79,13 @@ export function paymentOptionFromCli(
     requiresApproval: Boolean(entry.requiresApproval ?? false),
     description: entry.description as string | undefined,
   };
+}
+
+/** Resolve the option's exact `network + asset` through the catalog. */
+export function expectedAssetFromPaymentOption(
+  option: X402PaymentOption,
+): ExpectedB402Asset {
+  return resolveB402Asset(option.network, option.asset);
 }
 
 /**
