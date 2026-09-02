@@ -115,7 +115,10 @@ def test_evm_local_and_turnkey_allow_only_verified_known_eip3009_u(
         assert route.delegated is False
 
 
-def test_active_usd1_allows_local_eip3009_but_keeps_permit2_and_placeholder_closed() -> None:
+@pytest.mark.parametrize("wallet_kind", ("evm-local", "turnkey"))
+def test_active_usd1_allows_local_eip3009_but_keeps_permit2_and_placeholder_closed(
+    wallet_kind: str,
+) -> None:
     usd1 = x402.resolve_b402_asset("eip155:56", AssetId.USD1)
 
     assert known_eip3009_payment_tokens() == frozenset(
@@ -125,11 +128,12 @@ def test_active_usd1_allows_local_eip3009_but_keeps_permit2_and_placeholder_clos
             (97, get_asset(97, AssetId.TEST_U).address),
         }
     )
-    route = x402.require_b402_wallet_route("evm-local", usd1, "eip3009")
+    route = x402.require_b402_wallet_route(wallet_kind, usd1, "eip3009")
+    assert route.wallet_kind == wallet_kind
     assert route.transfer_method == "eip3009"
     assert route.delegated is False
     with pytest.raises(x402.UnsupportedWalletRouteError):
-        x402.require_b402_wallet_route("evm-local", usd1, "permit2-exact")
+        x402.require_b402_wallet_route(wallet_kind, usd1, "permit2-exact")
     with pytest.raises(KeyError, match="unavailable"):
         x402.resolve_b402_asset("eip155:97", AssetId.TEST_USD1)
 

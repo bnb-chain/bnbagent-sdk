@@ -85,10 +85,11 @@ class EVMWalletProvider(WalletProvider):
             signing_policy: Policy applied to every :meth:`sign_typed_data`
                 call. Defaults to :meth:`SigningPolicy.strict_default`, which
                 only accepts EIP-3009 ``TransferWithAuthorization`` /
-                ``ReceiveWithAuthorization`` against the registered U-token
-                payment-token deployments and refuses every unbounded Permit
-                variant. Pass :meth:`SigningPolicy.permissive` to disable the
-                gate (intended for tests; logs a warning on construction).
+                ``ReceiveWithAuthorization`` against active catalog assets
+                with verified EIP-3009 metadata and refuses every unbounded
+                Permit variant. Pass :meth:`SigningPolicy.permissive` to
+                disable the gate (intended for tests; logs a warning on
+                construction).
 
         Raises:
             ValueError: If password is empty, private_key is invalid, or

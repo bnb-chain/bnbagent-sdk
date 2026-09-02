@@ -45,8 +45,8 @@ const kind = expected.b402Kinds[0]; // permit2-exact / USD Coin / 1
 
 | 钱包路由 | `eip3009` | `permit2-exact` | `permit2-upto` |
 | --- | --- | --- | --- |
-| `evm-local` | 仅 catalog 有已验证 domain 且在 `known_payment_tokens` 中的 U | 不支持 | 不支持 |
-| `turnkey` | 仅 catalog 有已验证 domain 且在 `known_payment_tokens` 中的 U | 不支持 | 不支持 |
+| `evm-local` | 仅 active catalog 中有已验证 EIP-3009 domain 的资产（如 U、USD1） | 不支持 | 不支持 |
+| `turnkey` | 仅 active catalog 中有已验证 EIP-3009 domain 的资产（如 U、USD1） | 不支持 | 不支持 |
 | `twak` | catalog 声明时可交给 delegated payer | catalog 声明时可交给 delegated payer | 不支持 |
 | `altana` | catalog 声明时可交给 delegated payer | catalog 声明时可交给 delegated payer | 不支持 |
 
