@@ -210,6 +210,8 @@ function exactPermit2RouteMatches(
       typeof raw.payTo === "string" &&
       getAddress(raw.payTo) === getAddress(expected.payTo) &&
       raw.maxTimeoutSeconds === expected.maxTimeoutSeconds &&
+      (raw.transferMethod === undefined ||
+        raw.transferMethod === expected.transferMethod) &&
       extra.assetTransferMethod === expected.transferMethod &&
       extra.name === expected.name &&
       extra.version === expected.version &&
@@ -241,7 +243,11 @@ function canonicalJson(value: unknown): string | null {
   if (prototype !== Object.prototype && prototype !== null) return null;
   const entries: string[] = [];
   for (const key of Object.keys(value).sort()) {
-    const encoded = canonicalJson((value as Record<string, unknown>)[key]);
+    const item = (value as Record<string, unknown>)[key];
+    // JSON.stringify omits undefined object properties. Mirror that here so
+    // a typed optional field and its omission have one canonical binding.
+    if (item === undefined) continue;
+    const encoded = canonicalJson(item);
     if (encoded === null) return null;
     entries.push(`${JSON.stringify(key)}:${encoded}`);
   }

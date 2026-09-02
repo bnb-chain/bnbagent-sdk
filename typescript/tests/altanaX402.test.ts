@@ -449,6 +449,7 @@ describe("AltanaX402Payer.requestExact", () => {
     ["scheme", { scheme: "permit2-exact" }],
     ["missing scheme", { scheme: undefined }],
     ["unsafe numeric amount", { amount: 5000 }],
+    ["conflicting top-level method", { transferMethod: "eip3009" }],
     ["x402Version", {}, 1],
     ["timeout", { maxTimeoutSeconds: 301 }],
     [
@@ -503,6 +504,26 @@ describe("AltanaX402Payer.requestExact", () => {
       }),
     ).rejects.toThrow(X402NoPayableRouteError);
     expect(sdkMocks.signX402PaymentMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores undefined object properties when comparing canonical resources", async () => {
+    const resource = { url: exactResource.url };
+    const { impl } = fetchQueue(
+      json402({ x402Version: 2, resource, accepts: [exactEntry] }),
+      jsonOk({ data: "paid" }),
+    );
+    const payer = sessionProvider().makeX402Payer({ fetchImpl: impl });
+
+    const result = await payer.requestExact("https://api.example/paid", {
+      expectedRoute: {
+        ...expectedRoute,
+        resource: { ...resource, description: undefined },
+      },
+      maxPayment: 5000n,
+    });
+
+    expect(result).toMatchObject({ paid: true, amount: 5000n });
+    expect(sdkMocks.signX402PaymentMock).toHaveBeenCalledTimes(1);
   });
 
   it.each([false, 0, ""])(
