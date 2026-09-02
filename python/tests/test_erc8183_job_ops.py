@@ -8,7 +8,7 @@ Focus areas:
 import asyncio
 import json
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 
@@ -280,6 +280,57 @@ class TestVerifyJob:
         assert result["valid"] is False
         assert result["error_code"] == ERR_JOB_TOKEN_MISMATCH
         assert "0x" not in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_job_token_rpc_value_error_is_retryable_chain_error(self):
+        ops = _make_ops()
+        client = _inject_client(ops)
+        client.get_job.return_value = _job()
+        client.job_payment_token.side_effect = ValueError("execution reverted")
+
+        result = await ops.verify_job(1)
+
+        assert result["valid"] is False
+        assert result["error_code"] == "chain_unavailable"
+        assert result["retryable"] is True
+
+    @pytest.mark.asyncio
+    async def test_job_token_rpc_timeout_is_retryable_chain_error(self):
+        ops = _make_ops()
+        client = _inject_client(ops)
+        client.get_job.return_value = _job()
+        client.job_payment_token.side_effect = TimeoutError("rpc://secret")
+
+        result = await ops.verify_job(1)
+
+        assert result["valid"] is False
+        assert result["error_code"] == "chain_unavailable"
+        assert result["retryable"] is True
+        assert "secret" not in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_invalid_local_job_token_remains_stable_mismatch(self):
+        ops = _make_ops()
+        client = _inject_client(ops)
+        client.get_job.return_value = _job()
+        client.job_payment_token.return_value = "not-an-address"
+
+        result = await ops.verify_job(1)
+
+        assert result["error_code"] == ERR_JOB_TOKEN_MISMATCH
+
+    @pytest.mark.asyncio
+    async def test_default_payment_token_read_failure_is_retryable_chain_error(self):
+        ops = _make_ops()
+        client = _inject_client(ops)
+        client.get_job.return_value = _job()
+        type(client).payment_token = PropertyMock(side_effect=TimeoutError("rpc://secret"))
+
+        result = await ops.verify_job(1)
+
+        assert result["valid"] is False
+        assert result["error_code"] == "chain_unavailable"
+        assert result["retryable"] is True
 
     @pytest.mark.asyncio
     async def test_legacy_service_price_rejects_non_default_job_token(self):

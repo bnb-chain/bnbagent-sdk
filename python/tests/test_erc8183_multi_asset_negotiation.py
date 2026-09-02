@@ -1,6 +1,6 @@
 """Multi-asset ERC-8183 negotiation behavior."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -99,6 +99,33 @@ def test_successful_refresh_removes_only_newly_disabled_asset():
     assert handler.negotiate(_request(TEST_USDT.address)).accepted is False
 
 
+def test_negotiate_auto_refreshes_and_rejects_newly_disabled_asset():
+    enabled = {TEST_USDC.address.lower(), TEST_USDT.address.lower()}
+    client = _client(supported=set())
+    client.is_payment_token_supported.side_effect = lambda token: token.lower() in enabled
+    handler = _multi_handler(client)
+    enabled.remove(TEST_USDT.address.lower())
+
+    rejected = handler.negotiate(_request(TEST_USDT.address))
+
+    assert rejected.accepted is False
+    assert rejected.response["details"] == {"supported_assets": [AssetId.TEST_USDC.value]}
+    assert handler.negotiate(_request(TEST_USDC.address)).accepted is True
+
+
+def test_negotiate_refresh_rpc_failure_returns_safe_dormant_response():
+    client = _client(supported={TEST_USDC.address})
+    handler = _multi_handler(client)
+    client.is_payment_token_supported.side_effect = TimeoutError("rpc://secret-key")
+
+    result = handler.negotiate(_request(TEST_USDC.address))
+
+    assert result.accepted is False
+    assert result.response["reason_code"] == ReasonCode.UNSUPPORTED
+    assert result.response["details"] == {"supported_assets": []}
+    assert "secret" not in str(result.response)
+
+
 def test_refresh_failure_clears_active_snapshot_fail_closed():
     client = _client(supported={TEST_USDC.address})
     handler = _multi_handler(client)
@@ -111,6 +138,34 @@ def test_refresh_failure_clears_active_snapshot_fail_closed():
     assert result.accepted is False
     assert result.response["details"] == {"supported_assets": []}
     assert "rpc secret details" not in str(result.response)
+
+
+def test_omitted_currency_uses_catalog_default_not_commerce_payment_token():
+    client = _client(supported={TEST_USDC.address}, default=TEST_USDC.address)
+    handler = NegotiationHandler.from_erc8183_client_multi(
+        erc8183_client=client,
+        service_prices={AssetId.TEST_USDC: "1"},
+    )
+
+    omitted = handler.negotiate(_request())
+    explicit = handler.negotiate(_request(TEST_USDC.address))
+
+    assert omitted.accepted is False
+    assert omitted.response["details"] == {"supported_assets": [AssetId.TEST_USDC.value]}
+    assert explicit.accepted is True
+
+
+def test_multi_constructor_fails_closed_without_exactly_one_catalog_default():
+    client = _client(supported={TEST_USDC.address})
+    with patch(
+        "bnbagent.erc8183.negotiation.list_assets",
+        return_value=(TEST_USDC, TEST_USDT),
+    ):
+        with pytest.raises(ValueError, match="exactly one default"):
+            NegotiationHandler.from_erc8183_client_multi(
+                erc8183_client=client,
+                service_prices={AssetId.TEST_USDC: "1"},
+            )
 
 
 @pytest.mark.parametrize(
@@ -140,15 +195,53 @@ def test_multi_config_accepts_zero_atomic_price():
     assert result.response["terms"]["price"] == "0"
 
 
-@pytest.mark.parametrize("price", ["00", "01", "1.0", -1])
+def test_multi_config_accepts_integer_zero_as_canonical_wire_string():
+    client = _client(supported={TEST_USDC.address})
+    handler = NegotiationHandler.from_erc8183_client_multi(
+        erc8183_client=client,
+        service_prices={AssetId.TEST_USDC: 0},
+    )
+
+    result = handler.negotiate(_request(TEST_USDC.address))
+
+    assert result.accepted is True
+    assert result.response["terms"]["price"] == "0"
+
+
+@pytest.mark.parametrize("price", ["00", "01", "1.0", -1, True])
 def test_multi_config_rejects_noncanonical_atomic_price(price):
     client = _client(supported={TEST_USDC.address})
 
-    with pytest.raises(ValueError, match="non-negative integer string"):
+    with pytest.raises(ValueError, match="non-negative integer"):
         NegotiationHandler.from_erc8183_client_multi(
             erc8183_client=client,
             service_prices={AssetId.TEST_USDC: price},
         )
+
+
+def test_multi_handler_rejects_single_price_override():
+    handler = _multi_handler(_client(supported={TEST_USDC.address}))
+
+    result = handler.negotiate(_request(TEST_USDC.address), price="1")
+
+    assert result.accepted is False
+    assert result.response["reason_code"] == ReasonCode.AMBIGUOUS_TERMS
+
+
+def test_legacy_integer_zero_constructor_and_override_use_canonical_string():
+    handler = NegotiationHandler(service_price=0, currency=TEST_U.address)
+
+    default_result = handler.negotiate(_request())
+    override_result = handler.negotiate(_request(), price=0)
+
+    assert default_result.response["terms"]["price"] == "0"
+    assert override_result.response["terms"]["price"] == "0"
+
+
+@pytest.mark.parametrize("price", [True, -1, "00", "01"])
+def test_legacy_constructor_rejects_invalid_atomic_price(price):
+    with pytest.raises(ValueError, match="non-negative integer"):
+        NegotiationHandler(service_price=price, currency=TEST_U.address)
 
 
 def test_legacy_single_currency_preserves_default_and_rejects_other_explicit_token():

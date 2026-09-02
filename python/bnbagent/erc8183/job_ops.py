@@ -256,6 +256,15 @@ class ERC8183JobOps:
             "error_code": ERR_JOB_TOKEN_MISMATCH,
         }
 
+    @staticmethod
+    def _chain_read_error() -> dict[str, Any]:
+        return {
+            "valid": False,
+            "error": "Temporary chain/RPC error",
+            "error_code": ERR_CHAIN_UNAVAILABLE,
+            "retryable": True,
+        }
+
     def _resolve_job_asset(self, client: ERC8183Client, job_token: str) -> PaymentAsset | None:
         chain_id = client.network.chain_id
         try:
@@ -567,18 +576,25 @@ class ERC8183JobOps:
 
             client = self._get_client()
             try:
-                job_token = Web3.to_checksum_address(
-                    await asyncio.to_thread(client.job_payment_token, job_id)
-                )
+                raw_job_token = await asyncio.to_thread(client.job_payment_token, job_id)
+            except Exception:
+                return self._chain_read_error()
+            try:
+                job_token = Web3.to_checksum_address(raw_job_token)
                 job_asset = self._resolve_job_asset(client, job_token)
             except (KeyError, TypeError, ValueError):
                 return self._job_token_error()
 
             if self._service_prices is None:
                 try:
-                    if job_token != Web3.to_checksum_address(client.payment_token):
-                        return self._job_token_error()
+                    raw_default_token = await asyncio.to_thread(lambda: client.payment_token)
+                except Exception:
+                    return self._chain_read_error()
+                try:
+                    default_token = Web3.to_checksum_address(raw_default_token)
                 except (TypeError, ValueError):
+                    return self._job_token_error()
+                if job_token != default_token:
                     return self._job_token_error()
                 effective_service_price = self._service_price
             else:

@@ -378,6 +378,13 @@ class TestBuildJobDescription:
         with pytest.raises(ValueError, match="currency"):
             build_job_description(result)
 
+    def test_external_integer_zero_price_becomes_canonical_wire_string(self):
+        result = _make_accepted_result(price=0)
+
+        description = json.loads(build_job_description(result))
+
+        assert description["price"] == "0"
+
     def test_raises_when_over_max_length(self):
         """Over-length descriptions must raise, not truncate — truncating
         would change the signed content and break provider_sig verification."""
@@ -585,6 +592,16 @@ class TestNegotiationHandler:
     def test_invalid_format_rejection(self):
         handler = self._make_handler()
         result = handler.negotiate({"bad": "data"})
+        assert result.accepted is False
+        assert result.response.get("reason_code") == ReasonCode.AMBIGUOUS_TERMS
+
+    def test_invalid_request_price_is_rejected_without_raising(self):
+        handler = self._make_handler()
+        request = self._basic_request()
+        request["terms"]["price"] = True
+
+        result = handler.negotiate(request)
+
         assert result.accepted is False
         assert result.response.get("reason_code") == ReasonCode.AMBIGUOUS_TERMS
 
