@@ -28,6 +28,7 @@ def _snapshot() -> list[dict[str, object]]:
                     "symbol": asset.symbol,
                     "address": asset.address,
                     "decimals": asset.decimals,
+                    "availability": asset.availability,
                     "b402_methods": asset.b402_methods,
                     "b402_kinds": tuple(
                         (kind.method, kind.name, kind.version) for kind in asset.b402_kinds
@@ -54,6 +55,7 @@ def test_asset_catalog_snapshot_matches_locked_bsc_matrix():
             "symbol": "U",
             "address": "0xcE24439F2D9C6a2289F741120FE202248B666666",
             "decimals": 18,
+            "availability": "active",
             "b402_methods": ("eip3009", "permit2-exact"),
             "b402_kinds": (
                 ("eip3009", "United Stables", "1"),
@@ -64,10 +66,23 @@ def test_asset_catalog_snapshot_matches_locked_bsc_matrix():
         },
         {
             "chain_id": 56,
+            "asset_id": "USD1",
+            "symbol": "USD1",
+            "address": "0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d",
+            "decimals": 18,
+            "availability": "active",
+            "b402_methods": ("eip3009",),
+            "b402_kinds": (("eip3009", "World Liberty Financial USD", "1"),),
+            "eip3009_domain": ("World Liberty Financial USD", "1"),
+            "is_default": False,
+        },
+        {
+            "chain_id": 56,
             "asset_id": "BINANCE_PEG_USDC",
             "symbol": "USDC",
             "address": "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
             "decimals": 18,
+            "availability": "active",
             "b402_methods": ("permit2-exact",),
             "b402_kinds": (("permit2-exact", "USD Coin", "1"),),
             "eip3009_domain": None,
@@ -79,6 +94,7 @@ def test_asset_catalog_snapshot_matches_locked_bsc_matrix():
             "symbol": "USDT",
             "address": "0x55d398326f99059fF775485246999027B3197955",
             "decimals": 18,
+            "availability": "active",
             "b402_methods": ("permit2-exact",),
             "b402_kinds": (("permit2-exact", "Tether USD", "1"),),
             "eip3009_domain": None,
@@ -90,6 +106,7 @@ def test_asset_catalog_snapshot_matches_locked_bsc_matrix():
             "symbol": "U",
             "address": "0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
             "decimals": 18,
+            "availability": "active",
             "b402_methods": ("eip3009",),
             "b402_kinds": (("eip3009", "United Stables", "1"),),
             "eip3009_domain": ("United Stables", "1"),
@@ -101,6 +118,7 @@ def test_asset_catalog_snapshot_matches_locked_bsc_matrix():
             "symbol": "USDC",
             "address": "0xEC1C60D64a06896Df296438c12edD14E974FDE47",
             "decimals": 6,
+            "availability": "active",
             "b402_methods": ("permit2-exact",),
             "b402_kinds": (("permit2-exact", "USD Coin", "1"),),
             "eip3009_domain": None,
@@ -112,6 +130,7 @@ def test_asset_catalog_snapshot_matches_locked_bsc_matrix():
             "symbol": "USDT",
             "address": "0x337610d27c682E347C9cD60BD4b3b107C9d34dDd",
             "decimals": 18,
+            "availability": "active",
             "b402_methods": ("permit2-exact",),
             "b402_kinds": (("permit2-exact", "USDT Token", "1"),),
             "eip3009_domain": None,
@@ -146,6 +165,114 @@ def test_friendly_aliases_are_resolved_only_with_network_context():
     assert resolve_asset_alias(97, "U").value == "TEST_U"
     assert resolve_asset_alias(97, "USDC").value == "TEST_USDC"
     assert resolve_asset_alias(97, "USDT").value == "TEST_USDT"
+    assert resolve_asset_alias(97, "USD1").value == "TEST_USD1"
+
+
+def test_usd1_metadata_is_exposed_while_testnet_placeholder_fails_closed():
+    asset_id = _api("AssetId")
+    get_asset = _api("get_asset")
+    get_asset_by_address = _api("get_asset_by_address")
+    get_asset_metadata = _api("get_asset_metadata")
+    list_assets = _api("list_assets")
+    unavailable_error = _api("PaymentAssetUnavailableError")
+
+    active = get_asset(56, asset_id.USD1)
+    assert (
+        active.asset_id.value,
+        active.symbol,
+        active.address,
+        active.decimals,
+        active.availability,
+        active.b402_methods,
+        active.eip3009_domain,
+    ) == (
+        "USD1",
+        "USD1",
+        "0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d",
+        18,
+        "active",
+        ("eip3009",),
+        _api("EIP3009Domain")("World Liberty Financial USD", "1"),
+    )
+    placeholder = get_asset_metadata(97, asset_id.TEST_USD1)
+    assert (
+        placeholder.address,
+        placeholder.availability,
+        placeholder.b402_methods,
+        placeholder.eip3009_domain,
+    ) == ("0x0000000000000000000000000000000000000000", "placeholder", (), None)
+    with pytest.raises(unavailable_error):
+        get_asset(97, asset_id.TEST_USD1)
+    assert asset_id.TEST_USD1 not in tuple(asset.asset_id for asset in list_assets(97))
+    with pytest.raises(KeyError):
+        get_asset_by_address(97, "0x0000000000000000000000000000000000000000")
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        (
+            {"address": "0x0000000000000000000000000000000000000000"},
+            "active asset cannot use zero address",
+        ),
+        ({"availability": "placeholder"}, "placeholder asset must use zero address"),
+        (
+            {
+                "address": "0x0000000000000000000000000000000000000000",
+                "availability": "placeholder",
+                "b402_kinds": (),
+            },
+            "placeholder asset cannot declare B402 methods",
+        ),
+        (
+            {
+                "address": "0x0000000000000000000000000000000000000000",
+                "availability": "placeholder",
+                "b402_methods": (),
+                "b402_kinds": (),
+            },
+            "placeholder asset cannot declare an EIP-3009 domain",
+        ),
+        (
+            {
+                "address": "0x0000000000000000000000000000000000000000",
+                "availability": "placeholder",
+                "b402_methods": (),
+                "b402_kinds": (),
+                "eip3009_domain": None,
+            },
+            "placeholder asset cannot be the default asset",
+        ),
+    ],
+)
+def test_catalog_constructor_rejects_invalid_availability_invariants(
+    changes: dict[str, object], message: str
+) -> None:
+    asset_catalog = _api("AssetCatalog")
+    first = _api("get_asset")(56, _api("AssetId").U)
+
+    with pytest.raises(ValueError, match=message):
+        asset_catalog((replace(first, **changes),))
+
+
+def test_omitted_availability_is_active_in_catalog_results():
+    asset_catalog = _api("AssetCatalog")
+    asset_id = _api("AssetId")
+    first = _api("get_asset")(56, asset_id.U)
+    payment_asset = _api("PaymentAsset")
+    legacy = payment_asset(
+        chain_id=first.chain_id,
+        asset_id=first.asset_id,
+        symbol=first.symbol,
+        address=first.address,
+        decimals=first.decimals,
+        b402_methods=first.b402_methods,
+        eip3009_domain=first.eip3009_domain,
+        is_default=first.is_default,
+        b402_kinds=first.b402_kinds,
+    )
+
+    assert asset_catalog((legacy,)).get(56, asset_id.U).availability == "active"
 
 
 def test_canonical_parser_rejects_symbols_without_network_context():

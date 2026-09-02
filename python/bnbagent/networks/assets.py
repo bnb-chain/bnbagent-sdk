@@ -19,7 +19,8 @@ from .addresses import (
 )
 
 B402TransferMethod = Literal["eip3009", "permit2-exact"]
-AssetAlias = Literal["U", "USDC", "USDT"]
+AssetAlias = Literal["U", "USD1", "USDC", "USDT"]
+PaymentAssetAvailability = Literal["active", "placeholder"]
 
 
 class AssetId(str, Enum):
@@ -27,6 +28,8 @@ class AssetId(str, Enum):
 
     U = "U"
     TEST_U = "TEST_U"
+    USD1 = "USD1"
+    TEST_USD1 = "TEST_USD1"
     BINANCE_PEG_USDC = "BINANCE_PEG_USDC"
     BINANCE_PEG_USDT = "BINANCE_PEG_USDT"
     TEST_USDC = "TEST_USDC"
@@ -50,6 +53,15 @@ class B402Kind:
     version: str
 
 
+class PaymentAssetUnavailableError(KeyError):
+    """Raised when metadata names an asset unavailable for payment queries."""
+
+    def __init__(self, chain_id: int, asset_id: AssetId) -> None:
+        super().__init__(f"AssetId {asset_id.value} is unavailable on chain_id={chain_id}")
+        self.chain_id = chain_id
+        self.asset_id = asset_id
+
+
 @dataclass(frozen=True)
 class PaymentAsset:
     """Immutable metadata for one canonical asset on one network."""
@@ -65,21 +77,25 @@ class PaymentAsset:
     # A trailing default preserves direct construction compatibility. An
     # AssetCatalog still rejects missing identities for declared methods.
     b402_kinds: tuple[B402Kind, ...] = ()
+    # A trailing default preserves legacy object construction semantics.
+    availability: PaymentAssetAvailability = "active"
 
 
 class AssetCatalog:
     """Fail-closed lookup index keyed by network, canonical id, and address."""
 
     def __init__(self, assets: Sequence[PaymentAsset]) -> None:
-        by_key: dict[tuple[int, AssetId], PaymentAsset] = {}
-        by_address: dict[tuple[int, str], PaymentAsset] = {}
-        by_chain: dict[int, list[PaymentAsset]] = {}
+        metadata_by_key: dict[tuple[int, AssetId], PaymentAsset] = {}
+        metadata_by_address: dict[tuple[int, str], PaymentAsset] = {}
+        active_by_key: dict[tuple[int, AssetId], PaymentAsset] = {}
+        active_by_address: dict[tuple[int, str], PaymentAsset] = {}
+        active_by_chain: dict[int, list[PaymentAsset]] = {}
 
         for asset in assets:
             if not isinstance(asset.asset_id, AssetId):
                 raise ValueError(f"asset_id must be a canonical AssetId: {asset.asset_id!r}")
             key = (asset.chain_id, asset.asset_id)
-            if key in by_key:
+            if key in metadata_by_key:
                 raise ValueError(
                     f"duplicate catalog key: chain_id={asset.chain_id}, "
                     f"asset_id={asset.asset_id.value}"
@@ -88,23 +104,58 @@ class AssetCatalog:
             if not Web3.is_checksum_address(asset.address):
                 raise ValueError(f"catalog address is not checksummed: {asset.address}")
 
+            self._validate_availability(asset)
             self._validate_b402_metadata(asset)
             address_key = (asset.chain_id, asset.address.lower())
-            if address_key in by_address:
+            if address_key in metadata_by_address:
                 raise ValueError(
                     f"duplicate catalog address: chain_id={asset.chain_id}, "
                     f"address={asset.address}"
                 )
 
-            by_key[key] = asset
-            by_address[address_key] = asset
-            by_chain.setdefault(asset.chain_id, []).append(asset)
+            metadata_by_key[key] = asset
+            metadata_by_address[address_key] = asset
+            active_by_chain.setdefault(asset.chain_id, [])
+            if asset.availability == "active":
+                active_by_key[key] = asset
+                active_by_address[address_key] = asset
+                active_by_chain[asset.chain_id].append(asset)
 
-        self._by_key: Mapping[tuple[int, AssetId], PaymentAsset] = MappingProxyType(by_key)
-        self._by_address: Mapping[tuple[int, str], PaymentAsset] = MappingProxyType(by_address)
-        self._by_chain: Mapping[int, tuple[PaymentAsset, ...]] = MappingProxyType(
-            {chain_id: tuple(chain_assets) for chain_id, chain_assets in by_chain.items()}
+        self._metadata_by_key: Mapping[tuple[int, AssetId], PaymentAsset] = MappingProxyType(
+            metadata_by_key
         )
+        self._metadata_by_address: Mapping[tuple[int, str], PaymentAsset] = MappingProxyType(
+            metadata_by_address
+        )
+        self._active_by_key: Mapping[tuple[int, AssetId], PaymentAsset] = MappingProxyType(
+            active_by_key
+        )
+        self._active_by_address: Mapping[tuple[int, str], PaymentAsset] = MappingProxyType(
+            active_by_address
+        )
+        self._active_by_chain: Mapping[int, tuple[PaymentAsset, ...]] = MappingProxyType(
+            {
+                chain_id: tuple(chain_assets)
+                for chain_id, chain_assets in active_by_chain.items()
+            }
+        )
+
+    @staticmethod
+    def _validate_availability(asset: PaymentAsset) -> None:
+        if asset.availability not in ("active", "placeholder"):
+            raise ValueError("unknown payment asset availability")
+        if asset.availability == "active":
+            if asset.address.lower() == _ZERO_ADDRESS:
+                raise ValueError("active asset cannot use zero address")
+            return
+        if asset.address.lower() != _ZERO_ADDRESS:
+            raise ValueError("placeholder asset must use zero address")
+        if asset.b402_methods or asset.b402_kinds:
+            raise ValueError("placeholder asset cannot declare B402 methods")
+        if asset.eip3009_domain is not None:
+            raise ValueError("placeholder asset cannot declare an EIP-3009 domain")
+        if asset.is_default:
+            raise ValueError("placeholder asset cannot be the default asset")
 
     @staticmethod
     def _validate_b402_metadata(asset: PaymentAsset) -> None:
@@ -149,14 +200,20 @@ class AssetCatalog:
             raise ValueError("EIP-3009 kind must match eip3009_domain exactly")
 
     def _require_chain(self, chain_id: int) -> None:
-        if chain_id not in self._by_chain:
+        if chain_id not in self._active_by_chain:
             raise KeyError(f"no asset catalog registered for chain_id={chain_id}")
 
     def get(self, chain_id: int, asset_id: AssetId | str) -> PaymentAsset:
+        asset = self.get_metadata(chain_id, asset_id)
+        if asset.availability == "placeholder":
+            raise PaymentAssetUnavailableError(chain_id, asset.asset_id)
+        return self._active_by_key[(chain_id, asset.asset_id)]
+
+    def get_metadata(self, chain_id: int, asset_id: AssetId | str) -> PaymentAsset:
         self._require_chain(chain_id)
         canonical = parse_asset_id(asset_id)
         try:
-            return self._by_key[(chain_id, canonical)]
+            return self._metadata_by_key[(chain_id, canonical)]
         except KeyError as exc:
             raise KeyError(
                 f"AssetId {canonical.value} is not available on chain_id={chain_id}"
@@ -171,7 +228,7 @@ class AssetCatalog:
                 f"asset address {address!r} is not registered on chain_id={chain_id}"
             ) from exc
         try:
-            return self._by_address[(chain_id, address_key)]
+            return self._active_by_address[(chain_id, address_key)]
         except KeyError as exc:
             raise KeyError(
                 f"asset address {address!r} is not registered on chain_id={chain_id}"
@@ -179,13 +236,15 @@ class AssetCatalog:
 
     def list(self, chain_id: int) -> tuple[PaymentAsset, ...]:
         self._require_chain(chain_id)
-        return self._by_chain[chain_id]
+        return self._active_by_chain[chain_id]
 
 
 _DOMAIN = EIP3009Domain(
     name=PAYMENT_TOKEN_EIP712_NAME,
     version=PAYMENT_TOKEN_EIP712_VERSION,
 )
+
+_ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 ASSET_CATALOG = AssetCatalog(
     (
@@ -202,6 +261,18 @@ ASSET_CATALOG = AssetCatalog(
                 B402Kind("eip3009", "United Stables", "1"),
                 B402Kind("permit2-exact", "United Stables", "1"),
             ),
+        ),
+        PaymentAsset(
+            chain_id=BSC_MAINNET_CHAIN_ID,
+            asset_id=AssetId.USD1,
+            symbol="USD1",
+            address="0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d",
+            decimals=18,
+            availability="active",
+            b402_methods=("eip3009",),
+            eip3009_domain=EIP3009Domain("World Liberty Financial USD", "1"),
+            is_default=False,
+            b402_kinds=(B402Kind("eip3009", "World Liberty Financial USD", "1"),),
         ),
         PaymentAsset(
             chain_id=BSC_MAINNET_CHAIN_ID,
@@ -238,6 +309,18 @@ ASSET_CATALOG = AssetCatalog(
         ),
         PaymentAsset(
             chain_id=BSC_TESTNET_CHAIN_ID,
+            asset_id=AssetId.TEST_USD1,
+            symbol="USD1",
+            address=_ZERO_ADDRESS,
+            decimals=18,
+            availability="placeholder",
+            b402_methods=(),
+            eip3009_domain=None,
+            is_default=False,
+            b402_kinds=(),
+        ),
+        PaymentAsset(
+            chain_id=BSC_TESTNET_CHAIN_ID,
             asset_id=AssetId.TEST_USDC,
             symbol="USDC",
             address="0xEC1C60D64a06896Df296438c12edD14E974FDE47",
@@ -266,6 +349,7 @@ _ALIASES: Mapping[int, Mapping[str, AssetId]] = MappingProxyType(
         BSC_MAINNET_CHAIN_ID: MappingProxyType(
             {
                 "U": AssetId.U,
+                "USD1": AssetId.USD1,
                 "USDC": AssetId.BINANCE_PEG_USDC,
                 "USDT": AssetId.BINANCE_PEG_USDT,
             }
@@ -273,6 +357,7 @@ _ALIASES: Mapping[int, Mapping[str, AssetId]] = MappingProxyType(
         BSC_TESTNET_CHAIN_ID: MappingProxyType(
             {
                 "U": AssetId.TEST_U,
+                "USD1": AssetId.TEST_USD1,
                 "USDC": AssetId.TEST_USDC,
                 "USDT": AssetId.TEST_USDT,
             }
@@ -304,17 +389,22 @@ def resolve_asset_alias(chain_id: int, alias: AssetAlias | str) -> AssetId:
 
 
 def get_asset(chain_id: int, asset_id: AssetId | str) -> PaymentAsset:
-    """Return metadata for a strict ``(chain_id, canonical AssetId)`` key."""
+    """Return an active asset for a strict ``(chain_id, canonical AssetId)`` key."""
     return ASSET_CATALOG.get(chain_id, asset_id)
 
 
+def get_asset_metadata(chain_id: int, asset_id: AssetId | str) -> PaymentAsset:
+    """Return validated metadata, including diagnostic placeholder entries."""
+    return ASSET_CATALOG.get_metadata(chain_id, asset_id)
+
+
 def get_asset_by_address(chain_id: int, address: str) -> PaymentAsset:
-    """Reverse-resolve a token address; input casing is ignored."""
+    """Reverse-resolve an active token address; input casing is ignored."""
     return ASSET_CATALOG.by_address(chain_id, address)
 
 
 def list_assets(chain_id: int) -> tuple[PaymentAsset, ...]:
-    """Return the immutable catalog snapshot for one known network."""
+    """Return the immutable active catalog snapshot for one known network."""
     return ASSET_CATALOG.list(chain_id)
 
 

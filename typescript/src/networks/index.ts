@@ -14,8 +14,10 @@ export {
   AssetId,
   getAsset,
   getAssetByAddress,
+  getAssetMetadata,
   listAssets,
   parseAssetId,
+  PaymentAssetUnavailableError,
   resolveAssetAlias,
   toAssetAtomic,
 } from "./assets.js";
@@ -26,4 +28,5 @@ export type {
   CatalogPaymentAsset,
   EIP3009Domain,
   PaymentAsset,
+  PaymentAssetAvailability,
 } from "./assets.js";

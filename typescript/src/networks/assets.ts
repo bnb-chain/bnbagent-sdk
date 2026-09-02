@@ -11,6 +11,8 @@ import {
 export const AssetId = Object.freeze({
   U: "U",
   TEST_U: "TEST_U",
+  USD1: "USD1",
+  TEST_USD1: "TEST_USD1",
   BINANCE_PEG_USDC: "BINANCE_PEG_USDC",
   BINANCE_PEG_USDT: "BINANCE_PEG_USDT",
   TEST_USDC: "TEST_USDC",
@@ -18,8 +20,9 @@ export const AssetId = Object.freeze({
 } as const);
 
 export type AssetId = (typeof AssetId)[keyof typeof AssetId];
-export type AssetAlias = "U" | "USDC" | "USDT";
+export type AssetAlias = "U" | "USD1" | "USDC" | "USDT";
 export type B402TransferMethod = "eip3009" | "permit2-exact";
+export type PaymentAssetAvailability = "active" | "placeholder";
 
 export interface EIP3009Domain {
   readonly name: string;
@@ -38,6 +41,8 @@ export interface PaymentAsset {
   readonly symbol: string;
   readonly address: `0x${string}`;
   readonly decimals: number;
+  /** Omitted availability preserves the legacy active-asset behavior. */
+  readonly availability?: PaymentAssetAvailability;
   readonly b402Methods: readonly B402TransferMethod[];
   /**
    * Optional for source compatibility with pre-kind object literals.
@@ -50,7 +55,20 @@ export interface PaymentAsset {
 
 /** A catalog-validated asset with complete B402 kind identities. */
 export interface CatalogPaymentAsset extends PaymentAsset {
+  readonly availability: PaymentAssetAvailability;
   readonly b402Kinds: readonly B402Kind[];
+}
+
+export class PaymentAssetUnavailableError extends Error {
+  readonly chainId: number;
+  readonly assetId: AssetId;
+
+  constructor(chainId: number, assetId: AssetId) {
+    super(`AssetId ${assetId} is unavailable on chain_id=${chainId}`);
+    this.name = "PaymentAssetUnavailableError";
+    this.chainId = chainId;
+    this.assetId = assetId;
+  }
 }
 
 const CANONICAL_IDS = new Set<string>(Object.values(AssetId));
@@ -64,17 +82,20 @@ export function parseAssetId(value: string): AssetId {
 
 /** Fail-closed lookup index keyed by network, canonical id, and address. */
 export class AssetCatalog {
-  readonly #byKey = new Map<string, CatalogPaymentAsset>();
-  readonly #byAddress = new Map<string, CatalogPaymentAsset>();
-  readonly #byChain = new Map<number, readonly CatalogPaymentAsset[]>();
+  readonly #metadataByKey = new Map<string, CatalogPaymentAsset>();
+  readonly #metadataByAddress = new Map<string, CatalogPaymentAsset>();
+  readonly #activeByKey = new Map<string, CatalogPaymentAsset>();
+  readonly #activeByAddress = new Map<string, CatalogPaymentAsset>();
+  readonly #activeByChain = new Map<number, readonly CatalogPaymentAsset[]>();
+  readonly #metadataChains = new Set<number>();
 
   constructor(assets: readonly PaymentAsset[]) {
-    const mutableByChain = new Map<number, CatalogPaymentAsset[]>();
+    const mutableActiveByChain = new Map<number, CatalogPaymentAsset[]>();
 
     for (const input of assets) {
       const assetId = parseAssetId(input.assetId);
       const key = `${input.chainId}:${assetId}`;
-      if (this.#byKey.has(key)) {
+      if (this.#metadataByKey.has(key)) {
         throw new Error(
           `duplicate catalog key: chain_id=${input.chainId}, asset_id=${assetId}`,
         );
@@ -85,18 +106,21 @@ export class AssetCatalog {
         throw new Error(`catalog address is not checksummed: ${input.address}`);
       }
 
+      const availability = input.availability ?? "active";
+      validateAvailability(input, availability, address);
       const b402Kinds = validateB402Metadata(input);
       const addressKey = `${input.chainId}:${address.toLowerCase()}`;
-      if (this.#byAddress.has(addressKey)) {
+      if (this.#metadataByAddress.has(addressKey)) {
         throw new Error(
           `duplicate catalog address: chain_id=${input.chainId}, address=${address}`,
         );
       }
 
-      const asset = Object.freeze({
+      const asset: CatalogPaymentAsset = Object.freeze({
         ...input,
         assetId,
         address,
+        availability,
         b402Methods: Object.freeze([...input.b402Methods]),
         b402Kinds: Object.freeze(
           b402Kinds.map((kind) => Object.freeze({ ...kind })),
@@ -106,29 +130,51 @@ export class AssetCatalog {
             ? null
             : Object.freeze({ ...input.eip3009Domain }),
       });
-      this.#byKey.set(key, asset);
-      this.#byAddress.set(addressKey, asset);
-      const chainAssets = mutableByChain.get(asset.chainId) ?? [];
-      chainAssets.push(asset);
-      mutableByChain.set(asset.chainId, chainAssets);
+      this.#metadataByKey.set(key, asset);
+      this.#metadataByAddress.set(addressKey, asset);
+      this.#metadataChains.add(asset.chainId);
+      if (asset.availability === "active") {
+        this.#activeByKey.set(key, asset);
+        this.#activeByAddress.set(addressKey, asset);
+        const chainAssets = mutableActiveByChain.get(asset.chainId) ?? [];
+        chainAssets.push(asset);
+        mutableActiveByChain.set(asset.chainId, chainAssets);
+      }
     }
 
-    for (const [chainId, chainAssets] of mutableByChain) {
-      this.#byChain.set(chainId, Object.freeze([...chainAssets]));
+    for (const chainId of this.#metadataChains) {
+      this.#activeByChain.set(
+        chainId,
+        Object.freeze([...(mutableActiveByChain.get(chainId) ?? [])]),
+      );
     }
     Object.freeze(this);
   }
 
   #requireChain(chainId: number): void {
-    if (!this.#byChain.has(chainId)) {
+    if (!this.#metadataChains.has(chainId)) {
       throw new Error(`no asset catalog registered for chain_id=${chainId}`);
     }
   }
 
   get(chainId: number, assetId: AssetId | string): CatalogPaymentAsset {
+    const asset = this.getMetadata(chainId, assetId);
+    if (asset.availability === "placeholder") {
+      throw new PaymentAssetUnavailableError(chainId, asset.assetId);
+    }
+    const activeAsset = this.#activeByKey.get(`${chainId}:${asset.assetId}`);
+    if (activeAsset === undefined) {
+      throw new Error(
+        `AssetId ${asset.assetId} is not available on chain_id=${chainId}`,
+      );
+    }
+    return activeAsset;
+  }
+
+  getMetadata(chainId: number, assetId: AssetId | string): CatalogPaymentAsset {
     this.#requireChain(chainId);
     const canonical = parseAssetId(assetId);
-    const asset = this.#byKey.get(`${chainId}:${canonical}`);
+    const asset = this.#metadataByKey.get(`${chainId}:${canonical}`);
     if (asset === undefined) {
       throw new Error(
         `AssetId ${canonical} is not available on chain_id=${chainId}`,
@@ -148,7 +194,9 @@ export class AssetCatalog {
         { cause: error },
       );
     }
-    const asset = this.#byAddress.get(`${chainId}:${address.toLowerCase()}`);
+    const asset = this.#activeByAddress.get(
+      `${chainId}:${address.toLowerCase()}`,
+    );
     if (asset === undefined) {
       throw new Error(
         `asset address ${JSON.stringify(inputAddress)} is not registered on chain_id=${chainId}`,
@@ -159,11 +207,41 @@ export class AssetCatalog {
 
   list(chainId: number): readonly CatalogPaymentAsset[] {
     this.#requireChain(chainId);
-    const assets = this.#byChain.get(chainId);
+    const assets = this.#activeByChain.get(chainId);
     if (assets === undefined) {
       throw new Error(`no asset catalog registered for chain_id=${chainId}`);
     }
     return assets;
+  }
+}
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+function validateAvailability(
+  input: PaymentAsset,
+  availability: PaymentAssetAvailability,
+  address: `0x${string}`,
+): void {
+  if (availability !== "active" && availability !== "placeholder") {
+    throw new Error("unknown payment asset availability");
+  }
+  if (availability === "active") {
+    if (address.toLowerCase() === ZERO_ADDRESS) {
+      throw new Error("active asset cannot use zero address");
+    }
+    return;
+  }
+  if (address.toLowerCase() !== ZERO_ADDRESS) {
+    throw new Error("placeholder asset must use zero address");
+  }
+  if (input.b402Methods.length > 0 || (input.b402Kinds?.length ?? 0) > 0) {
+    throw new Error("placeholder asset cannot declare B402 methods");
+  }
+  if (input.eip3009Domain !== null) {
+    throw new Error("placeholder asset cannot declare an EIP-3009 domain");
+  }
+  if (input.isDefault) {
+    throw new Error("placeholder asset cannot be the default asset");
   }
 }
 
@@ -241,6 +319,24 @@ export const ASSET_CATALOG = new AssetCatalog([
   },
   {
     chainId: BSC_MAINNET_CHAIN_ID,
+    assetId: AssetId.USD1,
+    symbol: "USD1",
+    address: "0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d",
+    decimals: 18,
+    availability: "active",
+    b402Methods: ["eip3009"],
+    b402Kinds: [
+      {
+        method: "eip3009",
+        name: "World Liberty Financial USD",
+        version: "1",
+      },
+    ],
+    eip3009Domain: { name: "World Liberty Financial USD", version: "1" },
+    isDefault: false,
+  },
+  {
+    chainId: BSC_MAINNET_CHAIN_ID,
     assetId: AssetId.BINANCE_PEG_USDC,
     symbol: "USDC",
     address: "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
@@ -274,6 +370,18 @@ export const ASSET_CATALOG = new AssetCatalog([
   },
   {
     chainId: BSC_TESTNET_CHAIN_ID,
+    assetId: AssetId.TEST_USD1,
+    symbol: "USD1",
+    address: ZERO_ADDRESS,
+    decimals: 18,
+    availability: "placeholder",
+    b402Methods: [],
+    b402Kinds: [],
+    eip3009Domain: null,
+    isDefault: false,
+  },
+  {
+    chainId: BSC_TESTNET_CHAIN_ID,
     assetId: AssetId.TEST_USDC,
     symbol: "USDC",
     address: "0xEC1C60D64a06896Df296438c12edD14E974FDE47",
@@ -300,11 +408,13 @@ const ALIASES: Readonly<Record<number, Readonly<Record<AssetAlias, AssetId>>>> =
   Object.freeze({
     [BSC_MAINNET_CHAIN_ID]: Object.freeze({
       U: AssetId.U,
+      USD1: AssetId.USD1,
       USDC: AssetId.BINANCE_PEG_USDC,
       USDT: AssetId.BINANCE_PEG_USDT,
     }),
     [BSC_TESTNET_CHAIN_ID]: Object.freeze({
       U: AssetId.TEST_U,
+      USD1: AssetId.TEST_USD1,
       USDC: AssetId.TEST_USDC,
       USDT: AssetId.TEST_USDT,
     }),
@@ -329,6 +439,14 @@ export function getAsset(
   assetId: AssetId | string,
 ): CatalogPaymentAsset {
   return ASSET_CATALOG.get(chainId, assetId);
+}
+
+/** Return validated metadata, including diagnostic placeholder entries. */
+export function getAssetMetadata(
+  chainId: number,
+  assetId: AssetId | string,
+): CatalogPaymentAsset {
+  return ASSET_CATALOG.getMetadata(chainId, assetId);
 }
 
 export function getAssetByAddress(

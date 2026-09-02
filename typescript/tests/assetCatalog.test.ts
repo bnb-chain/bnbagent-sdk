@@ -7,9 +7,11 @@ import {
   BSC_TESTNET_CHAIN_ID,
   type CatalogPaymentAsset,
   type PaymentAsset,
+  PaymentAssetUnavailableError,
   getAddress,
   getAsset,
   getAssetByAddress,
+  getAssetMetadata,
   knownPaymentTokens,
   listAssets,
   parseAssetId,
@@ -25,6 +27,7 @@ function snapshot() {
       symbol: asset.symbol,
       address: asset.address,
       decimals: asset.decimals,
+      availability: asset.availability,
       b402Methods: [...asset.b402Methods],
       b402Kinds: asset.b402Kinds.map((kind) => ({ ...kind })),
       eip3009Domain: asset.eip3009Domain ?? null,
@@ -59,6 +62,11 @@ describe("asset catalog", () => {
     const listed: readonly CatalogPaymentAsset[] = listAssets(56);
     expect(resolved.b402Kinds.length).toBe(2);
     expect(listed.every((asset) => asset.b402Kinds.length > 0)).toBe(true);
+
+    const compatibilityCatalog = new AssetCatalog([
+      { ...resolved, availability: undefined },
+    ]);
+    expect(compatibilityCatalog.get(56, AssetId.U).availability).toBe("active");
   });
 
   it("matches the locked BSC mainnet/testnet snapshot", () => {
@@ -69,6 +77,7 @@ describe("asset catalog", () => {
         symbol: "U",
         address: "0xcE24439F2D9C6a2289F741120FE202248B666666",
         decimals: 18,
+        availability: "active",
         b402Methods: ["eip3009", "permit2-exact"],
         b402Kinds: [
           { method: "eip3009", name: "United Stables", version: "1" },
@@ -83,10 +92,29 @@ describe("asset catalog", () => {
       },
       {
         chainId: 56,
+        assetId: "USD1",
+        symbol: "USD1",
+        address: "0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d",
+        decimals: 18,
+        availability: "active",
+        b402Methods: ["eip3009"],
+        b402Kinds: [
+          {
+            method: "eip3009",
+            name: "World Liberty Financial USD",
+            version: "1",
+          },
+        ],
+        eip3009Domain: { name: "World Liberty Financial USD", version: "1" },
+        isDefault: false,
+      },
+      {
+        chainId: 56,
         assetId: "BINANCE_PEG_USDC",
         symbol: "USDC",
         address: "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
         decimals: 18,
+        availability: "active",
         b402Methods: ["permit2-exact"],
         b402Kinds: [
           { method: "permit2-exact", name: "USD Coin", version: "1" },
@@ -100,6 +128,7 @@ describe("asset catalog", () => {
         symbol: "USDT",
         address: "0x55d398326f99059fF775485246999027B3197955",
         decimals: 18,
+        availability: "active",
         b402Methods: ["permit2-exact"],
         b402Kinds: [
           { method: "permit2-exact", name: "Tether USD", version: "1" },
@@ -113,6 +142,7 @@ describe("asset catalog", () => {
         symbol: "U",
         address: "0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
         decimals: 18,
+        availability: "active",
         b402Methods: ["eip3009"],
         b402Kinds: [
           { method: "eip3009", name: "United Stables", version: "1" },
@@ -126,6 +156,7 @@ describe("asset catalog", () => {
         symbol: "USDC",
         address: "0xEC1C60D64a06896Df296438c12edD14E974FDE47",
         decimals: 6,
+        availability: "active",
         b402Methods: ["permit2-exact"],
         b402Kinds: [
           { method: "permit2-exact", name: "USD Coin", version: "1" },
@@ -139,6 +170,7 @@ describe("asset catalog", () => {
         symbol: "USDT",
         address: "0x337610d27c682E347C9cD60BD4b3b107C9d34dDd",
         decimals: 18,
+        availability: "active",
         b402Methods: ["permit2-exact"],
         b402Kinds: [
           { method: "permit2-exact", name: "USDT Token", version: "1" },
@@ -175,7 +207,94 @@ describe("asset catalog", () => {
     expect(resolveAssetAlias(97, "U")).toBe("TEST_U");
     expect(resolveAssetAlias(97, "USDC")).toBe("TEST_USDC");
     expect(resolveAssetAlias(97, "USDT")).toBe("TEST_USDT");
+    expect(resolveAssetAlias(97, "USD1")).toBe("TEST_USD1");
   });
+
+  it("exposes USD1 metadata while fail-closing its testnet placeholder", () => {
+    expect(getAsset(56, AssetId.USD1)).toMatchObject({
+      assetId: "USD1",
+      symbol: "USD1",
+      address: "0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d",
+      decimals: 18,
+      availability: "active",
+      b402Methods: ["eip3009"],
+      eip3009Domain: { name: "World Liberty Financial USD", version: "1" },
+    });
+    expect(getAssetMetadata(97, AssetId.TEST_USD1)).toMatchObject({
+      address: "0x0000000000000000000000000000000000000000",
+      availability: "placeholder",
+      b402Methods: [],
+      eip3009Domain: null,
+    });
+    expect(() => getAsset(97, AssetId.TEST_USD1)).toThrow(
+      PaymentAssetUnavailableError,
+    );
+    expect(listAssets(97).map((asset) => asset.assetId)).not.toContain(
+      "TEST_USD1",
+    );
+    expect(() =>
+      getAssetByAddress(97, "0x0000000000000000000000000000000000000000"),
+    ).toThrow();
+  });
+
+  it.each([
+    [
+      "active assets cannot use the zero address",
+      (active: CatalogPaymentAsset) => ({
+        ...active,
+        address: "0x0000000000000000000000000000000000000000" as const,
+      }),
+      "active asset cannot use zero address",
+    ],
+    [
+      "placeholders cannot use a nonzero address",
+      (active: CatalogPaymentAsset) => ({
+        ...active,
+        availability: "placeholder" as const,
+      }),
+      "placeholder asset must use zero address",
+    ],
+    [
+      "placeholders cannot declare B402 methods",
+      (active: CatalogPaymentAsset) => ({
+        ...active,
+        address: "0x0000000000000000000000000000000000000000" as const,
+        availability: "placeholder" as const,
+        b402Kinds: [],
+      }),
+      "placeholder asset cannot declare B402 methods",
+    ],
+    [
+      "placeholders cannot declare an EIP-3009 domain",
+      (active: CatalogPaymentAsset) => ({
+        ...active,
+        address: "0x0000000000000000000000000000000000000000" as const,
+        availability: "placeholder" as const,
+        b402Methods: [],
+        b402Kinds: [],
+      }),
+      "placeholder asset cannot declare an EIP-3009 domain",
+    ],
+    [
+      "placeholders cannot be default assets",
+      (active: CatalogPaymentAsset) => ({
+        ...active,
+        address: "0x0000000000000000000000000000000000000000" as const,
+        availability: "placeholder" as const,
+        b402Methods: [],
+        b402Kinds: [],
+        eip3009Domain: null,
+      }),
+      "placeholder asset cannot be the default asset",
+    ],
+  ] as const)(
+    "rejects invalid availability invariant: %s",
+    (_name, fixture, message) => {
+      expect(
+        () => new AssetCatalog([fixture(getAsset(56, AssetId.U))]),
+      ).toThrow(message);
+    },
+  );
 
   it("parses only canonical ids without network context", () => {
     expect(parseAssetId("BINANCE_PEG_USDC")).toBe("BINANCE_PEG_USDC");
