@@ -6,7 +6,7 @@ import {
   type AssetId,
   type B402Kind,
   type B402TransferMethod,
-  type PaymentAsset,
+  type CatalogPaymentAsset,
   getAsset,
   getAssetByAddress,
 } from "../networks/assets.js";
@@ -63,7 +63,7 @@ export function resolveB402Asset(
   asset: AssetId | string,
 ): ExpectedB402Asset {
   const chainId = parseNetwork(network);
-  let catalog: PaymentAsset;
+  let catalog: CatalogPaymentAsset;
   if (asset.startsWith("0x")) {
     let checksummed: `0x${string}`;
     try {

@@ -5,6 +5,7 @@ import {
   AssetId,
   BSC_MAINNET_CHAIN_ID,
   BSC_TESTNET_CHAIN_ID,
+  type CatalogPaymentAsset,
   type PaymentAsset,
   getAddress,
   getAsset,
@@ -32,7 +33,7 @@ function snapshot() {
   );
 }
 
-function kindAt(asset: PaymentAsset, index: number) {
+function kindAt(asset: CatalogPaymentAsset, index: number) {
   const kind = asset.b402Kinds[index];
   if (kind === undefined) {
     throw new Error(`missing fixture B402 kind at index ${index}`);
@@ -41,6 +42,25 @@ function kindAt(asset: PaymentAsset, index: number) {
 }
 
 describe("asset catalog", () => {
+  it("keeps legacy PaymentAsset literals source-compatible while returns stay complete", () => {
+    const legacy: PaymentAsset = {
+      chainId: 56,
+      assetId: AssetId.U,
+      symbol: "U",
+      address: "0xcE24439F2D9C6a2289F741120FE202248B666666",
+      decimals: 18,
+      b402Methods: ["eip3009", "permit2-exact"],
+      eip3009Domain: { name: "United Stables", version: "1" },
+      isDefault: true,
+    };
+    expect(() => new AssetCatalog([legacy])).toThrow("missing B402 kind");
+
+    const resolved: CatalogPaymentAsset = getAsset(56, AssetId.U);
+    const listed: readonly CatalogPaymentAsset[] = listAssets(56);
+    expect(resolved.b402Kinds.length).toBe(2);
+    expect(listed.every((asset) => asset.b402Kinds.length > 0)).toBe(true);
+  });
+
   it("matches the locked BSC mainnet/testnet snapshot", () => {
     expect(snapshot()).toEqual([
       {

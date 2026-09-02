@@ -21,6 +21,11 @@ scheme identity，不能从 UI symbol 推断。每个 `b402_methods` / `b402Meth
 只能有一个 `{method, name, version}`；缺失、重复、额外 method 都会让 catalog 构造失败。
 `eip3009` 的 name/version 还必须与 `eip3009_domain` / `eip3009Domain` 完全一致。
 
+TypeScript 为兼容旧版调用方手写的 `PaymentAsset` object literal，将其中的 `b402Kinds`
+保留为可选输入字段；这不表示 catalog 接受缺失 identity。`AssetCatalog` 构造器仍会严格拒绝
+缺失值，而 `getAsset`、`getAssetByAddress`、`listAssets` 返回更强的
+`CatalogPaymentAsset`，其 `b402Kinds` 在类型和运行时都保证存在且完整。
+
 Testnet 当前 Commerce 默认 token `0xc70B...5565` 暂以 `TEST_U` 表示，以兼容既有
 SDK 的已验证 EIP-3009 domain。其正式来源和完整 B402 能力仍属于发布前核验项；目录
 没有写入尚未确认的 Testnet U 地址，也没有宣称该 token 已验证 Permit2。

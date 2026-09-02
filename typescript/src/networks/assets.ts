@@ -39,15 +39,19 @@ export interface PaymentAsset {
   readonly address: `0x${string}`;
   readonly decimals: number;
   readonly b402Methods: readonly B402TransferMethod[];
-  readonly b402Kinds: readonly B402Kind[];
+  /**
+   * Optional for source compatibility with pre-kind object literals.
+   * AssetCatalog rejects omission and returns CatalogPaymentAsset instead.
+   */
+  readonly b402Kinds?: readonly B402Kind[];
   readonly eip3009Domain: EIP3009Domain | null;
   readonly isDefault: boolean;
 }
 
-type PaymentAssetInput = Omit<PaymentAsset, "b402Kinds"> & {
-  /** Optional only for source compatibility; AssetCatalog rejects omission. */
-  readonly b402Kinds?: readonly B402Kind[];
-};
+/** A catalog-validated asset with complete B402 kind identities. */
+export interface CatalogPaymentAsset extends PaymentAsset {
+  readonly b402Kinds: readonly B402Kind[];
+}
 
 const CANONICAL_IDS = new Set<string>(Object.values(AssetId));
 
@@ -60,12 +64,12 @@ export function parseAssetId(value: string): AssetId {
 
 /** Fail-closed lookup index keyed by network, canonical id, and address. */
 export class AssetCatalog {
-  readonly #byKey = new Map<string, PaymentAsset>();
-  readonly #byAddress = new Map<string, PaymentAsset>();
-  readonly #byChain = new Map<number, readonly PaymentAsset[]>();
+  readonly #byKey = new Map<string, CatalogPaymentAsset>();
+  readonly #byAddress = new Map<string, CatalogPaymentAsset>();
+  readonly #byChain = new Map<number, readonly CatalogPaymentAsset[]>();
 
-  constructor(assets: readonly PaymentAssetInput[]) {
-    const mutableByChain = new Map<number, PaymentAsset[]>();
+  constructor(assets: readonly PaymentAsset[]) {
+    const mutableByChain = new Map<number, CatalogPaymentAsset[]>();
 
     for (const input of assets) {
       const assetId = parseAssetId(input.assetId);
@@ -121,7 +125,7 @@ export class AssetCatalog {
     }
   }
 
-  get(chainId: number, assetId: AssetId | string): PaymentAsset {
+  get(chainId: number, assetId: AssetId | string): CatalogPaymentAsset {
     this.#requireChain(chainId);
     const canonical = parseAssetId(assetId);
     const asset = this.#byKey.get(`${chainId}:${canonical}`);
@@ -133,7 +137,7 @@ export class AssetCatalog {
     return asset;
   }
 
-  byAddress(chainId: number, inputAddress: string): PaymentAsset {
+  byAddress(chainId: number, inputAddress: string): CatalogPaymentAsset {
     this.#requireChain(chainId);
     let address: `0x${string}`;
     try {
@@ -153,7 +157,7 @@ export class AssetCatalog {
     return asset;
   }
 
-  list(chainId: number): readonly PaymentAsset[] {
+  list(chainId: number): readonly CatalogPaymentAsset[] {
     this.#requireChain(chainId);
     const assets = this.#byChain.get(chainId);
     if (assets === undefined) {
@@ -168,7 +172,7 @@ const B402_TRANSFER_METHODS = new Set<B402TransferMethod>([
   "permit2-exact",
 ]);
 
-function validateB402Metadata(input: PaymentAssetInput): readonly B402Kind[] {
+function validateB402Metadata(input: PaymentAsset): readonly B402Kind[] {
   const methods = input.b402Methods;
   if (new Set(methods).size !== methods.length) {
     throw new Error("duplicate B402 method in asset catalog");
@@ -323,18 +327,18 @@ export function resolveAssetAlias(chainId: number, alias: string): AssetId {
 export function getAsset(
   chainId: number,
   assetId: AssetId | string,
-): PaymentAsset {
+): CatalogPaymentAsset {
   return ASSET_CATALOG.get(chainId, assetId);
 }
 
 export function getAssetByAddress(
   chainId: number,
   address: string,
-): PaymentAsset {
+): CatalogPaymentAsset {
   return ASSET_CATALOG.byAddress(chainId, address);
 }
 
-export function listAssets(chainId: number): readonly PaymentAsset[] {
+export function listAssets(chainId: number): readonly CatalogPaymentAsset[] {
   return ASSET_CATALOG.list(chainId);
 }
 
