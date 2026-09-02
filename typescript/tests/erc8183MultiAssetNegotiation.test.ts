@@ -77,7 +77,7 @@ describe("multi-asset ERC-8183 negotiation", () => {
       request(TEST_USDC.address.toLowerCase()),
     );
     const usdt = await handler.negotiate(request(TEST_USDT.address));
-    const canonical = await handler.negotiate(request(AssetId.TEST_USDC));
+    const canonicalWire = await handler.negotiate(request(AssetId.TEST_USDC));
     expect(usdc.response.terms).toMatchObject({
       currency: TEST_USDC.address,
       price: "100000",
@@ -86,9 +86,12 @@ describe("multi-asset ERC-8183 negotiation", () => {
       currency: TEST_USDT.address,
       price: "100000000000000000",
     });
-    expect(canonical.response.terms).toMatchObject({
-      currency: TEST_USDC.address,
-      price: "100000",
+    expect(canonicalWire.response).toMatchObject({
+      accepted: false,
+      reason_code: ReasonCode.UNSUPPORTED,
+      details: {
+        supported_assets: [AssetId.TEST_USDC, AssetId.TEST_USDT],
+      },
     });
   });
 

@@ -1084,15 +1084,7 @@ export class NegotiationHandler {
     const selected = requestedCurrency ?? this.currency;
     let address: string;
     try {
-      try {
-        address = getAddress(selected).toLowerCase();
-      } catch {
-        if (this.chainId === null) throw new Error("missing chain binding");
-        address = getAsset(
-          this.chainId,
-          parseAssetId(selected),
-        ).address.toLowerCase();
-      }
+      address = getAddress(selected).toLowerCase();
     } catch {
       return null;
     }
