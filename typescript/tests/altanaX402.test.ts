@@ -106,6 +106,7 @@ const SESSION_PK: `0x${string}` = `0x${"b2".repeat(32)}`;
 const WALLET = getAddress(`0x${"11".repeat(20)}`);
 const USDC = getAddress("0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d");
 const PAY_TO = getAddress(`0x${"33".repeat(20)}`);
+const B402_PROXY = getAddress(`0x${"44".repeat(20)}`);
 const CALLS_ID: `0x${string}` = `0x${"ca".repeat(32)}`;
 const EXPIRY = 4_102_444_800;
 
@@ -366,6 +367,126 @@ describe("AltanaX402Payer.request", () => {
     await expect(
       payer.request("https://api.example/paid", { maxPayment: 10_000n }),
     ).rejects.toThrow(/@altananetwork\/sdk' >= 0\.4\.0/);
+  });
+});
+
+describe("AltanaX402Payer.requestExact", () => {
+  const exactEntry = {
+    scheme: "exact",
+    network: "eip155:56" as const,
+    amount: "5000",
+    asset: USDC,
+    payTo: PAY_TO,
+    maxTimeoutSeconds: 300,
+    extra: {
+      assetTransferMethod: "permit2-exact",
+      name: "USD Coin",
+      version: "1",
+      signerAddress: WALLET,
+      spenderAddress: B402_PROXY,
+    },
+  };
+  const expectedRoute = {
+    x402Version: 2 as const,
+    scheme: "exact" as const,
+    network: "eip155:56" as const,
+    asset: USDC,
+    amount: 5000n,
+    payTo: PAY_TO,
+    maxTimeoutSeconds: 300,
+    transferMethod: "permit2-exact" as const,
+    name: "USD Coin",
+    version: "1",
+    spenderAddress: B402_PROXY,
+    trustedSpenders: [B402_PROXY],
+  };
+
+  it("validates and signs one exact Permit2 route from the same challenge", async () => {
+    const challenge = {
+      x402Version: 2,
+      resource: { url: "https://api.example/paid", description: "paid" },
+      accepts: [exactEntry],
+    };
+    const { impl } = fetchQueue(json402(challenge), jsonOk({ data: "paid" }));
+    const payer = sessionProvider().makeX402Payer({ fetchImpl: impl });
+
+    const result = await payer.requestExact("https://api.example/paid", {
+      expectedRoute,
+      maxPayment: 5000n,
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      amount: 5000n,
+      asset: USDC,
+      network: "eip155:56",
+      payTo: PAY_TO,
+      transferMethod: "permit2-exact",
+      spenderAddress: B402_PROXY,
+    });
+    expect(sdkMocks.signX402PaymentMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        ...exactEntry,
+        x402Version: 2,
+        resource: challenge.resource,
+      }),
+    );
+  });
+
+  it.each([
+    ["amount", { amount: "5001" }],
+    ["scheme", { scheme: "permit2-exact" }],
+    ["x402Version", {}, 1],
+    ["timeout", { maxTimeoutSeconds: 301 }],
+    [
+      "spender",
+      {
+        extra: {
+          ...exactEntry.extra,
+          spenderAddress: PAY_TO,
+        },
+      },
+    ],
+    [
+      "domain",
+      { extra: { ...exactEntry.extra, name: "forged", version: "2" } },
+    ],
+  ])(
+    "rejects %s drift before signing",
+    async (_label, entryPatch, version = 2) => {
+      const { impl } = fetchQueue(
+        json402({
+          x402Version: version,
+          resource: { url: "https://api.example/paid" },
+          accepts: [{ ...exactEntry, ...entryPatch }],
+        }),
+      );
+      const payer = sessionProvider().makeX402Payer({ fetchImpl: impl });
+
+      await expect(
+        payer.requestExact("https://api.example/paid", {
+          expectedRoute,
+          maxPayment: 5000n,
+        }),
+      ).rejects.toThrow(X402NoPayableRouteError);
+      expect(sdkMocks.signX402PaymentMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects an expected proxy outside the explicit trust root", async () => {
+    const { impl } = fetchQueue(
+      json402({ x402Version: 2, accepts: [exactEntry] }),
+    );
+    const payer = sessionProvider().makeX402Payer({ fetchImpl: impl });
+
+    await expect(
+      payer.requestExact("https://api.example/paid", {
+        expectedRoute: { ...expectedRoute, trustedSpenders: [PAY_TO] },
+        maxPayment: 5000n,
+      }),
+    ).rejects.toThrow(X402NoPayableRouteError);
+    expect(sdkMocks.signX402PaymentMock).not.toHaveBeenCalled();
   });
 });
 

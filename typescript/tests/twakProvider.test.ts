@@ -967,6 +967,11 @@ function x402Router(): string[][] {
 }
 
 describe("TwakX402Payer", () => {
+  it("does not claim atomic exact-route payment support", () => {
+    const payer = new TWAKProvider().makeX402Payer(PAYER_OPTS);
+    expect("requestExact" in payer).toBe(false);
+  });
+
   it("requires valid trusted recipient and asset anchors", () => {
     const provider = new TWAKProvider();
     expect(() =>

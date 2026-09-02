@@ -136,6 +136,49 @@ export interface X402PaymentResult {
   transaction?: string;
 }
 
+export type X402TransferMethod = "eip3009" | "permit2-exact";
+
+interface ExpectedX402RouteBase {
+  readonly x402Version: 2;
+  readonly scheme: "exact";
+  readonly network: `eip155:${number}`;
+  readonly asset: string;
+  readonly amount: bigint;
+  readonly payTo: string;
+  readonly maxTimeoutSeconds: number;
+}
+
+export type ExpectedX402Route =
+  | (ExpectedX402RouteBase & {
+      readonly transferMethod: "eip3009";
+    })
+  | (ExpectedX402RouteBase & {
+      readonly transferMethod: "permit2-exact";
+      readonly name: string;
+      readonly version: string;
+      /** Expected B402 proxy from the caller's trusted capability snapshot. */
+      readonly spenderAddress: string;
+      /** Explicit trust root; the challenge cannot add to this list. */
+      readonly trustedSpenders: readonly string[];
+    });
+
+export interface X402ExactPaymentResult extends X402PaymentResult {
+  readonly success: true;
+  readonly amount: bigint;
+  readonly asset: string;
+  readonly network: `eip155:${number}`;
+  readonly payTo: string;
+  readonly transferMethod: X402TransferMethod;
+  readonly spenderAddress?: string;
+}
+
+export interface X402ExactRequestOptions {
+  readonly expectedRoute: ExpectedX402Route;
+  readonly maxPayment: bigint;
+  readonly method?: string;
+  readonly body?: string;
+}
+
 /**
  * Structural contract for delegated x402 payment backends.
  *
@@ -144,6 +187,9 @@ export interface X402PaymentResult {
  * Implementations may accept extra options.
  */
 export interface X402Payer {
+  /** Methods this implementation can bind atomically in `requestExact`. */
+  readonly exactTransferMethods?: readonly X402TransferMethod[];
+
   /** Fetch the 402 challenge for `url` without paying. */
   quote(
     url: string,
@@ -158,4 +204,13 @@ export interface X402Payer {
     url: string,
     opts: { maxPayment: bigint; method?: string; body?: string },
   ): Promise<X402PaymentResult>;
+
+  /**
+   * Fetch, validate, sign, and retry one challenge without re-fetching or
+   * selecting a route outside the caller-supplied exact binding.
+   */
+  requestExact?(
+    url: string,
+    opts: X402ExactRequestOptions,
+  ): Promise<X402ExactPaymentResult>;
 }
