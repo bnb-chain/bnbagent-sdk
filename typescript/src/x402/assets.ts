@@ -32,6 +32,32 @@ export interface B402WalletRoute {
   readonly delegated: boolean;
 }
 
+/**
+ * The minimal capability contract for a delegated exact payer. A wallet kind
+ * is not enough evidence that a particular transfer rail is usable: the
+ * concrete payer must expose an atomic exact-request operation and advertise
+ * the requested method itself.
+ */
+export interface DelegatedX402ExactPayerCapability {
+  readonly exactTransferMethods?: readonly B402TransferMethod[];
+  readonly requestExact?: unknown;
+}
+
+/**
+ * A caller-selected EIP-3009 route resolved from the SDK's immutable asset
+ * catalog. It is the trust anchor for local x402 signing: the challenge may
+ * supply typed-data, but it may not select a token or EIP-712 domain.
+ */
+export interface ExpectedEip3009Route {
+  readonly network: `eip155:${number}`;
+  readonly chainId: number;
+  readonly assetId: AssetId;
+  readonly address: `0x${string}`;
+  readonly transferMethod: "eip3009";
+  readonly name: string;
+  readonly version: string;
+}
+
 const CAIP2_NETWORK = /^eip155:(56|97)$/;
 const LOCAL_WALLETS = new Set(["evm-local", "turnkey"]);
 const DELEGATED_WALLETS = new Set(["twak", "altana"]);
@@ -100,11 +126,68 @@ export function resolveB402Asset(
   });
 }
 
+/** Resolve one active catalog asset into its exact EIP-3009 signing route. */
+export function resolveExpectedEip3009Route(
+  network: string | number,
+  asset: AssetId | string,
+): ExpectedEip3009Route {
+  const expectedAsset = resolveB402Asset(network, asset);
+  const kind = expectedAsset.b402Kinds.find(
+    (candidate) => candidate.method === "eip3009",
+  );
+  const domain = expectedAsset.eip3009Domain;
+  if (
+    !expectedAsset.b402Methods.includes("eip3009") ||
+    kind === undefined ||
+    domain === null ||
+    kind.name !== domain.name ||
+    kind.version !== domain.version
+  ) {
+    throw new Error(
+      `asset ${expectedAsset.assetId} has no catalog EIP-3009 signing route`,
+    );
+  }
+  return Object.freeze({
+    network: expectedAsset.network as `eip155:${number}`,
+    chainId: expectedAsset.chainId,
+    assetId: expectedAsset.assetId,
+    address: expectedAsset.address,
+    transferMethod: "eip3009" as const,
+    name: domain.name,
+    version: domain.version,
+  });
+}
+
+/**
+ * Reject hand-built, stale, or placeholder routes by exact re-resolution.
+ * This intentionally treats the public TypeScript interface as untrusted at
+ * runtime: structural typing cannot prove an object was produced by the
+ * catalog resolver.
+ */
+export function requireExpectedEip3009Route(
+  route: ExpectedEip3009Route,
+): ExpectedEip3009Route {
+  const canonical = resolveExpectedEip3009Route(route.network, route.address);
+  if (
+    route.network !== canonical.network ||
+    route.chainId !== canonical.chainId ||
+    route.assetId !== canonical.assetId ||
+    route.address !== canonical.address ||
+    route.transferMethod !== canonical.transferMethod ||
+    route.name !== canonical.name ||
+    route.version !== canonical.version
+  ) {
+    throw new Error("expected EIP-3009 route does not match the asset catalog");
+  }
+  return canonical;
+}
+
 /** Validate a wallet route for the exact expected asset, or throw typed unsupported. */
 export function requireB402WalletRoute(
   walletKind: string,
   expectedAsset: ExpectedB402Asset,
   transferMethod: string,
+  delegatedPayer?: DelegatedX402ExactPayerCapability,
 ): B402WalletRoute {
   let addressResolved = true;
   let catalogExpected: ExpectedB402Asset;
@@ -158,7 +241,14 @@ export function requireB402WalletRoute(
   const methodSupported = catalogExpected.b402Methods.includes(
     transferMethod as B402TransferMethod,
   );
-  const delegated = DELEGATED_WALLETS.has(walletKind);
+  const delegated =
+    DELEGATED_WALLETS.has(walletKind) &&
+    delegatedPayer !== undefined &&
+    typeof delegatedPayer.requestExact === "function" &&
+    Array.isArray(delegatedPayer.exactTransferMethods) &&
+    delegatedPayer.exactTransferMethods.includes(
+      transferMethod as B402TransferMethod,
+    );
 
   const supportedDelegated = catalogMatches && methodSupported && delegated;
   const supportedLocalEip3009 =

@@ -12,10 +12,9 @@
  * - session-cumulative budget tracker (rate-limits a compromised agent even
  *   if individual calls are within max-value)
  *
- * x402 SchemeExactEVM and EIP-3009 `TransferWithAuthorization` are the
- * primary intended primary types; callers signing other types via this
- * wrapper should ensure the message has `to` and `value` fields with the
- * same semantics.
+ * This is deliberately an EIP-3009-only signer: every call must carry a
+ * caller-selected catalog route for `TransferWithAuthorization`. Generic
+ * typed-data signing belongs on the wallet's separately policy-gated API.
  *
  * Port of `python/bnbagent/x402/signer.py`.
  */
@@ -26,6 +25,10 @@ import { PolicyViolation } from "../signing/errors.js";
 import { SIGN_TYPED_DATA } from "../wallets/capabilities.js";
 import { UnsupportedWalletOperation } from "../wallets/errors.js";
 import type { SignatureResult } from "../wallets/walletProvider.js";
+import {
+  type ExpectedEip3009Route,
+  requireExpectedEip3009Route,
+} from "./assets.js";
 import { SessionBudgetTracker } from "./budget.js";
 import {
   X402AmountExceededError,
@@ -85,6 +88,13 @@ export interface SignPaymentOptions {
    * (defaults to `0` if absent).
    */
   message: Record<string, unknown>;
+  /**
+   * Caller-selected EIP-3009 route produced by
+   * {@link resolveExpectedEip3009Route}. It is mandatory: the signer
+   * re-resolves it through the catalog and binds chain/token/method/domain
+   * fields before reserving budget or asking the wallet to sign.
+   */
+  expectedRoute: ExpectedEip3009Route;
   /**
    * Address the caller commits to as the payee. Compared byte-equal
    * (case-insensitive) against `message.to`. Any drift →
@@ -171,7 +181,17 @@ export class X402Signer {
    *   token.
    */
   async signPayment(opts: SignPaymentOptions): Promise<SignatureResult> {
-    const { domain, types, message, expectedTo } = opts;
+    const { domain, types, message, expectedRoute, expectedTo } = opts;
+    let expected: ExpectedEip3009Route;
+    try {
+      expected = requireExpectedEip3009Route(expectedRoute);
+    } catch (e) {
+      throw new X402PolicyError(
+        "expected EIP-3009 route is missing, unavailable, or does not match the asset catalog",
+        { cause: e },
+      );
+    }
+
     // A malformed/missing verifyingContract would otherwise throw a raw viem
     // InvalidAddressError, escaping the documented X402 error contract.
     let verifying: `0x${string}`;
@@ -181,6 +201,29 @@ export class X402Signer {
       throw new X402PolicyError(
         `invalid or missing verifyingContract in EIP-712 domain: ${JSON.stringify(domain.verifyingContract)}`,
         { cause: e },
+      );
+    }
+
+    const primaryTypes = Object.keys(types).filter(
+      (typeName) => typeName !== "EIP712Domain",
+    );
+    const domainChainId = domain.chainId;
+    const chainMatches =
+      (typeof domainChainId === "number" &&
+        Number.isSafeInteger(domainChainId) &&
+        domainChainId === expected.chainId) ||
+      (typeof domainChainId === "bigint" &&
+        domainChainId === BigInt(expected.chainId));
+    if (
+      !chainMatches ||
+      verifying !== expected.address ||
+      domain.name !== expected.name ||
+      domain.version !== expected.version ||
+      primaryTypes.length !== 1 ||
+      primaryTypes[0] !== "TransferWithAuthorization"
+    ) {
+      throw new X402PolicyError(
+        "typed data does not match the expected EIP-3009 route (chain, token, method, name, or version)",
       );
     }
 

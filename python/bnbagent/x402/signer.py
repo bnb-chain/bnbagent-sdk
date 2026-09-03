@@ -11,10 +11,9 @@ window). X402Signer adds the *transactional* layer on top:
 - session-cumulative budget tracker (rate-limits a compromised agent
   even if individual calls are within max_value)
 
-x402 SchemeExactEVM and EIP-3009 ``TransferWithAuthorization`` are the
-primary intended primary types; callers signing other types via this
-wrapper should ensure the message has ``to`` and ``value`` fields with
-the same semantics.
+This is deliberately an EIP-3009-only signer: every call carries a
+caller-selected catalog route for ``TransferWithAuthorization``. Generic
+typed-data signing belongs on the wallet's separately policy-gated API.
 """
 
 from __future__ import annotations
@@ -27,6 +26,7 @@ from web3 import Web3
 from ..signing import PolicyViolation
 from ..wallets import TypedDataSigner, UnsupportedWalletOperation
 from ..wallets.capabilities import SIGN_TYPED_DATA
+from .assets import ExpectedEIP3009Route, require_expected_eip3009_route
 from .budget import SessionBudgetTracker
 from .errors import (
     X402AmountExceededError,
@@ -115,6 +115,7 @@ class X402Signer:
         domain: dict[str, Any],
         types: dict[str, Any],
         message: dict[str, Any],
+        expected_route: ExpectedEIP3009Route,
         expected_to: str,
     ) -> dict[str, Any]:
         """Sign an x402 / EIP-3009 payment after all guards pass.
@@ -125,6 +126,10 @@ class X402Signer:
             types: EIP-712 types dict.
             message: Struct values. Must include ``to`` and ``value`` for
                 X402Signer's recipient/amount guards.
+            expected_route: Caller-selected route from
+                :func:`resolve_expected_eip3009_route`. It is canonicalized
+                against the active catalog before any budget reservation or
+                wallet signing.
             expected_to: Address the caller commits to as the payee.
                 Compared byte-equal (case-insensitive) against
                 ``message['to']``. Any drift → X402RecipientMismatchError.
@@ -142,6 +147,14 @@ class X402Signer:
             X402PolicyError: wraps an underlying
                 :class:`bnbagent.signing.PolicyViolation`.
         """
+        try:
+            expected = require_expected_eip3009_route(expected_route)
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            raise X402PolicyError(
+                "expected EIP-3009 route is missing, unavailable, or does not match "
+                "the asset catalog"
+            ) from exc
+
         raw_verifying = domain.get("verifyingContract")
         try:
             if not isinstance(raw_verifying, str):
@@ -151,6 +164,19 @@ class X402Signer:
             raise X402PolicyError(
                 f"invalid or missing verifyingContract in EIP-712 domain: {raw_verifying!r}"
             ) from exc
+
+        primary_types = tuple(type_name for type_name in types if type_name != "EIP712Domain")
+        if (
+            domain.get("chainId") != expected.chain_id
+            or verifying != expected.address
+            or domain.get("name") != expected.name
+            or domain.get("version") != expected.version
+            or primary_types != ("TransferWithAuthorization",)
+        ):
+            raise X402PolicyError(
+                "typed data does not match the expected EIP-3009 route "
+                "(chain, token, method, name, or version)"
+            )
 
         # ── L0 recipient (cheapest check, fail fast) ───────────────
         msg_to = message.get("to")

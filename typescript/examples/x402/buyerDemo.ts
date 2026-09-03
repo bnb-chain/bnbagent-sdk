@@ -46,7 +46,10 @@ import {
   getAddress,
 } from "../../src/networks/index.js";
 import { EVMWalletProvider } from "../../src/wallets/index.js";
-import { X402Signer } from "../../src/x402/index.js";
+import {
+  X402Signer,
+  resolveExpectedEip3009Route,
+} from "../../src/x402/index.js";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────
 // Ephemeral, in-memory wallet (persist=false) — fresh key per run, never
@@ -55,6 +58,7 @@ const DEMO_PK = generatePrivateKey();
 const DEMO_PW = "x402-buyer-demo-pw";
 
 const U_TESTNET = getAddress(BSC_TESTNET_CHAIN_ID).paymentToken;
+const U_TESTNET_ROUTE = resolveExpectedEip3009Route("eip155:97", "TEST_U");
 const NETWORK_ID = `eip155:${BSC_TESTNET_CHAIN_ID}`;
 const PAY_TO = `0x${"be".repeat(20)}`; // Mock beneficiary (server-controlled in real life)
 const PRICE_BASE_UNITS = 100_000n; // 0.1 U at 6 decimals — same shape as a real x402 listing
@@ -310,6 +314,7 @@ async function main(): Promise<number> {
       domain,
       types,
       message,
+      expectedRoute: U_TESTNET_ROUTE,
       expectedTo: PAY_TO,
     });
     const sig = signed.signature;

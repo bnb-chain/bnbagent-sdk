@@ -14,11 +14,11 @@ import { join } from "node:path";
 import { getAddress as toChecksumAddress } from "viem";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { BSC_MAINNET_CHAIN_ID, getAddress } from "../src/networks/index.js";
-import { PolicyViolation } from "../src/signing/index.js";
 import { SIGN_TYPED_DATA } from "../src/wallets/capabilities.js";
 import { UnsupportedWalletOperation } from "../src/wallets/errors.js";
 import { EVMWalletProvider } from "../src/wallets/index.js";
 import type { SignatureResult } from "../src/wallets/walletProvider.js";
+import { resolveExpectedEip3009Route } from "../src/x402/assets.js";
 import { SessionBudgetTracker } from "../src/x402/budget.js";
 import {
   X402AmountExceededError,
@@ -34,6 +34,10 @@ const PW = "test-secure-password-123";
 const PK = `0x${"a".repeat(64)}` as const;
 
 const U_MAINNET = getAddress(BSC_MAINNET_CHAIN_ID).paymentToken;
+const USD1_MAINNET = "0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d" as const;
+
+const U_EIP3009_ROUTE = resolveExpectedEip3009Route("eip155:56", "U");
+const USD1_EIP3009_ROUTE = resolveExpectedEip3009Route("eip155:56", "USD1");
 
 const EIP712DOMAIN_FIELDS = [
   { name: "name", type: "string" },
@@ -99,8 +103,83 @@ function payload(
       validBefore: now + 60,
       nonce: `0x${"c".repeat(64)}`,
     },
+    expectedRoute: U_EIP3009_ROUTE,
   };
 }
+
+describe("X402Signer — catalog EIP-3009 route binding", () => {
+  it("rejects a USD1 domain substituted for the caller-selected U route before signing", async () => {
+    let signCalls = 0;
+    const routeSigner = new X402Signer({
+      address: wallet.address,
+      signTypedData: async (): Promise<SignatureResult> => {
+        signCalls++;
+        throw new Error("wallet must not be called for a rejected route");
+      },
+    });
+    const p = payload({ fromAddr: routeSigner.walletAddress });
+    const substituted = {
+      ...p,
+      domain: {
+        ...p.domain,
+        name: USD1_EIP3009_ROUTE.name,
+        verifyingContract: USD1_MAINNET,
+      },
+      expectedRoute: U_EIP3009_ROUTE,
+      expectedTo: p.message.to,
+    };
+
+    await expect(routeSigner.signPayment(substituted)).rejects.toThrow(
+      /expected EIP-3009 route/i,
+    );
+    expect(routeSigner.budget.spent(U_MAINNET)).toBe(0n);
+    expect(signCalls).toBe(0);
+  });
+
+  it.each([
+    ["name", "World Liberty Financial USD"],
+    ["version", "2"],
+  ] as const)(
+    "rejects a wrong EIP-712 %s before signing",
+    async (field, value) => {
+      const p = payload({ fromAddr: signer.walletAddress });
+      const forgedDomain = {
+        ...p,
+        domain: {
+          ...p.domain,
+          [field]: value,
+        },
+        expectedRoute: U_EIP3009_ROUTE,
+        expectedTo: p.message.to,
+      };
+
+      await expect(signer.signPayment(forgedDomain)).rejects.toThrow(
+        /expected EIP-3009 route/i,
+      );
+      expect(signer.budget.spent(U_MAINNET)).toBe(0n);
+    },
+  );
+
+  it("rejects a placeholder route even when the supplied domain is otherwise valid", async () => {
+    const p = payload({ fromAddr: signer.walletAddress });
+    const placeholder = {
+      ...p,
+      expectedRoute: {
+        ...U_EIP3009_ROUTE,
+        network: "eip155:97" as const,
+        chainId: 97,
+        assetId: "TEST_USD1" as const,
+        address: "0x0000000000000000000000000000000000000000" as const,
+      },
+      expectedTo: p.message.to,
+    };
+
+    await expect(signer.signPayment(placeholder)).rejects.toThrow(
+      /expected EIP-3009 route/i,
+    );
+    expect(signer.budget.spent(U_MAINNET)).toBe(0n);
+  });
+});
 
 // ── Happy path ─────────────────────────────────────────────────────────
 
@@ -314,10 +393,10 @@ describe("X402Signer — session budget", () => {
   });
 });
 
-// ── PolicyViolation propagation ──────────────────────────────────────────
+// ── Non-EIP-3009 rejection ───────────────────────────────────────────────
 
-describe("X402Signer — PolicyViolation propagation", () => {
-  it("wraps a wallet PolicyViolation as X402PolicyError with cause chained", async () => {
+describe("X402Signer — non-EIP-3009 rejection", () => {
+  it("rejects a Permit primary type before budget reservation or wallet signing", async () => {
     const permitSigner = new X402Signer(wallet, {
       maxValuePerCall: { [U_MAINNET]: 1_000_000n },
     });
@@ -347,19 +426,15 @@ describe("X402Signer — PolicyViolation propagation", () => {
         nonce: 0,
         deadline: 2_000_000_000,
       },
+      expectedRoute: U_EIP3009_ROUTE,
     };
-    let caught: X402PolicyError | undefined;
-    try {
-      await permitSigner.signPayment({
+    await expect(
+      permitSigner.signPayment({
         ...permitPayload,
         expectedTo: `0x${"b".repeat(40)}`,
-      });
-    } catch (e) {
-      caught = e as X402PolicyError;
-    }
-    expect(caught).toBeInstanceOf(X402PolicyError);
-    expect(caught?.cause).toBeInstanceOf(PolicyViolation);
-    expect((caught?.cause as PolicyViolation).primaryType).toBe("Permit");
+      }),
+    ).rejects.toThrow(/expected EIP-3009 route/);
+    expect(permitSigner.budget.spent(U_MAINNET)).toBe(0n);
   });
 });
 

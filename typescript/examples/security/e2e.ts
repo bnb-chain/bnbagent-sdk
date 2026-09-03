@@ -36,6 +36,7 @@ import {
   X402AmountExceededError,
   X402RecipientMismatchError,
   X402Signer,
+  resolveExpectedEip3009Route,
 } from "../../src/x402/index.js";
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
@@ -45,6 +46,7 @@ const PW = "e2e-secure-pw";
 // if you need a deterministic key for a specific repro.
 const PK = process.env.E2E_PRIVATE_KEY || generatePrivateKey();
 const U_TESTNET = getAddress(BSC_TESTNET_CHAIN_ID).paymentToken;
+const U_TESTNET_ROUTE = resolveExpectedEip3009Route("eip155:97", "TEST_U");
 
 const EIP712_DOMAIN_FIELDS = [
   { name: "name", type: "string" },
@@ -246,6 +248,7 @@ async function assertion5X402SignerRejectsOvervalue(
       domain,
       types,
       message: msg,
+      expectedRoute: U_TESTNET_ROUTE,
       expectedTo: msg.to as string,
     });
   } catch (error) {
@@ -277,6 +280,7 @@ async function assertion6X402SignerRejectsRecipientMismatch(
       domain,
       types,
       message: msg,
+      expectedRoute: U_TESTNET_ROUTE,
       expectedTo: `0x${"9".repeat(40)}`, // different!
     });
   } catch (error) {

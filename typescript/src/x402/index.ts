@@ -13,8 +13,18 @@ export {
   paymentOptionFromCli,
   quoteFromCli,
 } from "./payer.js";
-export { requireB402WalletRoute, resolveB402Asset } from "./assets.js";
-export type { B402WalletRoute, ExpectedB402Asset } from "./assets.js";
+export {
+  requireB402WalletRoute,
+  requireExpectedEip3009Route,
+  resolveB402Asset,
+  resolveExpectedEip3009Route,
+} from "./assets.js";
+export type {
+  B402WalletRoute,
+  DelegatedX402ExactPayerCapability,
+  ExpectedB402Asset,
+  ExpectedEip3009Route,
+} from "./assets.js";
 export type {
   ExpectedX402Route,
   ExpectedX402Resource,

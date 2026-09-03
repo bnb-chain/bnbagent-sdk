@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, Literal, Protocol, cast, runtime_checkable
 
 from web3 import Web3
 
@@ -51,6 +51,35 @@ class B402WalletRoute:
     delegated: bool
 
 
+@runtime_checkable
+class DelegatedX402ExactPayerCapability(Protocol):
+    """Minimal concrete-payer contract for a delegated exact route."""
+
+    exact_transfer_methods: tuple[B402TransferMethod, ...]
+
+    def request_exact(self, *args: Any, **kwargs: Any) -> Any:
+        """Atomically bind a caller-selected route before payment."""
+        ...
+
+
+@dataclass(frozen=True)
+class ExpectedEIP3009Route:
+    """Caller-selected catalog route bound by :class:`X402Signer`.
+
+    The challenge supplies typed-data, never its trust root. This immutable
+    value contains the exact active token and EIP-712 domain that local
+    EIP-3009 signing may use.
+    """
+
+    network: str
+    chain_id: int
+    asset_id: AssetId
+    address: str
+    transfer_method: Literal["eip3009"]
+    name: str
+    version: str
+
+
 def _parse_network(network: str | int) -> int:
     if isinstance(network, bool):
         raise TypeError("B402 network must be a chain id or CAIP-2 eip155 network")
@@ -95,10 +124,53 @@ def resolve_b402_asset(network: str | int, asset: AssetId | str) -> ExpectedB402
     )
 
 
+def resolve_expected_eip3009_route(
+    network: str | int, asset: AssetId | str
+) -> ExpectedEIP3009Route:
+    """Resolve one active catalog asset into its exact EIP-3009 signing route."""
+
+    expected_asset = resolve_b402_asset(network, asset)
+    kind = next(
+        (candidate for candidate in expected_asset.b402_kinds if candidate.method == "eip3009"),
+        None,
+    )
+    domain = expected_asset.eip3009_domain
+    if (
+        "eip3009" not in expected_asset.b402_methods
+        or kind is None
+        or domain is None
+        or (kind.name, kind.version) != (domain.name, domain.version)
+    ):
+        raise ValueError(
+            f"asset {expected_asset.asset_id.value} has no catalog EIP-3009 signing route"
+        )
+    return ExpectedEIP3009Route(
+        network=expected_asset.network,
+        chain_id=expected_asset.chain_id,
+        asset_id=expected_asset.asset_id,
+        address=expected_asset.address,
+        transfer_method="eip3009",
+        name=domain.name,
+        version=domain.version,
+    )
+
+
+def require_expected_eip3009_route(route: ExpectedEIP3009Route) -> ExpectedEIP3009Route:
+    """Re-resolve an untrusted public route and reject any field drift."""
+
+    if not isinstance(route, ExpectedEIP3009Route):
+        raise TypeError("expected EIP-3009 route must be catalog-derived")
+    canonical = resolve_expected_eip3009_route(route.network, route.address)
+    if route != canonical:
+        raise ValueError("expected EIP-3009 route does not match the asset catalog")
+    return canonical
+
+
 def require_b402_wallet_route(
     wallet_kind: str,
     expected_asset: ExpectedB402Asset,
     transfer_method: str,
+    delegated_payer: DelegatedX402ExactPayerCapability | object | None = None,
 ) -> B402WalletRoute:
     """Validate a wallet route for exactly ``expected_asset`` or raise typed unsupported."""
 
@@ -134,7 +206,13 @@ def require_b402_wallet_route(
     )
     method_supported = transfer_method in catalog_expected.b402_methods
 
-    delegated = wallet_kind in _DELEGATED_WALLETS
+    exact_transfer_methods = getattr(delegated_payer, "exact_transfer_methods", ())
+    delegated = (
+        wallet_kind in _DELEGATED_WALLETS
+        and callable(getattr(delegated_payer, "request_exact", None))
+        and isinstance(exact_transfer_methods, (tuple, list, frozenset))
+        and transfer_method in exact_transfer_methods
+    )
     supported = False
     if catalog_matches and method_supported and delegated:
         supported = True

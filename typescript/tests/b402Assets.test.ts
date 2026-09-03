@@ -190,31 +190,53 @@ describe("requireB402WalletRoute", () => {
     },
   );
 
-  it.each(["twak", "altana"] as const)(
-    "allows catalog-declared delegated routes for %s",
-    (walletKind) => {
-      const routes = [
-        [56, AssetId.U, "eip3009"],
-        [56, AssetId.U, "permit2-exact"],
-        [56, AssetId.BINANCE_PEG_USDC, "permit2-exact"],
-        [56, AssetId.BINANCE_PEG_USDT, "permit2-exact"],
-        [97, AssetId.TEST_U, "eip3009"],
-        [97, AssetId.TEST_USDC, "permit2-exact"],
-        [97, AssetId.TEST_USDT, "permit2-exact"],
-      ] as const;
-      for (const [chainId, assetId, transferMethod] of routes) {
-        const expected = resolveB402Asset(chainId, assetId);
-        expect(
-          requireB402WalletRoute(walletKind, expected, transferMethod),
-        ).toEqual({
-          walletKind,
-          expectedAsset: expected,
-          transferMethod,
-          delegated: true,
-        });
-      }
-    },
-  );
+  it("rejects static Altana and TWAK USD1 reporting without a concrete EIP-3009 exact payer", () => {
+    const usd1 = resolveB402Asset(56, AssetId.USD1);
+    const altanaPayerShape = {
+      exactTransferMethods: ["permit2-exact"] as const,
+      requestExact: async () => ({
+        paid: false as const,
+        cacheHit: true as const,
+        response: null,
+      }),
+    };
+    // TWAK exposes quote/request, but no exact binding surface.
+    const twakPayerShape = {
+      request: async () => ({ success: true, response: null }),
+    };
+
+    for (const [walletKind, payer] of [
+      ["altana", altanaPayerShape],
+      // The explicit cast models a non-exact provider at the trust boundary;
+      // runtime checking must still refuse this representative TWAK shape.
+      ["twak", twakPayerShape as { exactTransferMethods?: readonly never[] }],
+    ] as const) {
+      expect(() =>
+        requireB402WalletRoute(walletKind, usd1, "eip3009", payer),
+      ).toThrow(UnsupportedWalletRouteError);
+    }
+  });
+
+  it("permits a future delegated USD1 route only when its exact payer advertises EIP-3009", () => {
+    const usd1 = resolveB402Asset(56, AssetId.USD1);
+    const exactEip3009Payer = {
+      exactTransferMethods: ["eip3009"] as const,
+      requestExact: async () => ({
+        paid: false as const,
+        cacheHit: true as const,
+        response: null,
+      }),
+    };
+
+    expect(
+      requireB402WalletRoute("altana", usd1, "eip3009", exactEip3009Payer),
+    ).toMatchObject({
+      walletKind: "altana",
+      expectedAsset: usd1,
+      transferMethod: "eip3009",
+      delegated: true,
+    });
+  });
 
   it.each(["twak", "altana"] as const)(
     "rejects methods missing from each asset catalog entry for %s",

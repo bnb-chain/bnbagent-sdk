@@ -65,7 +65,7 @@ assert erc8183.get_job_status(job_id) == JobStatus.COMPLETED
 - `approve_floor=X` 是显式的旧行为 opt-in，授权 `max(amount, X)`；不会再默认授权 100 个 token。
 - `amount == 0` 仍会读取并核对 job token，但不会读取 allowance 或发送 approve。
 
-### 多资产 job（U / USDC / USDT）
+### 多资产 job（U / USD1 / USDC / USDT）
 
 `AssetId` 是 SDK 内部身份；`USDC` / `USDT` 这类 UI symbol 不会在客户端层静默解析。
 创建新 job 时可传当前网络的 canonical AssetId 或 catalog 地址：

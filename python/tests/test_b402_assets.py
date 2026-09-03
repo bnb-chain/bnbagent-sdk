@@ -180,29 +180,37 @@ def test_local_wallets_do_not_open_permit2_even_when_u_catalog_supports_it(
         x402.require_b402_wallet_route(wallet_kind, expected, "permit2-exact")
 
 
-@pytest.mark.parametrize("wallet_kind", ["twak", "altana"])
-@pytest.mark.parametrize(
-    ("chain_id", "asset_id", "method"),
-    [
-        (56, AssetId.U, "eip3009"),
-        (56, AssetId.U, "permit2-exact"),
-        (56, AssetId.BINANCE_PEG_USDC, "permit2-exact"),
-        (56, AssetId.BINANCE_PEG_USDT, "permit2-exact"),
-        (97, AssetId.TEST_U, "eip3009"),
-        (97, AssetId.TEST_USDC, "permit2-exact"),
-        (97, AssetId.TEST_USDT, "permit2-exact"),
-    ],
-)
-def test_delegated_wallets_allow_only_catalog_declared_routes(
-    wallet_kind: str, chain_id: int, asset_id: AssetId, method: str
-) -> None:
-    expected = x402.resolve_b402_asset(chain_id, asset_id)
+def test_static_altana_and_twak_usd1_reporting_requires_concrete_eip3009_exact_payer() -> None:
+    usd1 = x402.resolve_b402_asset(56, AssetId.USD1)
 
-    route = x402.require_b402_wallet_route(wallet_kind, expected, method)
+    class AltanaPayerShape:
+        exact_transfer_methods = ("permit2-exact",)
 
-    assert route.expected_asset == expected
-    assert route.expected_asset is not expected
-    assert route.transfer_method == method
+        def request_exact(self):
+            raise NotImplementedError
+
+    class TwakPayerShape:
+        def request(self):
+            raise NotImplementedError
+
+    for wallet_kind, payer in (("altana", AltanaPayerShape()), ("twak", TwakPayerShape())):
+        with pytest.raises(x402.UnsupportedWalletRouteError):
+            x402.require_b402_wallet_route(wallet_kind, usd1, "eip3009", payer)
+
+
+def test_future_delegated_usd1_route_requires_advertised_eip3009_exact_payer() -> None:
+    usd1 = x402.resolve_b402_asset(56, AssetId.USD1)
+
+    class ExactEIP3009Payer:
+        exact_transfer_methods = ("eip3009",)
+
+        def request_exact(self):
+            raise NotImplementedError
+
+    route = x402.require_b402_wallet_route("altana", usd1, "eip3009", ExactEIP3009Payer())
+    assert route.expected_asset == usd1
+    assert route.expected_asset is not usd1
+    assert route.transfer_method == "eip3009"
     assert route.delegated is True
 
 

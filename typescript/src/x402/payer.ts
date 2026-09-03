@@ -169,6 +169,9 @@ interface ExpectedX402RouteBase {
 export type ExpectedX402Route =
   | (ExpectedX402RouteBase & {
       readonly transferMethod: "eip3009";
+      /** Trusted EIP-3009 domain identity, never inferred from a challenge. */
+      readonly name: string;
+      readonly version: string;
     })
   | (ExpectedX402RouteBase & {
       readonly transferMethod: "permit2-exact";
