@@ -139,6 +139,24 @@ def test_asset_catalog_snapshot_matches_locked_bsc_matrix():
     ]
 
 
+def test_testnet_u_uses_distinct_erc8183_and_b402_contract_facts():
+    erc8183_u = _api("get_asset")(97, _api("AssetId").TEST_U)
+    b402_u = _api("get_b402_asset")(97, _api("AssetId").TEST_U)
+
+    assert (erc8183_u.address, erc8183_u.decimals) == (
+        "0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
+        18,
+    )
+    assert (b402_u.address, b402_u.decimals) == (
+        "0x330949Aed7d00FCe0558C64ED6FeC9792616cC39",
+        6,
+    )
+    with pytest.raises(KeyError, match="not registered"):
+        _api("get_b402_asset_by_address")(97, erc8183_u.address)
+    with pytest.raises(KeyError, match="not registered"):
+        _api("get_asset_by_address")(97, b402_u.address)
+
+
 def test_catalog_addresses_are_checksummed_and_reverse_lookup_is_case_insensitive():
     get_asset_by_address = _api("get_asset_by_address")
     for row in _snapshot():
@@ -165,16 +183,14 @@ def test_friendly_aliases_are_resolved_only_with_network_context():
     assert resolve_asset_alias(97, "U").value == "TEST_U"
     assert resolve_asset_alias(97, "USDC").value == "TEST_USDC"
     assert resolve_asset_alias(97, "USDT").value == "TEST_USDT"
-    assert resolve_asset_alias(97, "USD1").value == "TEST_USD1"
+    with pytest.raises(KeyError, match="unknown asset alias"):
+        resolve_asset_alias(97, "USD1")
 
 
-def test_usd1_metadata_is_exposed_while_testnet_placeholder_fails_closed():
+def test_mainnet_usd1_is_exposed_while_testnet_usd1_is_unsupported():
     asset_id = _api("AssetId")
     get_asset = _api("get_asset")
     get_asset_by_address = _api("get_asset_by_address")
-    get_asset_metadata = _api("get_asset_metadata")
-    list_assets = _api("list_assets")
-    unavailable_error = _api("PaymentAssetUnavailableError")
 
     active = get_asset(56, asset_id.USD1)
     assert (
@@ -194,16 +210,10 @@ def test_usd1_metadata_is_exposed_while_testnet_placeholder_fails_closed():
         ("eip3009",),
         _api("EIP3009Domain")("World Liberty Financial USD", "1"),
     )
-    placeholder = get_asset_metadata(97, asset_id.TEST_USD1)
-    assert (
-        placeholder.address,
-        placeholder.availability,
-        placeholder.b402_methods,
-        placeholder.eip3009_domain,
-    ) == ("0x0000000000000000000000000000000000000000", "placeholder", (), None)
-    with pytest.raises(unavailable_error):
-        get_asset(97, asset_id.TEST_USD1)
-    assert asset_id.TEST_USD1 not in tuple(asset.asset_id for asset in list_assets(97))
+    with pytest.raises(ValueError, match="unknown canonical AssetId"):
+        _api("parse_asset_id")("TEST_USD1")
+    with pytest.raises(KeyError, match="unknown asset alias"):
+        _api("resolve_asset_alias")(97, "USD1")
     with pytest.raises(KeyError):
         get_asset_by_address(97, "0x0000000000000000000000000000000000000000")
 

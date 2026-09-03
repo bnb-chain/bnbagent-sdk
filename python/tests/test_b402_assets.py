@@ -7,25 +7,88 @@ from dataclasses import FrozenInstanceError, replace
 import pytest
 
 import bnbagent.x402 as x402
-from bnbagent.networks import AssetId, get_asset, known_eip3009_payment_tokens
+from bnbagent.networks import (
+    AssetId,
+    get_asset,
+    get_b402_asset,
+    known_eip3009_payment_tokens,
+)
 from bnbagent.x402 import TwakX402Payer, X402Payer, X402PaymentOption
 
 
 @pytest.mark.parametrize(
-    ("network", "asset_id", "symbol", "decimals", "methods", "is_default"),
+    ("network", "asset_id", "symbol", "address", "decimals", "methods", "is_default"),
     [
-        ("eip155:56", AssetId.U, "U", 18, ("eip3009", "permit2-exact"), True),
-        (56, AssetId.BINANCE_PEG_USDC, "USDC", 18, ("permit2-exact",), False),
-        (56, AssetId.BINANCE_PEG_USDT, "USDT", 18, ("permit2-exact",), False),
-        ("eip155:97", AssetId.TEST_U, "U", 18, ("eip3009",), True),
-        (97, AssetId.TEST_USDC, "USDC", 6, ("permit2-exact",), False),
-        (97, AssetId.TEST_USDT, "USDT", 18, ("permit2-exact",), False),
+        (
+            "eip155:56",
+            AssetId.U,
+            "U",
+            "0xcE24439F2D9C6a2289F741120FE202248B666666",
+            18,
+            ("eip3009", "permit2-exact"),
+            True,
+        ),
+        (
+            56,
+            AssetId.USD1,
+            "USD1",
+            "0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d",
+            18,
+            ("eip3009",),
+            False,
+        ),
+        (
+            56,
+            AssetId.BINANCE_PEG_USDC,
+            "USDC",
+            "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
+            18,
+            ("permit2-exact",),
+            False,
+        ),
+        (
+            56,
+            AssetId.BINANCE_PEG_USDT,
+            "USDT",
+            "0x55d398326f99059fF775485246999027B3197955",
+            18,
+            ("permit2-exact",),
+            False,
+        ),
+        (
+            "eip155:97",
+            AssetId.TEST_U,
+            "U",
+            "0x330949Aed7d00FCe0558C64ED6FeC9792616cC39",
+            6,
+            ("eip3009",),
+            True,
+        ),
+        (
+            97,
+            AssetId.TEST_USDC,
+            "USDC",
+            "0xEC1C60D64a06896Df296438c12edD14E974FDE47",
+            6,
+            ("permit2-exact",),
+            False,
+        ),
+        (
+            97,
+            AssetId.TEST_USDT,
+            "USDT",
+            "0x337610d27c682E347C9cD60BD4b3b107C9d34dDd",
+            18,
+            ("permit2-exact",),
+            False,
+        ),
     ],
 )
 def test_resolve_b402_asset_snapshot(
     network: str | int,
     asset_id: AssetId,
     symbol: str,
+    address: str,
     decimals: int,
     methods: tuple[str, ...],
     is_default: bool,
@@ -48,7 +111,7 @@ def test_resolve_b402_asset_snapshot(
         catalog.chain_id,
         asset_id,
         symbol,
-        catalog.address,
+        address,
         decimals,
         methods,
         catalog.b402_kinds,
@@ -64,7 +127,7 @@ def test_resolve_b402_asset_accepts_only_same_chain_catalog_asset(
     chain_id: int, asset_id: AssetId
 ) -> None:
     try:
-        catalog = get_asset(chain_id, asset_id)
+        catalog = get_b402_asset(chain_id, asset_id)
     except KeyError:
         with pytest.raises(KeyError, match=r"(?:not )?available"):
             x402.resolve_b402_asset(chain_id, asset_id)
@@ -125,7 +188,7 @@ def test_active_usd1_allows_local_eip3009_but_keeps_permit2_and_placeholder_clos
         {
             (56, get_asset(56, AssetId.U).address),
             (56, usd1.address),
-            (97, get_asset(97, AssetId.TEST_U).address),
+            (97, get_b402_asset(97, AssetId.TEST_U).address),
         }
     )
     route = x402.require_b402_wallet_route(wallet_kind, usd1, "eip3009")
@@ -134,8 +197,8 @@ def test_active_usd1_allows_local_eip3009_but_keeps_permit2_and_placeholder_clos
     assert route.delegated is False
     with pytest.raises(x402.UnsupportedWalletRouteError):
         x402.require_b402_wallet_route(wallet_kind, usd1, "permit2-exact")
-    with pytest.raises(KeyError, match="unavailable"):
-        x402.resolve_b402_asset("eip155:97", AssetId.TEST_USD1)
+    with pytest.raises(ValueError, match="unknown canonical AssetId"):
+        x402.resolve_b402_asset("eip155:97", "TEST_USD1")
 
 
 @pytest.mark.parametrize("chain_id", [56, 97])

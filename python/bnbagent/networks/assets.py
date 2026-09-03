@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from types import MappingProxyType
 from typing import Literal
@@ -29,7 +29,6 @@ class AssetId(str, Enum):
     U = "U"
     TEST_U = "TEST_U"
     USD1 = "USD1"
-    TEST_USD1 = "TEST_USD1"
     BINANCE_PEG_USDC = "BINANCE_PEG_USDC"
     BINANCE_PEG_USDT = "BINANCE_PEG_USDT"
     TEST_USDC = "TEST_USDC"
@@ -79,6 +78,12 @@ class PaymentAsset:
     b402_kinds: tuple[B402Kind, ...] = ()
     # A trailing default preserves legacy object construction semantics.
     availability: PaymentAssetAvailability = "active"
+    # B402 execution facts default to the ERC-8183 address and decimals.
+    b402_address: str | None = None
+    b402_decimals: int | None = None
+
+
+B402PaymentAsset = PaymentAsset
 
 
 class AssetCatalog:
@@ -89,6 +94,8 @@ class AssetCatalog:
         metadata_by_address: dict[tuple[int, str], PaymentAsset] = {}
         active_by_key: dict[tuple[int, AssetId], PaymentAsset] = {}
         active_by_address: dict[tuple[int, str], PaymentAsset] = {}
+        active_b402_by_key: dict[tuple[int, AssetId], B402PaymentAsset] = {}
+        active_b402_by_address: dict[tuple[int, str], B402PaymentAsset] = {}
         active_by_chain: dict[int, list[PaymentAsset]] = {}
 
         for asset in assets:
@@ -106,6 +113,14 @@ class AssetCatalog:
 
             self._validate_availability(asset)
             self._validate_b402_metadata(asset)
+            b402_address = asset.b402_address or asset.address
+            b402_decimals = asset.decimals if asset.b402_decimals is None else asset.b402_decimals
+            if not Web3.is_checksum_address(b402_address):
+                raise ValueError(f"catalog B402 address is not checksummed: {b402_address}")
+            if isinstance(b402_decimals, bool) or not isinstance(b402_decimals, int):
+                raise ValueError("catalog B402 decimals must be a non-negative integer")
+            if b402_decimals < 0:
+                raise ValueError("catalog B402 decimals must be a non-negative integer")
             address_key = (asset.chain_id, asset.address.lower())
             if address_key in metadata_by_address:
                 raise ValueError(
@@ -117,8 +132,25 @@ class AssetCatalog:
             metadata_by_address[address_key] = asset
             active_by_chain.setdefault(asset.chain_id, [])
             if asset.availability == "active":
+                if b402_address.lower() == _ZERO_ADDRESS:
+                    raise ValueError("active B402 asset cannot use zero address")
+                b402_address_key = (asset.chain_id, b402_address.lower())
+                if b402_address_key in active_b402_by_address:
+                    raise ValueError(
+                        f"duplicate catalog B402 address: chain_id={asset.chain_id}, "
+                        f"address={b402_address}"
+                    )
+                b402_asset = replace(
+                    asset,
+                    address=b402_address,
+                    decimals=b402_decimals,
+                    b402_address=b402_address,
+                    b402_decimals=b402_decimals,
+                )
                 active_by_key[key] = asset
                 active_by_address[address_key] = asset
+                active_b402_by_key[key] = b402_asset
+                active_b402_by_address[b402_address_key] = b402_asset
                 active_by_chain[asset.chain_id].append(asset)
 
         self._metadata_by_key: Mapping[tuple[int, AssetId], PaymentAsset] = MappingProxyType(
@@ -133,11 +165,14 @@ class AssetCatalog:
         self._active_by_address: Mapping[tuple[int, str], PaymentAsset] = MappingProxyType(
             active_by_address
         )
+        self._active_b402_by_key: Mapping[tuple[int, AssetId], B402PaymentAsset] = (
+            MappingProxyType(active_b402_by_key)
+        )
+        self._active_b402_by_address: Mapping[tuple[int, str], B402PaymentAsset] = (
+            MappingProxyType(active_b402_by_address)
+        )
         self._active_by_chain: Mapping[int, tuple[PaymentAsset, ...]] = MappingProxyType(
-            {
-                chain_id: tuple(chain_assets)
-                for chain_id, chain_assets in active_by_chain.items()
-            }
+            {chain_id: tuple(chain_assets) for chain_id, chain_assets in active_by_chain.items()}
         )
 
     @staticmethod
@@ -234,6 +269,25 @@ class AssetCatalog:
                 f"asset address {address!r} is not registered on chain_id={chain_id}"
             ) from exc
 
+    def get_b402(self, chain_id: int, asset_id: AssetId | str) -> B402PaymentAsset:
+        asset = self.get(chain_id, asset_id)
+        return self._active_b402_by_key[(chain_id, asset.asset_id)]
+
+    def by_b402_address(self, chain_id: int, address: str) -> B402PaymentAsset:
+        self._require_chain(chain_id)
+        try:
+            address_key = Web3.to_checksum_address(address).lower()
+        except (TypeError, ValueError) as exc:
+            raise KeyError(
+                f"B402 asset address {address!r} is not registered on chain_id={chain_id}"
+            ) from exc
+        try:
+            return self._active_b402_by_address[(chain_id, address_key)]
+        except KeyError as exc:
+            raise KeyError(
+                f"B402 asset address {address!r} is not registered on chain_id={chain_id}"
+            ) from exc
+
     def list(self, chain_id: int) -> tuple[PaymentAsset, ...]:
         self._require_chain(chain_id)
         return self._active_by_chain[chain_id]
@@ -302,22 +356,12 @@ ASSET_CATALOG = AssetCatalog(
             symbol="U",
             address="0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
             decimals=18,
+            b402_address="0x330949Aed7d00FCe0558C64ED6FeC9792616cC39",
+            b402_decimals=6,
             b402_methods=("eip3009",),
             eip3009_domain=_DOMAIN,
             is_default=True,
             b402_kinds=(B402Kind("eip3009", "United Stables", "1"),),
-        ),
-        PaymentAsset(
-            chain_id=BSC_TESTNET_CHAIN_ID,
-            asset_id=AssetId.TEST_USD1,
-            symbol="USD1",
-            address=_ZERO_ADDRESS,
-            decimals=18,
-            availability="placeholder",
-            b402_methods=(),
-            eip3009_domain=None,
-            is_default=False,
-            b402_kinds=(),
         ),
         PaymentAsset(
             chain_id=BSC_TESTNET_CHAIN_ID,
@@ -357,7 +401,6 @@ _ALIASES: Mapping[int, Mapping[str, AssetId]] = MappingProxyType(
         BSC_TESTNET_CHAIN_ID: MappingProxyType(
             {
                 "U": AssetId.TEST_U,
-                "USD1": AssetId.TEST_USD1,
                 "USDC": AssetId.TEST_USDC,
                 "USDT": AssetId.TEST_USDT,
             }
@@ -403,6 +446,16 @@ def get_asset_by_address(chain_id: int, address: str) -> PaymentAsset:
     return ASSET_CATALOG.by_address(chain_id, address)
 
 
+def get_b402_asset(chain_id: int, asset_id: AssetId | str) -> B402PaymentAsset:
+    """Return active metadata projected to the B402 execution contract."""
+    return ASSET_CATALOG.get_b402(chain_id, asset_id)
+
+
+def get_b402_asset_by_address(chain_id: int, address: str) -> B402PaymentAsset:
+    """Reverse-resolve an active B402 token address; input casing is ignored."""
+    return ASSET_CATALOG.by_b402_address(chain_id, address)
+
+
 def list_assets(chain_id: int) -> tuple[PaymentAsset, ...]:
     """Return the immutable active catalog snapshot for one known network."""
     return ASSET_CATALOG.list(chain_id)
@@ -411,7 +464,7 @@ def list_assets(chain_id: int) -> tuple[PaymentAsset, ...]:
 def known_eip3009_payment_tokens() -> frozenset[tuple[int, str]]:
     """Active catalog EIP-3009 ``(chain_id, checksum_address)`` domains."""
     return frozenset(
-        (chain_id, asset.address)
+        (chain_id, get_b402_asset(chain_id, asset.asset_id).address)
         for chain_id in (BSC_MAINNET_CHAIN_ID, BSC_TESTNET_CHAIN_ID)
         for asset in list_assets(chain_id)
         if asset.eip3009_domain is not None and "eip3009" in asset.b402_methods

@@ -13,8 +13,8 @@ from ..networks import (
     B402Kind,
     B402TransferMethod,
     EIP3009Domain,
-    get_asset,
-    get_asset_by_address,
+    get_b402_asset,
+    get_b402_asset_by_address,
     known_eip3009_payment_tokens,
     parse_asset_id,
 )
@@ -106,9 +106,9 @@ def resolve_b402_asset(network: str | int, asset: AssetId | str) -> ExpectedB402
     if isinstance(asset, str) and asset.startswith("0x"):
         if not Web3.is_checksum_address(asset):
             raise ValueError(f"B402 asset address must be checksummed: {asset!r}")
-        catalog = get_asset_by_address(chain_id, asset)
+        catalog = get_b402_asset_by_address(chain_id, asset)
     else:
-        catalog = get_asset(chain_id, asset)
+        catalog = get_b402_asset(chain_id, asset)
 
     return ExpectedB402Asset(
         network=f"eip155:{chain_id}",
@@ -225,8 +225,7 @@ def require_b402_wallet_route(
         and wallet_kind in _LOCAL_WALLETS
         and transfer_method == "eip3009"
         and catalog_expected.eip3009_domain is not None
-        and (catalog_expected.chain_id, catalog_expected.address)
-        in known_eip3009_payment_tokens()
+        and (catalog_expected.chain_id, catalog_expected.address) in known_eip3009_payment_tokens()
     ):
         supported = True
 
