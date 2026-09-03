@@ -6,8 +6,8 @@ import {
   type B402Kind,
   type B402TransferMethod,
   type CatalogPaymentAsset,
-  getAsset,
-  getAssetByAddress,
+  getB402Asset,
+  getB402AssetByAddress,
   knownEip3009PaymentTokens,
 } from "../networks/assets.js";
 import { UnsupportedWalletRouteError } from "./errors.js";
@@ -107,9 +107,9 @@ export function resolveB402Asset(
         `B402 asset address must be checksummed: ${JSON.stringify(asset)}`,
       );
     }
-    catalog = getAssetByAddress(chainId, asset);
+    catalog = getB402AssetByAddress(chainId, asset);
   } else {
-    catalog = getAsset(chainId, asset);
+    catalog = getB402Asset(chainId, asset);
   }
 
   return Object.freeze({

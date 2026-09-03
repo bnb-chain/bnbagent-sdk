@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AssetId,
   getAsset,
+  getB402Asset,
   knownEip3009PaymentTokens,
 } from "../src/networks/assets.js";
 import type { AltanaWalletProvider } from "../src/wallets/altana/provider.js";
@@ -20,27 +21,83 @@ import {
 
 describe("resolveB402Asset", () => {
   it.each([
-    ["eip155:56", AssetId.U, "U", 18, ["eip3009", "permit2-exact"], true],
-    [56, AssetId.BINANCE_PEG_USDC, "USDC", 18, ["permit2-exact"], false],
-    [56, AssetId.BINANCE_PEG_USDT, "USDT", 18, ["permit2-exact"], false],
-    ["eip155:97", AssetId.TEST_U, "U", 18, ["eip3009"], true],
-    [97, AssetId.TEST_USDC, "USDC", 6, ["permit2-exact"], false],
-    [97, AssetId.TEST_USDT, "USDT", 18, ["permit2-exact"], false],
+    [
+      "eip155:56",
+      AssetId.U,
+      "U",
+      "0xcE24439F2D9C6a2289F741120FE202248B666666",
+      18,
+      ["eip3009", "permit2-exact"],
+      true,
+    ],
+    [
+      56,
+      AssetId.USD1,
+      "USD1",
+      "0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d",
+      18,
+      ["eip3009"],
+      false,
+    ],
+    [
+      56,
+      AssetId.BINANCE_PEG_USDC,
+      "USDC",
+      "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
+      18,
+      ["permit2-exact"],
+      false,
+    ],
+    [
+      56,
+      AssetId.BINANCE_PEG_USDT,
+      "USDT",
+      "0x55d398326f99059fF775485246999027B3197955",
+      18,
+      ["permit2-exact"],
+      false,
+    ],
+    [
+      "eip155:97",
+      AssetId.TEST_U,
+      "U",
+      "0x330949Aed7d00FCe0558C64ED6FeC9792616cC39",
+      6,
+      ["eip3009"],
+      true,
+    ],
+    [
+      97,
+      AssetId.TEST_USDC,
+      "USDC",
+      "0xEC1C60D64a06896Df296438c12edD14E974FDE47",
+      6,
+      ["permit2-exact"],
+      false,
+    ],
+    [
+      97,
+      AssetId.TEST_USDT,
+      "USDT",
+      "0x337610d27c682E347C9cD60BD4b3b107C9d34dDd",
+      18,
+      ["permit2-exact"],
+      false,
+    ],
   ] as const)(
     "resolves %s / %s to the catalog snapshot",
-    (network, assetId, symbol, decimals, methods, isDefault) => {
+    (network, assetId, symbol, address, decimals, methods, isDefault) => {
       const expected = resolveB402Asset(network, assetId);
-      const catalog = getAsset(expected.chainId, assetId);
       expect(expected).toEqual({
-        network: `eip155:${catalog.chainId}`,
-        chainId: catalog.chainId,
+        network: `eip155:${expected.chainId}`,
+        chainId: expected.chainId,
         assetId,
         symbol,
-        address: catalog.address,
+        address,
         decimals,
         b402Methods: methods,
-        b402Kinds: catalog.b402Kinds,
-        eip3009Domain: catalog.eip3009Domain,
+        b402Kinds: getAsset(expected.chainId, assetId).b402Kinds,
+        eip3009Domain: getAsset(expected.chainId, assetId).eip3009Domain,
         isDefault,
       });
       expect(Object.isFrozen(expected)).toBe(true);
@@ -52,7 +109,7 @@ describe("resolveB402Asset", () => {
     (chainId) => {
       for (const assetId of Object.values(AssetId)) {
         try {
-          const catalog = getAsset(chainId, assetId);
+          const catalog = getB402Asset(chainId, assetId);
           expect(resolveB402Asset(chainId, catalog.address).assetId).toBe(
             assetId,
           );
@@ -125,7 +182,7 @@ describe("requireB402WalletRoute", () => {
         [
           `56:${getAsset(56, AssetId.U).address}`,
           `56:${usd1.address}`,
-          `97:${getAsset(97, AssetId.TEST_U).address}`,
+          `97:${getB402Asset(97, AssetId.TEST_U).address}`,
         ].sort(),
       );
 
@@ -139,8 +196,8 @@ describe("requireB402WalletRoute", () => {
       expect(() =>
         requireB402WalletRoute(walletKind, usd1, "permit2-exact"),
       ).toThrow(UnsupportedWalletRouteError);
-      expect(() => resolveB402Asset("eip155:97", AssetId.TEST_USD1)).toThrow(
-        "unavailable",
+      expect(() => resolveB402Asset("eip155:97", "TEST_USD1")).toThrow(
+        "canonical AssetId",
       );
     },
   );

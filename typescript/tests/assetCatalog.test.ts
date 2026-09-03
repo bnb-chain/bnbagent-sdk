@@ -7,11 +7,11 @@ import {
   BSC_TESTNET_CHAIN_ID,
   type CatalogPaymentAsset,
   type PaymentAsset,
-  PaymentAssetUnavailableError,
   getAddress,
   getAsset,
   getAssetByAddress,
-  getAssetMetadata,
+  getB402Asset,
+  getB402AssetByAddress,
   knownPaymentTokens,
   listAssets,
   parseAssetId,
@@ -45,6 +45,25 @@ function kindAt(asset: CatalogPaymentAsset, index: number) {
 }
 
 describe("asset catalog", () => {
+  it("keeps Testnet U identity while separating ERC-8183 and B402 facts", () => {
+    expect(getAsset(97, AssetId.TEST_U)).toMatchObject({
+      assetId: AssetId.TEST_U,
+      address: "0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
+      decimals: 18,
+    });
+    expect(getB402Asset(97, AssetId.TEST_U)).toMatchObject({
+      assetId: AssetId.TEST_U,
+      address: "0x330949Aed7d00FCe0558C64ED6FeC9792616cC39",
+      decimals: 6,
+    });
+    expect(() =>
+      getB402AssetByAddress(97, "0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565"),
+    ).toThrow("not registered");
+    expect(() =>
+      getAssetByAddress(97, "0x330949Aed7d00FCe0558C64ED6FeC9792616cC39"),
+    ).toThrow("not registered");
+  });
+
   it("keeps legacy PaymentAsset literals source-compatible while returns stay complete", () => {
     const legacy: PaymentAsset = {
       chainId: 56,
@@ -207,10 +226,10 @@ describe("asset catalog", () => {
     expect(resolveAssetAlias(97, "U")).toBe("TEST_U");
     expect(resolveAssetAlias(97, "USDC")).toBe("TEST_USDC");
     expect(resolveAssetAlias(97, "USDT")).toBe("TEST_USDT");
-    expect(resolveAssetAlias(97, "USD1")).toBe("TEST_USD1");
+    expect(() => resolveAssetAlias(97, "USD1")).toThrow("unknown asset alias");
   });
 
-  it("exposes USD1 metadata while fail-closing its testnet placeholder", () => {
+  it("exposes mainnet USD1 while testnet USD1 is unsupported", () => {
     expect(getAsset(56, AssetId.USD1)).toMatchObject({
       assetId: "USD1",
       symbol: "USD1",
@@ -220,18 +239,8 @@ describe("asset catalog", () => {
       b402Methods: ["eip3009"],
       eip3009Domain: { name: "World Liberty Financial USD", version: "1" },
     });
-    expect(getAssetMetadata(97, AssetId.TEST_USD1)).toMatchObject({
-      address: "0x0000000000000000000000000000000000000000",
-      availability: "placeholder",
-      b402Methods: [],
-      eip3009Domain: null,
-    });
-    expect(() => getAsset(97, AssetId.TEST_USD1)).toThrow(
-      PaymentAssetUnavailableError,
-    );
-    expect(listAssets(97).map((asset) => asset.assetId)).not.toContain(
-      "TEST_USD1",
-    );
+    expect(() => parseAssetId("TEST_USD1")).toThrow("canonical AssetId");
+    expect(() => resolveAssetAlias(97, "USD1")).toThrow("unknown asset alias");
     expect(() =>
       getAssetByAddress(97, "0x0000000000000000000000000000000000000000"),
     ).toThrow();

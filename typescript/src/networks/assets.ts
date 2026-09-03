@@ -12,7 +12,6 @@ export const AssetId = Object.freeze({
   U: "U",
   TEST_U: "TEST_U",
   USD1: "USD1",
-  TEST_USD1: "TEST_USD1",
   BINANCE_PEG_USDC: "BINANCE_PEG_USDC",
   BINANCE_PEG_USDT: "BINANCE_PEG_USDT",
   TEST_USDC: "TEST_USDC",
@@ -41,6 +40,10 @@ export interface PaymentAsset {
   readonly symbol: string;
   readonly address: `0x${string}`;
   readonly decimals: number;
+  /** B402 execution address; omitted when it matches the ERC-8183 address. */
+  readonly b402Address?: `0x${string}`;
+  /** B402 execution decimals; omitted when they match the ERC-8183 decimals. */
+  readonly b402Decimals?: number;
   /** Omitted availability preserves the legacy active-asset behavior. */
   readonly availability?: PaymentAssetAvailability;
   readonly b402Methods: readonly B402TransferMethod[];
@@ -57,6 +60,15 @@ export interface PaymentAsset {
 export interface CatalogPaymentAsset extends PaymentAsset {
   readonly availability: PaymentAssetAvailability;
   readonly b402Kinds: readonly B402Kind[];
+  readonly b402Address: `0x${string}`;
+  readonly b402Decimals: number;
+}
+
+/** A catalog asset projected to the address and decimals used on B402. */
+export interface B402PaymentAsset
+  extends Omit<CatalogPaymentAsset, "address" | "decimals"> {
+  readonly address: `0x${string}`;
+  readonly decimals: number;
 }
 
 export class PaymentAssetUnavailableError extends Error {
@@ -86,6 +98,8 @@ export class AssetCatalog {
   readonly #metadataByAddress = new Map<string, CatalogPaymentAsset>();
   readonly #activeByKey = new Map<string, CatalogPaymentAsset>();
   readonly #activeByAddress = new Map<string, CatalogPaymentAsset>();
+  readonly #activeB402ByKey = new Map<string, B402PaymentAsset>();
+  readonly #activeB402ByAddress = new Map<string, B402PaymentAsset>();
   readonly #activeByChain = new Map<number, readonly CatalogPaymentAsset[]>();
   readonly #metadataChains = new Set<number>();
 
@@ -109,6 +123,16 @@ export class AssetCatalog {
       const availability = input.availability ?? "active";
       validateAvailability(input, availability, address);
       const b402Kinds = validateB402Metadata(input);
+      const b402Address = toChecksumAddress(input.b402Address ?? address);
+      if (b402Address !== (input.b402Address ?? address)) {
+        throw new Error(
+          `catalog B402 address is not checksummed: ${input.b402Address ?? address}`,
+        );
+      }
+      const b402Decimals = input.b402Decimals ?? input.decimals;
+      if (!Number.isInteger(b402Decimals) || b402Decimals < 0) {
+        throw new Error("catalog B402 decimals must be a non-negative integer");
+      }
       const addressKey = `${input.chainId}:${address.toLowerCase()}`;
       if (this.#metadataByAddress.has(addressKey)) {
         throw new Error(
@@ -120,6 +144,8 @@ export class AssetCatalog {
         ...input,
         assetId,
         address,
+        b402Address,
+        b402Decimals,
         availability,
         b402Methods: Object.freeze([...input.b402Methods]),
         b402Kinds: Object.freeze(
@@ -134,8 +160,24 @@ export class AssetCatalog {
       this.#metadataByAddress.set(addressKey, asset);
       this.#metadataChains.add(asset.chainId);
       if (asset.availability === "active") {
+        if (b402Address.toLowerCase() === ZERO_ADDRESS) {
+          throw new Error("active B402 asset cannot use zero address");
+        }
+        const b402AddressKey = `${asset.chainId}:${b402Address.toLowerCase()}`;
+        if (this.#activeB402ByAddress.has(b402AddressKey)) {
+          throw new Error(
+            `duplicate catalog B402 address: chain_id=${asset.chainId}, address=${b402Address}`,
+          );
+        }
+        const b402Asset = Object.freeze({
+          ...asset,
+          address: b402Address,
+          decimals: b402Decimals,
+        });
         this.#activeByKey.set(key, asset);
         this.#activeByAddress.set(addressKey, asset);
+        this.#activeB402ByKey.set(key, b402Asset);
+        this.#activeB402ByAddress.set(b402AddressKey, b402Asset);
         const chainAssets = mutableActiveByChain.get(asset.chainId) ?? [];
         chainAssets.push(asset);
         mutableActiveByChain.set(asset.chainId, chainAssets);
@@ -200,6 +242,39 @@ export class AssetCatalog {
     if (asset === undefined) {
       throw new Error(
         `asset address ${JSON.stringify(inputAddress)} is not registered on chain_id=${chainId}`,
+      );
+    }
+    return asset;
+  }
+
+  getB402(chainId: number, assetId: AssetId | string): B402PaymentAsset {
+    const asset = this.get(chainId, assetId);
+    const b402Asset = this.#activeB402ByKey.get(`${chainId}:${asset.assetId}`);
+    if (b402Asset === undefined) {
+      throw new Error(
+        `AssetId ${asset.assetId} is not available on B402 chain_id=${chainId}`,
+      );
+    }
+    return b402Asset;
+  }
+
+  byB402Address(chainId: number, inputAddress: string): B402PaymentAsset {
+    this.#requireChain(chainId);
+    let address: `0x${string}`;
+    try {
+      address = toChecksumAddress(inputAddress);
+    } catch (error) {
+      throw new Error(
+        `B402 asset address ${JSON.stringify(inputAddress)} is not registered on chain_id=${chainId}`,
+        { cause: error },
+      );
+    }
+    const asset = this.#activeB402ByAddress.get(
+      `${chainId}:${address.toLowerCase()}`,
+    );
+    if (asset === undefined) {
+      throw new Error(
+        `B402 asset address ${JSON.stringify(inputAddress)} is not registered on chain_id=${chainId}`,
       );
     }
     return asset;
@@ -363,22 +438,12 @@ export const ASSET_CATALOG = new AssetCatalog([
     symbol: "U",
     address: "0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
     decimals: 18,
+    b402Address: "0x330949Aed7d00FCe0558C64ED6FeC9792616cC39",
+    b402Decimals: 6,
     b402Methods: ["eip3009"],
     b402Kinds: [{ method: "eip3009", name: "United Stables", version: "1" }],
     eip3009Domain: EIP3009_DOMAIN,
     isDefault: true,
-  },
-  {
-    chainId: BSC_TESTNET_CHAIN_ID,
-    assetId: AssetId.TEST_USD1,
-    symbol: "USD1",
-    address: ZERO_ADDRESS,
-    decimals: 18,
-    availability: "placeholder",
-    b402Methods: [],
-    b402Kinds: [],
-    eip3009Domain: null,
-    isDefault: false,
   },
   {
     chainId: BSC_TESTNET_CHAIN_ID,
@@ -404,21 +469,21 @@ export const ASSET_CATALOG = new AssetCatalog([
   },
 ]);
 
-const ALIASES: Readonly<Record<number, Readonly<Record<AssetAlias, AssetId>>>> =
-  Object.freeze({
-    [BSC_MAINNET_CHAIN_ID]: Object.freeze({
-      U: AssetId.U,
-      USD1: AssetId.USD1,
-      USDC: AssetId.BINANCE_PEG_USDC,
-      USDT: AssetId.BINANCE_PEG_USDT,
-    }),
-    [BSC_TESTNET_CHAIN_ID]: Object.freeze({
-      U: AssetId.TEST_U,
-      USD1: AssetId.TEST_USD1,
-      USDC: AssetId.TEST_USDC,
-      USDT: AssetId.TEST_USDT,
-    }),
-  });
+const ALIASES: Readonly<
+  Record<number, Readonly<Partial<Record<AssetAlias, AssetId>>>>
+> = Object.freeze({
+  [BSC_MAINNET_CHAIN_ID]: Object.freeze({
+    U: AssetId.U,
+    USD1: AssetId.USD1,
+    USDC: AssetId.BINANCE_PEG_USDC,
+    USDT: AssetId.BINANCE_PEG_USDT,
+  }),
+  [BSC_TESTNET_CHAIN_ID]: Object.freeze({
+    U: AssetId.TEST_U,
+    USDC: AssetId.TEST_USDC,
+    USDT: AssetId.TEST_USDT,
+  }),
+});
 
 export function resolveAssetAlias(chainId: number, alias: string): AssetId {
   const aliases = ALIASES[chainId];
@@ -456,6 +521,20 @@ export function getAssetByAddress(
   return ASSET_CATALOG.byAddress(chainId, address);
 }
 
+export function getB402Asset(
+  chainId: number,
+  assetId: AssetId | string,
+): B402PaymentAsset {
+  return ASSET_CATALOG.getB402(chainId, assetId);
+}
+
+export function getB402AssetByAddress(
+  chainId: number,
+  address: string,
+): B402PaymentAsset {
+  return ASSET_CATALOG.byB402Address(chainId, address);
+}
+
 export function listAssets(chainId: number): readonly CatalogPaymentAsset[] {
   return ASSET_CATALOG.list(chainId);
 }
@@ -476,7 +555,10 @@ export function knownEip3009PaymentTokens(): ReadonlySet<string> {
             asset.eip3009Domain !== null &&
             asset.b402Methods.includes("eip3009"),
         )
-        .map((asset) => `${chainId}:${asset.address}`),
+        .map(
+          (asset) =>
+            `${chainId}:${getB402Asset(chainId, asset.assetId).address}`,
+        ),
     ),
   );
 }

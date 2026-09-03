@@ -14,6 +14,8 @@ export {
   AssetId,
   getAsset,
   getAssetByAddress,
+  getB402Asset,
+  getB402AssetByAddress,
   getAssetMetadata,
   knownEip3009PaymentTokens,
   listAssets,
@@ -25,6 +27,7 @@ export {
 export type {
   AssetAlias,
   B402Kind,
+  B402PaymentAsset,
   B402TransferMethod,
   CatalogPaymentAsset,
   EIP3009Domain,

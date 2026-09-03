@@ -254,7 +254,7 @@ describe("X402Signer — catalog EIP-3009 route binding", () => {
         ...U_EIP3009_ROUTE,
         network: "eip155:97" as const,
         chainId: 97,
-        assetId: "TEST_USD1" as const,
+        assetId: "TEST_USD1" as never,
         address: "0x0000000000000000000000000000000000000000" as const,
       },
       expectedTo: p.message.to,
