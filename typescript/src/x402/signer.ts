@@ -36,6 +36,46 @@ import {
   X402RecipientMismatchError,
 } from "./errors.js";
 
+const CANONICAL_EIP712_DOMAIN_KEYS = [
+  "name",
+  "version",
+  "chainId",
+  "verifyingContract",
+] as const;
+const CANONICAL_EIP712_DOMAIN_FIELDS = [
+  { name: "name", type: "string" },
+  { name: "version", type: "string" },
+  { name: "chainId", type: "uint256" },
+  { name: "verifyingContract", type: "address" },
+] as const;
+
+function hasCanonicalEip712Domain(
+  domain: Record<string, unknown>,
+  types: Record<string, { name: string; type: string }[]>,
+): boolean {
+  const domainKeys = Object.keys(domain);
+  if (
+    domainKeys.length !== CANONICAL_EIP712_DOMAIN_KEYS.length ||
+    !CANONICAL_EIP712_DOMAIN_KEYS.every((key) => Object.hasOwn(domain, key))
+  ) {
+    return false;
+  }
+  const fields = types.EIP712Domain;
+  return (
+    Array.isArray(fields) &&
+    fields.length === CANONICAL_EIP712_DOMAIN_FIELDS.length &&
+    fields.every((field, index) => {
+      const canonical = CANONICAL_EIP712_DOMAIN_FIELDS[index];
+      return (
+        canonical !== undefined &&
+        Object.keys(field).length === 2 &&
+        field.name === canonical.name &&
+        field.type === canonical.type
+      );
+    })
+  );
+}
+
 /**
  * The narrow contract X402Signer actually depends on.
  *
@@ -96,8 +136,8 @@ export interface SignPaymentOptions {
    */
   expectedRoute: ExpectedEip3009Route;
   /**
-   * Address the caller commits to as the payee. Compared byte-equal
-   * (case-insensitive) against `message.to`. Any drift →
+   * A valid EVM address the caller commits to as the payee. It is normalized
+   * and compared against the valid EVM address in `message.to`. Any drift →
    * `X402RecipientMismatchError`.
    */
   expectedTo: string;
@@ -204,6 +244,12 @@ export class X402Signer {
       );
     }
 
+    if (!hasCanonicalEip712Domain(domain, types)) {
+      throw new X402PolicyError(
+        "typed data does not have the canonical EIP-712 domain (name, version, chainId, verifyingContract)",
+      );
+    }
+
     const primaryTypes = Object.keys(types).filter(
       (typeName) => typeName !== "EIP712Domain",
     );
@@ -234,9 +280,19 @@ export class X402Signer {
         `message.to is missing or not an address: ${JSON.stringify(msgTo)}`,
       );
     }
-    if (msgTo.toLowerCase() !== expectedTo.toLowerCase()) {
+    let msgToCs: string;
+    let expectedToCs: string;
+    try {
+      msgToCs = toChecksumAddress(msgTo as `0x${string}`);
+      expectedToCs = toChecksumAddress(expectedTo as `0x${string}`);
+    } catch {
       throw new X402RecipientMismatchError(
-        `expectedTo=${expectedTo} does not match message.to=${msgTo} — refusing to sign`,
+        `message.to and expectedTo must be valid addresses: message.to=${JSON.stringify(msgTo)}, expectedTo=${JSON.stringify(expectedTo)}`,
+      );
+    }
+    if (msgToCs !== expectedToCs) {
+      throw new X402RecipientMismatchError(
+        `expectedTo=${expectedToCs} does not match message.to=${msgToCs} — refusing to sign`,
       );
     }
 

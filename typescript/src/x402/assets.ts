@@ -159,10 +159,9 @@ export function resolveExpectedEip3009Route(
 }
 
 /**
- * Reject hand-built, stale, or placeholder routes by exact re-resolution.
- * This intentionally treats the public TypeScript interface as untrusted at
- * runtime: structural typing cannot prove an object was produced by the
- * catalog resolver.
+ * Re-resolve a public route and require an exact catalog-canonical match.
+ * Structural typing cannot prove provenance, so an exact clone of resolver
+ * output is accepted; stale, placeholder, and field-drifted routes are not.
  */
 export function requireExpectedEip3009Route(
   route: ExpectedEip3009Route,

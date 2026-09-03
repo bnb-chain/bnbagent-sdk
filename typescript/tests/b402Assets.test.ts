@@ -4,7 +4,12 @@ import {
   getAsset,
   knownEip3009PaymentTokens,
 } from "../src/networks/assets.js";
+import type { AltanaWalletProvider } from "../src/wallets/altana/provider.js";
+import { AltanaX402Payer } from "../src/wallets/altana/x402.js";
+import type { TWAKProvider } from "../src/wallets/twak/provider.js";
+import { TwakX402Payer } from "../src/wallets/twak/x402.js";
 import {
+  type DelegatedX402ExactPayerCapability,
   UnsupportedWalletRouteError,
   X402SignerError,
   expectedAssetFromPaymentOption,
@@ -190,26 +195,19 @@ describe("requireB402WalletRoute", () => {
     },
   );
 
-  it("rejects static Altana and TWAK USD1 reporting without a concrete EIP-3009 exact payer", () => {
+  it("rejects the actual Altana Permit2-only and TWAK non-exact payer surfaces for USD1", () => {
     const usd1 = resolveB402Asset(56, AssetId.USD1);
-    const altanaPayerShape = {
-      exactTransferMethods: ["permit2-exact"] as const,
-      requestExact: async () => ({
-        paid: false as const,
-        cacheHit: true as const,
-        response: null,
-      }),
-    };
-    // TWAK exposes quote/request, but no exact binding surface.
-    const twakPayerShape = {
-      request: async () => ({ success: true, response: null }),
-    };
+    const altanaPayer = new AltanaX402Payer({} as AltanaWalletProvider);
+    const twakPayer = new TwakX402Payer({} as TWAKProvider, {
+      expectedPayTo: `0x${"b".repeat(40)}`,
+      expectedAsset: usd1.address,
+    });
 
+    expect(altanaPayer.exactTransferMethods).toEqual(["permit2-exact"]);
+    expect("requestExact" in twakPayer).toBe(false);
     for (const [walletKind, payer] of [
-      ["altana", altanaPayerShape],
-      // The explicit cast models a non-exact provider at the trust boundary;
-      // runtime checking must still refuse this representative TWAK shape.
-      ["twak", twakPayerShape as { exactTransferMethods?: readonly never[] }],
+      ["altana", altanaPayer],
+      ["twak", twakPayer as unknown as DelegatedX402ExactPayerCapability],
     ] as const) {
       expect(() =>
         requireB402WalletRoute(walletKind, usd1, "eip3009", payer),

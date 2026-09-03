@@ -123,6 +123,67 @@ def test_rejects_wrong_eip712_name_or_version_before_signing(signer, field, valu
     assert signer.budget.spent(U_MAINNET) == 0
 
 
+@pytest.mark.parametrize(
+    "variant",
+    (
+        "extra_salt",
+        "missing_version",
+        "expanded_salt_schema",
+        "wrong_schema_field_type",
+        "reordered_schema",
+        "duplicated_schema_field",
+    ),
+)
+def test_rejects_noncanonical_domain_before_budget_or_wallet_signing(signer, variant):
+    sign_calls = 0
+
+    class TrackingWallet:
+        address = signer.wallet_address
+
+        def sign_typed_data(self, domain, types, message):
+            nonlocal sign_calls
+            sign_calls += 1
+            return {"signature": "0x"}
+
+    tracking_signer = X402Signer(TrackingWallet())
+    p = _payload(from_addr=tracking_signer.wallet_address)
+    if variant == "extra_salt":
+        p["domain"]["salt"] = "0x" + "0" * 64
+    elif variant == "missing_version":
+        del p["domain"]["version"]
+    elif variant == "expanded_salt_schema":
+        p["domain"]["salt"] = "0x" + "0" * 64
+        p["types"]["EIP712Domain"] = [
+            *EIP712DOMAIN_FIELDS,
+            {"name": "salt", "type": "bytes32"},
+        ]
+    elif variant == "wrong_schema_field_type":
+        p["types"]["EIP712Domain"] = [
+            {"name": "name", "type": "bytes32"},
+            *EIP712DOMAIN_FIELDS[1:],
+        ]
+    elif variant == "reordered_schema":
+        p["types"]["EIP712Domain"] = [
+            EIP712DOMAIN_FIELDS[1],
+            EIP712DOMAIN_FIELDS[0],
+            *EIP712DOMAIN_FIELDS[2:],
+        ]
+    else:
+        p["types"]["EIP712Domain"] = [
+            EIP712DOMAIN_FIELDS[0],
+            EIP712DOMAIN_FIELDS[0],
+            *EIP712DOMAIN_FIELDS[1:3],
+        ]
+
+    try:
+        tracking_signer.sign_payment(**p, expected_to=p["message"]["to"])
+    except X402PolicyError:
+        pass
+
+    assert tracking_signer.budget.spent(U_MAINNET) == 0
+    assert sign_calls == 0
+
+
 def test_rejects_testnet_usd1_placeholder_route_before_signing(signer):
     p = _payload(from_addr=signer.wallet_address)
     from dataclasses import replace
@@ -190,6 +251,30 @@ def test_rejects_when_message_to_missing(signer):
     del p["message"]["to"]
     with pytest.raises(X402RecipientMismatchError, match="missing or not an address"):
         signer.sign_payment(**p, expected_to="0x" + "b" * 40)
+
+
+def test_rejects_matching_malformed_recipient_addresses_before_budget_or_wallet_signing(signer):
+    sign_calls = 0
+
+    class TrackingWallet:
+        address = signer.wallet_address
+
+        def sign_typed_data(self, domain, types, message):
+            nonlocal sign_calls
+            sign_calls += 1
+            return {"signature": "0x"}
+
+    tracking_signer = X402Signer(TrackingWallet())
+    p = _payload(from_addr=tracking_signer.wallet_address)
+    p["message"]["to"] = "not-an-address"
+
+    try:
+        tracking_signer.sign_payment(**p, expected_to="not-an-address")
+    except X402RecipientMismatchError:
+        pass
+
+    assert tracking_signer.budget.spent(U_MAINNET) == 0
+    assert sign_calls == 0
 
 
 # ── Signer binding (message['from']) ─────────────────────────────────────

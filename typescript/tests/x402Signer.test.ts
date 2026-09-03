@@ -107,6 +107,18 @@ function payload(
   };
 }
 
+function makeTrackingSigner() {
+  let signCalls = 0;
+  const trackingSigner = new X402Signer({
+    address: wallet.address,
+    signTypedData: async (): Promise<SignatureResult> => {
+      signCalls++;
+      return { signature: "0x" };
+    },
+  });
+  return { trackingSigner, signCalls: () => signCalls };
+}
+
 describe("X402Signer — catalog EIP-3009 route binding", () => {
   it("rejects a USD1 domain substituted for the caller-selected U route before signing", async () => {
     let signCalls = 0;
@@ -135,6 +147,80 @@ describe("X402Signer — catalog EIP-3009 route binding", () => {
     expect(routeSigner.budget.spent(U_MAINNET)).toBe(0n);
     expect(signCalls).toBe(0);
   });
+
+  it.each([
+    [
+      "an extra salt domain property",
+      (p: ReturnType<typeof payload>) => {
+        p.domain.salt = `0x${"0".repeat(64)}`;
+      },
+    ],
+    [
+      "a missing domain version",
+      (p: ReturnType<typeof payload>) => {
+        // biome-ignore lint/performance/noDelete: the domain key must be absent
+        delete p.domain.version;
+      },
+    ],
+    [
+      "an expanded salt domain schema",
+      (p: ReturnType<typeof payload>) => {
+        p.domain.salt = `0x${"0".repeat(64)}`;
+        p.types.EIP712Domain = [
+          ...EIP712DOMAIN_FIELDS,
+          { name: "salt", type: "bytes32" },
+        ];
+      },
+    ],
+    [
+      "a domain schema with a wrong field type",
+      (p: ReturnType<typeof payload>) => {
+        p.types.EIP712Domain = [
+          { name: "name", type: "bytes32" },
+          ...EIP712DOMAIN_FIELDS.slice(1),
+        ];
+      },
+    ],
+    [
+      "a reordered domain schema",
+      (p: ReturnType<typeof payload>) => {
+        p.types.EIP712Domain = [
+          { name: "version", type: "string" },
+          { name: "name", type: "string" },
+          ...EIP712DOMAIN_FIELDS.slice(2),
+        ];
+      },
+    ],
+    [
+      "a duplicated domain schema field",
+      (p: ReturnType<typeof payload>) => {
+        p.types.EIP712Domain = [
+          { name: "name", type: "string" },
+          { name: "name", type: "string" },
+          ...EIP712DOMAIN_FIELDS.slice(1, 3),
+        ];
+      },
+    ],
+  ] as const)(
+    "rejects %s before budget reservation or wallet signing",
+    async (_, mutate) => {
+      const { trackingSigner, signCalls } = makeTrackingSigner();
+      const p = payload({ fromAddr: trackingSigner.walletAddress });
+      mutate(p);
+
+      try {
+        await trackingSigner.signPayment({
+          ...p,
+          expectedTo: p.message.to as string,
+        });
+      } catch (error) {
+        expect(error).toBeInstanceOf(X402PolicyError);
+      }
+
+      expect(trackingSigner.budget.spent(U_MAINNET)).toBe(0n);
+      expect(signCalls()).toBe(0);
+    },
+  );
 
   it.each([
     ["name", "World Liberty Financial USD"],
@@ -228,6 +314,21 @@ describe("X402Signer — recipient mismatch", () => {
     await expect(
       signer.signPayment({ ...p, expectedTo: `0x${"b".repeat(40)}` }),
     ).rejects.toThrow(/missing or not an address/);
+  });
+
+  it("rejects matching malformed message.to and expectedTo before budget reservation or wallet signing", async () => {
+    const { trackingSigner, signCalls } = makeTrackingSigner();
+    const p = payload({ fromAddr: trackingSigner.walletAddress });
+    p.message.to = "not-an-address";
+
+    try {
+      await trackingSigner.signPayment({ ...p, expectedTo: "not-an-address" });
+    } catch (error) {
+      expect(error).toBeInstanceOf(X402RecipientMismatchError);
+    }
+
+    expect(trackingSigner.budget.spent(U_MAINNET)).toBe(0n);
+    expect(signCalls()).toBe(0);
   });
 });
 

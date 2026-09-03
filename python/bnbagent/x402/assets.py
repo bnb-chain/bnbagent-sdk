@@ -156,7 +156,11 @@ def resolve_expected_eip3009_route(
 
 
 def require_expected_eip3009_route(route: ExpectedEIP3009Route) -> ExpectedEIP3009Route:
-    """Re-resolve an untrusted public route and reject any field drift."""
+    """Re-resolve a public route and require an exact catalog-canonical match.
+
+    An exact structural clone of resolver output is accepted; a stale,
+    placeholder, or field-drifted route is not.
+    """
 
     if not isinstance(route, ExpectedEIP3009Route):
         raise TypeError("expected EIP-3009 route must be catalog-derived")

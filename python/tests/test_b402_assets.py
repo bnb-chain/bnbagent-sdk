@@ -8,7 +8,7 @@ import pytest
 
 import bnbagent.x402 as x402
 from bnbagent.networks import AssetId, get_asset, known_eip3009_payment_tokens
-from bnbagent.x402 import X402Payer, X402PaymentOption
+from bnbagent.x402 import TwakX402Payer, X402Payer, X402PaymentOption
 
 
 @pytest.mark.parametrize(
@@ -180,22 +180,18 @@ def test_local_wallets_do_not_open_permit2_even_when_u_catalog_supports_it(
         x402.require_b402_wallet_route(wallet_kind, expected, "permit2-exact")
 
 
-def test_static_altana_and_twak_usd1_reporting_requires_concrete_eip3009_exact_payer() -> None:
+def test_actual_twak_payer_surface_cannot_report_a_usd1_eip3009_route() -> None:
     usd1 = x402.resolve_b402_asset(56, AssetId.USD1)
+    payer = TwakX402Payer(
+        object(),  # concrete payer only uses its provider when quote/request runs
+        expected_pay_to="0x" + "b" * 40,
+        expected_asset=usd1.address,
+    )
 
-    class AltanaPayerShape:
-        exact_transfer_methods = ("permit2-exact",)
-
-        def request_exact(self):
-            raise NotImplementedError
-
-    class TwakPayerShape:
-        def request(self):
-            raise NotImplementedError
-
-    for wallet_kind, payer in (("altana", AltanaPayerShape()), ("twak", TwakPayerShape())):
-        with pytest.raises(x402.UnsupportedWalletRouteError):
-            x402.require_b402_wallet_route(wallet_kind, usd1, "eip3009", payer)
+    assert not hasattr(payer, "request_exact")
+    assert not hasattr(payer, "exact_transfer_methods")
+    with pytest.raises(x402.UnsupportedWalletRouteError):
+        x402.require_b402_wallet_route("twak", usd1, "eip3009", payer)
 
 
 def test_future_delegated_usd1_route_requires_advertised_eip3009_exact_payer() -> None:
