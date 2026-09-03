@@ -70,9 +70,9 @@ U 作为默认资产是上层 Buyer 策略，不是 helper 的自动选择行为
 - USDC/USDT 目前只登记 `permit2-exact`，绝不能伪装为 EIP-3009 token。
 - Mainnet `USD1` 仅登记 EIP-3009：地址
   `0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d`，18 decimals，domain 为
-  `World Liberty Financial USD / 1`；它没有 Permit2 route。Testnet `TEST_USD1`
-  是零地址 placeholder，支付解析必须 typed unavailable，不能进入 route、签名、allowlist
-  或审计 actual facts。
+  `World Liberty Financial USD / 1`；它没有 Permit2 route。Testnet 不支持 USD1。
+- Testnet U 的 B402 地址是 `0x330949Aed7d00FCe0558C64ED6FeC9792616cC39`，
+  6 decimals；ERC-8183 使用另一地址与 18 decimals，调用方必须使用对应轨道 API。
 - `evm-local`/Turnkey 首期没有 Permit2 signing/approval 实现；helper 会返回类型化 unsupported。
 - TWAK/Altana 的 delegated 能力表示支付由其既有受约束 payer 执行，不等于向应用开放 raw
   Permit2 typed-data 或任意 token/target。

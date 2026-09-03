@@ -435,7 +435,7 @@ such.
 
 ### EIP-712 typed-data signing (`SigningPolicy`)
 
-`EVMWalletProvider.sign_typed_data` is **policy-gated by default**. Without explicit configuration, the wallet only accepts EIP-3009 `TransferWithAuthorization` / `ReceiveWithAuthorization` against catalog-verified domains: U on BSC mainnet/testnet and USD1 on BSC mainnet. `TEST_USD1` is a placeholder and cannot sign or route. All Permit variants (ERC-2612 `Permit`, Permit2 `PermitSingle`/`PermitBatch`) are denylisted - even if your own code mistakenly allowlists them, the denylist wins.
+`EVMWalletProvider.sign_typed_data` is **policy-gated by default**. Without explicit configuration, the wallet only accepts EIP-3009 `TransferWithAuthorization` / `ReceiveWithAuthorization` against catalog-verified B402 domains: U on BSC mainnet/testnet and USD1 on BSC mainnet. Testnet does not support USD1. All Permit variants (ERC-2612 `Permit`, Permit2 `PermitSingle`/`PermitBatch`) are denylisted - even if your own code mistakenly allowlists them, the denylist wins.
 
 The threat: U token (and most ERC-20s) support EIP-2612 `Permit` on-chain. Without `SigningPolicy`, an LLM agent receiving a 402 challenge from a malicious server could be talked into signing a Permit that grants unbounded allowance, draining the wallet over time. The default policy refuses unconditionally; you opt in explicitly when you know what you're signing.
 
@@ -498,7 +498,7 @@ print(wallet.signing_policy)
 #   domain_allowlist (3 entries):
 #     - chain_id=56 verifyingContract=0xcE24439F2D9C6a2289F741120FE202248B666666
 #     - chain_id=56 verifyingContract=0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d
-#     - chain_id=97 verifyingContract=0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565
+#     - chain_id=97 verifyingContract=0x330949Aed7d00FCe0558C64ED6FeC9792616cC39
 #   primary_type_allowlist=['ReceiveWithAuthorization', 'TransferWithAuthorization']
 #   primary_type_denylist=['Permit', 'PermitBatch', 'PermitSingle']
 #   validity: window<=600s, future<=900s, required_for=[...]
