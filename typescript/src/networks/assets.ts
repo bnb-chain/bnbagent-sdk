@@ -377,6 +377,11 @@ const EIP3009_DOMAIN = Object.freeze({
   version: PAYMENT_TOKEN_EIP712_VERSION,
 });
 
+const TESTNET_U_EIP3009_DOMAIN = Object.freeze({
+  name: "U",
+  version: "1",
+});
+
 export const ASSET_CATALOG = new AssetCatalog([
   {
     chainId: BSC_MAINNET_CHAIN_ID,
@@ -441,8 +446,8 @@ export const ASSET_CATALOG = new AssetCatalog([
     b402Address: "0x330949Aed7d00FCe0558C64ED6FeC9792616cC39",
     b402Decimals: 6,
     b402Methods: ["eip3009"],
-    b402Kinds: [{ method: "eip3009", name: "United Stables", version: "1" }],
-    eip3009Domain: EIP3009_DOMAIN,
+    b402Kinds: [{ method: "eip3009", name: "U", version: "1" }],
+    eip3009Domain: TESTNET_U_EIP3009_DOMAIN,
     isDefault: true,
   },
   {

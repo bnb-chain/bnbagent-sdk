@@ -298,6 +298,8 @@ _DOMAIN = EIP3009Domain(
     version=PAYMENT_TOKEN_EIP712_VERSION,
 )
 
+_TESTNET_U_DOMAIN = EIP3009Domain(name="U", version="1")
+
 _ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 ASSET_CATALOG = AssetCatalog(
@@ -359,9 +361,9 @@ ASSET_CATALOG = AssetCatalog(
             b402_address="0x330949Aed7d00FCe0558C64ED6FeC9792616cC39",
             b402_decimals=6,
             b402_methods=("eip3009",),
-            eip3009_domain=_DOMAIN,
+            eip3009_domain=_TESTNET_U_DOMAIN,
             is_default=True,
-            b402_kinds=(B402Kind("eip3009", "United Stables", "1"),),
+            b402_kinds=(B402Kind("eip3009", "U", "1"),),
         ),
         PaymentAsset(
             chain_id=BSC_TESTNET_CHAIN_ID,

@@ -108,8 +108,8 @@ def test_asset_catalog_snapshot_matches_locked_bsc_matrix():
             "decimals": 18,
             "availability": "active",
             "b402_methods": ("eip3009",),
-            "b402_kinds": (("eip3009", "United Stables", "1"),),
-            "eip3009_domain": ("United Stables", "1"),
+            "b402_kinds": (("eip3009", "U", "1"),),
+            "eip3009_domain": ("U", "1"),
             "is_default": True,
         },
         {

@@ -10,6 +10,7 @@ from bnbagent.networks import (
     AssetId,
     get_address,
     get_asset,
+    get_b402_asset,
 )
 from bnbagent.signing import (
     EIP3009_TYPES,
@@ -23,7 +24,7 @@ from bnbagent.signing import (
 # ── Fixtures ───────────────────────────────────────────────────────────────
 
 U_MAINNET = get_address(BSC_MAINNET_CHAIN_ID).payment_token
-U_TESTNET = get_address(BSC_TESTNET_CHAIN_ID).payment_token
+U_TESTNET = get_b402_asset(BSC_TESTNET_CHAIN_ID, AssetId.TEST_U).address
 USD1_MAINNET = get_asset(BSC_MAINNET_CHAIN_ID, AssetId.USD1)
 
 EIP712DOMAIN_FIELDS = [
@@ -101,7 +102,11 @@ def test_strict_default_allows_u_testnet_transfer_with_authorization():
     p = SigningPolicy.strict_default()
     pt = _twa_call(
         p,
-        domain_overrides={"chainId": BSC_TESTNET_CHAIN_ID, "verifyingContract": U_TESTNET},
+        domain_overrides={
+            "name": "U",
+            "chainId": BSC_TESTNET_CHAIN_ID,
+            "verifyingContract": U_TESTNET,
+        },
     )
     assert pt == "TransferWithAuthorization"
 

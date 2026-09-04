@@ -5,6 +5,7 @@ import {
   BSC_TESTNET_CHAIN_ID,
   getAddress,
   getAsset,
+  getB402Asset,
 } from "../src/networks/index.js";
 import {
   EIP3009_TYPES,
@@ -18,7 +19,7 @@ import {
 /** Ports python/tests/test_signing_policy.py. */
 
 const U_MAINNET = getAddress(BSC_MAINNET_CHAIN_ID).paymentToken;
-const U_TESTNET = getAddress(BSC_TESTNET_CHAIN_ID).paymentToken;
+const U_TESTNET = getB402Asset(BSC_TESTNET_CHAIN_ID, AssetId.TEST_U).address;
 const USD1_MAINNET = getAsset(BSC_MAINNET_CHAIN_ID, AssetId.USD1);
 
 const EIP712DOMAIN_FIELDS = [
@@ -95,6 +96,7 @@ describe("SigningPolicy.strictDefault", () => {
     const p = SigningPolicy.strictDefault();
     const pt = twaCall(p, {
       domainOverrides: {
+        name: "U",
         chainId: BSC_TESTNET_CHAIN_ID,
         verifyingContract: U_TESTNET,
       },

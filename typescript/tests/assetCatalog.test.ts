@@ -163,10 +163,8 @@ describe("asset catalog", () => {
         decimals: 18,
         availability: "active",
         b402Methods: ["eip3009"],
-        b402Kinds: [
-          { method: "eip3009", name: "United Stables", version: "1" },
-        ],
-        eip3009Domain: { name: "United Stables", version: "1" },
+        b402Kinds: [{ method: "eip3009", name: "U", version: "1" }],
+        eip3009Domain: { name: "U", version: "1" },
         isDefault: true,
       },
       {
