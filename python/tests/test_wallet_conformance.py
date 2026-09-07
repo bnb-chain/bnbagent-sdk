@@ -65,9 +65,7 @@ EXPECTED_CAPABILITIES: dict[str, frozenset[str]] = {
     "evm": frozenset(
         {SIGN_MESSAGE, SIGN_TRANSACTION, SIGN_TYPED_DATA, CALLS_ARBITRARY, PAYMASTER_SPONSOR}
     ),
-    "twak": frozenset(
-        {SIGN_MESSAGE, BROADCAST_SELF, INTENTS_ERC8004, INTENTS_ERC8183, X402_PAY}
-    ),
+    "twak": frozenset({SIGN_MESSAGE, BROADCAST_SELF, INTENTS_ERC8004, INTENTS_ERC8183, X402_PAY}),
     "turnkey": frozenset(
         {SIGN_MESSAGE, SIGN_TRANSACTION, SIGN_TYPED_DATA, CALLS_ARBITRARY, PAYMASTER_SPONSOR}
     ),
@@ -136,8 +134,12 @@ _TX = {
     "nonce": 0,
     "chainId": 56,
 }
-_DOMAIN = {"name": "Conformance", "version": "1", "chainId": 56,
-           "verifyingContract": "0x" + "33" * 20}
+_DOMAIN = {
+    "name": "Conformance",
+    "version": "1",
+    "chainId": 56,
+    "verifyingContract": "0x" + "33" * 20,
+}
 _TYPES = {
     "EIP712Domain": [
         {"name": "name", "type": "string"},
@@ -175,9 +177,7 @@ def _prime_twak_for_sign_message(
     acct = Account.from_key(_TEST_KEY)
     twak._address = acct.address
     twak._ensured = True
-    signed = Account.sign_message(
-        encode_defunct(text=message), private_key=_TEST_KEY
-    )
+    signed = Account.sign_message(encode_defunct(text=message), private_key=_TEST_KEY)
     runner.side_effect = lambda cmd, **kwargs: _completed(
         {"success": True, "signature": bytes(signed.signature).hex()}
     )
@@ -270,9 +270,7 @@ def test_extra_capabilities_union_with_derived():
             return {"signature": "0x" + "00" * 65}
 
     wallet = Extra()
-    assert wallet.capabilities() == frozenset(
-        {SIGN_MESSAGE, BROADCAST_SELF, "acme.batch_sign"}
-    )
+    assert wallet.capabilities() == frozenset({SIGN_MESSAGE, BROADCAST_SELF, "acme.batch_sign"})
     # Open set: the vendor-namespaced value is first-class in supports()...
     assert wallet.supports("acme.batch_sign") is True
     # ...and any string not declared is simply unsupported.
@@ -289,8 +287,9 @@ def test_signless_subclass_make_executor_raises_at_construction():
         _AddressOnly().make_executor(ExecutionContext(web3=Mock()))
 
 
-def test_evm_make_executor_returns_local_executor(no_real_cli):
-    executor = _make_provider("evm").make_executor(ExecutionContext(web3=Mock()))
+@pytest.mark.parametrize("kind", ["evm", "turnkey"])
+def test_generic_transaction_wallets_keep_using_local_executor(kind, no_real_cli):
+    executor = _make_provider(kind).make_executor(ExecutionContext(web3=Mock()))
     assert isinstance(executor, LocalExecutor)
 
 

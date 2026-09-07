@@ -8,20 +8,27 @@ Focus areas:
 import asyncio
 import json
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 
 from bnbagent.erc8183.commerce import _decode_job
-from bnbagent.erc8183.job_ops import ERC8183JobOps, funded_job_watcher
+from bnbagent.erc8183.job_ops import (
+    ERR_JOB_TOKEN_MISMATCH,
+    ERC8183JobOps,
+    funded_job_watcher,
+)
 from bnbagent.erc8183.negotiation import NegotiationHandler, build_job_description
 from bnbagent.erc8183.types import Job, JobStatus
+from bnbagent.networks import AssetId, get_asset
 
 ME = "0x" + "aa" * 20
 OTHER = "0x" + "bb" * 20
 CLIENT = "0x" + "cc" * 20
 COMMERCE = "0x" + "11" * 20
-TOKEN = "0x" + "44" * 20
+TOKEN = get_asset(97, AssetId.TEST_U).address
+USDC = get_asset(97, AssetId.TEST_USDC).address
+USDT = get_asset(97, AssetId.TEST_USDT).address
 SELLER_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 
 
@@ -37,6 +44,7 @@ def _make_ops(
     wallet=None,
     agent_url=None,
     allow_unsigned_jobs=True,
+    service_prices=None,
 ):
     ops = ERC8183JobOps(
         wallet or _make_wallet(),
@@ -44,6 +52,7 @@ def _make_ops(
         service_price=service_price,
         agent_url=agent_url,
         allow_unsigned_jobs=allow_unsigned_jobs,
+        service_prices=service_prices,
     )
     return ops
 
@@ -51,6 +60,9 @@ def _make_ops(
 def _inject_client(ops):
     client = MagicMock()
     client.address = ME
+    client.network.chain_id = 97
+    client.payment_token = TOKEN
+    client.job_payment_token.return_value = TOKEN
     ops._client = client
     return client
 
@@ -69,7 +81,7 @@ def _job(status=JobStatus.FUNDED, provider=ME, expired_at=None, budget=1000, des
     )
 
 
-def _signed_description(negotiated_at):
+def _signed_description(negotiated_at, *, currency=TOKEN, service_price="1000"):
     from eth_account import Account
     from eth_account.messages import encode_defunct
 
@@ -80,8 +92,8 @@ def _signed_description(negotiated_at):
         "signature": account.sign_message(encode_defunct(text=message)).signature
     }
     handler = NegotiationHandler(
-        service_price="1000",
-        currency=TOKEN,
+        service_price=service_price,
+        currency=currency,
         wallet_provider=wallet,
         chain_id=97,
         verifying_contract=COMMERCE,
@@ -146,6 +158,7 @@ class TestVerifyJob:
         result = await ops.verify_job(1)
 
         assert result["valid"] is True
+        client.job_payment_token.assert_called_once_with(1)
         client.get_job_funded_block.assert_called_once_with(
             1,
             negotiated_at=negotiated_at,
@@ -222,10 +235,172 @@ class TestVerifyJob:
             provider=provider,
             description=description,
         )
-        client.payment_token = OTHER
+        client.job_payment_token.return_value = OTHER
         result = await ops.verify_job(1)
-        assert result["error_code"] == "quote_invalid"
-        assert "Commerce payment token" in result["error"]
+        assert result["error_code"] == ERR_JOB_TOKEN_MISMATCH
+
+    @pytest.mark.asyncio
+    async def test_accepts_signed_non_default_token_when_quote_job_catalog_agree(self):
+        negotiated_at = int(time.time()) - 60
+        description, provider = _signed_description(
+            negotiated_at, currency=USDC, service_price="100000"
+        )
+        ops = _make_ops(
+            wallet=_make_wallet(provider),
+            allow_unsigned_jobs=False,
+            service_prices={AssetId.TEST_USDC: 100000},
+        )
+        client = _inject_client(ops)
+        client.policy.dispute_window.return_value = 0
+        client.get_job_funded_block.return_value = 123
+        client.job_payment_token.return_value = USDC
+        client.commerce.address = COMMERCE
+        client.w3.eth.chain_id = 97
+        client.w3.eth.get_block.return_value = {"timestamp": negotiated_at + 30}
+        client.w3.eth.get_code.return_value = b""
+        client.get_job.return_value = _job(
+            provider=provider,
+            budget=100000,
+            description=description,
+        )
+
+        result = await ops.verify_job(1)
+
+        assert result["valid"] is True
+
+    @pytest.mark.asyncio
+    async def test_rejects_unknown_job_token_on_catalog_network(self):
+        ops = _make_ops(service_prices={AssetId.TEST_USDC: 1})
+        client = _inject_client(ops)
+        client.get_job.return_value = _job()
+        client.job_payment_token.return_value = OTHER
+
+        result = await ops.verify_job(1)
+
+        assert result["valid"] is False
+        assert result["error_code"] == ERR_JOB_TOKEN_MISMATCH
+        assert "0x" not in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_job_token_rpc_value_error_is_retryable_chain_error(self):
+        ops = _make_ops()
+        client = _inject_client(ops)
+        client.get_job.return_value = _job()
+        client.job_payment_token.side_effect = ValueError("execution reverted")
+
+        result = await ops.verify_job(1)
+
+        assert result["valid"] is False
+        assert result["error_code"] == "chain_unavailable"
+        assert result["retryable"] is True
+
+    @pytest.mark.asyncio
+    async def test_job_token_rpc_timeout_is_retryable_chain_error(self):
+        ops = _make_ops()
+        client = _inject_client(ops)
+        client.get_job.return_value = _job()
+        client.job_payment_token.side_effect = TimeoutError("rpc://secret")
+
+        result = await ops.verify_job(1)
+
+        assert result["valid"] is False
+        assert result["error_code"] == "chain_unavailable"
+        assert result["retryable"] is True
+        assert "secret" not in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_invalid_local_job_token_remains_stable_mismatch(self):
+        ops = _make_ops()
+        client = _inject_client(ops)
+        client.get_job.return_value = _job()
+        client.job_payment_token.return_value = "not-an-address"
+
+        result = await ops.verify_job(1)
+
+        assert result["error_code"] == ERR_JOB_TOKEN_MISMATCH
+
+    @pytest.mark.asyncio
+    async def test_default_payment_token_read_failure_is_retryable_chain_error(self):
+        ops = _make_ops()
+        client = _inject_client(ops)
+        client.get_job.return_value = _job()
+        type(client).payment_token = PropertyMock(side_effect=TimeoutError("rpc://secret"))
+
+        result = await ops.verify_job(1)
+
+        assert result["valid"] is False
+        assert result["error_code"] == "chain_unavailable"
+        assert result["retryable"] is True
+
+    @pytest.mark.asyncio
+    async def test_legacy_service_price_rejects_non_default_job_token(self):
+        ops = _make_ops(service_price=0)
+        client = _inject_client(ops)
+        client.get_job.return_value = _job()
+        client.job_payment_token.return_value = USDC
+
+        result = await ops.verify_job(1)
+
+        assert result["valid"] is False
+        assert result["error_code"] == ERR_JOB_TOKEN_MISMATCH
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("asset_id", "token", "price", "decimals"),
+        [
+            (AssetId.TEST_USDC, USDC, 100000, 6),
+            (AssetId.TEST_USDT, USDT, 10**18, 18),
+        ],
+    )
+    async def test_per_token_service_price_uses_catalog_decimals_for_diagnostics(
+        self, asset_id, token, price, decimals
+    ):
+        ops = _make_ops(service_prices={asset_id: price})
+        client = _inject_client(ops)
+        client.get_job.return_value = _job(budget=price - 1)
+        client.job_payment_token.return_value = token
+
+        result = await ops.verify_job(1)
+
+        assert result["valid"] is False
+        assert result["error_code"] == "budget_too_low"
+        assert result["service_price"] == str(price)
+        assert result["decimals"] == decimals
+        client.token_decimals.assert_not_called()
+
+    @pytest.mark.parametrize("asset_id", ["USDC", AssetId.BINANCE_PEG_USDC])
+    def test_service_prices_reject_symbol_and_cross_chain_asset(self, asset_id):
+        with pytest.raises((KeyError, ValueError)):
+            _make_ops(service_prices={asset_id: 1})
+
+    @pytest.mark.asyncio
+    async def test_per_token_zero_service_price_is_valid_without_conversion(self):
+        negotiated_at = int(time.time()) - 60
+        description, provider = _signed_description(
+            negotiated_at, currency=USDC, service_price="0"
+        )
+        ops = _make_ops(
+            wallet=_make_wallet(provider),
+            allow_unsigned_jobs=False,
+            service_prices={AssetId.TEST_USDC: 0},
+        )
+        client = _inject_client(ops)
+        client.policy.dispute_window.return_value = 0
+        client.get_job_funded_block.return_value = 123
+        client.job_payment_token.return_value = USDC
+        client.commerce.address = COMMERCE
+        client.w3.eth.chain_id = 97
+        client.w3.eth.get_block.return_value = {"timestamp": negotiated_at + 30}
+        client.w3.eth.get_code.return_value = b""
+        client.get_job.return_value = _job(
+            provider=provider,
+            budget=0,
+            description=description,
+        )
+
+        result = await ops.verify_job(1)
+
+        assert result["valid"] is True
 
     @pytest.mark.asyncio
     async def test_rejects_non_funded(self):

@@ -19,6 +19,7 @@ export type {
   AgentPermissionTargets,
   DefaultAgentPermissionsOpts,
   SpendCap,
+  TokenSpendCap,
   StrictAgentCallPermission,
 } from "./permissions.js";
 export {

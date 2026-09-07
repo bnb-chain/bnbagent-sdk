@@ -102,9 +102,10 @@ def get_address(chain_id: int) -> DeployedAddresses:
 def known_payment_tokens() -> frozenset[tuple[int, str]]:
     """``(chain_id, checksum_address)`` pairs of every registered payment token.
 
-    Used as the default ``domain_allowlist`` seed for ``SigningPolicy``: a
-    typed-data signature against any verifyingContract not in this set will be
-    refused unless the caller explicitly extends the policy.
+    Compatibility API for deployment-registry callers. ``SigningPolicy``
+    ``strict_default()`` derives its domain allowlist from active catalog
+    assets with verified EIP-3009 metadata, so this set must not be used to
+    infer every strict-signing domain.
     """
     return frozenset(
         (cid, deploy.payment_token) for cid, deploy in BNB_CHAIN_ADDRESSES.items()

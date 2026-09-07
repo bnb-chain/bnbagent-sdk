@@ -12,10 +12,9 @@
  * - session-cumulative budget tracker (rate-limits a compromised agent even
  *   if individual calls are within max-value)
  *
- * x402 SchemeExactEVM and EIP-3009 `TransferWithAuthorization` are the
- * primary intended primary types; callers signing other types via this
- * wrapper should ensure the message has `to` and `value` fields with the
- * same semantics.
+ * This is deliberately an EIP-3009-only signer: every call must carry a
+ * caller-selected catalog route for `TransferWithAuthorization`. Generic
+ * typed-data signing belongs on the wallet's separately policy-gated API.
  *
  * Port of `python/bnbagent/x402/signer.py`.
  */
@@ -26,12 +25,56 @@ import { PolicyViolation } from "../signing/errors.js";
 import { SIGN_TYPED_DATA } from "../wallets/capabilities.js";
 import { UnsupportedWalletOperation } from "../wallets/errors.js";
 import type { SignatureResult } from "../wallets/walletProvider.js";
+import {
+  type ExpectedEip3009Route,
+  requireExpectedEip3009Route,
+} from "./assets.js";
 import { SessionBudgetTracker } from "./budget.js";
 import {
   X402AmountExceededError,
   X402PolicyError,
   X402RecipientMismatchError,
 } from "./errors.js";
+
+const CANONICAL_EIP712_DOMAIN_KEYS = [
+  "name",
+  "version",
+  "chainId",
+  "verifyingContract",
+] as const;
+const CANONICAL_EIP712_DOMAIN_FIELDS = [
+  { name: "name", type: "string" },
+  { name: "version", type: "string" },
+  { name: "chainId", type: "uint256" },
+  { name: "verifyingContract", type: "address" },
+] as const;
+
+function hasCanonicalEip712Domain(
+  domain: Record<string, unknown>,
+  types: Record<string, { name: string; type: string }[]>,
+): boolean {
+  const domainKeys = Object.keys(domain);
+  if (
+    domainKeys.length !== CANONICAL_EIP712_DOMAIN_KEYS.length ||
+    !CANONICAL_EIP712_DOMAIN_KEYS.every((key) => Object.hasOwn(domain, key))
+  ) {
+    return false;
+  }
+  const fields = types.EIP712Domain;
+  return (
+    Array.isArray(fields) &&
+    fields.length === CANONICAL_EIP712_DOMAIN_FIELDS.length &&
+    fields.every((field, index) => {
+      const canonical = CANONICAL_EIP712_DOMAIN_FIELDS[index];
+      return (
+        canonical !== undefined &&
+        Object.keys(field).length === 2 &&
+        field.name === canonical.name &&
+        field.type === canonical.type
+      );
+    })
+  );
+}
 
 /**
  * The narrow contract X402Signer actually depends on.
@@ -86,8 +129,15 @@ export interface SignPaymentOptions {
    */
   message: Record<string, unknown>;
   /**
-   * Address the caller commits to as the payee. Compared byte-equal
-   * (case-insensitive) against `message.to`. Any drift →
+   * Caller-selected EIP-3009 route produced by
+   * {@link resolveExpectedEip3009Route}. It is mandatory: the signer
+   * re-resolves it through the catalog and binds chain/token/method/domain
+   * fields before reserving budget or asking the wallet to sign.
+   */
+  expectedRoute: ExpectedEip3009Route;
+  /**
+   * A valid EVM address the caller commits to as the payee. It is normalized
+   * and compared against the valid EVM address in `message.to`. Any drift →
    * `X402RecipientMismatchError`.
    */
   expectedTo: string;
@@ -171,7 +221,17 @@ export class X402Signer {
    *   token.
    */
   async signPayment(opts: SignPaymentOptions): Promise<SignatureResult> {
-    const { domain, types, message, expectedTo } = opts;
+    const { domain, types, message, expectedRoute, expectedTo } = opts;
+    let expected: ExpectedEip3009Route;
+    try {
+      expected = requireExpectedEip3009Route(expectedRoute);
+    } catch (e) {
+      throw new X402PolicyError(
+        "expected EIP-3009 route is missing, unavailable, or does not match the asset catalog",
+        { cause: e },
+      );
+    }
+
     // A malformed/missing verifyingContract would otherwise throw a raw viem
     // InvalidAddressError, escaping the documented X402 error contract.
     let verifying: `0x${string}`;
@@ -184,6 +244,35 @@ export class X402Signer {
       );
     }
 
+    if (!hasCanonicalEip712Domain(domain, types)) {
+      throw new X402PolicyError(
+        "typed data does not have the canonical EIP-712 domain (name, version, chainId, verifyingContract)",
+      );
+    }
+
+    const primaryTypes = Object.keys(types).filter(
+      (typeName) => typeName !== "EIP712Domain",
+    );
+    const domainChainId = domain.chainId;
+    const chainMatches =
+      (typeof domainChainId === "number" &&
+        Number.isSafeInteger(domainChainId) &&
+        domainChainId === expected.chainId) ||
+      (typeof domainChainId === "bigint" &&
+        domainChainId === BigInt(expected.chainId));
+    if (
+      !chainMatches ||
+      verifying !== expected.address ||
+      domain.name !== expected.name ||
+      domain.version !== expected.version ||
+      primaryTypes.length !== 1 ||
+      primaryTypes[0] !== "TransferWithAuthorization"
+    ) {
+      throw new X402PolicyError(
+        "typed data does not match the expected EIP-3009 route (chain, token, method, name, or version)",
+      );
+    }
+
     // ── L0 recipient (cheapest check, fail fast) ────────────────────────
     const msgTo = message.to;
     if (typeof msgTo !== "string") {
@@ -191,9 +280,19 @@ export class X402Signer {
         `message.to is missing or not an address: ${JSON.stringify(msgTo)}`,
       );
     }
-    if (msgTo.toLowerCase() !== expectedTo.toLowerCase()) {
+    let msgToCs: string;
+    let expectedToCs: string;
+    try {
+      msgToCs = toChecksumAddress(msgTo as `0x${string}`);
+      expectedToCs = toChecksumAddress(expectedTo as `0x${string}`);
+    } catch {
       throw new X402RecipientMismatchError(
-        `expectedTo=${expectedTo} does not match message.to=${msgTo} — refusing to sign`,
+        `message.to and expectedTo must be valid addresses: message.to=${JSON.stringify(msgTo)}, expectedTo=${JSON.stringify(expectedTo)}`,
+      );
+    }
+    if (msgToCs !== expectedToCs) {
+      throw new X402RecipientMismatchError(
+        `expectedTo=${expectedToCs} does not match message.to=${msgToCs} — refusing to sign`,
       );
     }
 

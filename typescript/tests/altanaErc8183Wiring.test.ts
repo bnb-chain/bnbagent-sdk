@@ -97,6 +97,7 @@ const FAKE_COMMERCE = getAddress(`0x${"aa".repeat(20)}`);
 const FAKE_ROUTER = getAddress(`0x${"bb".repeat(20)}`);
 const FAKE_POLICY = getAddress(`0x${"cc".repeat(20)}`);
 const FAKE_TOKEN = getAddress(`0x${"dd".repeat(20)}`);
+const JOB_TOKEN = getAddress(`0x${"12".repeat(20)}`);
 const FAKE_REGISTRY = getAddress(`0x${"ee".repeat(20)}`);
 const DECOY_CONTRACT = getAddress(`0x${"99".repeat(20)}`);
 const CALLS_ID: `0x${string}` = `0x${"ca".repeat(32)}`;
@@ -105,6 +106,11 @@ const PAYMENT_TOKEN_SELECTOR = encodeFunctionData({
   abi: agenticCommerceAbi,
   functionName: "paymentToken",
   args: [],
+}).slice(0, 10);
+const JOB_PAYMENT_TOKEN_SELECTOR = encodeFunctionData({
+  abi: agenticCommerceAbi,
+  functionName: "jobPaymentToken",
+  args: [7n],
 }).slice(0, 10);
 const ALLOWANCE_SELECTOR = encodeFunctionData({
   abi: erc20Abi,
@@ -152,6 +158,8 @@ function rpcLog(
 function makeMock(
   receiptLogs: unknown[] = [],
   commerceAllowance = 250n,
+  jobToken: `0x${string}` = FAKE_TOKEN,
+  defaultToken: `0x${string}` = FAKE_TOKEN,
 ): MockPublicClient {
   const mock = mockPublicClient({
     eth_chainId: () => "0x61", // 97, must match fakeNetwork
@@ -161,7 +169,14 @@ function makeMock(
         return encodeFunctionResult({
           abi: agenticCommerceAbi,
           functionName: "paymentToken",
-          result: FAKE_TOKEN,
+          result: defaultToken,
+        });
+      }
+      if (data.toLowerCase().startsWith(JOB_PAYMENT_TOKEN_SELECTOR)) {
+        return encodeFunctionResult({
+          abi: agenticCommerceAbi,
+          functionName: "jobPaymentToken",
+          result: jobToken,
         });
       }
       if (data.toLowerCase().startsWith(ALLOWANCE_SELECTOR)) {
@@ -224,11 +239,13 @@ describe("ERC8183Client over AltanaWalletProvider", () => {
     // Self-broadcasting all the way down: nothing was locally signed or
     // broadcast. The executor reads the immutable payment token plus the
     // pre-provisioned Commerce allowance, but never mutates that allowance.
+    // The facade validates the authoritative job token and carries it into
+    // the executor, which reads only that token's bounded allowance.
     expect(
       mock.calls.filter((c) => c.method === "eth_sendRawTransaction"),
     ).toHaveLength(0);
     const ethCalls = mock.calls.filter((c) => c.method === "eth_call");
-    expect(ethCalls).toHaveLength(2); // paymentToken + allowance
+    expect(ethCalls).toHaveLength(3); // facade job token + executor job token + allowance
 
     // One relay submission carrying fund only — no session-key approve.
     expect(sdkMocks.executeMock).toHaveBeenCalledTimes(1);
@@ -243,6 +260,28 @@ describe("ERC8183Client over AltanaWalletProvider", () => {
     expect(calls[0]?.to).toBe(FAKE_COMMERCE);
     expect(fund.functionName).toBe("fund");
     expect(fund.args).toEqual([7n, 250n, "0x"]);
+  });
+
+  it("fund(): carries the authoritative job token into the Altana allowance check", async () => {
+    const mock = makeMock([], 250n, JOB_TOKEN, FAKE_TOKEN);
+    createPublicClientForMock.mockReturnValue(mock.client);
+    const client = await ERC8183Client.create({
+      walletProvider: makeProvider(),
+      network: fakeNetwork(),
+    });
+
+    await client.fund(7n, 250n);
+
+    const allowanceCall = mock.calls.find(
+      (call) =>
+        call.method === "eth_call" &&
+        String(
+          (call.params[0] as { data?: string } | undefined)?.data ?? "",
+        ).startsWith(ALLOWANCE_SELECTOR),
+    );
+    expect(
+      (allowanceCall?.params[0] as { to?: `0x${string}` } | undefined)?.to,
+    ).toBe(JOB_TOKEN);
   });
 
   it("fund(): refuses before relay when the bounded allowance is too small", async () => {

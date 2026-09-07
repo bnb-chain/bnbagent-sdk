@@ -36,6 +36,7 @@ import {
   ERC8183_CLAIM_REFUND,
   ERC8183_COMPLETE,
   ERC8183_CREATE_JOB,
+  ERC8183_CREATE_JOB_WITH_TOKEN,
   ERC8183_DISPUTE,
   ERC8183_FUND,
   ERC8183_MARK_EXPIRED,
@@ -64,6 +65,8 @@ const EVALUATOR = getAddress(`0x${"22".repeat(20)}`);
 const HOOK = getAddress(`0x${"33".repeat(20)}`);
 const POLICY = getAddress(`0x${"44".repeat(20)}`);
 const VOTER = getAddress(`0x${"55".repeat(20)}`);
+const TOKEN_INPUT = "0x1234567890abcdef1234567890abcdef12345678";
+const TOKEN = getAddress(TOKEN_INPUT);
 
 /** Stub IntentExecutor: records every intent, returns a canonical result. */
 class RecordingExecutor implements IntentExecutor {
@@ -146,6 +149,38 @@ function policyWithExecutor(result?: TxResult) {
 }
 
 describe("CommerceClient: write intents", () => {
+  it("createJobWithToken uses its distinct intent and checksummed token", async () => {
+    const { client, executor } = commerceWithExecutor();
+    await client.createJobWithToken({
+      provider: PROVIDER,
+      evaluator: EVALUATOR,
+      expiredAt: 123n,
+      description: "d",
+      hook: HOOK,
+      token: TOKEN_INPUT,
+    });
+    const [intent] = executor.intents;
+    expect(ERC8183_CREATE_JOB_WITH_TOKEN).toBe("erc8183.create_job_with_token");
+    expect(intent.name).toBe(ERC8183_CREATE_JOB_WITH_TOKEN);
+    expect(intent.kwargs).toEqual({
+      provider: PROVIDER,
+      evaluator: EVALUATOR,
+      expiredAt: 123n,
+      description: "d",
+      hook: HOOK,
+      token: TOKEN,
+    });
+    expect(intent.call?.functionName).toBe("createJobWithToken");
+    expect(intent.call?.args).toEqual([
+      PROVIDER,
+      EVALUATOR,
+      123n,
+      "d",
+      HOOK,
+      TOKEN,
+    ]);
+  });
+
   it("createJob", async () => {
     const { client, executor } = commerceWithExecutor();
     await client.createJob({
@@ -415,6 +450,24 @@ function receiptWithLogs(logs: unknown[]) {
 const UNRELATED_CONTRACT = getAddress(`0x${"bb".repeat(20)}`);
 
 describe("createJob: jobId dual-sourcing", () => {
+  it("createJobWithToken reuses receipt-based jobId recovery", async () => {
+    const receipt = receiptWithLogs([jobCreatedLog(CONTRACT_ADDRESS, 8n)]);
+    const { client } = commerceWithExecutor({
+      transactionHash: FAKE_TX_HASH,
+      status: 1,
+      receipt,
+    });
+    const result = await client.createJobWithToken({
+      provider: PROVIDER,
+      evaluator: EVALUATOR,
+      expiredAt: 123n,
+      description: "d",
+      hook: HOOK,
+      token: TOKEN,
+    });
+    expect(result.jobId).toBe(8n);
+  });
+
   it("uses the executor-supplied jobId and skips receipt parsing", async () => {
     const { client } = commerceWithExecutor({
       transactionHash: FAKE_TX_HASH,
@@ -673,6 +726,29 @@ describe("CommerceClient: views", () => {
     });
     const client = new CommerceClient(mock.client, CONTRACT_ADDRESS);
     await expect(client.paymentToken()).resolves.toBe(PROVIDER);
+  });
+
+  it("jobPaymentToken()", async () => {
+    const mock = mockPublicClient({
+      eth_call: readCommerce({ jobPaymentToken: TOKEN }),
+    });
+    const client = new CommerceClient(mock.client, CONTRACT_ADDRESS);
+    await expect(client.jobPaymentToken(7n)).resolves.toBe(TOKEN);
+  });
+
+  it("isPaymentTokenSupported() checksums the address", async () => {
+    const mock = mockPublicClient({
+      eth_call: readCommerce({ isPaymentTokenSupported: false }),
+    });
+    const client = new CommerceClient(mock.client, CONTRACT_ADDRESS);
+    await expect(client.isPaymentTokenSupported(TOKEN_INPUT)).resolves.toBe(
+      false,
+    );
+    const call = mock.calls.find((entry) => entry.method === "eth_call");
+    const [{ data }] = call?.params as [{ data: `0x${string}` }];
+    expect(decodeFunctionData({ abi: agenticCommerceAbi, data }).args).toEqual([
+      TOKEN,
+    ]);
   });
 
   it("platformFeeBp()", async () => {

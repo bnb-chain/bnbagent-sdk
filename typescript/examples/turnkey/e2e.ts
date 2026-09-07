@@ -53,9 +53,13 @@ import { loadEnv } from "../../src/core/env.js";
 import { getEnv } from "../../src/core/envUtil.js";
 import { BNB_CHAIN_ADDRESSES } from "../../src/networks/addresses.js";
 import { TurnkeyWalletProvider } from "../../src/wallets/turnkey/provider.js";
-import { X402Signer } from "../../src/x402/signer.js";
+import {
+  X402Signer,
+  resolveExpectedEip3009Route,
+} from "../../src/x402/index.js";
 
 const CHAIN_ID = 97;
+const U_TESTNET_ROUTE = resolveExpectedEip3009Route("eip155:97", "TEST_U");
 const GAP_MS = 1100; // free tier: 1 request/second — stay under it
 const SIGNATURE_BUDGET = 5;
 
@@ -217,6 +221,7 @@ async function main(): Promise<void> {
       domain: domain as Record<string, unknown>,
       types,
       message: { ...message712, value: 10n },
+      expectedRoute: U_TESTNET_ROUTE,
       expectedTo: address,
     }),
   );

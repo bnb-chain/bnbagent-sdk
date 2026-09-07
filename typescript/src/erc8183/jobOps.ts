@@ -34,11 +34,18 @@ import {
   RpcRangeLimitError,
   TransactionPendingError,
 } from "../errors.js";
+import {
+  type AssetId,
+  type PaymentAsset,
+  getAsset,
+  getAssetByAddress,
+  parseAssetId,
+} from "../networks/assets.js";
 import { LocalStorageProvider } from "../storage/localStorageProvider.js";
 import type { StorageProvider } from "../storage/storageProvider.js";
 import type { WalletProvider } from "../wallets/walletProvider.js";
 import { ERC8183Client } from "./client.js";
-import { ERC8183_ENV_PREFIX } from "./constants.js";
+import { ERC8183_ENV_PREFIX, resolveErc8183Network } from "./constants.js";
 import { NegotiationHandler, parseJobDescription } from "./negotiation.js";
 import { verifyQuoteSignature } from "./quoteVerify.js";
 import { DeliverableManifest, SCHEMA_VERSION } from "./schema.js";
@@ -149,6 +156,7 @@ export const ERR_JOB_EXPIRED = "job_expired"; // past job.expiredAt
 export const ERR_WRONG_STATUS = "wrong_status"; // job not in the required status
 export const ERR_DESCRIPTION_INVALID = "description_invalid"; // malformed description (fail closed)
 export const ERR_QUOTE_INVALID = "quote_invalid"; // missing, altered, expired-at-funding, or invalid provider quote
+export const ERR_JOB_TOKEN_MISMATCH = "job_token_mismatch";
 export const ERR_SUBMIT_DEADLINE_PASSED = "submit_deadline_passed"; // past expiredAt - disputeWindow
 export const ERR_PAYLOAD_TOO_LARGE = "payload_too_large"; // response/metadata size cap hit
 export const ERR_METADATA_INVALID = "metadata_invalid"; // metadata not JSON-serializable (e.g. a bigint) — permanent
@@ -289,6 +297,8 @@ export interface ERC8183JobOpsCreateOpts {
   /** Minimum acceptable budget in token raw units. Used by `verifyJob` to
    * reject under-priced jobs (`budget_too_low`). */
   servicePrice?: bigint;
+  /** Canonical AssetId to minimum atomic-unit budget for multi-token sellers. */
+  servicePrices?: Readonly<Partial<Record<AssetId, bigint>>>;
   /** Public base URL of this agent (required when storage returns a
    * `file://` URL). */
   agentUrl?: string | null;
@@ -314,6 +324,7 @@ export class ERC8183JobOps {
   private readonly network: string | NetworkConfig;
   private readonly storage: StorageProvider | null;
   private readonly servicePrice: bigint;
+  private readonly servicePrices: ReadonlyMap<AssetId, bigint> | null;
   private readonly agentUrl: string | null;
   private readonly allowUnsignedJobs: boolean;
 
@@ -329,6 +340,7 @@ export class ERC8183JobOps {
     network: string | NetworkConfig;
     storage: StorageProvider | null;
     servicePrice: bigint;
+    servicePrices: ReadonlyMap<AssetId, bigint> | null;
     agentUrl: string | null;
     allowUnsignedJobs: boolean;
   }) {
@@ -337,6 +349,7 @@ export class ERC8183JobOps {
     this.network = opts.network;
     this.storage = opts.storage;
     this.servicePrice = opts.servicePrice;
+    this.servicePrices = opts.servicePrices;
     this.agentUrl = opts.agentUrl;
     this.allowUnsignedJobs = opts.allowUnsignedJobs;
   }
@@ -355,15 +368,66 @@ export class ERC8183JobOps {
         ? walletProvider.address
         : getAddress(opts.providerAddress as string);
 
+    const network = opts.network ?? "bsc-testnet";
+    const servicePrices = ERC8183JobOps.validateServicePrices(
+      network,
+      opts.servicePrices,
+    );
+
     return new ERC8183JobOps({
       walletProvider,
       agentAddress,
-      network: opts.network ?? "bsc-testnet",
+      network,
       storage: opts.storageProvider ?? null,
       servicePrice: opts.servicePrice ?? 0n,
+      servicePrices,
       agentUrl: opts.agentUrl ?? null,
       allowUnsignedJobs: opts.allowUnsignedJobs ?? false,
     });
+  }
+
+  private static validateServicePrices(
+    network: string | NetworkConfig,
+    servicePrices: Readonly<Partial<Record<AssetId, bigint>>> | undefined,
+  ): ReadonlyMap<AssetId, bigint> | null {
+    if (servicePrices === undefined) return null;
+    const entries = Object.entries(servicePrices);
+    if (entries.length === 0) {
+      throw new Error(
+        "servicePrices must contain at least one canonical AssetId",
+      );
+    }
+    const chainId = resolveErc8183Network(network).chainId;
+    const validated = new Map<AssetId, bigint>();
+    for (const [rawAssetId, price] of entries) {
+      const assetId = parseAssetId(rawAssetId);
+      getAsset(chainId, assetId);
+      if (typeof price !== "bigint" || price < 0n) {
+        throw new Error(
+          `service price for ${assetId} must be a non-negative bigint`,
+        );
+      }
+      validated.set(assetId, price);
+    }
+    return validated;
+  }
+
+  private static jobTokenError(): OpResult {
+    return {
+      valid: false,
+      error:
+        "Job payment token does not match the signed quote and seller catalog",
+      error_code: ERR_JOB_TOKEN_MISMATCH,
+    };
+  }
+
+  private static chainReadError(): OpResult {
+    return {
+      valid: false,
+      error: "Temporary chain/RPC error",
+      error_code: ERR_CHAIN_UNAVAILABLE,
+      retryable: true,
+    };
   }
 
   get agentAddress(): `0x${string}` {
@@ -743,6 +807,58 @@ export class ERC8183JobOps {
         );
       }
 
+      let rawJobToken: string;
+      try {
+        rawJobToken = await client.jobPaymentToken(BigInt(jobId));
+      } catch {
+        return ERC8183JobOps.chainReadError();
+      }
+      let jobToken: `0x${string}`;
+      let jobAsset: PaymentAsset | null = null;
+      try {
+        jobToken = getAddress(rawJobToken);
+        try {
+          jobAsset = getAssetByAddress(client.network.chainId, jobToken);
+        } catch {
+          jobAsset = null;
+        }
+      } catch {
+        return ERC8183JobOps.jobTokenError();
+      }
+
+      let effectiveServicePrice: bigint;
+      if (this.servicePrices === null) {
+        let rawDefaultToken: string;
+        try {
+          rawDefaultToken = await client.paymentToken();
+        } catch {
+          return ERC8183JobOps.chainReadError();
+        }
+        let defaultToken: `0x${string}`;
+        try {
+          defaultToken = getAddress(rawDefaultToken);
+        } catch {
+          return ERC8183JobOps.jobTokenError();
+        }
+        if (jobToken !== defaultToken) {
+          return ERC8183JobOps.jobTokenError();
+        }
+        effectiveServicePrice = this.servicePrice;
+      } else {
+        if (jobAsset === null || !this.servicePrices.has(jobAsset.assetId)) {
+          return ERC8183JobOps.jobTokenError();
+        }
+        if (
+          jobToken !==
+          getAsset(client.network.chainId, jobAsset.assetId).address
+        ) {
+          return ERC8183JobOps.jobTokenError();
+        }
+        effectiveServicePrice = this.servicePrices.get(
+          jobAsset.assetId,
+        ) as bigint;
+      }
+
       const description = (jobResult.description as string | undefined) ?? "";
       let quoteEnvelope: Record<string, unknown> | null = null;
       let hasStructuredDescription = false;
@@ -872,27 +988,23 @@ export class ERC8183JobOps {
             error_code: ERR_QUOTE_INVALID,
           };
         }
-        const paymentToken = await client.paymentToken();
-        if (signedCurrency !== getAddress(paymentToken)) {
-          return {
-            valid: false,
-            error: `Signed quote currency (${signedCurrency}) does not match the Commerce payment token (${paymentToken})`,
-            error_code: ERR_QUOTE_INVALID,
-          };
+        if (signedCurrency !== jobToken) {
+          return ERC8183JobOps.jobTokenError();
         }
       }
 
-      if (this.servicePrice > 0n) {
+      if (effectiveServicePrice > 0n) {
         const budget = BigInt((jobResult.budget as string | undefined) ?? "0");
-        if (budget < this.servicePrice) {
-          const decimals = await client.tokenDecimals();
+        if (budget < effectiveServicePrice) {
+          const decimals =
+            jobAsset?.decimals ?? (await client.tokenDecimals(jobToken));
           return {
             valid: false,
             error:
               `Job budget (${budget}) is below agent's` +
-              ` service price (${this.servicePrice})`,
+              ` service price (${effectiveServicePrice})`,
             error_code: ERR_BUDGET_TOO_LOW,
-            service_price: this.servicePrice.toString(),
+            service_price: effectiveServicePrice.toString(),
             decimals,
           };
         }
