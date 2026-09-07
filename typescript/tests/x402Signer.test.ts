@@ -107,13 +107,17 @@ function payload(
   };
 }
 
+type MutableDomainPayload = Omit<ReturnType<typeof payload>, "domain"> & {
+  domain: Record<string, unknown>;
+};
+
 function makeTrackingSigner() {
   let signCalls = 0;
   const trackingSigner = new X402Signer({
     address: wallet.address,
     signTypedData: async (): Promise<SignatureResult> => {
       signCalls++;
-      return { signature: "0x" };
+      throw new Error("wallet must not be called for a rejected payment");
     },
   });
   return { trackingSigner, signCalls: () => signCalls };
@@ -151,20 +155,20 @@ describe("X402Signer — catalog EIP-3009 route binding", () => {
   it.each([
     [
       "an extra salt domain property",
-      (p: ReturnType<typeof payload>) => {
+      (p: MutableDomainPayload) => {
         p.domain.salt = `0x${"0".repeat(64)}`;
       },
     ],
     [
       "a missing domain version",
-      (p: ReturnType<typeof payload>) => {
+      (p: MutableDomainPayload) => {
         // biome-ignore lint/performance/noDelete: the domain key must be absent
         delete p.domain.version;
       },
     ],
     [
       "an expanded salt domain schema",
-      (p: ReturnType<typeof payload>) => {
+      (p: MutableDomainPayload) => {
         p.domain.salt = `0x${"0".repeat(64)}`;
         p.types.EIP712Domain = [
           ...EIP712DOMAIN_FIELDS,
@@ -174,7 +178,7 @@ describe("X402Signer — catalog EIP-3009 route binding", () => {
     ],
     [
       "a domain schema with a wrong field type",
-      (p: ReturnType<typeof payload>) => {
+      (p: MutableDomainPayload) => {
         p.types.EIP712Domain = [
           { name: "name", type: "bytes32" },
           ...EIP712DOMAIN_FIELDS.slice(1),
@@ -183,7 +187,7 @@ describe("X402Signer — catalog EIP-3009 route binding", () => {
     ],
     [
       "a reordered domain schema",
-      (p: ReturnType<typeof payload>) => {
+      (p: MutableDomainPayload) => {
         p.types.EIP712Domain = [
           { name: "version", type: "string" },
           { name: "name", type: "string" },
@@ -193,7 +197,7 @@ describe("X402Signer — catalog EIP-3009 route binding", () => {
     ],
     [
       "a duplicated domain schema field",
-      (p: ReturnType<typeof payload>) => {
+      (p: MutableDomainPayload) => {
         p.types.EIP712Domain = [
           { name: "name", type: "string" },
           { name: "name", type: "string" },
