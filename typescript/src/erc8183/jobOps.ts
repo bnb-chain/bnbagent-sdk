@@ -125,6 +125,37 @@ function findRpcErrorCode(exc: unknown): number | undefined {
   return undefined;
 }
 
+/** Preserve a revert selector without exposing RPC URLs or encoded arguments. */
+function findRevertSelector(exc: unknown): string | undefined {
+  const seen = new Set<object>();
+  let current = exc;
+  let reverted = false;
+  while (
+    current !== null &&
+    typeof current === "object" &&
+    !seen.has(current)
+  ) {
+    seen.add(current);
+    const error = current as {
+      message?: unknown;
+      data?: unknown;
+      cause?: unknown;
+    };
+    reverted ||=
+      typeof error.message === "string" &&
+      /\brevert(?:ed)?\b/i.test(error.message);
+    if (
+      reverted &&
+      typeof error.data === "string" &&
+      /^0x[0-9a-f]{8}(?:[0-9a-f]{64})*$/i.test(error.data)
+    ) {
+      return error.data.slice(0, 10).toLowerCase();
+    }
+    current = error.cause;
+  }
+  return undefined;
+}
+
 /** Full transient-keyword list used by {@link excErrorFields}. */
 const TRANSIENT_ERROR_KEYWORDS = [
   "timeout",
@@ -243,6 +274,10 @@ export function excErrorFields(exc: unknown): Record<string, unknown> {
   } else {
     const redacted = message.replace(/\S+:\/\/\S+/g, "<redacted>");
     fields = { error: redacted, error_code: ERR_INTERNAL, retryable: true };
+  }
+  const selector = findRevertSelector(exc);
+  if (selector !== undefined) {
+    fields.error += ` (execution reverted: ${selector})`;
   }
   if (rpcCode !== undefined) {
     fields.rpc_error_code = rpcCode;
