@@ -16,11 +16,9 @@ import type { SigningPolicy } from "./policy.js";
 export const EIP712_DOMAIN_TYPE_NAME = "EIP712Domain";
 
 /**
- * Return the single non-`EIP712Domain` struct name in `types`.
- *
- * Raises {@link PolicyViolation} if there isn't exactly one. Multiple
- * non-domain structs would create ambiguity over what gets signed and is
- * explicitly rejected — caller must split into separate sign calls.
+ * Return the unique root of a non-domain struct dependency graph.
+ * Nested structs (including arrays) are supported; ambiguous, disconnected
+ * or cyclic graphs are rejected before applying the normal signing policy.
  */
 export function inferPrimaryType(types: Record<string, unknown>): string {
   const nonDomain = Object.keys(types).filter(
@@ -32,10 +30,85 @@ export function inferPrimaryType(types: Record<string, unknown>): string {
     );
   }
   if (nonDomain.length > 1) {
-    const listRepr = `[${nonDomain.map((s) => `'${s}'`).join(", ")}]`;
-    throw new PolicyViolation(
-      `EIP-712 types contains multiple non-EIP712Domain structs: ${listRepr}; sign one at a time to avoid primary-type ambiguity`,
-    );
+    // Bound untrusted schemas before recursion or invoking a wallet signer.
+    if (nonDomain.length > 256) {
+      throw new PolicyViolation("EIP-712 nested schema exceeds 256 structs");
+    }
+    let fieldCount = 0;
+    const names = new Set(nonDomain);
+    const referenced = new Set<string>();
+    const edges = new Map<string, string[]>();
+    for (const name of nonDomain) {
+      const fields = types[name];
+      if (!Array.isArray(fields)) {
+        throw new PolicyViolation(
+          `EIP-712 struct '${name}' must contain fields`,
+        );
+      }
+      fieldCount += fields.length;
+      if (fieldCount > 4096) {
+        throw new PolicyViolation("EIP-712 nested schema exceeds 4096 fields");
+      }
+      const children: string[] = [];
+      for (const field of fields) {
+        if (!field || typeof field.type !== "string") {
+          throw new PolicyViolation(
+            `EIP-712 struct '${name}' has an invalid field`,
+          );
+        }
+        const type = field.type.replace(/(\[[0-9]*\])+$/, "");
+        if (names.has(type)) {
+          children.push(type);
+          referenced.add(type);
+        } else if (
+          !/^(address|bool|string|bytes([0-9]+)?|u?int([0-9]+)?)$/.test(type)
+        ) {
+          throw new PolicyViolation(
+            `EIP-712 field references unknown type '${type}'`,
+          );
+        }
+      }
+      edges.set(name, children);
+    }
+    const roots = nonDomain.filter((name) => !referenced.has(name));
+    if (roots.length !== 1) {
+      throw new PolicyViolation(
+        `EIP-712 types contains multiple non-EIP712Domain structs without a unique primary type: ${nonDomain.join(", ")}`,
+      );
+    }
+    const visiting = new Set<string>();
+    const visited = new Set<string>();
+    const depths = new Map<string, number>();
+    const visit = (name: string, depth: number): number => {
+      if (depth > 64) {
+        throw new PolicyViolation("EIP-712 nested schema exceeds depth 64");
+      }
+      if (visiting.has(name)) {
+        throw new PolicyViolation("EIP-712 types contains a cyclic dependency");
+      }
+      if (visited.has(name)) {
+        const height = depths.get(name) as number;
+        if (depth + height - 1 > 64) {
+          throw new PolicyViolation("EIP-712 nested schema exceeds depth 64");
+        }
+        return height;
+      }
+      visiting.add(name);
+      let height = 1;
+      for (const child of edges.get(name) ?? []) {
+        height = Math.max(height, 1 + visit(child, depth + 1));
+      }
+      visiting.delete(name);
+      visited.add(name);
+      depths.set(name, height);
+      return height;
+    };
+    const root = roots[0] as string;
+    visit(root, 1);
+    if (visited.size !== nonDomain.length) {
+      throw new PolicyViolation("EIP-712 types contains disconnected structs");
+    }
+    return root;
   }
   return nonDomain[0] as string;
 }
