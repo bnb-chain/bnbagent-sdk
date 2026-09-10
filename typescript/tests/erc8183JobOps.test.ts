@@ -1325,6 +1325,44 @@ describe("excErrorFields", () => {
     expect(fields.error_code).toBe("chain_unavailable");
   });
 
+  it("preserves only the selector of a nested parameterized revert across JSON serialization", () => {
+    const rpcError = {
+      code: 3,
+      message: "execution reverted",
+      data: `0x118cdaa7${"ab".repeat(32)}`,
+      url: "https://rpc.example/SECRET",
+    };
+    const error = new Error("RPC request failed", { cause: rpcError });
+    const fields = JSON.parse(JSON.stringify(excErrorFields(error)));
+    expect(fields.error).toBe(
+      "Temporary chain/RPC error (execution reverted: 0x118cdaa7)",
+    );
+    expect(fields.error_code).toBe("chain_unavailable");
+    expect(fields.retryable).toBe(true);
+    expect(fields.rpc_error_code).toBe(3);
+    expect(JSON.stringify(fields)).not.toContain("SECRET");
+    expect(JSON.stringify(fields)).not.toContain("ab".repeat(32));
+  });
+
+  it.each([
+    "0x",
+    "0x32d53d69ff",
+    `0x${"ab".repeat(20)}`,
+    `0x${"ab".repeat(32)}`,
+  ])("does not invent a selector from malformed/opaque data %s", (data) => {
+    const fields = excErrorFields({ message: "execution reverted", data });
+    expect(fields.error).toBe("execution reverted");
+  });
+
+  it("does not treat request calldata as revert data and terminates on cyclic causes", () => {
+    const error = Object.assign(new Error("request failed"), {
+      data: "0x32d53d69",
+      cause: undefined as unknown,
+    });
+    error.cause = error;
+    expect(excErrorFields(error).error).toBe("request failed");
+  });
+
   it("passes a revert reason through unchanged", () => {
     const fields = excErrorFields(
       new Error("Transaction would revert: NotProvider"),
