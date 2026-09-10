@@ -65,6 +65,7 @@ import {
   ERC8183_CLAIM_REFUND,
   ERC8183_COMPLETE,
   ERC8183_CREATE_JOB,
+  ERC8183_CREATE_JOB_WITH_TOKEN,
   ERC8183_DISPUTE,
   ERC8183_FUND,
   ERC8183_MARK_EXPIRED,
@@ -83,6 +84,33 @@ import {
 import type { SignatureResult } from "../walletProvider.js";
 import { WalletProvider } from "../walletProvider.js";
 import { TwakX402Payer, type TwakX402PayerOptions } from "./x402.js";
+
+function isCliParserError(message: string, flag?: string): boolean {
+  const prefixes = [
+    "unknown command",
+    "unknown option",
+    "unknown argument",
+    "unknown flag",
+    "unrecognized option",
+    "unrecognized argument",
+    "unexpected option",
+    "unexpected argument",
+  ];
+  return message
+    .toLowerCase()
+    .split(/\r?\n/u)
+    .some((line) => {
+      let detail = line.trim().replace(/^error:\s*/u, "");
+      if (detail.startsWith("twak command failed (")) {
+        detail = detail.split("): ", 2)[1] ?? detail;
+      }
+      detail = detail.replace(/^error:\s*/u, "");
+      return (
+        prefixes.some((prefix) => detail.startsWith(prefix)) &&
+        (flag === undefined || detail.includes(flag.toLowerCase()))
+      );
+    });
+}
 
 /** Default per-CLI-invocation timeout. */
 export const DEFAULT_TWAK_TIMEOUT_MS = 120_000;
@@ -161,6 +189,7 @@ const CONTRACT_KEY_BY_INTENT: Readonly<Record<string, CanonicalContractKey>> = {
   [ERC8004_SET_METADATA]: "registryContract",
   [ERC8004_SET_AGENT_URI]: "registryContract",
   [ERC8183_CREATE_JOB]: "commerceContract",
+  [ERC8183_CREATE_JOB_WITH_TOKEN]: "commerceContract",
   [ERC8183_SET_PROVIDER]: "commerceContract",
   [ERC8183_SET_BUDGET]: "commerceContract",
   [ERC8183_FUND]: "commerceContract",
@@ -615,13 +644,11 @@ export class TWAKProvider extends WalletProvider implements IntentExecutor {
     }
     // "unknown command/option" means the installed twak predates the
     // command surface this provider targets — point at the upgrade.
-    const combined = `${stderr} ${stdout}`;
-    const hint =
-      combined.includes("unknown command") ||
-      combined.includes("unknown option")
-        ? "The installed twak CLI does not recognise this command/option — " +
-          "upgrade twak to >= v0.20.0 (`npm install @trustwallet/cli`)."
-        : SETUP_HINT;
+    const combined = `${stderr}\n${stdout}`;
+    const hint = isCliParserError(combined)
+      ? "The installed twak CLI does not recognise this command/option — " +
+        "upgrade twak to >= v0.20.0 (`npm install @trustwallet/cli`)."
+      : SETUP_HINT;
     return `twak command failed (${redact(cmd)}): ${detail || "<no output>"}. ${hint}`;
   }
 
@@ -1183,6 +1210,45 @@ async function handleCreateJob(
   return p._txResult(data, { jobId: asBigInt(data.jobId) });
 }
 
+async function handleCreateJobWithToken(
+  p: TWAKProvider,
+  kwargs: Record<string, unknown>,
+): Promise<TxResult> {
+  const args = [
+    "erc8183",
+    "create-job",
+    "--provider",
+    String(kwargs.provider),
+    "--evaluator",
+    String(kwargs.evaluator),
+    "--expires-at",
+    String(kwargs.expiredAt),
+    "--description",
+    String(kwargs.description),
+  ];
+  const hook = kwargs.hook as string | undefined;
+  if (hook && hook.toLowerCase() !== ZERO_ADDRESS) {
+    args.push("--hook", hook);
+  }
+  args.push("--payment-token", String(kwargs.token));
+  let data: Record<string, unknown>;
+  try {
+    data = await p._run([...args, ...p._paymasterArgs(), "--chain", p.chain]);
+  } catch (error) {
+    const message = String(error);
+    if (isCliParserError(message, "--payment-token")) {
+      throw new UnsupportedWalletOperation("erc8183.create_job_with_token", {
+        reason:
+          "upgrade twak to a version that supports the --payment-token capability; the installed CLI cannot safely create a token-bound job",
+        alternative: "upgrade TWAK or use an EVM/Turnkey wallet",
+        ref: "docs/twak.md",
+      });
+    }
+    throw error;
+  }
+  return p._txResult(data, { jobId: asBigInt(data.jobId) });
+}
+
 async function handleSetProvider(
   p: TWAKProvider,
   kwargs: Record<string, unknown>,
@@ -1334,6 +1400,7 @@ const INTENT_HANDLERS: Record<string, IntentHandler> = {
   [ERC8004_SET_METADATA]: handleSetMetadata,
   [ERC8004_SET_AGENT_URI]: handleSetAgentUri,
   [ERC8183_CREATE_JOB]: handleCreateJob,
+  [ERC8183_CREATE_JOB_WITH_TOKEN]: handleCreateJobWithToken,
   [ERC8183_SET_PROVIDER]: handleSetProvider,
   [ERC8183_SET_BUDGET]: handleSetBudget,
   [ERC8183_FUND]: handleFund,

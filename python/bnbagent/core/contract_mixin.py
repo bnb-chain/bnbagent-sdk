@@ -16,6 +16,8 @@ from .nonce_manager import NonceManager
 
 logger = logging.getLogger(__name__)
 
+READ_ONLY_MESSAGE = "wallet_provider is required for write operations (client is read-only)"
+
 
 # Errors after which the transaction MAY have been accepted by the node, so
 # the nonce must be pinned BROADCAST and the local hash tracked. "nonce too
@@ -49,6 +51,7 @@ def _raw_bytes(signed: Any) -> bytes:
 def _local_tx_hash(raw: bytes) -> tuple[bytes, str]:
     digest = bytes(Web3.keccak(raw))
     return digest, "0x" + digest.hex()
+
 
 MAX_RETRIES = 5
 RETRY_BASE_DELAY = 1.0
@@ -167,9 +170,7 @@ class ContractClientMixin:
         per client instance.
         """
         if not self._wallet_provider:
-            raise RuntimeError(
-                "wallet_provider is required for write operations (client is read-only)"
-            )
+            raise RuntimeError(READ_ONLY_MESSAGE)
         executor = getattr(self, "_intent_executor", None)
         if executor is None:
             from ..wallets.intents import ExecutionContext
@@ -195,9 +196,7 @@ class ContractClientMixin:
         to skip estimation.
         """
         if not self._wallet_provider:
-            raise RuntimeError(
-                "wallet_provider is required for write operations (client is read-only)"
-            )
+            raise RuntimeError(READ_ONLY_MESSAGE)
 
         if gas is None:
             gas = self._estimate_gas_limit(fn, value, skip_preflight)

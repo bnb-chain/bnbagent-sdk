@@ -16,11 +16,16 @@ from bnbagent.x402 import (
     X402RecipientMismatchError,
     X402Signer,
 )
+from bnbagent.x402.assets import resolve_expected_eip3009_route
 
 PW = "test-secure-password-123"
 PK = "0x" + "a" * 64
 
 U_MAINNET = get_address(BSC_MAINNET_CHAIN_ID).payment_token
+USD1_MAINNET = "0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d"
+
+U_EIP3009_ROUTE = resolve_expected_eip3009_route("eip155:56", "U")
+USD1_EIP3009_ROUTE = resolve_expected_eip3009_route("eip155:56", "USD1")
 
 EIP712DOMAIN_FIELDS = [
     {"name": "name", "type": "string"},
@@ -74,7 +79,126 @@ def _payload(*, to=None, value=500_000, from_addr=None):
             "validBefore": now + 60,
             "nonce": "0x" + "c" * 64,
         },
+        "expected_route": U_EIP3009_ROUTE,
     }
+
+
+# ── Catalog EIP-3009 route binding ──────────────────────────────────────
+
+
+def test_rejects_usd1_substituted_for_caller_selected_u_route_before_signing(signer):
+    sign_calls = 0
+
+    class NeverSign:
+        address = signer.wallet_address
+
+        def sign_typed_data(self, domain, types, message):
+            nonlocal sign_calls
+            sign_calls += 1
+            raise AssertionError("wallet must not be called for a rejected route")
+
+    route_signer = X402Signer(NeverSign())
+    p = _payload(from_addr=route_signer.wallet_address)
+    p["domain"].update(
+        name=USD1_EIP3009_ROUTE.name,
+        verifyingContract=USD1_MAINNET,
+    )
+    p["expected_route"] = U_EIP3009_ROUTE
+    with pytest.raises(X402PolicyError, match="expected EIP-3009 route"):
+        route_signer.sign_payment(**p, expected_to=p["message"]["to"])
+    assert route_signer.budget.spent(U_MAINNET) == 0
+    assert sign_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("name", "World Liberty Financial USD"), ("version", "2")),
+)
+def test_rejects_wrong_eip712_name_or_version_before_signing(signer, field, value):
+    p = _payload(from_addr=signer.wallet_address)
+    p["domain"][field] = value
+    p["expected_route"] = U_EIP3009_ROUTE
+    with pytest.raises(X402PolicyError, match="expected EIP-3009 route"):
+        signer.sign_payment(**p, expected_to=p["message"]["to"])
+    assert signer.budget.spent(U_MAINNET) == 0
+
+
+@pytest.mark.parametrize(
+    "variant",
+    (
+        "extra_salt",
+        "missing_version",
+        "expanded_salt_schema",
+        "wrong_schema_field_type",
+        "reordered_schema",
+        "duplicated_schema_field",
+    ),
+)
+def test_rejects_noncanonical_domain_before_budget_or_wallet_signing(signer, variant):
+    sign_calls = 0
+
+    class TrackingWallet:
+        address = signer.wallet_address
+
+        def sign_typed_data(self, domain, types, message):
+            nonlocal sign_calls
+            sign_calls += 1
+            return {"signature": "0x"}
+
+    tracking_signer = X402Signer(TrackingWallet())
+    p = _payload(from_addr=tracking_signer.wallet_address)
+    if variant == "extra_salt":
+        p["domain"]["salt"] = "0x" + "0" * 64
+    elif variant == "missing_version":
+        del p["domain"]["version"]
+    elif variant == "expanded_salt_schema":
+        p["domain"]["salt"] = "0x" + "0" * 64
+        p["types"]["EIP712Domain"] = [
+            *EIP712DOMAIN_FIELDS,
+            {"name": "salt", "type": "bytes32"},
+        ]
+    elif variant == "wrong_schema_field_type":
+        p["types"]["EIP712Domain"] = [
+            {"name": "name", "type": "bytes32"},
+            *EIP712DOMAIN_FIELDS[1:],
+        ]
+    elif variant == "reordered_schema":
+        p["types"]["EIP712Domain"] = [
+            EIP712DOMAIN_FIELDS[1],
+            EIP712DOMAIN_FIELDS[0],
+            *EIP712DOMAIN_FIELDS[2:],
+        ]
+    else:
+        p["types"]["EIP712Domain"] = [
+            EIP712DOMAIN_FIELDS[0],
+            EIP712DOMAIN_FIELDS[0],
+            *EIP712DOMAIN_FIELDS[1:3],
+        ]
+
+    try:
+        tracking_signer.sign_payment(**p, expected_to=p["message"]["to"])
+    except X402PolicyError:
+        pass
+
+    assert tracking_signer.budget.spent(U_MAINNET) == 0
+    assert sign_calls == 0
+
+
+def test_rejects_testnet_usd1_placeholder_route_before_signing(signer):
+    p = _payload(from_addr=signer.wallet_address)
+    from dataclasses import replace
+
+    placeholder = replace(
+        U_EIP3009_ROUTE,
+        network="eip155:97",
+        chain_id=97,
+        asset_id="TEST_USD1",  # type: ignore[arg-type]
+        address="0x0000000000000000000000000000000000000000",
+    )
+    p["expected_route"] = placeholder
+    with pytest.raises(X402PolicyError, match="expected EIP-3009 route"):
+        signer.sign_payment(**p, expected_to=p["message"]["to"])
+    assert signer.budget.spent(U_MAINNET) == 0
 
 
 # ── Happy path ───────────────────────────────────────────────────────────
@@ -127,6 +251,30 @@ def test_rejects_when_message_to_missing(signer):
     del p["message"]["to"]
     with pytest.raises(X402RecipientMismatchError, match="missing or not an address"):
         signer.sign_payment(**p, expected_to="0x" + "b" * 40)
+
+
+def test_rejects_matching_malformed_recipient_addresses_before_budget_or_wallet_signing(signer):
+    sign_calls = 0
+
+    class TrackingWallet:
+        address = signer.wallet_address
+
+        def sign_typed_data(self, domain, types, message):
+            nonlocal sign_calls
+            sign_calls += 1
+            return {"signature": "0x"}
+
+    tracking_signer = X402Signer(TrackingWallet())
+    p = _payload(from_addr=tracking_signer.wallet_address)
+    p["message"]["to"] = "not-an-address"
+
+    try:
+        tracking_signer.sign_payment(**p, expected_to="not-an-address")
+    except X402RecipientMismatchError:
+        pass
+
+    assert tracking_signer.budget.spent(U_MAINNET) == 0
+    assert sign_calls == 0
 
 
 # ── Signer binding (message['from']) ─────────────────────────────────────
@@ -309,12 +457,11 @@ def test_budget_not_consumed_when_underlying_wallet_rejects(wallet, tmp_path):
     assert signer.budget.spent(Web3.to_checksum_address("0x" + "1" * 40)) == 0
 
 
-# ── PolicyViolation propagation ─────────────────────────────────────────
+# ── Non-EIP-3009 rejection ──────────────────────────────────────────────
 
 
-def test_wraps_wallet_policy_violation_as_x402_policy_error(wallet, tmp_path):
-    """When the wallet rejects (e.g. Permit primary type), X402Signer
-    surfaces X402PolicyError with the underlying PolicyViolation chained."""
+def test_rejects_permit_primary_type_before_budget_or_wallet_signing(wallet, tmp_path):
+    """Only EIP-3009 may pass the catalog-bound signer entrypoint."""
     signer = X402Signer(
         wallet,
         max_value_per_call={U_MAINNET: 1_000_000},
@@ -349,14 +496,11 @@ def test_wraps_wallet_policy_violation_as_x402_policy_error(wallet, tmp_path):
             "nonce": 0,
             "deadline": 2_000_000_000,
         },
+        "expected_route": U_EIP3009_ROUTE,
     }
-    with pytest.raises(X402PolicyError) as exc:
+    with pytest.raises(X402PolicyError, match="expected EIP-3009 route"):
         signer.sign_payment(**permit_payload, expected_to="0x" + "b" * 40)
-    # Original PolicyViolation chained
-    from bnbagent.signing import PolicyViolation
-
-    assert isinstance(exc.value.__cause__, PolicyViolation)
-    assert exc.value.__cause__.primary_type == "Permit"
+    assert signer.budget.spent(U_MAINNET) == 0
 
 
 # ── Concurrency regression (v0.4.1 / PR #34 review) ──────────────────────

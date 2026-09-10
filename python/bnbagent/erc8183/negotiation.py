@@ -8,7 +8,7 @@ The TermSpecification follows ERC-8183's structured terms:
   Agreed Service + Compensation + Evaluation.
 
 NegotiationHandler provides a ready-to-use negotiation processor for agents:
-  handler = NegotiationHandler(service_price="20e18", currency="0x...")
+  handler = NegotiationHandler(service_price="20000000000000000000", currency="0x...")
   result = handler.negotiate(request_data)
 
 On-chain Description (v1 schema)
@@ -38,8 +38,13 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+from web3 import Web3
+
+from ..networks import AssetId, PaymentAsset, get_asset, list_assets, parse_asset_id
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +89,24 @@ class ReasonCode:
     TASK_TOO_LONG = "0x07"  # task + terms exceed the on-chain description cap
 
 
+def _normalize_atomic_price(value: str | int, *, field_name: str = "price") -> str:
+    """Return a canonical non-negative base-10 atomic-unit string."""
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a non-negative integer")
+    if isinstance(value, int):
+        if value < 0:
+            raise ValueError(f"{field_name} must be a non-negative integer")
+        return str(value)
+    if (
+        not isinstance(value, str)
+        or not value.isascii()
+        or not value.isdecimal()
+        or (value != "0" and value.startswith("0"))
+    ):
+        raise ValueError(f"{field_name} must be a canonical non-negative integer string")
+    return value
+
+
 @dataclass
 class TermSpecification:
     """
@@ -101,11 +124,15 @@ class TermSpecification:
 
     success_criteria: list[str] | None = None
 
-    price: str | None = None
+    price: str | int | None = None
     currency: str | None = None
 
     evaluation_required: bool = True
     evaluator_type: str = "uma_oov3"
+
+    def __post_init__(self) -> None:
+        if self.price is not None:
+            self.price = _normalize_atomic_price(self.price)
 
     def to_dict(self) -> dict:
         result = {
@@ -230,6 +257,7 @@ class NegotiationResponse:
 
     reason_code: str | None = None
     reason: str | None = None
+    details: dict[str, object] | None = None
 
     def to_dict(self) -> dict:
         """Return the response content (without hash)."""
@@ -244,6 +272,8 @@ class NegotiationResponse:
             result["reason_code"] = self.reason_code
         if self.reason is not None:
             result["reason"] = self.reason
+        if self.details is not None:
+            result["details"] = self.details
         return result
 
     def to_envelope(self) -> dict:
@@ -294,6 +324,7 @@ class NegotiationResponse:
             quote_expires_at=data.get("quote_expires_at"),
             reason_code=data.get("reason_code"),
             reason=data.get("reason"),
+            details=data.get("details"),
         )
 
     @classmethod
@@ -383,12 +414,13 @@ def _build_description_content(
         raise ValueError("Cannot build description from a rejected negotiation")
 
     response_terms = response.get("terms", {})
-    price = response_terms.get("price") or ""
-    currency = response_terms.get("currency") or ""
+    raw_price = response_terms.get("price")
+    currency = response_terms.get("currency")
 
-    if not price:
+    if raw_price is None:
         raise ValueError("Negotiation response missing price")
-    if not currency:
+    price = _normalize_atomic_price(raw_price)
+    if currency is None or currency == "":
         raise ValueError("Negotiation response missing currency")
 
     # Build terms section (quality fields only, no price/currency)
@@ -535,7 +567,7 @@ class NegotiationHandler:
 
     def __init__(
         self,
-        service_price: str,
+        service_price: str | int,
         currency: str,
         estimated_completion_seconds: int = 120,
         require_quality_standards: bool = True,
@@ -577,7 +609,7 @@ class NegotiationHandler:
                 f"got {quote_ttl_seconds}"
             )
 
-        self._service_price = service_price
+        self._service_price = _normalize_atomic_price(service_price, field_name="service_price")
         self._currency = currency
         self._estimated_completion = estimated_completion_seconds
         self._require_quality_standards = require_quality_standards
@@ -585,6 +617,10 @@ class NegotiationHandler:
         self._quote_ttl_seconds = quote_ttl_seconds
         self._chain_id = chain_id
         self._verifying_contract = verifying_contract
+        self._multi_asset = False
+        self._erc8183_client: ERC8183Client | None = None
+        self._configured_offers: dict[str, tuple[PaymentAsset, str]] = {}
+        self._active_offers: dict[str, tuple[PaymentAsset, str]] = {}
 
         if wallet_provider is not None and chain_id is None:
             logger.warning(
@@ -597,7 +633,7 @@ class NegotiationHandler:
     def from_erc8183_client(
         cls,
         erc8183_client: ERC8183Client,
-        service_price: str,
+        service_price: str | int,
         estimated_completion_seconds: int = 120,
         require_quality_standards: bool = True,
         wallet_provider: MessageSigner | None = None,
@@ -641,6 +677,109 @@ class NegotiationHandler:
             verifying_contract=erc8183_client.commerce.address,
         )
 
+    @classmethod
+    def from_erc8183_client_multi(
+        cls,
+        erc8183_client: ERC8183Client,
+        service_prices: Mapping[AssetId | str, str | int],
+        estimated_completion_seconds: int = 120,
+        require_quality_standards: bool = True,
+        wallet_provider: MessageSigner | None = None,
+        quote_ttl_seconds: int = 300,
+    ) -> NegotiationHandler:
+        """Build a catalog-bound multi-asset seller and load its active snapshot.
+
+        Mapping keys are canonical :class:`AssetId` values, never UI symbols or
+        token addresses. Values are non-negative atomic-unit integer strings.
+        Commerce support is checked immediately and can be refreshed later.
+        """
+        if not service_prices:
+            raise ValueError("service_prices must contain at least one canonical AssetId")
+
+        chain_id = erc8183_client.network.chain_id
+        configured: dict[str, tuple[PaymentAsset, str]] = {}
+        seen_ids: set[AssetId] = set()
+        for raw_asset_id, atomic_price in service_prices.items():
+            asset_id = parse_asset_id(raw_asset_id)
+            if asset_id in seen_ids:
+                raise ValueError(f"duplicate service price for AssetId {asset_id.value}")
+            normalized_price = _normalize_atomic_price(
+                atomic_price, field_name=f"service price for {asset_id.value}"
+            )
+            asset = get_asset(chain_id, asset_id)
+            configured[asset.address.lower()] = (asset, normalized_price)
+            seen_ids.add(asset_id)
+
+        defaults = tuple(asset for asset in list_assets(chain_id) if asset.is_default)
+        if len(defaults) != 1:
+            raise ValueError(
+                f"chain_id={chain_id} asset catalog must contain exactly one default asset"
+            )
+        default_currency = defaults[0].address
+        handler = cls(
+            service_price="0",
+            currency=default_currency,
+            estimated_completion_seconds=estimated_completion_seconds,
+            require_quality_standards=require_quality_standards,
+            wallet_provider=wallet_provider,
+            quote_ttl_seconds=quote_ttl_seconds,
+            chain_id=chain_id,
+            verifying_contract=erc8183_client.commerce.address,
+        )
+        handler._multi_asset = True
+        handler._erc8183_client = erc8183_client
+        handler._configured_offers = configured
+        handler.refresh_payment_tokens()
+        return handler
+
+    def refresh_payment_tokens(self) -> tuple[AssetId, ...]:
+        """Refresh active Commerce offers, clearing stale state on any failure."""
+        if not self._multi_asset or self._erc8183_client is None:
+            return ()
+
+        self._active_offers = {}
+        refreshed: dict[str, tuple[PaymentAsset, str]] = {}
+        try:
+            for address, offer in self._configured_offers.items():
+                if self._erc8183_client.is_payment_token_supported(offer[0].address):
+                    refreshed[address] = offer
+        except Exception as exc:
+            raise RuntimeError("payment-token refresh failed; active offers cleared") from exc
+        self._active_offers = refreshed
+        return tuple(offer[0].asset_id for offer in refreshed.values())
+
+    def _supported_details(self) -> dict[str, object]:
+        if not self._multi_asset:
+            return {"supported_assets": []}
+        return {
+            "supported_assets": [offer[0].asset_id.value for offer in self._active_offers.values()]
+        }
+
+    @staticmethod
+    def _currencies_equal(left: str, right: str) -> bool:
+        try:
+            return Web3.to_checksum_address(left) == Web3.to_checksum_address(right)
+        except (TypeError, ValueError):
+            return left == right
+
+    def _select_offer(self, requested_currency: str | None) -> tuple[str, str] | None:
+        if not self._multi_asset:
+            if requested_currency is not None and not self._currencies_equal(
+                requested_currency, self._currency
+            ):
+                return None
+            return self._currency, self._service_price
+
+        selected = requested_currency or self._currency
+        try:
+            selected_address = Web3.to_checksum_address(selected)
+        except (TypeError, ValueError):
+            return None
+        offer = self._active_offers.get(selected_address.lower())
+        if offer is None:
+            return None
+        return offer[0].address, offer[1]
+
     @staticmethod
     def _ensure_hex_prefix(h: str) -> str:
         """Ensure hash has 0x prefix."""
@@ -650,7 +789,7 @@ class NegotiationHandler:
         self,
         request_data: dict,
         *,
-        price: str | None = None,
+        price: str | int | None = None,
         estimated_completion_seconds: int | None = None,
     ) -> NegotiationResult:
         """
@@ -663,9 +802,11 @@ class NegotiationHandler:
         Args:
             request_data: The incoming request dict (task_description, terms, ...)
             price: Optional per-request price (token smallest-unit uint256
-                string) overriding the construction-time ``service_price`` for
-                this call only. Must be seller-controlled (e.g. an effort
-                estimate), NOT echoed from untrusted client input.
+                string or safe integer) overriding the construction-time
+                ``service_price`` for this call only. Available only to legacy
+                single-token handlers; multi-asset handlers must use their
+                per-asset ``service_prices``. Must be seller-controlled (e.g.
+                an effort estimate), NOT echoed from untrusted client input.
             estimated_completion_seconds: Optional per-request ETA override.
 
         Returns:
@@ -674,7 +815,7 @@ class NegotiationHandler:
         """
         try:
             req = NegotiationRequest.from_dict(request_data)
-        except (KeyError, TypeError) as e:
+        except (KeyError, TypeError, ValueError) as e:
             return self._reject(
                 request_data=request_data,
                 reason_code=ReasonCode.AMBIGUOUS_TERMS,
@@ -691,19 +832,59 @@ class NegotiationHandler:
                 reason="quality_standards is required in terms.",
             )
 
+        if self._multi_asset:
+            try:
+                self.refresh_payment_tokens()
+            except RuntimeError:
+                return self._reject(
+                    request_data=req.to_dict(),
+                    request_hash=request_hash,
+                    reason_code=ReasonCode.UNSUPPORTED,
+                    reason="Payment-token availability could not be verified",
+                    details=self._supported_details(),
+                )
+            if price is not None:
+                return self._reject(
+                    request_data=req.to_dict(),
+                    request_hash=request_hash,
+                    reason_code=ReasonCode.AMBIGUOUS_TERMS,
+                    reason="A single price override is not valid for multi-asset offers",
+                )
+
+        offer = self._select_offer(req.terms.currency)
+        if offer is None:
+            return self._reject(
+                request_data=req.to_dict(),
+                request_hash=request_hash,
+                reason_code=ReasonCode.UNSUPPORTED,
+                reason="Requested payment token is unavailable",
+                details=self._supported_details(),
+            )
+        selected_currency, configured_price = offer
+
         # Per-request overrides fall back to the construction-time defaults.
         if price is not None:
-            try:
-                if int(price) < 0:
-                    raise ValueError
-            except (TypeError, ValueError):
+            if isinstance(price, bool) or not isinstance(price, (str, int)):
                 return self._reject(
                     request_data=req.to_dict(),
                     request_hash=request_hash,
                     reason_code=ReasonCode.AMBIGUOUS_TERMS,
                     reason=f"price must be a non-negative integer string, got {price!r}",
                 )
-        effective_price = price if price is not None else self._service_price
+            try:
+                normalized_override = _normalize_atomic_price(price)
+            except ValueError:
+                return self._reject(
+                    request_data=req.to_dict(),
+                    request_hash=request_hash,
+                    reason_code=ReasonCode.AMBIGUOUS_TERMS,
+                    reason=f"price must be a non-negative integer string, got {price!r}",
+                )
+        else:
+            normalized_override = None
+        effective_price = (
+            normalized_override if normalized_override is not None else configured_price
+        )
         effective_eta = (
             estimated_completion_seconds
             if estimated_completion_seconds is not None
@@ -718,7 +899,7 @@ class NegotiationHandler:
             quality_standards=req.terms.quality_standards,
             success_criteria=req.terms.success_criteria,
             price=effective_price,
-            currency=self._currency,
+            currency=selected_currency,
         )
 
         response = NegotiationResponse(
@@ -818,12 +999,14 @@ class NegotiationHandler:
         reason_code: str,
         reason: str,
         request_hash: str = "",
+        details: dict[str, object] | None = None,
     ) -> NegotiationResult:
         """Build a rejection response."""
         response = NegotiationResponse(
             accepted=False,
             reason_code=reason_code,
             reason=reason,
+            details=details,
         )
         response_hash = self._ensure_hex_prefix(response.compute_hash()) if request_hash else ""
         return NegotiationResult(

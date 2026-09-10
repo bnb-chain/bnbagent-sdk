@@ -7,7 +7,10 @@ import pytest
 from bnbagent.networks import (
     BSC_MAINNET_CHAIN_ID,
     BSC_TESTNET_CHAIN_ID,
+    AssetId,
     get_address,
+    get_asset,
+    get_b402_asset,
 )
 from bnbagent.signing import (
     EIP3009_TYPES,
@@ -21,7 +24,8 @@ from bnbagent.signing import (
 # ── Fixtures ───────────────────────────────────────────────────────────────
 
 U_MAINNET = get_address(BSC_MAINNET_CHAIN_ID).payment_token
-U_TESTNET = get_address(BSC_TESTNET_CHAIN_ID).payment_token
+U_TESTNET = get_b402_asset(BSC_TESTNET_CHAIN_ID, AssetId.TEST_U).address
+USD1_MAINNET = get_asset(BSC_MAINNET_CHAIN_ID, AssetId.USD1)
 
 EIP712DOMAIN_FIELDS = [
     {"name": "name", "type": "string"},
@@ -98,9 +102,52 @@ def test_strict_default_allows_u_testnet_transfer_with_authorization():
     p = SigningPolicy.strict_default()
     pt = _twa_call(
         p,
-        domain_overrides={"chainId": BSC_TESTNET_CHAIN_ID, "verifyingContract": U_TESTNET},
+        domain_overrides={
+            "name": "U",
+            "chainId": BSC_TESTNET_CHAIN_ID,
+            "verifyingContract": U_TESTNET,
+        },
     )
     assert pt == "TransferWithAuthorization"
+
+
+def test_strict_default_allows_only_catalog_declared_eip3009_usd1_domains():
+    policy = SigningPolicy.strict_default()
+    assert policy.domain_allowlist == frozenset(
+        {
+            (BSC_MAINNET_CHAIN_ID, U_MAINNET),
+            (BSC_MAINNET_CHAIN_ID, USD1_MAINNET.address),
+            (BSC_TESTNET_CHAIN_ID, U_TESTNET),
+        }
+    )
+    assert (
+        _twa_call(
+            policy,
+            domain_overrides={
+                "name": "World Liberty Financial USD",
+                "chainId": BSC_MAINNET_CHAIN_ID,
+                "verifyingContract": USD1_MAINNET.address,
+            },
+        )
+        == "TransferWithAuthorization"
+    )
+    with pytest.raises(PolicyViolation, match="not in allowlist"):
+        _twa_call(
+            policy,
+            domain_overrides={
+                "chainId": BSC_TESTNET_CHAIN_ID,
+                "verifyingContract": USD1_MAINNET.address,
+            },
+        )
+    with pytest.raises(PolicyViolation, match="not in allowlist"):
+        _twa_call(
+            policy,
+            domain_overrides={"verifyingContract": "0x" + "1" * 40},
+        )
+    assert (
+        BSC_TESTNET_CHAIN_ID,
+        "0x0000000000000000000000000000000000000000",
+    ) not in policy.domain_allowlist
 
 
 def test_strict_default_rejects_unknown_verifying_contract():
@@ -109,6 +156,16 @@ def test_strict_default_rejects_unknown_verifying_contract():
         _twa_call(p, domain_overrides={"verifyingContract": "0x" + "1" * 40})
     assert exc.value.primary_type == "TransferWithAuthorization"
     assert exc.value.chain_id == BSC_MAINNET_CHAIN_ID
+
+
+@pytest.mark.parametrize("asset_id", [AssetId.BINANCE_PEG_USDC, AssetId.BINANCE_PEG_USDT])
+def test_strict_default_does_not_treat_catalog_stablecoins_as_eip3009(asset_id):
+    token = get_asset(BSC_MAINNET_CHAIN_ID, asset_id)
+    with pytest.raises(PolicyViolation, match="not in allowlist"):
+        _twa_call(
+            SigningPolicy.strict_default(),
+            domain_overrides={"verifyingContract": token.address},
+        )
 
 
 def test_strict_default_rejects_unknown_chain_id():
@@ -151,6 +208,22 @@ def test_strict_default_rejects_permit2_permit_single():
     types = {"EIP712Domain": EIP712DOMAIN_FIELDS, "PermitSingle": PERMIT_FIELDS}
     with pytest.raises(PolicyViolation, match="denylisted"):
         check(p, domain, types, {}, now=NOW)
+
+
+def test_strict_default_rejects_permit2_signature_transfer_primary_type():
+    token = get_asset(BSC_MAINNET_CHAIN_ID, AssetId.BINANCE_PEG_USDC)
+    domain = {
+        "name": "Permit2",
+        "version": "1",
+        "chainId": BSC_MAINNET_CHAIN_ID,
+        "verifyingContract": token.address,
+    }
+    types = {
+        "EIP712Domain": EIP712DOMAIN_FIELDS,
+        "PermitTransferFrom": [{"name": "nonce", "type": "uint256"}],
+    }
+    with pytest.raises(PolicyViolation, match="not in allowlist"):
+        check(SigningPolicy.strict_default(), domain, types, {"nonce": 1}, now=NOW)
 
 
 def test_denylist_takes_precedence_over_allowlist():
@@ -567,7 +640,7 @@ def test_str_contains_canonical_sections():
     p = SigningPolicy.strict_default()
     s = str(p)
     assert "SigningPolicy(" in s
-    assert "domain_allowlist (2 entries)" in s
+    assert "domain_allowlist (3 entries)" in s
     assert "TransferWithAuthorization" in s
     assert "Permit" in s
     assert "allow_unknown_domain=False" in s

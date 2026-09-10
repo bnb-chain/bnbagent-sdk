@@ -35,6 +35,7 @@ describe("Tier 1 public API (src/index.ts)", () => {
       "NetworkError",
       "RpcRangeLimitError",
       "JobError",
+      "JobPaymentTokenMismatchError",
       "NegotiationError",
       "TransactionPendingError",
       "ERC8004PartialRegistrationError",
@@ -137,6 +138,7 @@ describe("Tier 2 subpath: ./erc8183", () => {
     expect(typeof Erc8183.NegotiationHandler).toBe("function");
     expect(typeof Erc8183.DeliverableManifest).toBe("function");
     expect(typeof Erc8183.JobDescription).toBe("function");
+    expect(typeof Erc8183.JobPaymentTokenMismatchError).toBe("function");
     expect(typeof Erc8183.SCHEMA_VERSION).toBe("number");
     expect(typeof Erc8183.NegotiationRequest).toBe("function");
     expect(typeof Erc8183.NegotiationResponse).toBe("function");

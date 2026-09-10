@@ -21,6 +21,7 @@ from ..wallets.intents import (
     ERC8183_CLAIM_REFUND,
     ERC8183_COMPLETE,
     ERC8183_CREATE_JOB,
+    ERC8183_CREATE_JOB_WITH_TOKEN,
     ERC8183_FUND,
     ERC8183_REJECT,
     ERC8183_SET_BUDGET,
@@ -117,6 +118,47 @@ class CommerceClient(ContractClientMixin):
                 description="create job",
             )
         )
+        return self._recover_created_job_id(result)
+
+    def create_job_with_token(
+        self,
+        *,
+        provider: str,
+        evaluator: str,
+        expired_at: int,
+        description: str,
+        hook: str,
+        token: str,
+    ) -> dict[str, Any]:
+        """Create an ``Open`` job bound to an explicitly selected token."""
+        token_address = Web3.to_checksum_address(token)
+        fn = self.contract.functions.createJobWithToken(
+            Web3.to_checksum_address(provider),
+            Web3.to_checksum_address(evaluator),
+            expired_at,
+            description,
+            Web3.to_checksum_address(hook),
+            token_address,
+        )
+        result = self._execute_intent(
+            Intent(
+                name=ERC8183_CREATE_JOB_WITH_TOKEN,
+                kwargs={
+                    "provider": provider,
+                    "evaluator": evaluator,
+                    "expired_at": expired_at,
+                    "description": description,
+                    "hook": hook,
+                    "token": token_address,
+                },
+                call=fn,
+                description="create job with token",
+            )
+        )
+        return self._recover_created_job_id(result)
+
+    def _recover_created_job_id(self, result: dict[str, Any]) -> dict[str, Any]:
+        """Fill ``jobId`` from ``JobCreated`` when a backend returns a receipt."""
         # Semantic backends surface jobId directly; the local path parses it
         # from the JobCreated event in the receipt.
         if result.get("jobId") is None and result.get("receipt") is not None:
@@ -262,7 +304,20 @@ class CommerceClient(ContractClientMixin):
         return self._call_with_retry(self.contract.functions.jobCounter())
 
     def payment_token(self) -> str:
-        return self._call_with_retry(self.contract.functions.paymentToken())
+        return Web3.to_checksum_address(
+            self._call_with_retry(self.contract.functions.paymentToken())
+        )
+
+    def job_payment_token(self, job_id: int) -> str:
+        return Web3.to_checksum_address(
+            self._call_with_retry(self.contract.functions.jobPaymentToken(job_id))
+        )
+
+    def is_payment_token_supported(self, token: str) -> bool:
+        token_address = Web3.to_checksum_address(token)
+        return self._call_with_retry(
+            self.contract.functions.isPaymentTokenSupported(token_address)
+        )
 
     def platform_fee_bp(self) -> int:
         return self._call_with_retry(self.contract.functions.platformFeeBP())

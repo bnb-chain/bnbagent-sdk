@@ -34,6 +34,7 @@
  * EOA signature there).
  */
 
+import { getAddress, isAddress } from "viem";
 import { SessionBudgetTracker } from "../../x402/budget.js";
 import {
   X402AmountExceededError,
@@ -41,6 +42,9 @@ import {
   X402RecipientMismatchError,
 } from "../../x402/errors.js";
 import type {
+  ExpectedX402Route,
+  X402ExactPaymentResult,
+  X402ExactRequestOptions,
   X402Payer,
   X402PaymentOption,
   X402PaymentResult,
@@ -169,6 +173,113 @@ export function selectX402Route(
   const rank = (r: ParsedRoute) =>
     (isPermit2Route(r.option) ? 0 : 2) + (r.option.preferred ? 0 : 1);
   return [...candidates].sort((a, b) => rank(a) - rank(b))[0] ?? null;
+}
+
+function exactPermit2RouteMatches(
+  candidate: ParsedRoute,
+  expected: Extract<
+    ExpectedX402Route,
+    { readonly transferMethod: "permit2-exact" }
+  >,
+  trustedSpenders: ReadonlySet<string>,
+): boolean {
+  const { raw } = candidate;
+  const extra =
+    typeof raw.extra === "object" &&
+    raw.extra !== null &&
+    !Array.isArray(raw.extra)
+      ? (raw.extra as Record<string, unknown>)
+      : null;
+  if (extra === null) return false;
+  const rawAmount = raw.amount ?? raw.maxAmountRequired;
+  if (
+    (raw.amount !== undefined && raw.maxAmountRequired !== undefined) ||
+    typeof rawAmount !== "string" ||
+    !/^[1-9]\d*$/.test(rawAmount)
+  ) {
+    return false;
+  }
+  try {
+    const spender = getAddress(String(extra.spenderAddress ?? ""));
+    return (
+      raw.scheme === expected.scheme &&
+      raw.network === expected.network &&
+      typeof raw.asset === "string" &&
+      getAddress(raw.asset) === getAddress(expected.asset) &&
+      BigInt(rawAmount) === expected.amount &&
+      typeof raw.payTo === "string" &&
+      getAddress(raw.payTo) === getAddress(expected.payTo) &&
+      raw.maxTimeoutSeconds === expected.maxTimeoutSeconds &&
+      (raw.transferMethod === undefined ||
+        raw.transferMethod === expected.transferMethod) &&
+      extra.assetTransferMethod === expected.transferMethod &&
+      extra.name === expected.name &&
+      extra.version === expected.version &&
+      spender === getAddress(expected.spenderAddress) &&
+      trustedSpenders.has(spender.toLowerCase())
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Stable, lossless-for-JSON encoding used only to compare resource bindings. */
+function canonicalJson(value: unknown): string | null {
+  if (value === null) return "null";
+  if (typeof value === "string" || typeof value === "boolean") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? JSON.stringify(value) : null;
+  }
+  if (Array.isArray(value)) {
+    const encoded = value.map(canonicalJson);
+    return encoded.every((entry): entry is string => entry !== null)
+      ? `[${encoded.join(",")}]`
+      : null;
+  }
+  if (typeof value !== "object" || value === null) return null;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return null;
+  const entries: string[] = [];
+  for (const key of Object.keys(value).sort()) {
+    const item = (value as Record<string, unknown>)[key];
+    // JSON.stringify omits undefined object properties. Mirror that here so
+    // a typed optional field and its omission have one canonical binding.
+    if (item === undefined) continue;
+    const encoded = canonicalJson(item);
+    if (encoded === null) return null;
+    entries.push(`${JSON.stringify(key)}:${encoded}`);
+  }
+  return `{${entries.join(",")}}`;
+}
+
+function exactResourceMatches(
+  actual: unknown,
+  expected: ExpectedX402Route["resource"],
+): boolean {
+  const resourceHasValidKnownFields = (value: unknown): boolean => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return false;
+    }
+    const record = value as Record<string, unknown>;
+    return (
+      typeof record.url === "string" &&
+      record.url.length > 0 &&
+      (record.description === undefined ||
+        typeof record.description === "string") &&
+      (record.mimeType === undefined || typeof record.mimeType === "string")
+    );
+  };
+  if (
+    !resourceHasValidKnownFields(actual) ||
+    !resourceHasValidKnownFields(expected)
+  ) {
+    return false;
+  }
+  const actualCanonical = canonicalJson(actual);
+  const expectedCanonical = canonicalJson(expected);
+  return actualCanonical !== null && actualCanonical === expectedCanonical;
 }
 
 /** Constructor options for {@link AltanaX402Payer}. */
@@ -310,6 +421,7 @@ function transactionFromResponse(response: Response): string | undefined {
  * (see module docstring). Construct via `provider.makeX402Payer()`.
  */
 export class AltanaX402Payer implements X402Payer {
+  readonly exactTransferMethods = ["permit2-exact"] as const;
   readonly #provider: AltanaWalletProvider;
   readonly #budget: SessionBudgetTracker;
   readonly #expectedAsset: string | undefined;
@@ -353,6 +465,179 @@ export class AltanaX402Payer implements X402Payer {
       );
     }
     return parseX402Challenge(url, body).quote;
+  }
+
+  /**
+   * Atomically pay the caller-bound Permit2 route. The challenge is fetched
+   * once; the exact raw entry validated below is the entry passed to Altana
+   * for signing, so no second selection or quote/pay drift is possible.
+   */
+  async requestExact(
+    url: string,
+    opts: X402ExactRequestOptions,
+  ): Promise<X402ExactPaymentResult> {
+    const expected = opts.expectedRoute;
+    if (
+      expected.x402Version !== 2 ||
+      expected.scheme !== "exact" ||
+      expected.transferMethod !== "permit2-exact" ||
+      !/^eip155:\d+$/.test(expected.network) ||
+      !isAddress(expected.asset) ||
+      !isAddress(expected.payTo) ||
+      !isAddress(expected.spenderAddress) ||
+      expected.amount <= 0n ||
+      !Number.isSafeInteger(expected.maxTimeoutSeconds) ||
+      expected.maxTimeoutSeconds <= 0 ||
+      expected.name.length === 0 ||
+      expected.version.length === 0
+    ) {
+      throw new X402NoPayableRouteError("invalid expected x402 route binding");
+    }
+    if (
+      expected.resource.url !== url ||
+      !exactResourceMatches(expected.resource, expected.resource)
+    ) {
+      throw new X402NoPayableRouteError(
+        "invalid expected x402 resource binding",
+      );
+    }
+    let trustedSpenders: Set<string>;
+    try {
+      trustedSpenders = new Set(
+        expected.trustedSpenders.map((spender) =>
+          getAddress(spender).toLowerCase(),
+        ),
+      );
+    } catch {
+      throw new X402NoPayableRouteError(
+        "expected x402 route contains an invalid trusted spender",
+      );
+    }
+    if (
+      trustedSpenders.size === 0 ||
+      !trustedSpenders.has(getAddress(expected.spenderAddress).toLowerCase())
+    ) {
+      throw new X402NoPayableRouteError(
+        "expected x402 Permit2 proxy is outside trustedSpenders",
+      );
+    }
+    const chainId = await this.#provider._x402ChainId();
+    if (expected.network !== `eip155:${chainId}`) {
+      throw new X402NoPayableRouteError(
+        `expected x402 route ${expected.network} is not on wallet chain ${chainId}`,
+      );
+    }
+    if (
+      this.#expectedAsset !== undefined &&
+      expected.asset.toLowerCase() !== this.#expectedAsset.toLowerCase()
+    ) {
+      throw new X402NoPayableRouteError(
+        "expected x402 route conflicts with the payer asset pin",
+      );
+    }
+    if (
+      this.#expectedPayTo !== undefined &&
+      expected.payTo.toLowerCase() !== this.#expectedPayTo.toLowerCase()
+    ) {
+      throw new X402RecipientMismatchError(
+        `expected payTo ${expected.payTo} != payer pin ${this.#expectedPayTo}`,
+      );
+    }
+    if (expected.amount > opts.maxPayment) {
+      throw new X402AmountExceededError(
+        `expected x402 amount ${expected.amount} exceeds maxPayment ${opts.maxPayment}`,
+      );
+    }
+
+    const method = opts.method ?? "GET";
+    const init: RequestInit = {
+      method,
+      ...(opts.body !== undefined ? { body: opts.body } : {}),
+    };
+    const first = await this.#fetch(url, init);
+    if (first.status !== 402) {
+      const response = await parseBody(first);
+      if (first.ok) {
+        return { paid: false, cacheHit: true, response };
+      }
+      throw new X402NoPayableRouteError(
+        `exact x402 request expected HTTP 402 or 2xx, got ${first.status}`,
+      );
+    }
+    const parsed = await parseBody(first);
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      throw new X402NoPayableRouteError(
+        "exact x402 challenge is not a JSON object",
+      );
+    }
+    const challengeBody = parsed as Record<string, unknown>;
+    if (challengeBody.x402Version !== expected.x402Version) {
+      throw new X402NoPayableRouteError(
+        "x402 challenge version does not match the exact route binding",
+      );
+    }
+    if (!exactResourceMatches(challengeBody.resource, expected.resource)) {
+      throw new X402NoPayableRouteError(
+        "x402 challenge resource does not match the exact route binding",
+      );
+    }
+    const { routes } = parseX402Challenge(url, challengeBody);
+    const route = routes.find((candidate) =>
+      exactPermit2RouteMatches(candidate, expected, trustedSpenders),
+    );
+    if (route === undefined) {
+      throw new X402NoPayableRouteError(
+        "x402 challenge has no route matching the exact trusted binding",
+      );
+    }
+
+    const resource = challengeBody.resource;
+    const requirement: Record<string, unknown> = {
+      ...route.raw,
+      x402Version: expected.x402Version,
+      ...(resource !== undefined && resource !== null ? { resource } : {}),
+    };
+    this.#budget.reserve(expected.asset, expected.amount);
+    try {
+      const { header: signedHeader } =
+        await this.#provider._signX402Payment(requirement);
+      const header = normalizeX402PaymentHeader(signedHeader, {
+        x402Version: expected.x402Version,
+        resource,
+      });
+      const paid = await this.#fetch(url, {
+        ...init,
+        headers: {
+          [X_PAYMENT_HEADER]: header,
+          [PAYMENT_SIGNATURE_HEADER]: header,
+        },
+      });
+      if (!paid.ok) {
+        throw new Error(
+          `x402 payment for ${url} was signed but the paid retry failed: HTTP ${paid.status} (amount ${expected.amount}, asset ${expected.asset})`,
+        );
+      }
+      const transaction = transactionFromResponse(paid);
+      return {
+        paid: true,
+        success: true,
+        response: await parseBody(paid),
+        amount: expected.amount,
+        asset: expected.asset,
+        network: expected.network,
+        payTo: expected.payTo,
+        transferMethod: expected.transferMethod,
+        spenderAddress: expected.spenderAddress,
+        ...(transaction ? { transaction } : {}),
+      };
+    } catch (error) {
+      this.#budget.rollback(expected.asset, expected.amount);
+      throw error;
+    }
   }
 
   /**

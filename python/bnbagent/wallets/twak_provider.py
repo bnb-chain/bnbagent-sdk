@@ -99,6 +99,7 @@ from .intents import (
     ERC8183_CLAIM_REFUND,
     ERC8183_COMPLETE,
     ERC8183_CREATE_JOB,
+    ERC8183_CREATE_JOB_WITH_TOKEN,
     ERC8183_DISPUTE,
     ERC8183_FUND,
     ERC8183_MARK_EXPIRED,
@@ -116,6 +117,30 @@ from .intents import (
 from .wallet_provider import WalletProvider
 
 logger = logging.getLogger(__name__)
+
+
+def _is_cli_parser_error(message: str, *, flag: str | None = None) -> bool:
+    """Match explicit CLI-parser diagnostics, never transaction/revert text."""
+    prefixes = (
+        "unknown command",
+        "unknown option",
+        "unknown argument",
+        "unknown flag",
+        "unrecognized option",
+        "unrecognized argument",
+        "unexpected option",
+        "unexpected argument",
+    )
+    for line in message.lower().splitlines():
+        detail = line.strip()
+        if detail.startswith("twak command failed (") and "): " in detail:
+            detail = detail.split("): ", 1)[1]
+        if detail.startswith("error:"):
+            detail = detail.removeprefix("error:").strip()
+        if detail.startswith(prefixes) and (flag is None or flag.lower() in detail):
+            return True
+    return False
+
 
 DEFAULT_TWAK_BIN = "twak"
 DEFAULT_TIMEOUT = 120  # seconds per CLI invocation
@@ -188,6 +213,7 @@ def _reject_sensitive_argv_url(url: str) -> None:
                 "the CLI receives URLs through process argv"
             )
 
+
 _NETWORK_FOR_TWAK_CHAIN = {
     "bsc": "bsc-mainnet",
     "bsctestnet": "bsc-testnet",
@@ -198,6 +224,7 @@ _CONTRACT_FIELD_BY_INTENT = {
     ERC8004_SET_METADATA: "registry_contract",
     ERC8004_SET_AGENT_URI: "registry_contract",
     ERC8183_CREATE_JOB: "commerce_contract",
+    ERC8183_CREATE_JOB_WITH_TOKEN: "commerce_contract",
     ERC8183_SET_PROVIDER: "commerce_contract",
     ERC8183_SET_BUDGET: "commerce_contract",
     ERC8183_FUND: "commerce_contract",
@@ -381,8 +408,8 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         # "unknown command/option" means the installed twak predates the
         # command surface this provider targets — point at the upgrade, not
         # at the (irrelevant) setup steps.
-        combined = f"{stderr} {stdout}"
-        if "unknown command" in combined or "unknown option" in combined:
+        combined = f"{stderr}\n{stdout}"
+        if _is_cli_parser_error(combined):
             hint = (
                 "The installed twak CLI does not recognise this command/option "
                 "— upgrade twak to >= v0.20.0 (`npm install -g @trustwallet/cli`)."
@@ -898,6 +925,48 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         # (uint256 args) don't blow up on a str.
         return self._tx_result(data, jobId=_as_int(data.get("jobId")))
 
+    def _create_job_with_token(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Create a token-bound job without degrading to legacy ``createJob``.
+
+        ``--payment-token`` is intentionally a high-level CLI argument: TWAK
+        remains the builder/signer/broadcaster and the already checksummed
+        catalog address stays visible at its semantic boundary. Older CLIs
+        fail the flag explicitly and are mapped to a typed capability error.
+        """
+        args = [
+            "erc8183",
+            "create-job",
+            "--provider",
+            kwargs["provider"],
+            "--evaluator",
+            kwargs["evaluator"],
+            "--expires-at",
+            str(kwargs["expired_at"]),
+            "--description",
+            kwargs["description"],
+        ]
+        hook = kwargs.get("hook")
+        if hook and hook.lower() != _ZERO_ADDRESS:
+            args += ["--hook", hook]
+        args += ["--payment-token", kwargs["token"]]
+        try:
+            data = self._run([*args, *self._paymaster_args(), "--chain", self._chain])
+        except RuntimeError as exc:
+            message = str(exc)
+            if _is_cli_parser_error(message, flag="--payment-token"):
+                raise UnsupportedWalletOperation(
+                    "erc8183.create_job_with_token",
+                    reason=(
+                        "upgrade twak to a version that supports the "
+                        "--payment-token capability; the installed CLI cannot "
+                        "safely create a token-bound job"
+                    ),
+                    alternative="upgrade TWAK or use an EVM/Turnkey wallet",
+                    ref="docs/twak.md",
+                ) from exc
+            raise
+        return self._tx_result(data, jobId=_as_int(data.get("jobId")))
+
     def _set_provider(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         return self._erc8183(
             "set-provider",
@@ -994,6 +1063,7 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         ERC8004_SET_METADATA: _set_metadata,
         ERC8004_SET_AGENT_URI: _set_agent_uri,
         ERC8183_CREATE_JOB: _create_job,
+        ERC8183_CREATE_JOB_WITH_TOKEN: _create_job_with_token,
         ERC8183_SET_PROVIDER: _set_provider,
         ERC8183_SET_BUDGET: _set_budget,
         ERC8183_FUND: _fund,

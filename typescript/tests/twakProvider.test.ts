@@ -39,6 +39,7 @@ import {
   ERC8183_CLAIM_REFUND,
   ERC8183_COMPLETE,
   ERC8183_CREATE_JOB,
+  ERC8183_CREATE_JOB_WITH_TOKEN,
   ERC8183_DISPUTE,
   ERC8183_FUND,
   ERC8183_MARK_EXPIRED,
@@ -67,6 +68,7 @@ const WALLET = ACCOUNT.address;
 const PROVIDER_ADDR = `0x${"11".repeat(20)}`;
 const EVALUATOR_ADDR = `0x${"22".repeat(20)}`;
 const POLICY_ADDR = `0x${"44".repeat(20)}`;
+const TOKEN_ADDR = `0x${"55".repeat(20)}`;
 const ZERO_ADDRESS = `0x${"00".repeat(20)}`;
 const PM_URL = "https://bsc-megafuel-testnet.nodereal.io";
 
@@ -169,6 +171,101 @@ describe("TWAKProvider — construction and capabilities", () => {
   it("sets fundBundlesApproval to the literal true (the ERC8183Client gate is ===)", () => {
     expect(new TWAKProvider().fundBundlesApproval).toBe(true);
   });
+});
+
+describe("TWAKProvider — token-bound ERC-8183 creation", () => {
+  const intent = () => ({
+    name: ERC8183_CREATE_JOB_WITH_TOKEN,
+    kwargs: {
+      provider: PROVIDER_ADDR,
+      evaluator: EVALUATOR_ADDR,
+      expiredAt: 1_800_000_000n,
+      description: "multi asset job",
+      hook: ZERO_ADDRESS,
+      token: TOKEN_ADDR,
+    },
+  });
+
+  it("passes the exact payment token to twak and preserves the jobId envelope", async () => {
+    const calls = standardRouter({ ...TX_OUT, jobId: "151" });
+    const result = await new TWAKProvider().execute(intent());
+
+    expect(result.jobId).toBe(151n);
+    expect(calls[1]).toEqual([
+      "erc8183",
+      "create-job",
+      "--provider",
+      PROVIDER_ADDR,
+      "--evaluator",
+      EVALUATOR_ADDR,
+      "--expires-at",
+      "1800000000",
+      "--description",
+      "multi asset job",
+      "--payment-token",
+      TOKEN_ADDR,
+      "--chain",
+      "bsc",
+      "--json",
+    ]);
+  });
+
+  it.each([
+    "error: unknown option '--payment-token'",
+    "Error: Unknown option '--payment-token'",
+    "error: unrecognized option '--payment-token'",
+    "error: unexpected argument '--payment-token' found",
+    "error: unknown flag: --payment-token",
+    "Error: Unknown flag '--payment-token'",
+  ])(
+    "maps an old CLI surface (%s) to typed upgrade guidance",
+    async (cliError) => {
+      const calls = installRouter((args) =>
+        args[0] === "wallet" && args[1] === "status"
+          ? STATUS_OK
+          : { code: 1, stderr: cliError },
+      );
+
+      await expect(new TWAKProvider().execute(intent())).rejects.toMatchObject({
+        name: "UnsupportedWalletOperation",
+        message: expect.stringMatching(/upgrade twak.*payment-token/i),
+      });
+      expect(calls.some((call) => call.includes("--payment-token"))).toBe(true);
+    },
+  );
+
+  it.each([
+    "execution reverted: UnsupportedPaymentToken",
+    "execution reverted: unknown command opcode",
+    "execution reverted: memo contains unknown flag: --payment-token",
+    "error: unknown flag: --some-other-flag",
+  ])(
+    "keeps genuine transaction failure (%s) in the normal classification",
+    async (transactionError) => {
+      const calls = installRouter((args) =>
+        args[0] === "wallet" && args[1] === "status"
+          ? STATUS_OK
+          : {
+              code: 1,
+              stdout: JSON.stringify({
+                success: false,
+                error: transactionError,
+              }),
+            },
+      );
+
+      let thrown: unknown;
+      try {
+        await new TWAKProvider().execute(intent());
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(Error);
+      expect(thrown).not.toBeInstanceOf(UnsupportedWalletOperation);
+      expect((thrown as Error).message).toContain(transactionError);
+      expect(calls.some((call) => call.includes("--payment-token"))).toBe(true);
+    },
+  );
 });
 
 // ── address, identity pin, existence ──
@@ -443,6 +540,7 @@ describe("TWAKProvider — erc8183 intent argv", () => {
 
   const customErc8183ContractCases = [
     [ERC8183_CREATE_JOB, NETWORKS["bsc-mainnet"].commerceContract],
+    [ERC8183_CREATE_JOB_WITH_TOKEN, NETWORKS["bsc-mainnet"].commerceContract],
     [ERC8183_SET_PROVIDER, NETWORKS["bsc-mainnet"].commerceContract],
     [ERC8183_SET_BUDGET, NETWORKS["bsc-mainnet"].commerceContract],
     [ERC8183_FUND, NETWORKS["bsc-mainnet"].commerceContract],
@@ -869,6 +967,11 @@ function x402Router(): string[][] {
 }
 
 describe("TwakX402Payer", () => {
+  it("does not claim atomic exact-route payment support", () => {
+    const payer = new TWAKProvider().makeX402Payer(PAYER_OPTS);
+    expect("requestExact" in payer).toBe(false);
+  });
+
   it("requires valid trusted recipient and asset anchors", () => {
     const provider = new TWAKProvider();
     expect(() =>

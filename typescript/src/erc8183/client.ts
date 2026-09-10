@@ -23,17 +23,16 @@
  * - Network configuration goes through a single `network` argument that
  *   accepts either a preset name (`"bsc-testnet"`) or a `NetworkConfig`
  *   object for custom deployments (local forks, private RPCs, etc.).
- * - Payment token address is NOT a configuration input — it is immutable
- *   on the kernel and fetched lazily via `commerce.paymentToken()`.
- * - `fund` uses a **floor-based** approval strategy (see {@link fund}'s
- *   docstring). Default floor is `100 * 10**decimals`, which assumes a
- *   stablecoin payment token.
+ * - The default payment token remains available through `paymentToken()`,
+ *   while each job's authoritative token comes from `jobPaymentToken(jobId)`.
+ * - `fund` defaults to exact approval on the job-bound token. A larger floor
+ *   is available only through explicit legacy opt-in.
  *
  * Port of `python/bnbagent/erc8183/client.py`.
  */
 
 import type { PublicClient } from "viem";
-import { stringToHex } from "viem";
+import { getAddress, isAddress, stringToHex } from "viem";
 import type { NetworkConfig } from "../config.js";
 import { canonicalJson } from "../core/canonicalJson.js";
 import { createPublicClientFor } from "../core/clients.js";
@@ -41,11 +40,20 @@ import { READ_ONLY_MESSAGE } from "../core/contractBase.js";
 import { Paymaster } from "../core/paymaster.js";
 import { describeError } from "../core/txSender.js";
 import { MinimalERC20Client } from "../erc20/client.js";
+import { JobPaymentTokenMismatchError } from "../errors.js";
+import {
+  type AssetId,
+  getAsset,
+  getAssetByAddress,
+  listAssets,
+  parseAssetId,
+} from "../networks/assets.js";
 import type { TxResult } from "../wallets/intents.js";
 import type { WalletProvider } from "../wallets/walletProvider.js";
 import { CommerceClient, type CreateJobResult } from "./commerce.js";
 import { resolveErc8183Network } from "./constants.js";
 import { PolicyClient } from "./policy.js";
+import { type QuoteSigVerdict, verifyQuoteSignature } from "./quoteVerify.js";
 import { RouterClient } from "./router.js";
 import {
   type Job,
@@ -56,12 +64,21 @@ import {
 } from "./types.js";
 
 /**
- * Default floor for auto-approval in {@link ERC8183Client.fund}, expressed
- * in whole token units. Multiplied by `10 ** tokenDecimals()` at call time.
- * Assumes a stablecoin payment token; non-stable deployments should pass
- * `approveFloor: 0n` (exact) or a custom floor.
+ * Legacy convenience value for callers constructing an explicit
+ * `approveFloor`. {@link ERC8183Client.fund} defaults to exact approval and
+ * never applies this constant automatically. `approveFloor` is an atomic-unit
+ * `bigint`; callers wanting a floor of 100 whole tokens must multiply this
+ * value by `10n ** BigInt(tokenDecimals)` themselves.
  */
 export const DEFAULT_APPROVE_FLOOR_UNITS = 100n;
+
+export type TokenReference = AssetId | string;
+
+export interface TokenMetadata {
+  readonly address: `0x${string}`;
+  readonly decimals: number;
+  readonly symbol: string;
+}
 
 /**
  * Chain IDs where MegaFuel sponsors ERC-8183 writes, so `ERC8183Client`
@@ -104,8 +121,14 @@ export interface CreateJobFacadeOpts {
   skipExpiryCheck?: boolean;
 }
 
+/** Options accepted by {@link ERC8183Client.createJobWithToken}. */
+export interface CreateJobWithTokenFacadeOpts extends CreateJobFacadeOpts {
+  asset: TokenReference;
+}
+
 /** Options accepted by {@link ERC8183Client.fund}. */
 export interface FundOpts {
+  expectedToken?: TokenReference;
   approveFloor?: bigint;
 }
 
@@ -126,6 +149,16 @@ export interface GetJobFundedBlockOpts {
   quoteExpiresAt: number;
 }
 
+/** Trusted Buyer-side expectations for provider quote verification. */
+export interface VerifyNegotiationQuoteOpts {
+  /** Provider obtained out-of-band (for example from ERC-8004 discovery). */
+  expectedProvider: string;
+  /** Explicit Buyer selection. Omit only for the legacy Commerce-default path. */
+  expectedCurrency?: TokenReference;
+  /** Historical acceptance block for ERC-1271 and expiry verification. */
+  blockNumber?: bigint;
+}
+
 /**
  * High-level facade over Commerce + Router + Policy.
  *
@@ -142,11 +175,12 @@ export class ERC8183Client {
   private readonly walletProvider: WalletProvider | null;
   private readonly debug: boolean;
 
-  // Cached payment-token state (populated lazily).
+  // Cached token state (populated lazily and keyed by checksum address).
   private paymentTokenAddress: `0x${string}` | null = null;
-  private paymentTokenDecimals: number | null = null;
-  private paymentTokenSymbol: string | null = null;
-  private erc20: MinimalERC20Client | null = null;
+  private readonly erc20Clients = new Map<`0x${string}`, MinimalERC20Client>();
+  private readonly tokenDecimalsCache = new Map<`0x${string}`, number>();
+  private readonly tokenSymbolsCache = new Map<`0x${string}`, string>();
+  private readonly tokenMetadataCache = new Map<`0x${string}`, TokenMetadata>();
 
   private constructor(opts: {
     client: PublicClient;
@@ -284,45 +318,117 @@ export class ERC8183Client {
   /** Payment token address (cached forever). Fetched from `commerce.paymentToken`. */
   async paymentToken(): Promise<`0x${string}`> {
     if (this.paymentTokenAddress === null) {
-      this.paymentTokenAddress = await this.commerce.paymentToken();
+      this.paymentTokenAddress = getAddress(await this.commerce.paymentToken());
     }
     return this.paymentTokenAddress;
   }
 
-  private async erc20Client(): Promise<MinimalERC20Client> {
-    if (!this.erc20) {
-      const token = await this.paymentToken();
-      this.erc20 = new MinimalERC20Client(
-        this.client,
-        token,
-        this.walletProvider,
-      );
+  private resolveTokenAddress(token: TokenReference): `0x${string}` {
+    if (typeof token !== "string") {
+      throw new TypeError("token must be a canonical AssetId or address");
     }
-    return this.erc20;
+    if (isAddress(token)) {
+      return getAddress(token);
+    }
+    return getAsset(this.network.chainId, parseAssetId(token)).address;
   }
 
-  async tokenDecimals(): Promise<number> {
-    if (this.paymentTokenDecimals === null) {
-      this.paymentTokenDecimals = await (await this.erc20Client()).decimals();
+  private resolveJobCreationToken(token: TokenReference): `0x${string}` {
+    const address = this.resolveTokenAddress(token);
+    try {
+      listAssets(this.network.chainId);
+    } catch {
+      return address;
     }
-    return this.paymentTokenDecimals;
+    return getAssetByAddress(this.network.chainId, address).address;
   }
 
-  async tokenSymbol(): Promise<string> {
-    if (this.paymentTokenSymbol === null) {
-      this.paymentTokenSymbol = await (await this.erc20Client()).symbol();
+  private async erc20Client(
+    token?: TokenReference,
+  ): Promise<MinimalERC20Client> {
+    const address =
+      token === undefined
+        ? await this.paymentToken()
+        : this.resolveTokenAddress(token);
+    let erc20 = this.erc20Clients.get(address);
+    if (!erc20) {
+      erc20 = new MinimalERC20Client(this.client, address, this.walletProvider);
+      this.erc20Clients.set(address, erc20);
     }
-    return this.paymentTokenSymbol;
+    return erc20;
+  }
+
+  async tokenMetadata(token: TokenReference): Promise<TokenMetadata> {
+    const address = this.resolveTokenAddress(token);
+    let metadata = this.tokenMetadataCache.get(address);
+    if (!metadata) {
+      metadata = Object.freeze({
+        address,
+        decimals: await this.tokenDecimals(address),
+        symbol: await this.tokenSymbol(address),
+      });
+      this.tokenMetadataCache.set(address, metadata);
+    }
+    return metadata;
+  }
+
+  async tokenDecimals(token?: TokenReference): Promise<number> {
+    const address =
+      token === undefined
+        ? await this.paymentToken()
+        : this.resolveTokenAddress(token);
+    let decimals = this.tokenDecimalsCache.get(address);
+    if (decimals === undefined) {
+      decimals = await (await this.erc20Client(address)).decimals();
+      this.tokenDecimalsCache.set(address, decimals);
+    }
+    return decimals;
+  }
+
+  async tokenSymbol(token?: TokenReference): Promise<string> {
+    const address =
+      token === undefined
+        ? await this.paymentToken()
+        : this.resolveTokenAddress(token);
+    let symbol = this.tokenSymbolsCache.get(address);
+    if (symbol === undefined) {
+      symbol = await (await this.erc20Client(address)).symbol();
+      this.tokenSymbolsCache.set(address, symbol);
+    }
+    return symbol;
+  }
+
+  async tokenBalanceFor(
+    token: TokenReference,
+    address?: string,
+  ): Promise<bigint> {
+    return (await this.erc20Client(token)).balanceOf(
+      address ?? this.address ?? "",
+    );
+  }
+
+  async tokenAllowanceFor(
+    token: TokenReference,
+    owner: string,
+    spender: string,
+  ): Promise<bigint> {
+    return (await this.erc20Client(token)).allowance(owner, spender);
+  }
+
+  async approveToken(
+    token: TokenReference,
+    spender: string,
+    amount: bigint,
+  ): Promise<TxResult> {
+    return (await this.erc20Client(token)).approve(spender, amount);
   }
 
   async tokenBalance(address?: string): Promise<bigint> {
-    const erc20 = await this.erc20Client();
-    return erc20.balanceOf(address ?? this.address ?? "");
+    return this.tokenBalanceFor(await this.paymentToken(), address);
   }
 
   async tokenAllowance(owner: string, spender: string): Promise<bigint> {
-    const erc20 = await this.erc20Client();
-    return erc20.allowance(owner, spender);
+    return this.tokenAllowanceFor(await this.paymentToken(), owner, spender);
   }
 
   /** Send `approve(spender, amount)` on the payment token. */
@@ -330,8 +436,104 @@ export class ERC8183Client {
     spender: string,
     amount: bigint,
   ): Promise<TxResult> {
-    const erc20 = await this.erc20Client();
-    return erc20.approve(spender, amount);
+    return this.approveToken(await this.paymentToken(), spender, amount);
+  }
+
+  /**
+   * Verify a provider quote before creating or funding a job.
+   *
+   * Explicit asset selection binds request, response and expected token. The
+   * compatibility path without `expectedCurrency` still checks the Commerce
+   * default token. Signature, chain and Commerce bindings remain mandatory.
+   */
+  async verifyNegotiationQuote(
+    envelope: Record<string, unknown>,
+    opts: VerifyNegotiationQuoteOpts,
+  ): Promise<QuoteSigVerdict> {
+    const response = envelope.response;
+    if (
+      response === null ||
+      typeof response !== "object" ||
+      Array.isArray(response)
+    ) {
+      return { valid: false, reason: "quote response is missing" };
+    }
+    const responseRecord = response as Record<string, unknown>;
+    if (responseRecord.accepted !== true) {
+      return { valid: false, reason: "quote is not accepted" };
+    }
+    const terms = responseRecord.terms;
+    if (terms === null || typeof terms !== "object" || Array.isArray(terms)) {
+      return { valid: false, reason: "quote terms are missing" };
+    }
+    const termsRecord = terms as Record<string, unknown>;
+    const price = termsRecord.price;
+    if (typeof price !== "string" || !/^(0|[1-9][0-9]*)$/.test(price)) {
+      return {
+        valid: false,
+        reason: "quote price must be a non-negative integer",
+      };
+    }
+
+    let expectedAddress: `0x${string}`;
+    let responseCurrency: `0x${string}`;
+    try {
+      expectedAddress =
+        opts.expectedCurrency === undefined
+          ? await this.paymentToken()
+          : this.resolveTokenAddress(opts.expectedCurrency);
+      if (typeof termsRecord.currency !== "string") throw new Error();
+      responseCurrency = getAddress(termsRecord.currency);
+    } catch {
+      return { valid: false, reason: "quote currency is invalid" };
+    }
+    if (responseCurrency !== expectedAddress) {
+      return {
+        valid: false,
+        reason:
+          opts.expectedCurrency === undefined
+            ? "quote currency does not match payment token"
+            : "quote response currency mismatch",
+      };
+    }
+
+    const request = envelope.request;
+    const requestTerms =
+      request !== null && typeof request === "object" && !Array.isArray(request)
+        ? (request as Record<string, unknown>).terms
+        : undefined;
+    const requestCurrency =
+      requestTerms !== null &&
+      typeof requestTerms === "object" &&
+      !Array.isArray(requestTerms)
+        ? (requestTerms as Record<string, unknown>).currency
+        : undefined;
+    if (opts.expectedCurrency !== undefined && requestCurrency === undefined) {
+      return { valid: false, reason: "quote request currency is missing" };
+    }
+    if (requestCurrency !== undefined) {
+      try {
+        if (
+          typeof requestCurrency !== "string" ||
+          this.resolveTokenAddress(requestCurrency) !== expectedAddress
+        ) {
+          return { valid: false, reason: "quote request currency mismatch" };
+        }
+      } catch {
+        return { valid: false, reason: "quote request currency is invalid" };
+      }
+    }
+
+    if (envelope.chain_id !== this.network.chainId) {
+      return { valid: false, reason: "quote chain_id mismatch" };
+    }
+    return verifyQuoteSignature({
+      envelope,
+      provider: getAddress(opts.expectedProvider),
+      publicClient: this.client,
+      expectedVerifyingContract: this.commerce.address,
+      blockNumber: opts.blockNumber,
+    });
   }
 
   // ----------------------------------------------------------------- writes
@@ -360,28 +562,7 @@ export class ERC8183Client {
       skipExpiryCheck = false,
     } = opts;
 
-    if (!skipExpiryCheck) {
-      let disputeWindow: bigint | null = null;
-      try {
-        disputeWindow = await this.policy.disputeWindow();
-      } catch (error) {
-        // Don't block job creation if dispute_window can't be read (custom
-        // policies, RPC hiccup, etc.) — just warn.
-        console.warn(
-          `[ERC8183Client] dispute_window pre-flight failed; create_job proceeding without expiry check: ${describeError(error)}`,
-        );
-      }
-
-      if (disputeWindow !== null) {
-        const now = BigInt(Math.floor(Date.now() / 1000));
-        if (expiredAt - now <= disputeWindow) {
-          const days = (Number(disputeWindow) / 86400).toFixed(1);
-          throw new Error(
-            `expired_at (${expiredAt}) is too close to now (${now}). OptimisticPolicy on this network has dispute_window=${disputeWindow}s (${days}d), so the submit deadline (expired_at - dispute_window = ${expiredAt - disputeWindow}) is already in the past or within seconds. provider.submit() would revert with SubmissionTooLate(). Set expired_at >= now + dispute_window + a buffer (e.g. now + ${disputeWindow + 86400n}). Pass skipExpiryCheck=true to bypass this guard.`,
-          );
-        }
-      }
-    }
+    await this.validateExpiry(expiredAt, skipExpiryCheck);
 
     return this.commerce.createJob({
       provider,
@@ -390,6 +571,56 @@ export class ERC8183Client {
       description,
       hook: hook ?? this.router.address,
     });
+  }
+
+  /** Create a routed job bound to a canonical asset or catalog address. */
+  async createJobWithToken(
+    opts: CreateJobWithTokenFacadeOpts,
+  ): Promise<CreateJobResult> {
+    const {
+      asset,
+      provider = ZERO_ADDRESS,
+      expiredAt,
+      description = "",
+      hook,
+      skipExpiryCheck = false,
+    } = opts;
+    const token = this.resolveJobCreationToken(asset);
+    await this.validateExpiry(expiredAt, skipExpiryCheck);
+    return this.commerce.createJobWithToken({
+      provider,
+      evaluator: this.router.address,
+      expiredAt,
+      description,
+      hook: hook ?? this.router.address,
+      token,
+    });
+  }
+
+  private async validateExpiry(
+    expiredAt: bigint,
+    skipExpiryCheck: boolean,
+  ): Promise<void> {
+    if (skipExpiryCheck) return;
+
+    let disputeWindow: bigint | null = null;
+    try {
+      disputeWindow = await this.policy.disputeWindow();
+    } catch (error) {
+      console.warn(
+        `[ERC8183Client] dispute_window pre-flight failed; create_job proceeding without expiry check: ${describeError(error)}`,
+      );
+    }
+
+    if (disputeWindow !== null) {
+      const now = BigInt(Math.floor(Date.now() / 1000));
+      if (expiredAt - now <= disputeWindow) {
+        const days = (Number(disputeWindow) / 86400).toFixed(1);
+        throw new Error(
+          `expired_at (${expiredAt}) is too close to now (${now}). OptimisticPolicy on this network has dispute_window=${disputeWindow}s (${days}d), so the submit deadline (expired_at - dispute_window = ${expiredAt - disputeWindow}) is already in the past or within seconds. provider.submit() would revert with SubmissionTooLate(). Set expired_at >= now + dispute_window + a buffer (e.g. now + ${disputeWindow + 86400n}). Pass skipExpiryCheck=true to bypass this guard.`,
+        );
+      }
+    }
   }
 
   /** Bind the configured policy (or an override) to a job on the Router. */
@@ -406,19 +637,13 @@ export class ERC8183Client {
   }
 
   /**
-   * Fund a job, topping up the payment-token allowance if needed.
+   * Fund a job using its authoritative on-chain payment token.
    *
-   * Approval strategy (gas-aware, security-first):
-   *
-   * 1. If `allowance(client, commerce) >= amount` → call `fund` only.
-   * 2. Otherwise approve `max(amount, floor)` where `floor` is:
-   *    - `approveFloor` if provided (`0n` = exact `amount`).
-   *    - Else `DEFAULT_APPROVE_FLOOR_UNITS * 10n ** tokenDecimals()` (~100 of
-   *      the token, a stablecoin-friendly default).
-   *
-   * The floor pattern saves approve transactions for streams of
-   * small-budget jobs; large-budget jobs always fall back to exact approve
-   * so residual allowance is bounded.
+   * The job token is read before any allowance or approval action. When
+   * `expectedToken` is provided, a mismatch raises
+   * {@link JobPaymentTokenMismatchError} before funds can move. Missing
+   * allowance is approved for exactly `amount` by default; `approveFloor`
+   * remains an explicit legacy opt-in.
    *
    * A self-broadcasting backend that owns the allowance lifecycle sets
    * `walletProvider.fundBundlesApproval` to the literal `true` to skip the
@@ -430,36 +655,56 @@ export class ERC8183Client {
     amount: bigint,
     opts?: FundOpts,
   ): Promise<TxResult> {
-    // `=== true` guards against a truthy-but-not-boolean wallet stub in
-    // tests (and any non-EVM wallet whose fundBundlesApproval isn't a
-    // literal boolean).
-    if (this.walletProvider?.fundBundlesApproval === true) {
+    if (typeof amount !== "bigint") {
+      throw new TypeError("amount must be a bigint");
+    }
+    if (amount < 0n) {
+      throw new Error("amount must be >= 0");
+    }
+    if (
+      opts?.approveFloor !== undefined &&
+      typeof opts.approveFloor !== "bigint"
+    ) {
+      throw new TypeError("approve_floor must be a bigint");
+    }
+    if (opts?.approveFloor !== undefined && opts.approveFloor < 0n) {
+      throw new Error("approve_floor must be >= 0");
+    }
+    if (this.walletProvider === null || this.address === null) {
+      throw new Error(READ_ONLY_MESSAGE);
+    }
+
+    const actualToken = await this.jobPaymentToken(jobId);
+    if (opts?.expectedToken !== undefined) {
+      const expectedToken = this.resolveTokenAddress(opts.expectedToken);
+      if (expectedToken !== actualToken) {
+        throw new JobPaymentTokenMismatchError(
+          jobId,
+          expectedToken,
+          actualToken,
+        );
+      }
+    }
+
+    if (amount === 0n) {
       return this.commerce.fund(jobId, amount);
     }
 
-    // Guard the read-only path explicitly: without a wallet, `this.address`
-    // is null and the allowance read below would otherwise fail deep inside
-    // viem with a cryptic `getAddress("")` error instead of this clear
-    // message (the same one every write path raises).
-    if (this.address === null) {
-      throw new Error(READ_ONLY_MESSAGE);
+    // `=== true` guards against truthy-but-not-boolean wallet stubs.
+    if (this.walletProvider.fundBundlesApproval === true) {
+      return this.commerce.fund(jobId, amount);
     }
+
     const owner = this.address;
-    const current = await this.tokenAllowance(owner, this.commerce.address);
+    const current = await this.tokenAllowanceFor(
+      actualToken,
+      owner,
+      this.commerce.address,
+    );
     if (current < amount) {
-      let floor: bigint;
-      if (opts?.approveFloor === undefined) {
-        floor =
-          DEFAULT_APPROVE_FLOOR_UNITS *
-          10n ** BigInt(await this.tokenDecimals());
-      } else {
-        if (opts.approveFloor < 0n) {
-          throw new Error("approve_floor must be >= 0");
-        }
-        floor = opts.approveFloor;
-      }
-      const cap = amount > floor ? amount : floor;
-      await this.approvePaymentToken(this.commerce.address, cap);
+      const floor = opts?.approveFloor;
+      const cap = floor === undefined || amount > floor ? amount : floor;
+      await this.approveToken(actualToken, this.commerce.address, cap);
     }
 
     return this.commerce.fund(jobId, amount);
@@ -528,6 +773,16 @@ export class ERC8183Client {
 
   async getJob(jobId: bigint): Promise<Job> {
     return this.commerce.getJob(jobId);
+  }
+
+  async jobPaymentToken(jobId: bigint): Promise<`0x${string}`> {
+    return getAddress(await this.commerce.jobPaymentToken(jobId));
+  }
+
+  async isPaymentTokenSupported(token: TokenReference): Promise<boolean> {
+    return this.commerce.isPaymentTokenSupported(
+      this.resolveTokenAddress(token),
+    );
   }
 
   async getJobStatus(jobId: bigint): Promise<JobStatus> {
