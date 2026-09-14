@@ -1105,7 +1105,10 @@ export class NegotiationHandler {
     }
     const defaultOffer = this.activeOffers.get(defaultAddress);
     if (defaultOffer !== undefined) {
-      return { currency: defaultOffer.asset.address, price: defaultOffer.price };
+      return {
+        currency: defaultOffer.asset.address,
+        price: defaultOffer.price,
+      };
     }
     if (this.configuredOffers.has(defaultAddress)) {
       return null;

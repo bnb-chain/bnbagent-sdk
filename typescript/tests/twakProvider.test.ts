@@ -155,12 +155,7 @@ describe("TWAKProvider — construction and capabilities", () => {
   it("declares {sign.message, broadcast.self, intents.*} — no raw signing, no x402.pay until requestExact exists", () => {
     const twak = new TWAKProvider();
     expect(twak.capabilities()).toEqual(
-      new Set([
-        SIGN_MESSAGE,
-        BROADCAST_SELF,
-        INTENTS_ERC8004,
-        INTENTS_ERC8183,
-      ]),
+      new Set([SIGN_MESSAGE, BROADCAST_SELF, INTENTS_ERC8004, INTENTS_ERC8183]),
     );
     for (const absent of [
       SIGN_TRANSACTION,
