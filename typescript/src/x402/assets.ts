@@ -59,7 +59,8 @@ export interface ExpectedEip3009Route {
 }
 
 const CAIP2_NETWORK = /^eip155:(56|97)$/;
-const LOCAL_WALLETS = new Set(["evm-local", "turnkey"]);
+/** Studio config uses `evm-local`; `EVMWalletProvider.kind` is `evm`. */
+const LOCAL_WALLETS = new Set(["evm", "evm-local", "turnkey"]);
 const DELEGATED_WALLETS = new Set(["twak", "altana"]);
 
 function parseNetwork(network: string | number): number {
@@ -181,7 +182,14 @@ export function requireExpectedEip3009Route(
   return canonical;
 }
 
-/** Validate a wallet route for the exact expected asset, or throw typed unsupported. */
+/**
+ * Validate a wallet route for the exact expected asset, or throw typed unsupported.
+ *
+ * Reference gate only: Studio's buyer routes on wallet capabilities
+ * (`sign.typed_data` / `x402.pay` plus `requestExact`), not this helper.
+ * Keep the two in sync when adding wallet kinds. `walletKind` accepts both
+ * the studio config string `"evm-local"` and provider `kind` `"evm"`.
+ */
 export function requireB402WalletRoute(
   walletKind: string,
   expectedAsset: ExpectedB402Asset,

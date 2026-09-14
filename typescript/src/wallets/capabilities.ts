@@ -56,7 +56,10 @@ export const INTENTS_ERC8183 = "intents.erc8183";
 
 /**
  * The SDK can complete an x402 payment with this wallet (locally signed or
- * fully delegated to the wallet backend).
+ * fully delegated to the wallet backend). Declare this only when a buyer
+ * path can settle: local `sign.typed_data` EIP-3009, or a delegated payer
+ * that implements `requestExact` plus `exactTransferMethods`. A
+ * quote/`request`-only client must not advertise it.
  */
 export const X402_PAY = "x402.pay";
 

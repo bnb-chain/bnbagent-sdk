@@ -21,7 +21,8 @@ from ..networks import (
 from .errors import UnsupportedWalletRouteError
 
 _CAIP2_NETWORK = re.compile(r"^eip155:(56|97)$")
-_LOCAL_WALLETS = frozenset(("evm-local", "turnkey"))
+# Studio config uses ``evm-local``; ``EVMWalletProvider.kind`` is ``evm``.
+_LOCAL_WALLETS = frozenset(("evm", "evm-local", "turnkey"))
 _DELEGATED_WALLETS = frozenset(("twak", "altana"))
 
 
@@ -176,7 +177,14 @@ def require_b402_wallet_route(
     transfer_method: str,
     delegated_payer: DelegatedX402ExactPayerCapability | object | None = None,
 ) -> B402WalletRoute:
-    """Validate a wallet route for exactly ``expected_asset`` or raise typed unsupported."""
+    """Validate a wallet route for exactly ``expected_asset`` or raise typed unsupported.
+
+    Reference gate only: Studio's buyer routes on wallet capabilities
+    (``sign.typed_data`` / ``x402.pay`` plus ``request_exact``), not this
+    helper. Keep the two in sync when adding wallet kinds. ``wallet_kind``
+    accepts both the studio config string ``evm-local`` and provider kind
+    ``evm``.
+    """
 
     # Address + network are the route's on-wire identity. Re-resolve them so a
     # caller-owned object can never smuggle mutable metadata or a str-enum

@@ -48,7 +48,6 @@ from bnbagent.wallets.capabilities import (
     SIGN_MESSAGE,
     SIGN_TRANSACTION,
     SIGN_TYPED_DATA,
-    X402_PAY,
 )
 from bnbagent.wallets.local_executor import LocalExecutor
 
@@ -65,7 +64,7 @@ EXPECTED_CAPABILITIES: dict[str, frozenset[str]] = {
     "evm": frozenset(
         {SIGN_MESSAGE, SIGN_TRANSACTION, SIGN_TYPED_DATA, CALLS_ARBITRARY, PAYMASTER_SPONSOR}
     ),
-    "twak": frozenset({SIGN_MESSAGE, BROADCAST_SELF, INTENTS_ERC8004, INTENTS_ERC8183, X402_PAY}),
+    "twak": frozenset({SIGN_MESSAGE, BROADCAST_SELF, INTENTS_ERC8004, INTENTS_ERC8183}),
     "turnkey": frozenset(
         {SIGN_MESSAGE, SIGN_TRANSACTION, SIGN_TYPED_DATA, CALLS_ARBITRARY, PAYMASTER_SPONSOR}
     ),

@@ -99,7 +99,7 @@ HERE = Path(__file__).resolve().parent
 # The documented twak capability set (bnbagent/wallets/README.md) — asserted
 # verbatim in step 0 so a capability drift fails the smoke immediately.
 EXPECTED_TWAK_CAPS = frozenset(
-    {"sign.message", "broadcast.self", "intents.erc8004", "intents.erc8183", "x402.pay"}
+    {"sign.message", "broadcast.self", "intents.erc8004", "intents.erc8183"}
 )
 
 # twak's chain key for BSC testnet ("bsc-testnet" is the SDK's network name;

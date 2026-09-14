@@ -152,7 +152,7 @@ describe("TWAKProvider — construction and capabilities", () => {
     expect(new TWAKProvider({ chain: "bsctestnet" }).chain).toBe("bsctestnet");
   });
 
-  it("declares {sign.message, broadcast.self, intents.*, x402.pay} — no raw signing, no arbitrary calls", () => {
+  it("declares {sign.message, broadcast.self, intents.*} — no raw signing, no x402.pay until requestExact exists", () => {
     const twak = new TWAKProvider();
     expect(twak.capabilities()).toEqual(
       new Set([
@@ -160,10 +160,14 @@ describe("TWAKProvider — construction and capabilities", () => {
         BROADCAST_SELF,
         INTENTS_ERC8004,
         INTENTS_ERC8183,
-        X402_PAY,
       ]),
     );
-    for (const absent of [SIGN_TRANSACTION, SIGN_TYPED_DATA, CALLS_ARBITRARY]) {
+    for (const absent of [
+      SIGN_TRANSACTION,
+      SIGN_TYPED_DATA,
+      CALLS_ARBITRARY,
+      X402_PAY,
+    ]) {
       expect(twak.supports(absent)).toBe(false);
     }
   });

@@ -89,7 +89,6 @@ from .capabilities import (
     BROADCAST_SELF,
     INTENTS_ERC8004,
     INTENTS_ERC8183,
-    X402_PAY,
 )
 from .errors import UnsupportedWalletOperation, WalletIdentityMismatch
 from .intents import (
@@ -294,8 +293,9 @@ class TWAKProvider(WalletProvider, IntentExecutor):
     fund_bundles_approval = True
     # sign.message derives automatically from the override below; twak has
     # no sign_transaction / sign_typed_data, so the base defaults raise.
-    # x402.pay: served by the delegated TwakX402Payer (make_x402_payer).
-    _extra_capabilities = frozenset({BROADCAST_SELF, INTENTS_ERC8004, INTENTS_ERC8183, X402_PAY})
+    # x402.pay stays undeclared until TwakX402Payer implements request_exact.
+    # quote/request remain available via make_x402_payer.
+    _extra_capabilities = frozenset({BROADCAST_SELF, INTENTS_ERC8004, INTENTS_ERC8183})
 
     def __init__(
         self,

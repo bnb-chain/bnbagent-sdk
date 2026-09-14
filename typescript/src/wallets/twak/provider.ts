@@ -52,7 +52,6 @@ import {
   BROADCAST_SELF,
   INTENTS_ERC8004,
   INTENTS_ERC8183,
-  X402_PAY,
 } from "../capabilities.js";
 import {
   UnsupportedWalletOperation,
@@ -420,8 +419,9 @@ type IntentHandler = (
  * Wallet + execution backend delegating to the `twak` CLI (see the module
  * docstring). Capabilities: `sign.message` (auto-derived from the
  * override), `broadcast.self`, `intents.erc8004`, `intents.erc8183`,
- * `x402.pay` (via the delegated {@link TwakX402Payer}). No
- * `sign.transaction` / `sign.typed_data` — twak exposes no raw-tx or
+ * No `x402.pay` until {@link TwakX402Payer} implements `requestExact`
+ * (quote/`request` remain available via {@link TWAKProvider.makeX402Payer}).
+ * No `sign.transaction` / `sign.typed_data` — twak exposes no raw-tx or
  * generic EIP-712 primitive (design decision P0); use the EVM wallet for
  * those.
  */
@@ -437,7 +437,6 @@ export class TWAKProvider extends WalletProvider implements IntentExecutor {
     BROADCAST_SELF,
     INTENTS_ERC8004,
     INTENTS_ERC8183,
-    X402_PAY,
   ]);
 
   readonly #chain: string;

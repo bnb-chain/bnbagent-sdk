@@ -155,6 +155,16 @@ describe("resolveB402Asset", () => {
 });
 
 describe("requireB402WalletRoute", () => {
+  it("treats provider kind evm as the same local EIP-3009 route as evm-local", () => {
+    const expected = resolveB402Asset(56, AssetId.U);
+    const evm = requireB402WalletRoute("evm", expected, "eip3009");
+    const local = requireB402WalletRoute("evm-local", expected, "eip3009");
+    expect(evm.walletKind).toBe("evm");
+    expect(evm.transferMethod).toBe(local.transferMethod);
+    expect(evm.delegated).toBe(local.delegated);
+    expect(evm.expectedAsset).toEqual(local.expectedAsset);
+  });
+
   it.each([56, 97])(
     "allows evm-local and turnkey only on verified known EIP-3009 U (%i)",
     (chainId) => {

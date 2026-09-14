@@ -212,7 +212,7 @@ twak is a **permanently constrained but cleanly bounded** backend: it executes a
 | ERC-8183 **client (buyer)** - `create_job → set_budget → register_job → fund → settle` / `dispute` | ✅ | Full lifecycle via the intent dispatch, field-tested on `bsctestnet`. |
 | ERC-8183 **provider (seller)** - `submit` | ✅ (>= v0.19.0, **REQ-1** shipped) | `submit` passes `{"deliverable_url": …}` through as raw `--opt-params`, proven on-chain: `bsctestnet` job 150's `JobInitialised` event carries the full deliverable-URL JSON (v0.18.0 jobs emitted empty optParams). The other erc8183 writes pass `opt_params` through too (**S-1**, also v0.19.0) - the old fail-fast guards are retired; on an older CLI the unknown flag fails loudly with an upgrade hint. |
 | ERC-8183 **evaluator / voter** - `complete`, `vote_reject`, `settle` | ✅ |  |
-| **x402 buyer** | ✅ (mainnet routes) | Via the delegated `TwakX402Payer` (`make_x402_payer()`). twak rejects testnet routes as "no supported route" (testnet routes are being worked on upstream). |
+| **x402 buyer** | quote/`request` only (no `x402.pay`) | `TwakX402Payer` has no `request_exact`, so Studio and other exact-route buyers fail closed. `make_x402_payer()` still quotes and can call legacy `request`. twak rejects testnet routes as "no supported route". |
 | **`X402Signer`** | ❌ | No `sign.typed_data` - `X402Signer(twak_wallet)` is rejected at composition time with a pointer to `make_x402_payer()`. |
 | **Paymaster (sponsored gas)** | ✅ mainnet · ✅ testnet (**REQ-2** shipped, twak v0.20.0) | When the execution context carries a paymaster (e.g. `ERC8183Client` on a sponsored testnet network), `make_executor` captures its URL and every write forwards it as `--paymaster-url` - twak routes the broadcast through that MegaFuel endpoint. Without one, twak's own defaults apply: `bsc` mainnet sponsors automatically (Trust gateway, since v0.18.0), `bsctestnet` pays gas from the twak wallet's BNB - **pre-fund it**. |
 | **Arbitrary contract calls** | ❌ | Fixed command menu; an unknown intent raises with a pointer to use an EVM wallet (`calls.arbitrary`). |
@@ -222,7 +222,7 @@ The capability sets, verbatim from `capabilities()`:
 | Provider | `capabilities()` |
 | --- | --- |
 | `evm` | `sign.message`, `sign.transaction`, `sign.typed_data`, `calls.arbitrary`, `paymaster.sponsor` |
-| `twak` | `sign.message`, `broadcast.self`, `intents.erc8004`, `intents.erc8183`, `x402.pay` |
+| `twak` | `sign.message`, `broadcast.self`, `intents.erc8004`, `intents.erc8183` |
 
 Constants live in `bnbagent.wallets.capabilities`; check them with `wallet.supports(cap)` or read `wallet.describe()["capabilities"]`. For `sign_typed_data` specifically, three gates carry the weight: assembly-time (`capabilities()` lacks `sign.typed_data`, so the tool never enters a route), composition-time (`X402Signer.__init__` checks `supports()`), and runtime (the base default raises a descriptive `UnsupportedWalletOperation` - no CLI call is ever attempted).
 
@@ -331,7 +331,7 @@ The open capability registry - plain string constants, not an Enum, so third par
 | `CALLS_ARBITRARY` | `calls.arbitrary` | `_extra_capabilities` - arbitrary mechanical contract calls (vs a fixed menu). |
 | `BROADCAST_SELF` | `broadcast.self` | `_extra_capabilities` - the wallet is its own executor. |
 | `INTENTS_ERC8004` / `INTENTS_ERC8183` | `intents.erc8004` / `intents.erc8183` | `_extra_capabilities` - native intent execution. |
-| `X402_PAY` | `x402.pay` | `_extra_capabilities` - the SDK can complete an x402 payment with this wallet. |
+| `X402_PAY` | `x402.pay` | `_extra_capabilities` - the SDK can complete an x402 payment with this wallet. Declare only when a buyer path can settle (`request_exact` or local EIP-3009). Current TWAK does not advertise it. |
 | `PAYMASTER_SPONSOR` | `paymaster.sponsor` | `_extra_capabilities` - sponsored (MegaFuel) broadcast. |
 
 Consumers ignore unknown values and treat absence as unsupported; never probe by calling and catching.

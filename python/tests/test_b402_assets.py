@@ -178,6 +178,15 @@ def test_evm_local_and_turnkey_allow_only_verified_known_eip3009_u(
         assert route.delegated is False
 
 
+def test_provider_kind_evm_is_the_same_local_eip3009_route_as_evm_local() -> None:
+    expected = x402.resolve_b402_asset(56, AssetId.U)
+    evm = x402.require_b402_wallet_route("evm", expected, "eip3009")
+    local = x402.require_b402_wallet_route("evm-local", expected, "eip3009")
+    assert evm.transfer_method == local.transfer_method
+    assert evm.delegated == local.delegated
+    assert evm.expected_asset == local.expected_asset
+
+
 @pytest.mark.parametrize("wallet_kind", ("evm-local", "turnkey"))
 def test_active_usd1_allows_local_eip3009_but_keeps_permit2_and_placeholder_closed(
     wallet_kind: str,
