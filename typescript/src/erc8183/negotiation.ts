@@ -1081,17 +1081,39 @@ export class NegotiationHandler {
       return { currency: this.currency, price: this.servicePrice };
     }
 
-    const selected = requestedCurrency ?? this.currency;
-    let address: string;
+    // Omitted currency means "seller default": live catalog U if offered,
+    // otherwise the first configured active asset. A configured-but-disabled
+    // U stays fail-closed so we never silently switch tokens.
+    if (requestedCurrency !== null) {
+      let address: string;
+      try {
+        address = getAddress(requestedCurrency).toLowerCase();
+      } catch {
+        return null;
+      }
+      const offer = this.activeOffers.get(address);
+      return offer === undefined
+        ? null
+        : { currency: offer.asset.address, price: offer.price };
+    }
+
+    let defaultAddress: string;
     try {
-      address = getAddress(selected).toLowerCase();
+      defaultAddress = getAddress(this.currency).toLowerCase();
     } catch {
       return null;
     }
-    const offer = this.activeOffers.get(address);
-    return offer === undefined
+    const defaultOffer = this.activeOffers.get(defaultAddress);
+    if (defaultOffer !== undefined) {
+      return { currency: defaultOffer.asset.address, price: defaultOffer.price };
+    }
+    if (this.configuredOffers.has(defaultAddress)) {
+      return null;
+    }
+    const firstActive = this.activeOffers.values().next().value;
+    return firstActive === undefined
       ? null
-      : { currency: offer.asset.address, price: offer.price };
+      : { currency: firstActive.asset.address, price: firstActive.price };
   }
 
   /**

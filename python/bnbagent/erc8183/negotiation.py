@@ -770,15 +770,29 @@ class NegotiationHandler:
                 return None
             return self._currency, self._service_price
 
-        selected = requested_currency or self._currency
+        if requested_currency is not None:
+            try:
+                selected_address = Web3.to_checksum_address(requested_currency)
+            except (TypeError, ValueError):
+                return None
+            offer = self._active_offers.get(selected_address.lower())
+            if offer is None:
+                return None
+            return offer[0].address, offer[1]
+
         try:
-            selected_address = Web3.to_checksum_address(selected)
+            default_address = Web3.to_checksum_address(self._currency).lower()
         except (TypeError, ValueError):
             return None
-        offer = self._active_offers.get(selected_address.lower())
-        if offer is None:
+        default_offer = self._active_offers.get(default_address)
+        if default_offer is not None:
+            return default_offer[0].address, default_offer[1]
+        if default_address in self._configured_offers:
             return None
-        return offer[0].address, offer[1]
+        if not self._active_offers:
+            return None
+        first_active = next(iter(self._active_offers.values()))
+        return first_active[0].address, first_active[1]
 
     @staticmethod
     def _ensure_hex_prefix(h: str) -> str:

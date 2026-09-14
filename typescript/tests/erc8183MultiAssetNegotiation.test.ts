@@ -95,7 +95,7 @@ describe("multi-asset ERC-8183 negotiation", () => {
     });
   });
 
-  it("does not substitute USDC/USDT when the catalog-default U is omitted", async () => {
+  it("omitted currency uses the first configured active asset when U is not offered", async () => {
     const handler = await multi(
       client(
         new Set([
@@ -105,14 +105,32 @@ describe("multi-asset ERC-8183 negotiation", () => {
       ),
     );
     const result = await handler.negotiate(request());
-    expect(result.accepted).toBe(false);
-    expect(result.response).toMatchObject({
-      reason_code: ReasonCode.UNSUPPORTED,
-      details: { supported_assets: [AssetId.TEST_USDC, AssetId.TEST_USDT] },
+    expect(result.accepted).toBe(true);
+    expect(result.response.terms).toMatchObject({
+      currency: TEST_USDC.address,
+      price: "100000",
     });
   });
 
-  it("uses catalog U as default even when Commerce paymentToken is misconfigured", async () => {
+  it("does not substitute another asset when configured U is currently unavailable", async () => {
+    const handler = await NegotiationHandler.fromErc8183ClientMulti(
+      client(new Set([TEST_USDC.address.toLowerCase()])),
+      {
+        servicePrices: {
+          [AssetId.TEST_U]: "1",
+          [AssetId.TEST_USDC]: "2",
+        },
+      },
+    );
+    const result = await handler.negotiate(request());
+    expect(result.accepted).toBe(false);
+    expect(result.response).toMatchObject({
+      reason_code: ReasonCode.UNSUPPORTED,
+      details: { supported_assets: [AssetId.TEST_USDC] },
+    });
+  });
+
+  it("omitted currency does not use Commerce paymentToken; USDC-only seller quotes USDC", async () => {
     const erc8183Client = client(
       new Set([TEST_USDC.address.toLowerCase()]),
       TEST_USDC.address,
@@ -121,7 +139,12 @@ describe("multi-asset ERC-8183 negotiation", () => {
       erc8183Client,
       { servicePrices: { [AssetId.TEST_USDC]: "1" } },
     );
-    expect((await handler.negotiate(request())).accepted).toBe(false);
+    const omitted = await handler.negotiate(request());
+    expect(omitted.accepted).toBe(true);
+    expect(omitted.response.terms).toMatchObject({
+      currency: TEST_USDC.address,
+      price: "1",
+    });
     expect((await handler.negotiate(request(TEST_USDC.address))).accepted).toBe(
       true,
     );
@@ -246,9 +269,11 @@ describe("multi-asset ERC-8183 negotiation", () => {
       });
     }
     expect((await handler.negotiate(request())).response).toMatchObject({
-      accepted: false,
-      reason_code: ReasonCode.UNSUPPORTED,
-      details: { supported_assets: [AssetId.USD1] },
+      accepted: true,
+      terms: {
+        currency: usd1.address,
+        price: "100000000000000000",
+      },
     });
   });
 });

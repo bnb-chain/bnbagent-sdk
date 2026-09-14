@@ -55,16 +55,14 @@ def test_explicit_currency_selects_exact_active_offer_and_atomic_price():
     assert result.response["terms"]["price"] == "100000"
 
 
-def test_usdc_usdt_only_does_not_substitute_for_omitted_default():
+def test_omitted_currency_uses_first_configured_active_asset_when_u_is_not_offered():
     handler = _multi_handler(_client(supported={TEST_USDC.address, TEST_USDT.address}))
 
     result = handler.negotiate(_request())
 
-    assert result.accepted is False
-    assert result.response["reason_code"] == ReasonCode.UNSUPPORTED
-    assert result.response["details"] == {
-        "supported_assets": [AssetId.TEST_USDC.value, AssetId.TEST_USDT.value]
-    }
+    assert result.accepted is True
+    assert result.response["terms"]["currency"] == TEST_USDC.address
+    assert result.response["terms"]["price"] == "100000"
 
 
 def test_disabled_asset_is_removed_without_disabling_other_offers():
@@ -153,8 +151,8 @@ def test_omitted_currency_uses_catalog_default_not_commerce_payment_token():
     omitted = handler.negotiate(_request())
     explicit = handler.negotiate(_request(TEST_USDC.address))
 
-    assert omitted.accepted is False
-    assert omitted.response["details"] == {"supported_assets": [AssetId.TEST_USDC.value]}
+    assert omitted.accepted is True
+    assert omitted.response["terms"]["currency"] == TEST_USDC.address
     assert explicit.accepted is True
 
 
@@ -184,8 +182,9 @@ def test_explicit_usd1_offer_is_immutable_and_returns_alternatives_instead_of_sw
         assert rejected.response["reason_code"] == ReasonCode.UNSUPPORTED
         assert rejected.response["details"] == {"supported_assets": [AssetId.USD1.value]}
     omitted = handler.negotiate(_request())
-    assert omitted.accepted is False
-    assert omitted.response["details"] == {"supported_assets": [AssetId.USD1.value]}
+    assert omitted.accepted is True
+    assert omitted.response["terms"]["currency"] == MAINNET_USD1.address
+    assert omitted.response["terms"]["price"] == "100000000000000000"
 
 
 def test_multi_constructor_fails_closed_without_exactly_one_catalog_default():
