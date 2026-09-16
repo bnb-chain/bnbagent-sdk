@@ -55,8 +55,11 @@ ambiguous, disconnected and cyclic multi-struct graphs are rejected. This enable
 explicitly opted-in Permit2 `PermitWitnessTransferFrom` requests through the
 public wallet API. The normal primary-type/domain allowlists, denylist and
 validity checks still run: nested signing does not grant a new payment permission.
-Multi-struct schemas are limited to 256 structs, 4096 total fields and depth 64;
-oversized schemas raise `PolicyViolation` before signing.
+Every schema, single- or multi-struct, is validated before signing: struct and
+field names must be Solidity identifiers, field types must be EIP-712 atomic
+types (no `uint`/`int` aliases) or declared structs, optionally as arrays, and
+schemas are limited to 256 structs, 4096 total fields, depth 64 and
+256-character identifiers. Violations raise `PolicyViolation` before signing.
 
 Explicitly allowing a Permit2 domain and primary type is not a payment budget.
 The generic SDK policy does not pin Permit2 witness schemas, spenders, token
