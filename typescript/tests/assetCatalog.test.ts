@@ -64,6 +64,25 @@ describe("asset catalog", () => {
     ).toThrow("not registered");
   });
 
+  it("keeps Testnet USDC identity while separating ERC-8183 and B402 facts", () => {
+    expect(getAsset(97, AssetId.TEST_USDC)).toMatchObject({
+      assetId: AssetId.TEST_USDC,
+      address: "0x64544969ed7EBf5f083679233325356EbE738930",
+      decimals: 18,
+    });
+    expect(getB402Asset(97, AssetId.TEST_USDC)).toMatchObject({
+      assetId: AssetId.TEST_USDC,
+      address: "0xEC1C60D64a06896Df296438c12edD14E974FDE47",
+      decimals: 6,
+    });
+    expect(() =>
+      getB402AssetByAddress(97, "0x64544969ed7EBf5f083679233325356EbE738930"),
+    ).toThrow("not registered");
+    expect(() =>
+      getAssetByAddress(97, "0xEC1C60D64a06896Df296438c12edD14E974FDE47"),
+    ).toThrow("not registered");
+  });
+
   it("keeps legacy PaymentAsset literals source-compatible while returns stay complete", () => {
     const legacy: PaymentAsset = {
       chainId: 56,
@@ -171,8 +190,8 @@ describe("asset catalog", () => {
         chainId: 97,
         assetId: "TEST_USDC",
         symbol: "USDC",
-        address: "0xEC1C60D64a06896Df296438c12edD14E974FDE47",
-        decimals: 6,
+        address: "0x64544969ed7EBf5f083679233325356EbE738930",
+        decimals: 18,
         availability: "active",
         b402Methods: ["permit2-exact"],
         b402Kinds: [
@@ -416,7 +435,9 @@ describe("asset catalog", () => {
     expect(toAssetAtomic(56, AssetId.U, "1.000000000000000001")).toBe(
       10n ** 18n + 1n,
     );
-    expect(toAssetAtomic(97, AssetId.TEST_USDC, "1.000001")).toBe(1_000_001n);
+    expect(toAssetAtomic(97, AssetId.TEST_USDC, "1.000001")).toBe(
+      10n ** 18n + 10n ** 12n,
+    );
 
     for (const invalid of [
       "",
@@ -433,9 +454,9 @@ describe("asset catalog", () => {
         "decimal amount",
       );
     }
-    expect(() => toAssetAtomic(97, AssetId.TEST_USDC, "1.0000001")).toThrow(
-      "decimal places",
-    );
+    expect(() =>
+      toAssetAtomic(97, AssetId.TEST_USDC, "1.0000000000000000001"),
+    ).toThrow("decimal places");
     const callWithUnknown = toAssetAtomic as (
       chainId: number,
       assetId: string,

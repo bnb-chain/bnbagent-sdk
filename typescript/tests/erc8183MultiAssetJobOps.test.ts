@@ -192,7 +192,7 @@ describe("ERC8183JobOps multi-asset verification", () => {
   });
 
   it.each([
-    [AssetId.TEST_USDC, USDC.address, 100000n, 6],
+    [AssetId.TEST_USDC, USDC.address, 10n ** 17n, 18],
     [AssetId.TEST_USDT, USDT.address, 10n ** 18n, 18],
   ] as const)(
     "uses %s atomic service price and catalog decimals without conversion",

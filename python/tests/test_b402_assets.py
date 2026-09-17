@@ -379,7 +379,7 @@ def test_route_rejects_forged_b402_kind_identity() -> None:
 
 
 def test_payment_option_derives_same_expected_asset_and_keeps_atomic_amount() -> None:
-    token = get_asset(97, AssetId.TEST_USDC)
+    token = x402.resolve_b402_asset(97, AssetId.TEST_USDC)
     option = X402PaymentOption.from_cli(
         {
             "network": "eip155:97",

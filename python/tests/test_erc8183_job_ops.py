@@ -348,7 +348,7 @@ class TestVerifyJob:
     @pytest.mark.parametrize(
         ("asset_id", "token", "price", "decimals"),
         [
-            (AssetId.TEST_USDC, USDC, 100000, 6),
+            (AssetId.TEST_USDC, USDC, 10**17, 18),
             (AssetId.TEST_USDT, USDT, 10**18, 18),
         ],
     )

@@ -116,8 +116,8 @@ def test_asset_catalog_snapshot_matches_locked_bsc_matrix():
             "chain_id": 97,
             "asset_id": "TEST_USDC",
             "symbol": "USDC",
-            "address": "0xEC1C60D64a06896Df296438c12edD14E974FDE47",
-            "decimals": 6,
+            "address": "0x64544969ed7EBf5f083679233325356EbE738930",
+            "decimals": 18,
             "availability": "active",
             "b402_methods": ("permit2-exact",),
             "b402_kinds": (("permit2-exact", "USD Coin", "1"),),
@@ -155,6 +155,24 @@ def test_testnet_u_uses_distinct_erc8183_and_b402_contract_facts():
         _api("get_b402_asset_by_address")(97, erc8183_u.address)
     with pytest.raises(KeyError, match="not registered"):
         _api("get_asset_by_address")(97, b402_u.address)
+
+
+def test_testnet_usdc_uses_distinct_erc8183_and_b402_contract_facts():
+    erc8183_usdc = _api("get_asset")(97, _api("AssetId").TEST_USDC)
+    b402_usdc = _api("get_b402_asset")(97, _api("AssetId").TEST_USDC)
+
+    assert (erc8183_usdc.address, erc8183_usdc.decimals) == (
+        "0x64544969ed7EBf5f083679233325356EbE738930",
+        18,
+    )
+    assert (b402_usdc.address, b402_usdc.decimals) == (
+        "0xEC1C60D64a06896Df296438c12edD14E974FDE47",
+        6,
+    )
+    with pytest.raises(KeyError, match="not registered"):
+        _api("get_b402_asset_by_address")(97, erc8183_usdc.address)
+    with pytest.raises(KeyError, match="not registered"):
+        _api("get_asset_by_address")(97, b402_usdc.address)
 
 
 def test_catalog_addresses_are_checksummed_and_reverse_lookup_is_case_insensitive():
@@ -402,13 +420,13 @@ def test_asset_amount_conversion_uses_exact_non_negative_decimal_strings():
 
     assert to_asset_atomic(56, asset_id.U, "0") == 0
     assert to_asset_atomic(56, asset_id.U, "1.000000000000000001") == 10**18 + 1
-    assert to_asset_atomic(97, asset_id.TEST_USDC, "1.000001") == 1_000_001
+    assert to_asset_atomic(97, asset_id.TEST_USDC, "1.000001") == 10**18 + 10**12
 
     for invalid in ("", " 1", "1 ", "+1", "-1", ".1", "1.", "1e-6", "1E6"):
         with pytest.raises(ValueError, match="decimal amount"):
             to_asset_atomic(56, asset_id.U, invalid)
     with pytest.raises(ValueError, match="decimal places"):
-        to_asset_atomic(97, asset_id.TEST_USDC, "1.0000001")
+        to_asset_atomic(97, asset_id.TEST_USDC, "1.0000000000000000001")
     with pytest.raises(TypeError, match="string"):
         to_asset_atomic(56, asset_id.U, 1.1)
 

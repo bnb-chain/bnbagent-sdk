@@ -434,7 +434,7 @@ describe("requireB402WalletRoute", () => {
 });
 
 it("derives the same expected asset from a payment option and keeps bigint amount", () => {
-  const token = getAsset(97, AssetId.TEST_USDC);
+  const token = getB402Asset(97, AssetId.TEST_USDC);
   const option = paymentOptionFromCli({
     network: "eip155:97",
     asset: token.address,
