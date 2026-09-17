@@ -23,6 +23,7 @@
 import { getAddress as toChecksumAddress } from "viem";
 
 import { PolicyViolation } from "../signing/errors.js";
+import { describeValue, summarizeParserError } from "../utils/errorMessages.js";
 import { SIGN_TYPED_DATA } from "../wallets/capabilities.js";
 import { UnsupportedWalletOperation } from "../wallets/errors.js";
 import type { SignatureResult } from "../wallets/walletProvider.js";
@@ -179,8 +180,8 @@ export class X402Signer {
       verifying = toChecksumAddress(domain.verifyingContract as `0x${string}`);
     } catch (e) {
       throw new X402PolicyError(
-        `invalid or missing verifyingContract in EIP-712 domain: ${JSON.stringify(domain.verifyingContract)}`,
-        { cause: e },
+        `invalid or missing verifyingContract in EIP-712 domain: ${describeValue(domain.verifyingContract)}`,
+        { cause: summarizeParserError(e) },
       );
     }
 
@@ -188,12 +189,12 @@ export class X402Signer {
     const msgTo = message.to;
     if (typeof msgTo !== "string") {
       throw new X402RecipientMismatchError(
-        `message.to is missing or not an address: ${JSON.stringify(msgTo)}`,
+        `message.to is missing or not an address: ${describeValue(msgTo)}`,
       );
     }
     if (msgTo.toLowerCase() !== expectedTo.toLowerCase()) {
       throw new X402RecipientMismatchError(
-        `expectedTo=${expectedTo} does not match message.to=${msgTo} — refusing to sign`,
+        `expectedTo=${describeValue(expectedTo)} does not match message.to=${describeValue(msgTo)} — refusing to sign`,
       );
     }
 
@@ -205,8 +206,8 @@ export class X402Signer {
       value = BigInt((message.value ?? 0) as bigint | number | string);
     } catch (e) {
       throw new X402AmountExceededError(
-        `message.value is not a valid integer amount: ${JSON.stringify(message.value)}`,
-        { cause: e },
+        `message.value is not a valid integer amount: ${describeValue(message.value)}`,
+        { cause: summarizeParserError(e) },
       );
     }
     // BigInt() widens rather than validates: the declared uint256 field-shape
@@ -215,13 +216,13 @@ export class X402Signer {
     // rejected call still costs no budget.
     if (value < 0n) {
       throw new X402AmountExceededError(
-        `message.value must be non-negative, got ${value}`,
+        `message.value must be non-negative, got ${describeValue(value)}`,
       );
     }
     const cap = this.#maxValue.get(verifying);
     if (cap !== undefined && value > cap) {
       throw new X402AmountExceededError(
-        `value ${value} exceeds max_value_per_call=${cap} for token ${verifying}`,
+        `value ${describeValue(value)} exceeds max_value_per_call=${describeValue(cap)} for token ${verifying}`,
       );
     }
 
@@ -233,7 +234,7 @@ export class X402Signer {
     const msgFrom = message.from;
     if (typeof msgFrom !== "string") {
       throw new X402RecipientMismatchError(
-        `message.from is missing or not an address: ${JSON.stringify(msgFrom)}`,
+        `message.from is missing or not an address: ${describeValue(msgFrom)}`,
       );
     }
     let walletCs: string;
@@ -243,7 +244,7 @@ export class X402Signer {
       msgFromCs = toChecksumAddress(msgFrom as `0x${string}`);
     } catch {
       throw new X402RecipientMismatchError(
-        `message.from is not a valid address: ${JSON.stringify(msgFrom)}`,
+        `message.from is not a valid address: ${describeValue(msgFrom)}`,
       );
     }
     if (msgFromCs !== walletCs) {
