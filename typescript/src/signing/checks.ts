@@ -11,6 +11,7 @@
  */
 
 import { getAddress as toChecksumAddress } from "viem";
+import { describeValue } from "../utils/errorMessages.js";
 import { PolicyViolation } from "./errors.js";
 import { EIP3009_CANONICAL_FIELDS, EIP3009_TYPES } from "./policy.js";
 import type { SigningPolicy } from "./policy.js";
@@ -69,20 +70,8 @@ function isAtomicType(type: string): boolean {
   return m[1] === "bytes" ? size <= 32 : size % 8 === 0 && size <= 256;
 }
 
-/**
- * Render an untrusted name for an error message: JSON-escaped (so a newline
- * cannot forge a log line) and truncated (so an oversized name cannot bloat
- * the message).
- */
-function describeName(value: unknown): string {
-  if (typeof value !== "string") return reprValue(value);
-  const shown =
-    value.length > 64 ? `${value.slice(0, 64)}…(${value.length} chars)` : value;
-  return JSON.stringify(shown);
-}
-
 function describeNames(names: readonly string[]): string {
-  const shown = names.slice(0, MAX_NAMES_IN_ERROR).map(describeName);
+  const shown = names.slice(0, MAX_NAMES_IN_ERROR).map(describeValue);
   const rest = names.length - shown.length;
   return rest > 0
     ? `[${shown.join(", ")}, …(+${rest} more)]`
@@ -107,18 +96,18 @@ function collectStructEdges(
       !IDENTIFIER_RE.test(name)
     ) {
       throw new PolicyViolation(
-        `EIP-712 struct name ${describeName(name)} is not a valid identifier`,
+        `EIP-712 struct name ${describeValue(name)} is not a valid identifier`,
       );
     }
     if (isAtomicType(name)) {
       throw new PolicyViolation(
-        `EIP-712 struct name ${describeName(name)} shadows an atomic type`,
+        `EIP-712 struct name ${describeValue(name)} shadows an atomic type`,
       );
     }
     const fields = types[name];
     if (!Array.isArray(fields)) {
       throw new PolicyViolation(
-        `types[${describeName(name)}] must be an array of field descriptors, got ${reprValue(fields)}`,
+        `types[${describeValue(name)}] must be an array of field descriptors, got ${describeValue(fields)}`,
       );
     }
     fieldCount += fields.length;
@@ -132,7 +121,7 @@ function collectStructEdges(
     for (const field of fields) {
       if (typeof field !== "object" || field === null) {
         throw new PolicyViolation(
-          `EIP-712 struct ${describeName(name)} has a non-object field descriptor: ${reprValue(field)}`,
+          `EIP-712 struct ${describeValue(name)} has a non-object field descriptor: ${describeValue(field)}`,
         );
       }
       const fieldName = (field as Record<string, unknown>).name;
@@ -143,12 +132,12 @@ function collectStructEdges(
         !IDENTIFIER_RE.test(fieldName)
       ) {
         throw new PolicyViolation(
-          `EIP-712 struct ${describeName(name)} has a field whose name is not a valid identifier: ${describeName(fieldName)}`,
+          `EIP-712 struct ${describeValue(name)} has a field whose name is not a valid identifier: ${describeValue(fieldName)}`,
         );
       }
       if (seen.has(fieldName)) {
         throw new PolicyViolation(
-          `EIP-712 struct ${describeName(name)} declares field ${describeName(fieldName)} twice`,
+          `EIP-712 struct ${describeValue(name)} declares field ${describeValue(fieldName)} twice`,
         );
       }
       seen.add(fieldName);
@@ -157,13 +146,13 @@ function collectStructEdges(
         fieldType.length > MAX_SCHEMA_IDENTIFIER_LENGTH
       ) {
         throw new PolicyViolation(
-          `EIP-712 field ${name}.${fieldName} has an invalid type: ${describeName(fieldType)}`,
+          `EIP-712 field ${name}.${fieldName} has an invalid type: ${describeValue(fieldType)}`,
         );
       }
       const match = TYPE_REFERENCE_RE.exec(fieldType);
       if (!match) {
         throw new PolicyViolation(
-          `EIP-712 field ${name}.${fieldName} has a malformed type reference: ${describeName(fieldType)}`,
+          `EIP-712 field ${name}.${fieldName} has a malformed type reference: ${describeValue(fieldType)}`,
         );
       }
       const base = match[1] as string;
@@ -171,7 +160,7 @@ function collectStructEdges(
         children.push(base);
       } else if (!isAtomicType(base)) {
         throw new PolicyViolation(
-          `EIP-712 field ${name}.${fieldName} references unknown type ${describeName(base)}`,
+          `EIP-712 field ${name}.${fieldName} references unknown type ${describeValue(base)}`,
         );
       }
     }
@@ -273,12 +262,6 @@ function checksumOrNone(addr: unknown): string | undefined {
   }
 }
 
-function reprValue(v: unknown): string {
-  if (typeof v === "string") return `'${v}'`;
-  if (v === null || v === undefined) return "None";
-  return String(v);
-}
-
 /**
  * Coerce `value` to an integer with Python `int()` semantics.
  *
@@ -299,11 +282,11 @@ export function toIntStrict(value: unknown): number {
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (!/^[+-]?\d+$/.test(trimmed)) {
-      throw new Error(`invalid literal for int(): ${reprValue(value)}`);
+      throw new Error(`invalid literal for int(): ${describeValue(value)}`);
     }
     return Math.trunc(Number(trimmed));
   }
-  throw new Error(`${reprValue(value)} is not int-coercible`);
+  throw new Error(`${describeValue(value)} is not int-coercible`);
 }
 
 /**
@@ -350,7 +333,7 @@ export function check(
     chainId = toIntStrict(domain.chainId);
   } catch {
     throw new PolicyViolation(
-      `EIP-712 domain chainId is not integer-coercible: ${reprValue(domain.chainId)}`,
+      `EIP-712 domain chainId is not integer-coercible: ${describeValue(domain.chainId)}`,
       { primaryType },
     );
   }
@@ -358,7 +341,7 @@ export function check(
   const verifying = checksumOrNone(domain.verifyingContract);
   if (verifying === undefined) {
     throw new PolicyViolation(
-      `EIP-712 domain verifyingContract is not a valid address: ${reprValue(domain.verifyingContract)}`,
+      `EIP-712 domain verifyingContract is not a valid address: ${describeValue(domain.verifyingContract)}`,
       { primaryType, chainId },
     );
   }
@@ -446,7 +429,7 @@ function checkFieldShape(
   const fields = types[primaryType];
   if (!Array.isArray(fields)) {
     throw new PolicyViolation(
-      `types['${primaryType}'] must be an array of field descriptors, got ${reprValue(fields)}`,
+      `types['${primaryType}'] must be an array of field descriptors, got ${describeValue(fields)}`,
       { primaryType, chainId, verifyingContract: verifying },
     );
   }
