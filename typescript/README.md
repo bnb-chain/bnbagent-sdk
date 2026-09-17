@@ -49,6 +49,24 @@ import { SlidingWindowLimiter, RateLimitExceeded } from "@bnbagent/sdk/utils";
 
 Subpaths available: `./erc8004`, `./erc8183`, `./x402`, `./storage`, `./wallets`, `./signing`, `./networks`, `./utils`.
 
+The TypeScript signing checker supports nested EIP-712 structs when their
+dependency graph has one unambiguous root. Arrays of structs are supported;
+ambiguous, disconnected and cyclic multi-struct graphs are rejected. This enables
+explicitly opted-in Permit2 `PermitWitnessTransferFrom` requests through the
+public wallet API. The normal primary-type/domain allowlists, denylist and
+validity checks still run: nested signing does not grant a new payment permission.
+Every schema, single- or multi-struct, is validated before signing: struct and
+field names must be Solidity identifiers, field types must be EIP-712 atomic
+types (no `uint`/`int` aliases) or declared structs, optionally as arrays, and
+schemas are limited to 256 structs, 4096 total fields, depth 64 and
+256-character identifiers. Violations raise `PolicyViolation` before signing.
+
+Explicitly allowing a Permit2 domain and primary type is not a payment budget.
+The generic SDK policy does not pin Permit2 witness schemas, spenders, token
+amounts, recipients or `deadline` bounds. The trusted payment integration must
+validate those values before calling the wallet; never forward untrusted raw
+typed data after merely adding Permit2 to the allowlist.
+
 ## Quickstart
 
 Both snippets assume a funded wallet on `bsc-testnet` (get test BNB from the [BNB Chain faucet](https://www.bnbchain.org/en/testnet-faucet)) and an `.env` populated per the [environment variables](#environment-variables) table below. Call `loadEnv()` once at your entrypoint to load `.env`/`.env.local` (the SDK never does this for you - see its docstring for the precedence rules).
