@@ -39,7 +39,12 @@
  * Port of `python/bnbagent/erc8183/negotiation.py`.
  */
 
-import { getAddress } from "viem";
+import {
+  BaseError,
+  ContractFunctionRevertedError,
+  ContractFunctionZeroDataError,
+  getAddress,
+} from "viem";
 import { canonicalJson, keccakOfText } from "../core/canonicalJson.js";
 import {
   type AssetId,
@@ -120,6 +125,38 @@ function normalizeAtomicPrice(value: unknown, fieldName = "price"): string {
     );
   }
   return value;
+}
+
+/**
+ * Distinguish "this deployment has no multi-token surface" from "the chain
+ * could not answer".
+ *
+ * A Commerce that implements `isPaymentTokenSupported` reads a mapping and
+ * cannot revert, while one deployed before multi-token support has no such
+ * selector and its dispatcher reverts with empty returndata. So a revert that
+ * carries nothing back is a definite answer about the contract, whereas one
+ * carrying a reason string or a custom error is the function itself refusing
+ * and says nothing about the selector existing.
+ *
+ * Emptiness is read off `data`/`signature` rather than the revert text:
+ * viem populates those whenever there was returndata to decode, while the
+ * text for a bare revert is provider wording we should not depend on.
+ * Transport failures never reach this classification, so they keep failing
+ * closed.
+ */
+function lacksMultiTokenSurface(error: unknown): boolean {
+  if (!(error instanceof BaseError)) return false;
+  if (error.walk((e) => e instanceof ContractFunctionZeroDataError) !== null) {
+    return true;
+  }
+  const reverted = error.walk(
+    (e) => e instanceof ContractFunctionRevertedError,
+  ) as ContractFunctionRevertedError | null;
+  return (
+    reverted !== null &&
+    reverted.data === undefined &&
+    reverted.signature === undefined
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -869,6 +906,10 @@ export class NegotiationHandler {
     string,
     { asset: PaymentAsset; price: string }
   >();
+  // Latched, because a deployment does not grow the selector under a running
+  // seller; re-probing would spend one reverting call per negotiation. An
+  // upgraded stack is picked up on restart.
+  private singleTokenDeployment = false;
 
   constructor(opts: NegotiationHandlerOpts) {
     if (opts.walletProvider && opts.quoteSigner) {
@@ -1037,24 +1078,61 @@ export class NegotiationHandler {
 
   /** Refresh live Commerce allowlist state, clearing stale offers on failure. */
   async refreshPaymentTokens(): Promise<readonly AssetId[]> {
-    if (!this.multiAsset || this.erc8183Client === null) return [];
+    const client = this.erc8183Client;
+    if (!this.multiAsset || client === null) return [];
     this.activeOffers = new Map();
+    if (this.singleTokenDeployment) return this.refreshLegacyOffer(client);
+
     const refreshed = new Map<string, { asset: PaymentAsset; price: string }>();
     try {
       for (const [address, offer] of this.configuredOffers) {
-        if (
-          await this.erc8183Client.isPaymentTokenSupported(offer.asset.address)
-        ) {
+        if (await client.isPaymentTokenSupported(offer.asset.address)) {
           refreshed.set(address, offer);
         }
       }
     } catch (error) {
+      if (lacksMultiTokenSurface(error)) {
+        this.singleTokenDeployment = true;
+        return this.refreshLegacyOffer(client);
+      }
       throw new Error("payment-token refresh failed; active offers cleared", {
         cause: error,
       });
     }
     this.activeOffers = refreshed;
     return [...refreshed.values()].map((offer) => offer.asset.assetId);
+  }
+
+  /**
+   * Narrow the configured catalog to the one token a single-token deployment
+   * can escrow. Assets the contract cannot hold stay inactive, so `negotiate`
+   * refuses them by name rather than quoting a price no job could be funded
+   * in — and the seller's default asset keeps working meanwhile.
+   */
+  private async refreshLegacyOffer(
+    client: ERC8183Client,
+  ): Promise<readonly AssetId[]> {
+    let legacyToken: string;
+    try {
+      legacyToken = (await client.paymentToken()).toLowerCase();
+    } catch (error) {
+      throw new Error("payment-token refresh failed; active offers cleared", {
+        cause: error,
+      });
+    }
+    const offer = this.configuredOffers.get(legacyToken);
+    if (offer === undefined) return [];
+    this.activeOffers = new Map([[legacyToken, offer]]);
+    return [offer.asset.assetId];
+  }
+
+  /**
+   * True once the bound Commerce deployment proved it has no multi-token
+   * surface. Callers use this to tell an operator that the stack — not the
+   * configuration — is what narrowed the offered assets.
+   */
+  get isSingleTokenDeployment(): boolean {
+    return this.singleTokenDeployment;
   }
 
   private supportedDetails(): Record<string, unknown> {

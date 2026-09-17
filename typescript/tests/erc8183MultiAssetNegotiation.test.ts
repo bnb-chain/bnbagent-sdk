@@ -1,4 +1,9 @@
-import { getAddress } from "viem";
+import {
+  BaseError,
+  ContractFunctionRevertedError,
+  encodeErrorResult,
+  getAddress,
+} from "viem";
 import { describe, expect, it, vi } from "vitest";
 import type { ERC8183Client } from "../src/erc8183/client.js";
 import {
@@ -276,4 +281,145 @@ describe("multi-asset ERC-8183 negotiation", () => {
       },
     });
   });
+});
+
+describe("single-token Commerce deployments", () => {
+  // A deployment predating multi-token support has no
+  // `isPaymentTokenSupported` selector, so its dispatcher reverts with empty
+  // returndata — the exact shape viem reports from BSC.
+  function dispatcherRevert(): Error {
+    const reverted = new ContractFunctionRevertedError({
+      abi: [],
+      functionName: "isPaymentTokenSupported",
+      message: "execution reverted",
+    });
+    return new BaseError(
+      'The contract function "isPaymentTokenSupported" reverted.',
+      { cause: reverted },
+    );
+  }
+
+  function legacyClient(defaultToken = TEST_U.address) {
+    return {
+      network: { chainId: CHAIN_ID },
+      commerce: { address: COMMERCE },
+      paymentToken: vi.fn(async () => defaultToken),
+      isPaymentTokenSupported: vi.fn(async () => {
+        throw dispatcherRevert();
+      }),
+    } as unknown as ERC8183Client;
+  }
+
+  it("keeps selling the contract's own token instead of failing to build", async () => {
+    const erc8183Client = legacyClient();
+    const handler = await NegotiationHandler.fromErc8183ClientMulti(
+      erc8183Client,
+      {
+        servicePrices: {
+          [AssetId.TEST_U]: "1000000",
+          [AssetId.TEST_USDC]: "100000",
+        },
+      },
+    );
+
+    expect(handler.isSingleTokenDeployment).toBe(true);
+    expect(
+      (await handler.negotiate(request(TEST_U.address))).response,
+    ).toMatchObject({
+      accepted: true,
+      terms: { currency: TEST_U.address, price: "1000000" },
+    });
+  });
+
+  it("names the asset it can still sell when refusing one the stack cannot hold", async () => {
+    const handler = await NegotiationHandler.fromErc8183ClientMulti(
+      legacyClient(),
+      {
+        servicePrices: {
+          [AssetId.TEST_U]: "1000000",
+          [AssetId.TEST_USDC]: "100000",
+        },
+      },
+    );
+
+    expect(
+      (await handler.negotiate(request(TEST_USDC.address))).response,
+    ).toMatchObject({
+      accepted: false,
+      reason_code: ReasonCode.UNSUPPORTED,
+      details: { supported_assets: [AssetId.TEST_U] },
+    });
+  });
+
+  it("offers nothing when the seller configured no asset the stack can hold", async () => {
+    const handler = await NegotiationHandler.fromErc8183ClientMulti(
+      legacyClient(),
+      { servicePrices: { [AssetId.TEST_USDC]: "100000" } },
+    );
+
+    expect((await handler.negotiate(request())).response).toMatchObject({
+      accepted: false,
+      reason_code: ReasonCode.UNSUPPORTED,
+      details: { supported_assets: [] },
+    });
+  });
+
+  it("probes the missing selector once rather than per negotiation", async () => {
+    const erc8183Client = legacyClient();
+    const handler = await NegotiationHandler.fromErc8183ClientMulti(
+      erc8183Client,
+      { servicePrices: { [AssetId.TEST_U]: "1000000" } },
+    );
+    const probesAfterBuild = vi.mocked(erc8183Client.isPaymentTokenSupported)
+      .mock.calls.length;
+
+    await handler.negotiate(request(TEST_U.address));
+    await handler.negotiate(request(TEST_U.address));
+
+    expect(
+      vi.mocked(erc8183Client.isPaymentTokenSupported).mock.calls.length,
+    ).toBe(probesAfterBuild);
+  });
+
+  // A function that exists and refuses carries returndata back; only a
+  // missing selector comes back empty. Degrading on the former would sell
+  // through a pause or an access-control revert.
+  it.each([
+    [
+      "a reason string",
+      encodeErrorResult({
+        abi: [{ type: "error", name: "Error", inputs: [{ type: "string" }] }],
+        errorName: "Error",
+        args: ["Pausable: paused"],
+      }),
+    ],
+    ["a custom error", "0x8e78f0cb" as const],
+  ])(
+    "still fails closed when the contract reverts with %s",
+    async (_label, data) => {
+      const erc8183Client = client(new Set([TEST_USDC.address.toLowerCase()]));
+      const handler = await multi(erc8183Client);
+
+      vi.mocked(erc8183Client.isPaymentTokenSupported).mockRejectedValueOnce(
+        new BaseError(
+          'The contract function "isPaymentTokenSupported" reverted.',
+          {
+            cause: new ContractFunctionRevertedError({
+              abi: [],
+              functionName: "isPaymentTokenSupported",
+              data,
+            }),
+          },
+        ),
+      );
+
+      expect(
+        (await handler.negotiate(request(TEST_USDC.address))).response,
+      ).toMatchObject({
+        reason_code: ReasonCode.UNSUPPORTED,
+        details: { supported_assets: [] },
+      });
+      expect(handler.isSingleTokenDeployment).toBe(false);
+    },
+  );
 });

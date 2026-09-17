@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from web3.exceptions import BadFunctionCallOutput, ContractCustomError, ContractLogicError
 
 from bnbagent.erc8183.negotiation import NegotiationHandler, ReasonCode
 from bnbagent.networks import AssetId, get_asset
@@ -285,3 +286,131 @@ def test_legacy_single_currency_preserves_default_and_rejects_other_explicit_tok
     assert rejected.accepted is False
     assert rejected.response["reason_code"] == ReasonCode.UNSUPPORTED
     assert rejected.response["details"] == {"supported_assets": []}
+
+
+# --------------------------------------------------------------------------
+# Single-token Commerce deployments
+# --------------------------------------------------------------------------
+
+# Error(string) selector, data offset, length and "Pausable: paused" padded —
+# what web3 leaves in ``ContractLogicError.data`` for a revert with a reason.
+REASON_STRING_DATA = (
+    "0x08c379a0"
+    "0000000000000000000000000000000000000000000000000000000000000020"
+    "0000000000000000000000000000000000000000000000000000000000000010"
+    "5061757361626c653a2070617573656400000000000000000000000000000000"
+)
+CUSTOM_ERROR_DATA = "0x8e78f0cb"
+
+
+def _dispatcher_revert(data: str | None = "no data") -> ContractLogicError:
+    """The exception web3 raises for a selector the deployment does not have.
+
+    Verified against the real U-only bsc-testnet proxy: its dispatcher reverts
+    with empty returndata and BSC's public RPC omits the ``data`` field, which
+    web3 reports as its ``MISSING_DATA`` sentinel, ``"no data"``.
+    """
+    return ContractLogicError("execution reverted", data=data)
+
+
+def _legacy_client(
+    *, default: str = TEST_U.address, probe_error: Exception | None = None
+) -> MagicMock:
+    client = MagicMock()
+    client.network.chain_id = CHAIN_ID
+    client.commerce.address = COMMERCE
+    client.payment_token = default
+    client.is_payment_token_supported.side_effect = probe_error or _dispatcher_revert()
+    return client
+
+
+@pytest.mark.parametrize(
+    "probe_error",
+    [
+        _dispatcher_revert("no data"),
+        _dispatcher_revert(None),
+        _dispatcher_revert("0x"),
+        BadFunctionCallOutput(
+            "Could not transact with/call contract function, is contract "
+            "deployed correctly and chain synced?"
+        ),
+    ],
+    ids=["missing-data-sentinel", "data-none", "empty-hex", "no-returndata"],
+)
+def test_single_token_deployment_keeps_selling_the_contracts_own_token(probe_error):
+    handler = NegotiationHandler.from_erc8183_client_multi(
+        erc8183_client=_legacy_client(probe_error=probe_error),
+        service_prices={AssetId.TEST_U: "1000000", AssetId.TEST_USDC: "100000"},
+    )
+
+    result = handler.negotiate(_request(TEST_U.address))
+
+    assert handler.is_single_token_deployment is True
+    assert result.accepted is True
+    assert result.response["terms"]["currency"] == TEST_U.address
+    assert result.response["terms"]["price"] == "1000000"
+
+
+def test_single_token_deployment_names_the_asset_it_can_still_sell():
+    handler = NegotiationHandler.from_erc8183_client_multi(
+        erc8183_client=_legacy_client(),
+        service_prices={AssetId.TEST_U: "1000000", AssetId.TEST_USDC: "100000"},
+    )
+
+    rejected = handler.negotiate(_request(TEST_USDC.address))
+
+    assert rejected.accepted is False
+    assert rejected.response["reason_code"] == ReasonCode.UNSUPPORTED
+    assert rejected.response["details"] == {"supported_assets": [AssetId.TEST_U.value]}
+
+
+def test_single_token_deployment_offers_nothing_when_no_configured_asset_is_holdable():
+    handler = NegotiationHandler.from_erc8183_client_multi(
+        erc8183_client=_legacy_client(),
+        service_prices={AssetId.TEST_USDC: "100000"},
+    )
+
+    result = handler.negotiate(_request())
+
+    assert handler.is_single_token_deployment is True
+    assert result.accepted is False
+    assert result.response["reason_code"] == ReasonCode.UNSUPPORTED
+    assert result.response["details"] == {"supported_assets": []}
+
+
+def test_missing_selector_is_probed_once_not_per_negotiation():
+    client = _legacy_client()
+    handler = NegotiationHandler.from_erc8183_client_multi(
+        erc8183_client=client,
+        service_prices={AssetId.TEST_U: "1000000"},
+    )
+    probes_after_build = client.is_payment_token_supported.call_count
+
+    handler.negotiate(_request(TEST_U.address))
+    handler.negotiate(_request(TEST_U.address))
+
+    assert probes_after_build == 1
+    assert client.is_payment_token_supported.call_count == probes_after_build
+
+
+@pytest.mark.parametrize(
+    "probe_error",
+    [
+        ContractLogicError("execution reverted: Pausable: paused", data=REASON_STRING_DATA),
+        ContractCustomError(CUSTOM_ERROR_DATA, data=CUSTOM_ERROR_DATA),
+    ],
+    ids=["reason-string", "custom-error"],
+)
+def test_revert_carrying_returndata_fails_closed_without_latching_single_token(probe_error):
+    client = _client(supported={TEST_USDC.address})
+    handler = _multi_handler(client)
+    client.is_payment_token_supported.side_effect = probe_error
+
+    result = handler.negotiate(_request(TEST_USDC.address))
+
+    assert result.accepted is False
+    assert result.response["reason_code"] == ReasonCode.UNSUPPORTED
+    assert result.response["details"] == {"supported_assets": []}
+    assert handler.is_single_token_deployment is False
+    with pytest.raises(RuntimeError, match="payment-token refresh failed"):
+        handler.refresh_payment_tokens()

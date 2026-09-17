@@ -43,6 +43,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from web3 import Web3
+from web3.exceptions import BadFunctionCallOutput, ContractLogicError
 
 from ..networks import AssetId, PaymentAsset, get_asset, list_assets, parse_asset_id
 
@@ -105,6 +106,49 @@ def _normalize_atomic_price(value: str | int, *, field_name: str = "price") -> s
     ):
         raise ValueError(f"{field_name} must be a canonical non-negative integer string")
     return value
+
+
+# Every spelling web3 uses for "the revert carried no returndata": ``None`` and
+# the ``MISSING_DATA`` sentinel when the node omitted the ``data`` field (what
+# BSC's public RPC does), ``"0x"`` when it sent an empty one. The sentinel is
+# spelled out rather than imported from ``web3._utils.error_formatters_utils``
+# so we do not depend on a private module path across the supported web3 6/7
+# range; should a future web3 rename it, this stops matching and callers fall
+# back to failing closed.
+_EMPTY_REVERT_DATA = frozenset({"", "0x", "no data"})
+
+
+def _lacks_multi_token_surface(exc: Exception) -> bool:
+    """Tell "this deployment has no multi-token surface" from "the chain could
+    not answer".
+
+    A Commerce that implements ``isPaymentTokenSupported`` reads a mapping and
+    cannot revert, while one deployed before multi-token support has no such
+    selector and its dispatcher reverts with empty returndata. A revert that
+    carries nothing back is therefore a definite answer about the contract,
+    whereas one carrying a reason string or a custom error is the function
+    itself refusing (e.g. paused) and says nothing about the selector existing.
+
+    Emptiness is read off ``ContractLogicError.data`` rather than the revert
+    text, which is provider wording: web3 fills ``data`` whenever there was
+    returndata to decode, so an ``Error(string)`` revert keeps its ABI-encoded
+    payload there and a custom error arrives as ``ContractCustomError`` (a
+    ``ContractLogicError`` subclass) whose ``data`` holds at least its 4-byte
+    selector — both non-empty, both kept failing closed.
+    ``BadFunctionCallOutput`` covers a node answering ``0x`` without reverting;
+    it is also raised for an address with no code, but the single-token
+    fallback then has to read ``paymentToken()`` successfully, so an
+    unreachable contract still fails closed there.
+
+    Transport failures are not reverts and never reach this classification.
+    """
+    if isinstance(exc, BadFunctionCallOutput):
+        return True
+    if not isinstance(exc, ContractLogicError):
+        return False
+    return exc.data is None or (
+        isinstance(exc.data, str) and exc.data.strip().lower() in _EMPTY_REVERT_DATA
+    )
 
 
 @dataclass
@@ -621,6 +665,10 @@ class NegotiationHandler:
         self._erc8183_client: ERC8183Client | None = None
         self._configured_offers: dict[str, tuple[PaymentAsset, str]] = {}
         self._active_offers: dict[str, tuple[PaymentAsset, str]] = {}
+        # Latched, because a deployment does not grow the selector under a
+        # running seller; re-probing would spend one reverting call per
+        # negotiation. An upgraded stack is picked up on restart.
+        self._single_token_deployment = False
 
         if wallet_provider is not None and chain_id is None:
             logger.warning(
@@ -691,7 +739,10 @@ class NegotiationHandler:
 
         Mapping keys are canonical :class:`AssetId` values, never UI symbols or
         token addresses. Values are non-negative atomic-unit integer strings.
-        Commerce support is checked immediately and can be refreshed later.
+        Commerce support is checked immediately and can be refreshed later. A
+        deployment with no multi-token surface narrows to the single token it
+        can escrow instead of failing to build — see
+        :attr:`is_single_token_deployment`.
         """
         if not service_prices:
             raise ValueError("service_prices must contain at least one canonical AssetId")
@@ -734,19 +785,51 @@ class NegotiationHandler:
 
     def refresh_payment_tokens(self) -> tuple[AssetId, ...]:
         """Refresh active Commerce offers, clearing stale state on any failure."""
-        if not self._multi_asset or self._erc8183_client is None:
+        client = self._erc8183_client
+        if not self._multi_asset or client is None:
             return ()
 
         self._active_offers = {}
+        if self._single_token_deployment:
+            return self._refresh_legacy_offer(client)
+
         refreshed: dict[str, tuple[PaymentAsset, str]] = {}
         try:
             for address, offer in self._configured_offers.items():
-                if self._erc8183_client.is_payment_token_supported(offer[0].address):
+                if client.is_payment_token_supported(offer[0].address):
                     refreshed[address] = offer
         except Exception as exc:
+            if _lacks_multi_token_surface(exc):
+                self._single_token_deployment = True
+                return self._refresh_legacy_offer(client)
             raise RuntimeError("payment-token refresh failed; active offers cleared") from exc
         self._active_offers = refreshed
         return tuple(offer[0].asset_id for offer in refreshed.values())
+
+    def _refresh_legacy_offer(self, client: ERC8183Client) -> tuple[AssetId, ...]:
+        """Narrow the configured catalog to the one token a single-token
+        deployment can escrow.
+
+        Assets the contract cannot hold stay inactive, so :meth:`negotiate`
+        refuses them by name rather than quoting a price no job could ever be
+        funded in — and the seller's default asset keeps working meanwhile.
+        """
+        try:
+            legacy_token = client.payment_token.lower()
+        except Exception as exc:
+            raise RuntimeError("payment-token refresh failed; active offers cleared") from exc
+        offer = self._configured_offers.get(legacy_token)
+        if offer is None:
+            return ()
+        self._active_offers = {legacy_token: offer}
+        return (offer[0].asset_id,)
+
+    @property
+    def is_single_token_deployment(self) -> bool:
+        """True once the bound Commerce deployment proved it has no multi-token
+        surface. Callers use this to tell an operator that the stack — not the
+        configuration — is what narrowed the offered assets."""
+        return self._single_token_deployment
 
     def _supported_details(self) -> dict[str, object]:
         if not self._multi_asset:
