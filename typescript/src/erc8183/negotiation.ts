@@ -311,9 +311,17 @@ export class NegotiationRequest {
   }
 
   static fromDict(data: Record<string, unknown>): NegotiationRequest {
+    const taskDescription = requireString(data, "task_description");
+    const terms = data.terms;
+    if (terms == null) {
+      throw new Error("negotiation request missing required field: terms");
+    }
+    if (typeof terms !== "object" || Array.isArray(terms)) {
+      throw new Error("negotiation request field terms must be an object");
+    }
     return new NegotiationRequest({
-      taskDescription: requireString(data, "task_description"),
-      terms: TermSpecification.fromDict(data.terms as Record<string, unknown>),
+      taskDescription,
+      terms: TermSpecification.fromDict(terms as Record<string, unknown>),
       contextUrls: (data.context_urls as string[] | undefined) ?? null,
       requestId: (data.request_id as string | undefined) ?? null,
     });
