@@ -7,6 +7,7 @@ import {
   _resetTxConfigOverrides,
   setDefaultReceiptTimeout,
 } from "../src/core/txConfig.js";
+import { excErrorFields } from "../src/erc8183/jobOps.js";
 import { TransactionPendingError } from "../src/errors.js";
 import type {
   ExecutionContext,
@@ -165,6 +166,46 @@ describe("sendTx: read-only guard", () => {
       "wallet_provider is required for write operations (client is read-only)",
     );
   });
+});
+
+describe("sendTx: structured RPC revert data", () => {
+  it.each(["eth_estimateGas", "eth_call"])(
+    "preserves the RPC cause and envelope selector from %s",
+    async (method) => {
+      const rpcError = {
+        code: 3,
+        message: "execution reverted",
+        data: "0x32d53d69",
+      };
+      const { contract, wallet, mock } = makeContract({
+        handlers: {
+          [method]: () => {
+            throw rpcError;
+          },
+        },
+      });
+      const error = await contract
+        .callSendTx({ functionName: "setValue", args: [1n] })
+        .catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(Error);
+      const causes: unknown[] = [];
+      let current = error;
+      while (
+        current !== null &&
+        typeof current === "object" &&
+        !causes.includes(current)
+      ) {
+        causes.push(current);
+        current = (current as Error).cause;
+      }
+      expect(causes).toContain(rpcError);
+      expect(excErrorFields(error).error).toContain(
+        "execution reverted: 0x32d53d69",
+      );
+      expect(wallet.signedTxs).toHaveLength(0);
+      expect(sendRawCount(mock)).toBe(0);
+    },
+  );
 });
 
 describe("sendTx: gas estimation", () => {

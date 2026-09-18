@@ -170,7 +170,9 @@ export async function estimateGasLimit(
       return DEFAULT_GAS_FALLBACK;
     }
     if (describeError(error).toLowerCase().includes("revert")) {
-      throw new Error(`Transaction would revert: ${describeError(error)}`);
+      throw new Error(`Transaction would revert: ${describeError(error)}`, {
+        cause: error,
+      });
     }
     console.warn(
       `${logPrefix} Gas estimation unavailable (${describeError(error)}); falling back to gas=${DEFAULT_GAS_FALLBACK}`,
@@ -463,6 +465,7 @@ export async function sendSelfPayTx(
           } else {
             throw new Error(
               `Transaction would revert: ${describeError(preflight.error)}`,
+              { cause: preflight.error },
             );
           }
         }
