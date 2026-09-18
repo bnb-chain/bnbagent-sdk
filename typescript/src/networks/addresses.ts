@@ -102,9 +102,10 @@ export function getAddress(chainId: number): DeployedAddresses {
 /**
  * `"chainId:checksumAddress"` keys of every registered payment token.
  *
- * Used as the default `domainAllowlist` seed for `SigningPolicy`: a
- * typed-data signature against any verifyingContract not in this set will be
- * refused unless the caller explicitly extends the policy.
+ * Compatibility API for callers that still use the deployment registry.
+ * `SigningPolicy.strictDefault()` derives its domain allowlist from the active
+ * asset catalog's verified EIP-3009 metadata instead, so this set must not be
+ * used to infer every strict-signing domain.
  *
  * A fresh `Set` is built on every call, so mutating the returned instance
  * never leaks back into the registry.

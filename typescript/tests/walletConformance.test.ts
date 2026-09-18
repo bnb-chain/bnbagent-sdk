@@ -26,6 +26,7 @@ import type {
   ExecutionContext,
   SignatureResult,
 } from "../src/wallets/index.js";
+import { ERC8183_CREATE_JOB_WITH_TOKEN } from "../src/wallets/intents.js";
 import { mockPublicClient } from "./helpers/mockTransport.js";
 
 const DUMMY_SIGNATURE: SignatureResult = {
@@ -200,7 +201,7 @@ describe("WalletProvider#makeExecutor", () => {
     // are private and can't be inspected directly.
     const ABI = parseAbi(["function setValue(uint256 x) returns (bool)"]);
     const result = await executor.execute({
-      name: "test.op",
+      name: ERC8183_CREATE_JOB_WITH_TOKEN,
       call: {
         address: `0x${"22".repeat(20)}`,
         abi: ABI,

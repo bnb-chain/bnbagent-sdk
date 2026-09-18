@@ -118,6 +118,20 @@ export class JobError extends BNBAgentError {
   }
 }
 
+/** The caller's expected token differs from the job's on-chain token. */
+export class JobPaymentTokenMismatchError extends JobError {
+  constructor(
+    public readonly jobId: bigint,
+    public readonly expectedToken: `0x${string}`,
+    public readonly actualToken: `0x${string}`,
+  ) {
+    super(
+      `job ${jobId} payment token mismatch: expected ${expectedToken}, got ${actualToken}`,
+    );
+    this.name = "JobPaymentTokenMismatchError";
+  }
+}
+
 /**
  * Negotiation failed.
  *

@@ -26,9 +26,6 @@ import {
 import { generatePrivateKey } from "viem/accounts";
 import {
   BSC_TESTNET_CHAIN_ID,
-  PAYMENT_TOKEN_EIP712_NAME,
-  PAYMENT_TOKEN_EIP712_VERSION,
-  getAddress,
 } from "../../src/networks/index.js";
 import { PolicyViolation, SigningPolicy } from "../../src/signing/index.js";
 import { EVMWalletProvider } from "../../src/wallets/index.js";
@@ -36,6 +33,7 @@ import {
   X402AmountExceededError,
   X402RecipientMismatchError,
   X402Signer,
+  resolveExpectedEip3009Route,
 } from "../../src/x402/index.js";
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
@@ -44,7 +42,8 @@ const PW = "e2e-secure-pw";
 // Ephemeral key — this script never broadcasts. Override via E2E_PRIVATE_KEY
 // if you need a deterministic key for a specific repro.
 const PK = process.env.E2E_PRIVATE_KEY || generatePrivateKey();
-const U_TESTNET = getAddress(BSC_TESTNET_CHAIN_ID).paymentToken;
+const U_TESTNET_ROUTE = resolveExpectedEip3009Route("eip155:97", "TEST_U");
+const U_TESTNET = U_TESTNET_ROUTE.address;
 
 const EIP712_DOMAIN_FIELDS = [
   { name: "name", type: "string" },
@@ -102,8 +101,8 @@ function twaMessage(
 
 function twaDomain(): TypedDataDomain {
   return {
-    name: PAYMENT_TOKEN_EIP712_NAME,
-    version: PAYMENT_TOKEN_EIP712_VERSION,
+    name: U_TESTNET_ROUTE.name,
+    version: U_TESTNET_ROUTE.version,
     chainId: BSC_TESTNET_CHAIN_ID,
     verifyingContract: U_TESTNET,
   };
@@ -246,6 +245,7 @@ async function assertion5X402SignerRejectsOvervalue(
       domain,
       types,
       message: msg,
+      expectedRoute: U_TESTNET_ROUTE,
       expectedTo: msg.to as string,
     });
   } catch (error) {
@@ -277,6 +277,7 @@ async function assertion6X402SignerRejectsRecipientMismatch(
       domain,
       types,
       message: msg,
+      expectedRoute: U_TESTNET_ROUTE,
       expectedTo: `0x${"9".repeat(40)}`, // different!
     });
   } catch (error) {

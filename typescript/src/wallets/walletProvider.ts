@@ -90,6 +90,10 @@ export abstract class WalletProvider {
    * `"mpc"`, ...). Used by the wallet factory to select an implementation
    * and by {@link describe} for uniform introspection. Concrete providers
    * override it; third-party subclasses keep the default.
+   *
+   * Studio config uses `"evm-local"` for {@link EVMWalletProvider}
+   * (`kind === "evm"`). Route gates that accept a kind string must treat
+   * those two as the same local keystore wallet.
    */
   static readonly kind: string = "custom";
 

@@ -13,10 +13,16 @@ Public surface:
 
 from __future__ import annotations
 
-from .client import DEFAULT_APPROVE_FLOOR_UNITS, ERC8183Client
+from ..exceptions import JobPaymentTokenMismatchError
+from .client import DEFAULT_APPROVE_FLOOR_UNITS, ERC8183Client, TokenMetadata
 from .commerce import CommerceClient
 from .constants import get_erc8183_config
-from .job_ops import ERR_QUOTE_INVALID, ERC8183JobOps, funded_job_watcher
+from .job_ops import (
+    ERR_JOB_TOKEN_MISMATCH,
+    ERR_QUOTE_INVALID,
+    ERC8183JobOps,
+    funded_job_watcher,
+)
 from .negotiation import (
     NegotiationHandler,
     NegotiationRequest,
@@ -47,6 +53,8 @@ __all__ = [
     "RouterClient",
     "PolicyClient",
     "DEFAULT_APPROVE_FLOOR_UNITS",
+    "TokenMetadata",
+    "JobPaymentTokenMismatchError",
     # Types
     "Job",
     "JobStatus",
@@ -71,6 +79,7 @@ __all__ = [
     "ERC8183JobOps",
     "funded_job_watcher",
     "ERR_QUOTE_INVALID",
+    "ERR_JOB_TOKEN_MISMATCH",
     "QuoteSignatureVerdict",
     "verify_quote_signature",
     # Per-network defaults

@@ -46,7 +46,13 @@ from .core.env import load_env
 from .erc8004 import AgentEndpoint, ERC8004Agent
 
 # ERC-8183 — only essential public API
-from .erc8183 import ERC8183Client, JobStatus, Verdict
+from .erc8183 import (
+    ERC8183Client,
+    JobPaymentTokenMismatchError,
+    JobStatus,
+    TokenMetadata,
+    Verdict,
+)
 
 # Exceptions
 from .exceptions import (
@@ -86,6 +92,8 @@ __all__ = [
     "ERC8183Client",
     "JobStatus",
     "Verdict",
+    "TokenMetadata",
+    "JobPaymentTokenMismatchError",
     # Signing policy
     "SigningPolicy",
     "PolicyViolation",

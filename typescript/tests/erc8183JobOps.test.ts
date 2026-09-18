@@ -96,6 +96,7 @@ interface MockErc8183Client {
   getDeliverableUrl: ReturnType<typeof vi.fn>;
   tokenDecimals: ReturnType<typeof vi.fn>;
   paymentToken: ReturnType<typeof vi.fn>;
+  jobPaymentToken: ReturnType<typeof vi.fn>;
   getJobFundedBlock: ReturnType<typeof vi.fn>;
   publicClient: {
     getChainId: ReturnType<typeof vi.fn>;
@@ -123,6 +124,7 @@ function makeMockClient(): MockErc8183Client {
     getDeliverableUrl: vi.fn(),
     tokenDecimals: vi.fn(),
     paymentToken: vi.fn(async () => getAddress(`0x${"44".repeat(20)}`)),
+    jobPaymentToken: vi.fn(async () => getAddress(`0x${"44".repeat(20)}`)),
     getJobFundedBlock: vi.fn(async () => 123n),
     publicClient: {
       getChainId: vi.fn(async () => 97),
@@ -316,7 +318,7 @@ describe("ERC8183JobOps.verifyJob", () => {
     expect(result.error).toContain("signed quote price");
   });
 
-  it("rejects a signed currency that differs from the Commerce payment token", async () => {
+  it("rejects a signed currency that differs from the job payment token", async () => {
     const negotiatedAt = NOW() - 60;
     const ops = await makeOps({
       wallet: makeWallet(SELLER_ACCOUNT.address),
@@ -324,7 +326,9 @@ describe("ERC8183JobOps.verifyJob", () => {
     });
     const client = injectClient(ops);
     client.policy.disputeWindow.mockResolvedValue(0n);
-    client.paymentToken.mockResolvedValue(getAddress(`0x${"55".repeat(20)}`));
+    const otherToken = getAddress(`0x${"55".repeat(20)}`);
+    client.paymentToken.mockResolvedValue(otherToken);
+    client.jobPaymentToken.mockResolvedValue(otherToken);
     client.publicClient.getBlock.mockResolvedValue({
       timestamp: BigInt(negotiatedAt + 30),
     });
@@ -341,8 +345,8 @@ describe("ERC8183JobOps.verifyJob", () => {
     const result = await ops.verifyJob(1);
 
     expect(result.valid).toBe(false);
-    expect(result.error_code).toBe("quote_invalid");
-    expect(result.error).toContain("Commerce payment token");
+    expect(result.error_code).toBe("job_token_mismatch");
+    expect(result.error).toContain("Job payment token");
   });
 
   it("rejects an unsigned job by default", async () => {

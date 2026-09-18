@@ -12,6 +12,9 @@
  * data types and the CLI-shaped parse helpers are ported here.
  */
 
+import { resolveB402Asset } from "./assets.js";
+import type { ExpectedB402Asset } from "./assets.js";
+
 /**
  * One payable route from a 402 challenge (a quote `accepts` entry).
  *
@@ -78,6 +81,13 @@ export function paymentOptionFromCli(
   };
 }
 
+/** Resolve the option's exact `network + asset` through the catalog. */
+export function expectedAssetFromPaymentOption(
+  option: X402PaymentOption,
+): ExpectedB402Asset {
+  return resolveB402Asset(option.network, option.asset);
+}
+
 /**
  * A parsed 402 challenge: the resource plus its payable routes.
  *
@@ -126,6 +136,91 @@ export interface X402PaymentResult {
   transaction?: string;
 }
 
+export type X402TransferMethod = "eip3009" | "permit2-exact";
+
+export type X402ResourceValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly X402ResourceValue[]
+  | { readonly [key: string]: X402ResourceValue };
+
+/** Complete resource object copied from the caller-verified challenge. */
+export interface ExpectedX402Resource {
+  readonly url: string;
+  readonly description?: string;
+  readonly mimeType?: string;
+  readonly [key: string]: X402ResourceValue | undefined;
+}
+
+interface ExpectedX402RouteBase {
+  readonly x402Version: 2;
+  readonly scheme: "exact";
+  readonly network: `eip155:${number}`;
+  readonly asset: string;
+  readonly amount: bigint;
+  readonly payTo: string;
+  readonly maxTimeoutSeconds: number;
+  /** Every JSON field is bound; key order is ignored during comparison. */
+  readonly resource: ExpectedX402Resource;
+}
+
+export type ExpectedX402Route =
+  | (ExpectedX402RouteBase & {
+      readonly transferMethod: "eip3009";
+      /** Trusted EIP-3009 domain identity, never inferred from a challenge. */
+      readonly name: string;
+      readonly version: string;
+    })
+  | (ExpectedX402RouteBase & {
+      readonly transferMethod: "permit2-exact";
+      readonly name: string;
+      readonly version: string;
+      /** Expected B402 proxy from the caller's trusted capability snapshot. */
+      readonly spenderAddress: string;
+      /** Explicit trust root; the challenge cannot add to this list. */
+      readonly trustedSpenders: readonly string[];
+    });
+
+export interface X402ExactNoPaymentResult {
+  readonly paid: false;
+  readonly cacheHit: true;
+  /** The unchallenged successful endpoint response body, verbatim. */
+  readonly response: unknown;
+}
+
+interface X402ExactPaidResultBase extends X402PaymentResult {
+  readonly paid: true;
+  readonly success: true;
+  readonly amount: bigint;
+  readonly asset: string;
+  readonly network: `eip155:${number}`;
+  readonly payTo: string;
+}
+
+export interface X402ExactEip3009PaymentResult extends X402ExactPaidResultBase {
+  readonly transferMethod: "eip3009";
+  readonly spenderAddress?: never;
+}
+
+export interface X402ExactPermit2PaymentResult extends X402ExactPaidResultBase {
+  readonly transferMethod: "permit2-exact";
+  readonly spenderAddress: string;
+}
+
+export type X402ExactPaymentResult =
+  | X402ExactNoPaymentResult
+  | X402ExactEip3009PaymentResult
+  | X402ExactPermit2PaymentResult;
+
+export interface X402ExactRequestOptions {
+  readonly expectedRoute: ExpectedX402Route;
+  readonly maxPayment: bigint;
+  readonly method?: string;
+  readonly body?: string;
+}
+
 /**
  * Structural contract for delegated x402 payment backends.
  *
@@ -134,6 +229,9 @@ export interface X402PaymentResult {
  * Implementations may accept extra options.
  */
 export interface X402Payer {
+  /** Methods this implementation can bind atomically in `requestExact`. */
+  readonly exactTransferMethods?: readonly X402TransferMethod[];
+
   /** Fetch the 402 challenge for `url` without paying. */
   quote(
     url: string,
@@ -148,4 +246,13 @@ export interface X402Payer {
     url: string,
     opts: { maxPayment: bigint; method?: string; body?: string },
   ): Promise<X402PaymentResult>;
+
+  /**
+   * Fetch, validate, sign, and retry one challenge without re-fetching or
+   * selecting a route outside the caller-supplied exact binding.
+   */
+  requestExact?(
+    url: string,
+    opts: X402ExactRequestOptions,
+  ): Promise<X402ExactPaymentResult>;
 }

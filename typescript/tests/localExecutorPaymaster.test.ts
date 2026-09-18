@@ -1,5 +1,6 @@
 import {
   type TransactionRequestLegacy,
+  encodeFunctionData,
   getAddress,
   keccak256,
   parseAbi,
@@ -49,6 +50,18 @@ const FAKE_RAW_TX = "0xdeadbeef";
 const PAYMASTER_TX_HASH: `0x${string}` = keccak256(FAKE_RAW_TX);
 
 const ABI = parseAbi(["function setValue(uint256 x) returns (bool)"]);
+const CREATE_JOB_WITH_TOKEN_ABI = parseAbi([
+  "function createJobWithToken(address provider,address evaluator,uint256 expiredAt,string description,address hook,address token) returns (uint256 jobId)",
+]);
+const CREATE_JOB_WITH_TOKEN_SELECTOR = "0xe1623ca4";
+const CREATE_JOB_WITH_TOKEN_ARGS = [
+  getAddress(`0x${"33".repeat(20)}`),
+  getAddress(`0x${"44".repeat(20)}`),
+  1_800_000_000n,
+  "multi asset job",
+  getAddress(`0x${"55".repeat(20)}`),
+  getAddress(`0x${"66".repeat(20)}`),
+] as const;
 
 const CALL: ContractCall = {
   address: CONTRACT_ADDRESS,
@@ -123,6 +136,19 @@ function makeIntent(overrides?: Partial<Intent>): Intent {
   return { name: "test.op", description: "submit", call: CALL, ...overrides };
 }
 
+function makeCreateJobWithTokenIntent(): Intent {
+  return {
+    name: "erc8183.create_job_with_token",
+    description: "create job with token",
+    call: {
+      address: CONTRACT_ADDRESS,
+      abi: CREATE_JOB_WITH_TOKEN_ABI,
+      functionName: "createJobWithToken",
+      args: CREATE_JOB_WITH_TOKEN_ARGS,
+    },
+  };
+}
+
 beforeEach(() => {
   NonceManager._clearAll();
   _resetTxConfigOverrides();
@@ -191,6 +217,64 @@ describe("LocalExecutor: no paymaster", () => {
 });
 
 describe("LocalExecutor: sponsored path", () => {
+  it("sends createJobWithToken calldata through the existing sponsorship path", async () => {
+    const mock = mockPublicClient();
+    const wallet = new StubWallet();
+    const { paymaster, isSponsorable, ethSendRawTransaction } =
+      makeFakePaymaster({ isSponsorable: async () => true });
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: wallet,
+      paymaster,
+    });
+
+    await executor.execute(makeCreateJobWithTokenIntent());
+
+    const expectedData = encodeFunctionData({
+      abi: CREATE_JOB_WITH_TOKEN_ABI,
+      functionName: "createJobWithToken",
+      args: CREATE_JOB_WITH_TOKEN_ARGS,
+    });
+    expect(expectedData.slice(0, 10)).toBe(CREATE_JOB_WITH_TOKEN_SELECTOR);
+    expect(isSponsorable.mock.calls[0]?.[0]).toMatchObject({
+      data: expectedData,
+    });
+    expect(wallet.signedTxs[0]?.data).toBe(expectedData);
+    expect(ethSendRawTransaction).toHaveBeenCalledTimes(1);
+    expect(sendRawCount(mock)).toBe(0);
+  });
+
+  it("self-pays the same createJobWithToken calldata when sponsorship checking fails", async () => {
+    const mock = mockPublicClient();
+    const wallet = new StubWallet();
+    const { paymaster, isSponsorable, ethSendRawTransaction } =
+      makeFakePaymaster({
+        isSponsorable: async () => {
+          throw new Error("megafuel 503");
+        },
+      });
+    const executor = new LocalExecutor({
+      client: mock.client,
+      walletProvider: wallet,
+      paymaster,
+    });
+
+    await executor.execute(makeCreateJobWithTokenIntent());
+
+    const expectedData = encodeFunctionData({
+      abi: CREATE_JOB_WITH_TOKEN_ABI,
+      functionName: "createJobWithToken",
+      args: CREATE_JOB_WITH_TOKEN_ARGS,
+    });
+    expect(expectedData.slice(0, 10)).toBe(CREATE_JOB_WITH_TOKEN_SELECTOR);
+    expect(isSponsorable.mock.calls[0]?.[0]).toMatchObject({
+      data: expectedData,
+    });
+    expect(wallet.signedTxs[0]?.data).toBe(expectedData);
+    expect(ethSendRawTransaction).not.toHaveBeenCalled();
+    expect(sendRawCount(mock)).toBe(1);
+  });
+
   it("sends via the paymaster with a zero gasPrice; the client never broadcasts", async () => {
     const overrideReceipt: Partial<MockHandlers> = {
       eth_getTransactionReceipt: () => ({

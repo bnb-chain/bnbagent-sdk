@@ -35,6 +35,7 @@ from bnbagent.wallets.intents import (
     ERC8183_CLAIM_REFUND,
     ERC8183_COMPLETE,
     ERC8183_CREATE_JOB,
+    ERC8183_CREATE_JOB_WITH_TOKEN,
     ERC8183_DISPUTE,
     ERC8183_FUND,
     ERC8183_MARK_EXPIRED,
@@ -68,6 +69,7 @@ _PROVIDER_ADDR = "0x" + "11" * 20
 _EVALUATOR_ADDR = "0x" + "22" * 20
 _HOOK_ADDR = "0x" + "33" * 20
 _POLICY_ADDR = "0x" + "44" * 20
+_TOKEN_ADDR = "0x" + "55" * 20
 
 _WALLET_STATUS_CMD = ["twak", "wallet", "status", "--json"]
 
@@ -130,6 +132,20 @@ def _make_twak_contract(twak):
                 wallet_provider=twak,
             )
     return ci, web3
+
+
+def _create_job_with_token_intent():
+    return Intent(
+        name=ERC8183_CREATE_JOB_WITH_TOKEN,
+        kwargs={
+            "provider": _PROVIDER_ADDR,
+            "evaluator": _EVALUATOR_ADDR,
+            "expired_at": 1_800_000_000,
+            "description": "multi asset job",
+            "hook": _HOOK_ADDR,
+            "token": _TOKEN_ADDR,
+        },
+    )
 
 
 # ── TWAKProvider is a self-broadcasting executor ──
@@ -204,6 +220,87 @@ def test_make_executor_captures_paymaster_url_and_writes_carry_flag():
         "bsc",
         "--json",
     ]
+
+
+def test_create_job_with_token_passes_exact_payment_token_to_twak():
+    run, calls = _intent_router({**_TX_OUT, "jobId": "151"})
+    result = _execute(TWAKProvider(), _create_job_with_token_intent(), run)
+
+    assert result["jobId"] == 151
+    assert calls[1] == [
+        "twak",
+        "erc8183",
+        "create-job",
+        "--provider",
+        _PROVIDER_ADDR,
+        "--evaluator",
+        _EVALUATOR_ADDR,
+        "--expires-at",
+        "1800000000",
+        "--description",
+        "multi asset job",
+        "--hook",
+        _HOOK_ADDR,
+        "--payment-token",
+        _TOKEN_ADDR,
+        "--chain",
+        "bsc",
+        "--json",
+    ]
+
+
+@pytest.mark.parametrize(
+    "cli_error",
+    [
+        "error: unknown option '--payment-token'",
+        "Error: Unknown option '--payment-token'",
+        "error: unrecognized option '--payment-token'",
+        "error: unexpected argument '--payment-token' found",
+        "error: unknown flag: --payment-token",
+        "Error: Unknown flag '--payment-token'",
+    ],
+)
+def test_create_job_with_token_old_twak_maps_unknown_surface_to_typed_upgrade_error(cli_error):
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[1:3] == ["wallet", "status"]:
+            return _completed(cmd, {"agentWallet": "configured"})
+        return _completed(cmd, {}, returncode=1, stderr=cli_error)
+
+    with pytest.raises(UnsupportedWalletOperation, match=r"upgrade twak.*payment-token"):
+        _execute(TWAKProvider(), _create_job_with_token_intent(), run)
+    assert any("--payment-token" in call for call in calls)
+
+
+@pytest.mark.parametrize(
+    "transaction_error",
+    [
+        "execution reverted: UnsupportedPaymentToken",
+        "execution reverted: unknown command opcode",
+        "execution reverted: memo contains unknown flag: --payment-token",
+        "error: unknown flag: --some-other-flag",
+    ],
+)
+def test_create_job_with_token_transaction_error_keeps_runtime_classification(
+    transaction_error,
+):
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[1:3] == ["wallet", "status"]:
+            return _completed(cmd, {"agentWallet": "configured"})
+        return _completed(
+            cmd,
+            {"success": False, "error": transaction_error},
+            returncode=1,
+        )
+
+    with pytest.raises(RuntimeError, match=transaction_error):
+        _execute(TWAKProvider(), _create_job_with_token_intent(), run)
+    assert any("--payment-token" in call for call in calls)
 
 
 def test_erc8004_register_carries_paymaster_flag():
@@ -766,6 +863,7 @@ def test_unnamed_intent_rejected():
     ("name", "canonical_target"),
     [
         (ERC8183_CREATE_JOB, NETWORKS["bsc-mainnet"].commerce_contract),
+        (ERC8183_CREATE_JOB_WITH_TOKEN, NETWORKS["bsc-mainnet"].commerce_contract),
         (ERC8183_SET_PROVIDER, NETWORKS["bsc-mainnet"].commerce_contract),
         (ERC8183_SET_BUDGET, NETWORKS["bsc-mainnet"].commerce_contract),
         (ERC8183_FUND, NETWORKS["bsc-mainnet"].commerce_contract),

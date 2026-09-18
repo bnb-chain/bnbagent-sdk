@@ -50,7 +50,10 @@ INTENTS_ERC8004 = "intents.erc8004"
 INTENTS_ERC8183 = "intents.erc8183"
 
 #: The SDK can complete an x402 payment with this wallet (locally signed or
-#: fully delegated to the wallet backend).
+#: fully delegated to the wallet backend). Declare this only when a buyer
+#: path can settle: local ``sign.typed_data`` EIP-3009, or a delegated payer
+#: that implements ``request_exact`` plus ``exact_transfer_methods``. A
+#: quote/``request``-only client must not advertise it.
 X402_PAY = "x402.pay"
 
 #: Transactions can be sponsored via a paymaster (MegaFuel) broadcast.

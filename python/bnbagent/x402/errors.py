@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..networks import AssetId
+
 
 class X402SignerError(Exception):
     """Base class for X402Signer-layer refusals."""
@@ -34,3 +39,28 @@ class X402NoPayableRouteError(X402SignerError):
     The quoting client filters out routes on chains it does not support,
     so an empty list means the endpoint and the wallet share no network.
     """
+
+
+class UnsupportedWalletRouteError(X402SignerError):
+    """A wallet cannot pay the requested method for the exact expected asset."""
+
+    def __init__(
+        self,
+        *,
+        wallet_kind: str,
+        network: str,
+        chain_id: int,
+        asset_id: AssetId,
+        transfer_method: str,
+    ) -> None:
+        self.wallet_kind = wallet_kind
+        self.network = network
+        self.chain_id = chain_id
+        self.asset_id = asset_id
+        self.transfer_method = transfer_method
+        super().__init__(
+            "unsupported B402 wallet route: "
+            f"wallet_kind={wallet_kind}, network={network}, chain_id={chain_id}, "
+            f"asset_id={asset_id.value}, transfer_method={transfer_method}; "
+            "the expected asset is fixed and no cross-asset fallback was attempted"
+        )

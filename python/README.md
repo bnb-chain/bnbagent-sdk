@@ -435,7 +435,7 @@ such.
 
 ### EIP-712 typed-data signing (`SigningPolicy`)
 
-`EVMWalletProvider.sign_typed_data` is **policy-gated by default**. Without explicit configuration, the wallet only accepts EIP-3009 `TransferWithAuthorization` / `ReceiveWithAuthorization` against the registered U-token deployments (BSC mainnet/testnet). All Permit variants (ERC-2612 `Permit`, Permit2 `PermitSingle`/`PermitBatch`) are denylisted - even if your own code mistakenly allowlists them, the denylist wins.
+`EVMWalletProvider.sign_typed_data` is **policy-gated by default**. Without explicit configuration, the wallet only accepts EIP-3009 `TransferWithAuthorization` / `ReceiveWithAuthorization` against catalog-verified B402 domains: U on BSC mainnet/testnet and USD1 on BSC mainnet. Testnet does not support USD1. All Permit variants (ERC-2612 `Permit`, Permit2 `PermitSingle`/`PermitBatch`) are denylisted - even if your own code mistakenly allowlists them, the denylist wins.
 
 The threat: U token (and most ERC-20s) support EIP-2612 `Permit` on-chain. Without `SigningPolicy`, an LLM agent receiving a 402 challenge from a malicious server could be talked into signing a Permit that grants unbounded allowance, draining the wallet over time. The default policy refuses unconditionally; you opt in explicitly when you know what you're signing.
 
@@ -443,11 +443,12 @@ The threat: U token (and most ERC-20s) support EIP-2612 `Permit` on-chain. Witho
 
 ```python
 from bnbagent import EVMWalletProvider, X402Signer
-from bnbagent.networks import get_address, BSC_MAINNET_CHAIN_ID
+from bnbagent.x402 import resolve_expected_eip3009_route
 
-U = get_address(BSC_MAINNET_CHAIN_ID).payment_token
+U_ROUTE = resolve_expected_eip3009_route("eip155:56", "U")
+U = U_ROUTE.address
 
-# Strict default applied automatically - zero config needed for U-token TWA.
+# Strict default applied automatically for catalog U/USD1 EIP-3009 domains.
 wallet = EVMWalletProvider(password=os.environ["WALLET_PASSWORD"])
 
 # Pass a scoped signer (not the wallet) to your @tool functions:
@@ -462,11 +463,12 @@ def pay_for_resource(challenge: dict, expected_to: str) -> dict:
         domain=challenge["domain"],
         types=challenge["types"],
         message=challenge["message"],
+        expected_route=U_ROUTE,    # catalog-derived chain/token/method/name/version
         expected_to=expected_to,   # caller MUST commit to the payee
     )
 ```
 
-`X402Signer` enforces (a) byte-equal `expected_to == message['to']` (case-insensitive), (b) `message['from'] == wallet.address` (so a tampered challenge cannot authorize a payment "from" another account or burn the session budget on a doomed sign), (c) per-call `max_value`, (d) cumulative session budget. `expected_to` MUST come from a source independent of the 402 response (config / on-chain registry) - never from the challenge body itself. The underlying `SigningPolicy` simultaneously enforces (chain_id, verifyingContract) allowlist, primary-type allowlist/denylist, and validity-window bounds (default ≤ 600s window / ≤ 900s future).
+`X402Signer` requires an `expected_route` from `resolve_expected_eip3009_route()` and re-resolves it through the catalog. Before reserving budget or signing, it binds chain, token/verifying contract, `TransferWithAuthorization`, EIP-712 name/version, and (a) byte-equal `expected_to == message['to']` (case-insensitive). It also requires (b) `message['from'] == wallet.address`, enforces (c) per-call `max_value`, and (d) cumulative session budget. `expected_route` and `expected_to` MUST come from sources independent of the 402 response (configuration / on-chain registry), never from the challenge body itself. The underlying `SigningPolicy` simultaneously enforces the catalog domain allowlist, primary-type allowlist/denylist, and validity-window bounds (default ≤ 600s window / ≤ 900s future).
 
 **Extending the policy for custom contracts:**
 
@@ -493,9 +495,10 @@ wallet = EVMWalletProvider(
 wallet = EVMWalletProvider(password=...)
 print(wallet.signing_policy)
 # SigningPolicy(
-#   domain_allowlist (2 entries):
+#   domain_allowlist (3 entries):
 #     - chain_id=56 verifyingContract=0xcE24439F2D9C6a2289F741120FE202248B666666
-#     - chain_id=97 verifyingContract=0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565
+#     - chain_id=56 verifyingContract=0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d
+#     - chain_id=97 verifyingContract=0x330949Aed7d00FCe0558C64ED6FeC9792616cC39
 #   primary_type_allowlist=['ReceiveWithAuthorization', 'TransferWithAuthorization']
 #   primary_type_denylist=['Permit', 'PermitBatch', 'PermitSingle']
 #   validity: window<=600s, future<=900s, required_for=[...]
@@ -511,7 +514,7 @@ print(wallet.signing_policy)
 What are you signing?
 │
 ├── EIP-3009 TransferWithAuthorization / ReceiveWithAuthorization
-│   against U-token on BSC mainnet (56) or testnet (97)
+│   against catalog U on BSC mainnet (56) or testnet (97), or USD1 on BSC mainnet
 │   → ✅ zero config - strict_default() already allows it
 │
 ├── Same EIP-3009 type but a different token / chain

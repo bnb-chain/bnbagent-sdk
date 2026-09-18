@@ -14,6 +14,7 @@ import { getAddress } from "viem";
 import { describe, expect, it } from "vitest";
 import { NETWORKS } from "../src/config.js";
 import { BNB_CHAIN_ADDRESSES } from "../src/networks/addresses.js";
+import { AssetId, getAsset } from "../src/networks/assets.js";
 import {
   AgentAuthorizationPolicy,
   DEFAULT_NATIVE_GAS_ALLOWANCE_WEI,
@@ -160,7 +161,7 @@ describe("defaultAgentPermissions", () => {
     expect(testnet).toBeDefined();
     expect(paymentToken).toBeDefined();
     if (!testnet || !paymentToken) return;
-    expect(permissions.calls).toHaveLength(16);
+    expect(permissions.calls).toHaveLength(17);
     expect(permissions.calls).toContainEqual({
       to: getAddress(testnet.registryContract),
       signature: "register(string,(string,bytes)[])",
@@ -168,6 +169,11 @@ describe("defaultAgentPermissions", () => {
     expect(permissions.calls).toContainEqual({
       to: getAddress(testnet.commerceContract),
       signature: "submit(uint256,bytes32,bytes)",
+    });
+    expect(permissions.calls).toContainEqual({
+      to: getAddress(testnet.commerceContract),
+      signature:
+        "createJobWithToken(address,address,uint256,string,address,address)",
     });
     expect(
       permissions.calls?.some(
@@ -214,8 +220,8 @@ describe("defaultAgentPermissions", () => {
         (call) => "to" in call && call.to === commerceOverride,
       ),
     ).not.toHaveLength(0);
-    expect(overridden.calls).toHaveLength(17);
-    expect(overridden.calls?.[16]).toEqual({
+    expect(overridden.calls).toHaveLength(18);
+    expect(overridden.calls?.[17]).toEqual({
       to: getAddress(`0x${"77".repeat(20)}`),
       signature: "safeMethod(uint256)",
     });
@@ -245,7 +251,7 @@ describe("defaultAgentPermissions", () => {
         paymentToken: TOKEN,
       },
     });
-    expect(full.calls).toHaveLength(16);
+    expect(full.calls).toHaveLength(17);
     expect(full.spend?.[0]?.token).toBe(TOKEN);
   });
 
@@ -292,6 +298,88 @@ describe("defaultAgentPermissions", () => {
           },
         ],
       }),
-    ).toThrow(/session calls to the payment token are forbidden/);
+    ).toThrow(/session calls to catalog payment tokens are forbidden/);
+  });
+
+  it("expresses independent catalog-token caps for a multi-asset buyer", () => {
+    const u = getAsset(97, AssetId.TEST_U);
+    const usdc = getAsset(97, AssetId.TEST_USDC);
+    const usdt = getAsset(97, AssetId.TEST_USDT);
+    const permissions = defaultAgentPermissions({
+      chainId: 97,
+      tokenSpends: [
+        { token: u.address, limit: 10n },
+        { token: usdc.address, limit: 20n, period: "week" },
+        { token: usdt.address, limit: 30n },
+      ],
+    });
+
+    expect(permissions.spend).toEqual([
+      { token: u.address, limit: 10n, period: "day" },
+      { token: usdc.address, limit: 20n, period: "week" },
+      { token: usdt.address, limit: 30n, period: "day" },
+      { limit: DEFAULT_NATIVE_GAS_ALLOWANCE_WEI, period: "day" },
+    ]);
+  });
+
+  it("fails closed on ambiguous, unknown, duplicate, non-checksum and invalid token caps", () => {
+    const usdc = getAsset(97, AssetId.TEST_USDC);
+    const unknown = getAddress(`0x${"99".repeat(20)}`);
+
+    expect(() =>
+      defaultAgentPermissions({
+        chainId: 97,
+        tokenSpend: { limit: 1n },
+        tokenSpends: [{ token: usdc.address, limit: 1n }],
+      }),
+    ).toThrow(/exactly one of tokenSpend or tokenSpends/);
+    expect(() =>
+      defaultAgentPermissions({
+        chainId: 97,
+        tokenSpends: [{ token: unknown, limit: 1n }],
+      }),
+    ).toThrow(/registered catalog token/);
+    expect(() =>
+      defaultAgentPermissions({
+        chainId: 97,
+        tokenSpends: [
+          { token: usdc.address, limit: 1n },
+          { token: usdc.address, limit: 2n },
+        ],
+      }),
+    ).toThrow(/duplicate token spend cap/);
+    expect(() =>
+      defaultAgentPermissions({
+        chainId: 97,
+        tokenSpends: [
+          {
+            token: usdc.address.toLowerCase() as `0x${string}`,
+            limit: 1n,
+          },
+        ],
+      }),
+    ).toThrow(/checksummed/);
+    expect(() =>
+      defaultAgentPermissions({
+        chainId: 97,
+        tokenSpends: [{ token: usdc.address, limit: -1n }],
+      }),
+    ).toThrow(/non-negative bigint/);
+    expect(() =>
+      defaultAgentPermissions({ chainId: 97, tokenSpends: [] }),
+    ).toThrow(/non-empty/);
+  });
+
+  it("forbids session calls to every catalog payment token, not just legacy U", () => {
+    const usdc = getAsset(97, AssetId.TEST_USDC);
+    expect(() =>
+      defaultAgentPermissions({
+        chainId: 97,
+        tokenSpend: { limit: 1n },
+        extraCalls: [
+          { to: usdc.address, signature: "approve(address,uint256)" },
+        ],
+      }),
+    ).toThrow(/session calls to catalog payment tokens are forbidden/);
   });
 });

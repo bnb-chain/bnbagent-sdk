@@ -49,6 +49,7 @@ from bnbagent.networks import (
     PAYMENT_TOKEN_EIP712_VERSION,
     get_address,
 )
+from bnbagent.x402 import resolve_expected_eip3009_route
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s | %(message)s")
 log = logging.getLogger("x402_buyer_demo")
@@ -60,6 +61,7 @@ DEMO_PK = Account.create().key.hex()
 DEMO_PW = "x402-buyer-demo-pw"
 
 U_TESTNET = get_address(BSC_TESTNET_CHAIN_ID).payment_token
+U_TESTNET_ROUTE = resolve_expected_eip3009_route("eip155:97", "TEST_U")
 NETWORK_ID = f"eip155:{BSC_TESTNET_CHAIN_ID}"
 PAY_TO = "0x" + "be" * 20  # Mock beneficiary (server-controlled in real life)
 PRICE_BASE_UNITS = 100_000  # 0.1 U at 6 decimals — same shape as a real x402 listing
@@ -279,6 +281,7 @@ def main() -> int:
             domain=domain,
             types=types,
             message=message,
+            expected_route=U_TESTNET_ROUTE,
             expected_to=PAY_TO,
         )
         # ``signature`` may come back as HexBytes; normalize to a 0x-hex

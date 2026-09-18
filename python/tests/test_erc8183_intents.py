@@ -16,6 +16,9 @@ and the policy admin ops, which intentionally stay on ``_send_tx``.
 
 from unittest.mock import MagicMock
 
+from web3 import Web3
+
+import bnbagent.wallets.intents as wallet_intents
 from bnbagent.erc8183.commerce import CommerceClient
 from bnbagent.erc8183.policy import PolicyClient
 from bnbagent.erc8183.router import RouterClient
@@ -42,6 +45,8 @@ PROVIDER = "0x" + "11" * 20
 EVALUATOR = "0x" + "22" * 20
 HOOK = "0x" + "33" * 20
 POLICY = "0x" + "44" * 20
+TOKEN = "0x1234567890abcdef1234567890abcdef12345678"
+CHECKSUM_TOKEN = Web3.to_checksum_address(TOKEN)
 
 
 class _RecordingExecutor:
@@ -71,6 +76,29 @@ def _make(client_cls, result=None):
 
 
 class TestCommerceIntents:
+    def test_create_job_with_token_uses_distinct_semantic_intent(self):
+        client, executor = _make(CommerceClient)
+        client.create_job_with_token(
+            provider=PROVIDER,
+            evaluator=EVALUATOR,
+            expired_at=123,
+            description="d",
+            hook=HOOK,
+            token=TOKEN,
+        )
+        (intent,) = executor.intents
+        assert wallet_intents.ERC8183_CREATE_JOB_WITH_TOKEN == ("erc8183.create_job_with_token")
+        assert intent.name == wallet_intents.ERC8183_CREATE_JOB_WITH_TOKEN
+        assert intent.kwargs == {
+            "provider": PROVIDER,
+            "evaluator": EVALUATOR,
+            "expired_at": 123,
+            "description": "d",
+            "hook": HOOK,
+            "token": CHECKSUM_TOKEN,
+        }
+        assert intent.call is client.contract.functions.createJobWithToken.return_value
+
     def test_create_job(self):
         client, executor = _make(CommerceClient)
         client.create_job(
@@ -93,9 +121,7 @@ class TestCommerceIntents:
 
     def test_create_job_default_hook_is_zero_address(self):
         client, executor = _make(CommerceClient)
-        client.create_job(
-            provider=PROVIDER, evaluator=EVALUATOR, expired_at=123, description="d"
-        )
+        client.create_job(provider=PROVIDER, evaluator=EVALUATOR, expired_at=123, description="d")
         assert executor.intents[0].kwargs["hook"] == ZERO_ADDRESS
 
     def test_set_provider(self):
@@ -225,9 +251,7 @@ class TestCreateJobJobIdSources:
 
     def test_receipt_event_fills_job_id_when_executor_omits_it(self):
         receipt = {"blockNumber": 100}
-        client, _ = _make(
-            CommerceClient, result={"transactionHash": "0xabc", "receipt": receipt}
-        )
+        client, _ = _make(CommerceClient, result={"transactionHash": "0xabc", "receipt": receipt})
         client.contract.events.JobCreated.return_value.process_receipt.return_value = [
             {"args": {"jobId": 7}}
         ]
@@ -246,6 +270,49 @@ class TestCreateJobJobIdSources:
         )
         assert result.get("jobId") is None
         client.contract.events.JobCreated.assert_not_called()
+
+    def test_create_job_with_token_recovers_job_id_from_receipt(self):
+        receipt = {"blockNumber": 100}
+        client, _ = _make(CommerceClient, result={"transactionHash": "0xabc", "receipt": receipt})
+        client.contract.events.JobCreated.return_value.process_receipt.return_value = [
+            {"args": {"jobId": 8}}
+        ]
+
+        result = client.create_job_with_token(
+            provider=PROVIDER,
+            evaluator=EVALUATOR,
+            expired_at=123,
+            description="d",
+            hook=HOOK,
+            token=TOKEN,
+        )
+
+        assert result["jobId"] == 8
+        client.contract.events.JobCreated.return_value.process_receipt.assert_called_once_with(
+            receipt
+        )
+
+
+class TestCommerceMultiTokenReads:
+    def test_job_payment_token_returns_checksum_address(self):
+        client, _ = _make(CommerceClient)
+        client._call_with_retry = MagicMock(return_value=TOKEN)
+
+        assert client.job_payment_token(7) == CHECKSUM_TOKEN
+        client.contract.functions.jobPaymentToken.assert_called_once_with(7)
+
+    def test_payment_token_returns_checksum_address(self):
+        client, _ = _make(CommerceClient)
+        client._call_with_retry = MagicMock(return_value=TOKEN)
+
+        assert client.payment_token() == CHECKSUM_TOKEN
+
+    def test_support_read_checksums_token_argument(self):
+        client, _ = _make(CommerceClient)
+        client._call_with_retry = MagicMock(return_value=False)
+
+        assert client.is_payment_token_supported(TOKEN) is False
+        client.contract.functions.isPaymentTokenSupported.assert_called_once_with(CHECKSUM_TOKEN)
 
 
 class TestPolicyAdminOpsStayOnSendTx:

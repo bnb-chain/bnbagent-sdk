@@ -224,6 +224,28 @@ class TestNegotiationResponse:
         resp = NegotiationResponse.from_dict(d)
         assert resp.quote_expires_at == exp
 
+    def test_optional_structured_details_roundtrip(self):
+        data = {
+            "accepted": False,
+            "reason_code": ReasonCode.UNSUPPORTED,
+            "reason": "Requested payment token is unavailable",
+            "details": {"supported_assets": ["TEST_USDC", "TEST_USDT"]},
+        }
+
+        response = NegotiationResponse.from_dict(data)
+
+        assert response.to_dict() == data
+
+    def test_legacy_wire_without_details_still_parses(self):
+        response = NegotiationResponse.from_dict(
+            {"accepted": False, "reason_code": ReasonCode.UNSUPPORTED}
+        )
+
+        assert response.to_dict() == {
+            "accepted": False,
+            "reason_code": ReasonCode.UNSUPPORTED,
+        }
+
     def test_compute_hash_deterministic(self):
         resp = NegotiationResponse(accepted=False, reason_code="0x01")
         h1 = resp.compute_hash()
@@ -355,6 +377,13 @@ class TestBuildJobDescription:
         result = _make_accepted_result(currency="")
         with pytest.raises(ValueError, match="currency"):
             build_job_description(result)
+
+    def test_external_integer_zero_price_becomes_canonical_wire_string(self):
+        result = _make_accepted_result(price=0)
+
+        description = json.loads(build_job_description(result))
+
+        assert description["price"] == "0"
 
     def test_raises_when_over_max_length(self):
         """Over-length descriptions must raise, not truncate — truncating
@@ -563,6 +592,16 @@ class TestNegotiationHandler:
     def test_invalid_format_rejection(self):
         handler = self._make_handler()
         result = handler.negotiate({"bad": "data"})
+        assert result.accepted is False
+        assert result.response.get("reason_code") == ReasonCode.AMBIGUOUS_TERMS
+
+    def test_invalid_request_price_is_rejected_without_raising(self):
+        handler = self._make_handler()
+        request = self._basic_request()
+        request["terms"]["price"] = True
+
+        result = handler.negotiate(request)
+
         assert result.accepted is False
         assert result.response.get("reason_code") == ReasonCode.AMBIGUOUS_TERMS
 
@@ -816,8 +855,9 @@ class TestSigningFailureLogging:
         mock_wallet.sign_message.side_effect = RuntimeError("hardware key offline")
         handler = self._make_handler(wallet_provider=mock_wallet, chain_id=97)
 
-        with caplog.at_level("ERROR"), pytest.raises(
-            QuoteSigningError, match="quote signing failed: hardware key offline"
+        with (
+            caplog.at_level("ERROR"),
+            pytest.raises(QuoteSigningError, match="quote signing failed: hardware key offline"),
         ):
             handler.negotiate(
                 {

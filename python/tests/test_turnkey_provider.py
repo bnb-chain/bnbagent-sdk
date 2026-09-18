@@ -29,6 +29,8 @@ from bnbagent.wallets.capabilities import (
     SIGN_TRANSACTION,
     SIGN_TYPED_DATA,
 )
+from bnbagent.wallets.intents import ExecutionContext
+from bnbagent.wallets.local_executor import LocalExecutor
 from bnbagent.wallets.turnkey import (
     TURNKEY_API_BASE_URL_DEFAULT,
     TurnkeyApiError,
@@ -179,6 +181,12 @@ class TestConstruction:
         provider.describe()
         assert fake_client.raw_payload_calls == []
         assert fake_client.transaction_calls == []
+
+    def test_erc8183_token_bound_intent_uses_generic_local_executor(self, fake_client):
+        provider = make_provider(fake_client, expected_chain_id=97)
+        executor = provider.make_executor(ExecutionContext(web3=object()))
+        assert isinstance(executor, LocalExecutor)
+        assert provider.expected_chain_id == 97
 
 
 # ── from_env ──────────────────────────────────────────────────────────

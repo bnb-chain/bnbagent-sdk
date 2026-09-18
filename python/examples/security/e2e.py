@@ -41,6 +41,7 @@ from bnbagent.networks import (
 from bnbagent.x402 import (
     X402AmountExceededError,
     X402RecipientMismatchError,
+    resolve_expected_eip3009_route,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s | %(message)s")
@@ -53,6 +54,7 @@ PW = "e2e-secure-pw"
 # if you need a deterministic key for a specific repro.
 PK = os.environ.get("E2E_PRIVATE_KEY") or Account.create().key.hex()
 U_TESTNET = get_address(BSC_TESTNET_CHAIN_ID).payment_token
+U_TESTNET_ROUTE = resolve_expected_eip3009_route("eip155:97", "TEST_U")
 log.info(
     "U testnet address: %s (name=%r version=%r)",
     U_TESTNET,
@@ -206,6 +208,7 @@ def assert_5_x402signer_rejects_overvalue(tmpdir: str) -> None:
             domain=domain,
             types=types,
             message=msg,
+            expected_route=U_TESTNET_ROUTE,
             expected_to=msg["to"],
         )
     except X402AmountExceededError as e:
@@ -227,6 +230,7 @@ def assert_6_x402signer_rejects_recipient_mismatch(tmpdir: str) -> None:
             domain=domain,
             types=types,
             message=msg,
+            expected_route=U_TESTNET_ROUTE,
             expected_to="0x" + "9" * 40,  # different!
         )
     except X402RecipientMismatchError as e:

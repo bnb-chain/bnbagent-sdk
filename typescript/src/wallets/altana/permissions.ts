@@ -3,8 +3,8 @@
  *
  * Builds the call whitelist + spend caps an agent session needs to run the
  * SDK's protocol surface: the ERC-8004 registry, the ERC-8183 stack
- * (commerce / router / policy). The payment token is used only for the
- * on-chain spend cap: session call permissions deliberately exclude ERC-20
+ * (commerce / router / policy). Payment tokens are used only for independent
+ * on-chain spend caps: session call permissions deliberately exclude ERC-20
  * approvals because an allowance survives session expiry and revocation.
  *
  * The native spend entry is UNCONDITIONAL and load-bearing: an Altana
@@ -19,6 +19,7 @@
 import { getAddress as toChecksumAddress } from "viem";
 import { NETWORKS } from "../../config.js";
 import { BNB_CHAIN_ADDRESSES } from "../../networks/addresses.js";
+import { getAssetByAddress, listAssets } from "../../networks/assets.js";
 import { SigningPolicy } from "../../signing/policy.js";
 import type {
   AltanaCallPermission,
@@ -48,6 +49,11 @@ export interface SpendCap {
   period?: AltanaSpendPermission["period"];
 }
 
+/** One catalog token's independent session-spend ceiling. */
+export interface TokenSpendCap extends SpendCap {
+  token: `0x${string}`;
+}
+
 /** Protocol roles compiled into least-privilege Altana call selectors. */
 export type AgentAuthorizationRole =
   | "identity"
@@ -74,6 +80,8 @@ const REGISTRY_SIGNATURES = {
 
 const COMMERCE_SIGNATURES = {
   createJob: "createJob(address,address,uint256,string,address)",
+  createJobWithToken:
+    "createJobWithToken(address,address,uint256,string,address,address)",
   setProvider: "setProvider(uint256,address,bytes)",
   setBudget: "setBudget(uint256,uint256,bytes)",
   fund: "fund(uint256,uint256,bytes)",
@@ -98,8 +106,10 @@ const POLICY_SIGNATURES = {
 export interface DefaultAgentPermissionsOpts {
   /** Chain the session will operate on (56 / 97 for the built-in presets). */
   chainId: number;
-  /** Payment-token spend cap (the agent's working budget). */
-  tokenSpend: SpendCap;
+  /** Legacy default-payment-token cap. Mutually exclusive with `tokenSpends`. */
+  tokenSpend?: SpendCap;
+  /** Independent caps for checksummed tokens registered in the chain catalog. */
+  tokenSpends?: readonly TokenSpendCap[];
   /**
    * Native (gas) spend cap. Defaults to
    * {@link DEFAULT_NATIVE_GAS_ALLOWANCE_WEI} per day — never omitted (see
@@ -220,6 +230,7 @@ function compileAltanaPermissions(
   if (roles.has("buyer")) {
     allow(targets.commerce, [
       COMMERCE_SIGNATURES.createJob,
+      COMMERCE_SIGNATURES.createJobWithToken,
       COMMERCE_SIGNATURES.setProvider,
       COMMERCE_SIGNATURES.setBudget,
       COMMERCE_SIGNATURES.fund,
@@ -246,6 +257,17 @@ function compileAltanaPermissions(
     allow(targets.policy, [POLICY_SIGNATURES.voteReject]);
   }
 
+  const forbiddenTokenTargets = new Set<string>([
+    targets.paymentToken.toLowerCase(),
+  ]);
+  try {
+    for (const asset of listAssets(opts.chainId)) {
+      forbiddenTokenTargets.add(asset.address.toLowerCase());
+    }
+  } catch {
+    // Unknown chains retain the legacy explicit paymentToken boundary.
+  }
+
   for (const extra of opts.extraCalls ?? []) {
     if (!extra.to || !extra.signature) {
       throw new Error(
@@ -253,9 +275,9 @@ function compileAltanaPermissions(
       );
     }
     const to = toChecksumAddress(extra.to);
-    if (to === targets.paymentToken) {
+    if (forbiddenTokenTargets.has(to.toLowerCase())) {
       throw new Error(
-        "session calls to the payment token are forbidden: provision Commerce " +
+        "session calls to catalog payment tokens are forbidden: provision Commerce " +
           "allowances outside the session so they cannot outlive session " +
           "expiry or revocation",
       );
@@ -272,12 +294,81 @@ function compileAltanaPermissions(
     ).values(),
   ];
 
-  const spend: AltanaSpendPermission[] = [
-    {
+  const hasLegacySpend = opts.tokenSpend !== undefined;
+  const hasMultiSpend = opts.tokenSpends !== undefined;
+  if (hasLegacySpend === hasMultiSpend) {
+    throw new Error(
+      "defaultAgentPermissions requires exactly one of tokenSpend or tokenSpends",
+    );
+  }
+
+  const validateCap = (cap: SpendCap, label: string): void => {
+    if (typeof cap.limit !== "bigint" || cap.limit < 0n) {
+      throw new Error(`${label}.limit must be a non-negative bigint`);
+    }
+    if (
+      cap.period !== undefined &&
+      !["minute", "hour", "day", "week", "month", "year"].includes(cap.period)
+    ) {
+      throw new Error(`${label} has an unsupported spend period`);
+    }
+  };
+
+  const tokenSpendEntries: AltanaSpendPermission[] = [];
+  if (opts.tokenSpend !== undefined) {
+    validateCap(opts.tokenSpend, "tokenSpend");
+    tokenSpendEntries.push({
       limit: opts.tokenSpend.limit,
       period: opts.tokenSpend.period ?? "day",
       token: targets.paymentToken,
-    },
+    });
+  } else {
+    const caps = opts.tokenSpends ?? [];
+    if (caps.length === 0) {
+      throw new Error("tokenSpends must be non-empty");
+    }
+    const seen = new Set<string>();
+    for (const cap of caps) {
+      validateCap(cap, `tokenSpends[${tokenSpendEntries.length}]`);
+      let token: `0x${string}`;
+      try {
+        token = toChecksumAddress(cap.token);
+      } catch (error) {
+        throw new Error(
+          `token spend address is invalid: ${String(cap.token)}`,
+          {
+            cause: error,
+          },
+        );
+      }
+      if (token !== cap.token) {
+        throw new Error(
+          `token spend address must be checksummed: ${cap.token}`,
+        );
+      }
+      try {
+        getAssetByAddress(opts.chainId, token);
+      } catch (error) {
+        throw new Error(
+          `token spend address must be a registered catalog token on chainId=${opts.chainId}: ${token}`,
+          { cause: error },
+        );
+      }
+      const key = token.toLowerCase();
+      if (seen.has(key)) {
+        throw new Error(`duplicate token spend cap: ${token}`);
+      }
+      seen.add(key);
+      tokenSpendEntries.push({
+        limit: cap.limit,
+        period: cap.period ?? "day",
+        token,
+      });
+    }
+  }
+
+  const spend: AltanaSpendPermission[] = [
+    ...tokenSpendEntries,
     // Unconditional: the session's own relay gas fee counts as native
     // spend; without this entry every execute reverts NoSpendPermissions.
     {

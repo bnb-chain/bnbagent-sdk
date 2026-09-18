@@ -6,6 +6,7 @@ import {
   ContractError,
   ERC8004PartialRegistrationError,
   JobError,
+  JobPaymentTokenMismatchError,
   NegotiationError,
   NetworkError,
   RelayFallbackFailedError,
@@ -58,6 +59,20 @@ describe("Error Hierarchy", () => {
     const error = new JobError("test");
     expect(error).toBeInstanceOf(BNBAgentError);
     expect(error).toBeInstanceOf(JobError);
+  });
+
+  it("JobPaymentTokenMismatchError is typed and carries stable fields", () => {
+    const expected = "0x1234567890AbcdEF1234567890aBcdef12345678";
+    const actual = "0xDDdDddDdDdddDDdDdDDddDdddddDdDdDDDDDDddD";
+    const error = new JobPaymentTokenMismatchError(7n, expected, actual);
+    expect(error).toBeInstanceOf(JobError);
+    expect(error).toMatchObject({
+      name: "JobPaymentTokenMismatchError",
+      jobId: 7n,
+      expectedToken: expected,
+      actualToken: actual,
+      message: `job 7 payment token mismatch: expected ${expected}, got ${actual}`,
+    });
   });
 
   it("NegotiationError is instance of BNBAgentError", () => {

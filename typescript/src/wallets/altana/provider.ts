@@ -1074,21 +1074,45 @@ export class AltanaIntentExecutor implements IntentExecutor {
     ];
 
     if (intent.name === ERC8183_FUND) {
-      const amount =
-        (intent.kwargs?.expectedBudget as bigint | undefined) ??
-        (call.args[1] as bigint | undefined);
-      if (typeof amount !== "bigint") {
+      const jobId = call.args[0];
+      const amount = call.args[1];
+      if (intent.kwargs?.jobId !== undefined && intent.kwargs.jobId !== jobId) {
         throw new Error(
-          "erc8183.fund intent is missing its amount (kwargs.expectedBudget / call.args[1]); cannot verify the bounded Commerce allowance",
+          "erc8183.fund kwargs.jobId must exactly match call.args[0]",
         );
       }
-      const token = await this.#provider._paymentTokenFor(
-        this.#context.client,
-        call.address,
-        call.abi,
-      );
+      if (
+        intent.kwargs?.expectedBudget !== undefined &&
+        intent.kwargs.expectedBudget !== amount
+      ) {
+        throw new Error(
+          "erc8183.fund kwargs.expectedBudget must exactly match call.args[1]",
+        );
+      }
+      if (typeof amount !== "bigint") {
+        throw new Error(
+          "erc8183.fund call.args[1] must be a bigint amount; cannot verify the bounded Commerce allowance",
+        );
+      }
+      if (typeof jobId !== "bigint") {
+        throw new Error(
+          "erc8183.fund call.args[0] must be a bigint jobId; cannot resolve the authoritative job payment token",
+        );
+      }
+      const token = await this.#context.client.readContract({
+        address: call.address,
+        abi: call.abi,
+        functionName: "jobPaymentToken",
+        args: [jobId],
+      });
+      if (typeof token !== "string") {
+        throw new Error(
+          `erc8183.fund jobPaymentToken(${jobId}) returned a non-address value`,
+        );
+      }
+      const checkedToken = toChecksumAddress(token);
       const allowance = await this.#context.client.readContract({
-        address: token,
+        address: checkedToken,
         abi: erc20Abi,
         functionName: "allowance",
         args: [this.#provider.address, call.address],

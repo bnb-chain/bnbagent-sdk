@@ -19,24 +19,27 @@ Design notes
 - Network configuration goes through a single ``network`` argument that
   accepts either a preset name (``"bsc-testnet"``) or a ``NetworkConfig``
   object for custom deployments (local forks, private RPCs, etc.).
-- Payment token address is NOT a configuration input — it is immutable
-  on the kernel and fetched lazily via ``commerce.paymentToken()``.
-- ``fund`` uses a **floor-based** approval strategy (see
-  ``fund`` docstring). Default floor is ``100 * 10**decimals``, which
-  assumes a stablecoin payment token.
+- The default payment token remains available through ``paymentToken()``, while
+  each job's authoritative token is read from ``jobPaymentToken(jobId)``.
+- ``fund`` defaults to exact approval on the job-bound token. A larger approval
+  floor is available only through the explicit legacy opt-in parameter.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from web3 import Web3
 
 from ..config import NetworkConfig, resolve_network
 from ..core.abi_loader import create_web3
+from ..core.contract_mixin import READ_ONLY_MESSAGE
 from ..erc20.client import MinimalERC20Client
+from ..exceptions import JobPaymentTokenMismatchError
+from ..networks import AssetId, get_asset, get_asset_by_address, list_assets, parse_asset_id
 from ..wallets.wallet_provider import WalletProvider
 from .commerce import CommerceClient
 from .policy import PolicyClient
@@ -47,10 +50,20 @@ from .types import ZERO_ADDRESS, ZERO_REASON, Job, JobStatus, Verdict
 logger = logging.getLogger(__name__)
 
 
-# Default floor for auto-approval in ``fund``, expressed in whole token units.
-# Multiplied by ``10 ** token_decimals`` at call time.
-# Assumes a stablecoin payment token; non-stable deployments should pass
-# ``approve_floor=0`` (exact) or a custom floor.
+TokenReference = AssetId | str
+
+
+@dataclass(frozen=True)
+class TokenMetadata:
+    """On-chain ERC-20 metadata cached for one checksummed token address."""
+
+    address: str
+    decimals: int
+    symbol: str
+
+
+# Legacy convenience constant for callers that explicitly opt in to an
+# approval floor. ``fund`` itself defaults to exact approval.
 DEFAULT_APPROVE_FLOOR_UNITS: int = 100
 
 # Chain IDs where MegaFuel sponsors ERC-8183 writes, so ``ERC8183Client``
@@ -132,11 +145,12 @@ class ERC8183Client:
             self.w3, nc.policy_contract, wallet_provider, paymaster=paymaster
         )
 
-        # Cached payment-token state (populated lazily).
+        # Cached token state (populated lazily and keyed by checksum address).
         self._payment_token_address: str | None = None
-        self._payment_token_decimals: int | None = None
-        self._payment_token_symbol: str | None = None
-        self._erc20: MinimalERC20Client | None = None
+        self._erc20_clients: dict[str, MinimalERC20Client] = {}
+        self._token_decimals: dict[str, int] = {}
+        self._token_symbols: dict[str, str] = {}
+        self._token_metadata: dict[str, TokenMetadata] = {}
 
     @staticmethod
     def _build_paymaster(nc: NetworkConfig, debug: bool):
@@ -162,23 +176,69 @@ class ERC8183Client:
     def payment_token(self) -> str:
         """Payment token address (cached). Fetched from ``commerce.paymentToken``."""
         if self._payment_token_address is None:
-            self._payment_token_address = self.commerce.payment_token()
+            self._payment_token_address = Web3.to_checksum_address(self.commerce.payment_token())
         return self._payment_token_address
 
-    def _erc20_client(self) -> MinimalERC20Client:
-        if self._erc20 is None:
-            self._erc20 = MinimalERC20Client(self.w3, self.payment_token, self._wallet_provider)
-        return self._erc20
+    def _resolve_token_address(self, token: TokenReference) -> str:
+        """Resolve a canonical AssetId or checksum a direct token address."""
+        if isinstance(token, AssetId):
+            return get_asset(self.network.chain_id, token).address
+        if not isinstance(token, str):
+            raise TypeError("token must be a canonical AssetId or address")
+        if Web3.is_address(token):
+            return Web3.to_checksum_address(token)
+        canonical = parse_asset_id(token)
+        return get_asset(self.network.chain_id, canonical).address
 
-    def token_decimals(self) -> int:
-        if self._payment_token_decimals is None:
-            self._payment_token_decimals = self._erc20_client().decimals()
-        return self._payment_token_decimals
+    def _resolve_job_creation_token(self, token: TokenReference) -> str:
+        """Require current-chain catalog membership on cataloged networks."""
+        address = self._resolve_token_address(token)
+        try:
+            list_assets(self.network.chain_id)
+        except KeyError:
+            return address
+        return get_asset_by_address(self.network.chain_id, address).address
 
-    def token_symbol(self) -> str:
-        if self._payment_token_symbol is None:
-            self._payment_token_symbol = self._erc20_client().symbol()
-        return self._payment_token_symbol
+    def _erc20_client(self, token: TokenReference | None = None) -> MinimalERC20Client:
+        address = self.payment_token if token is None else self._resolve_token_address(token)
+        client = self._erc20_clients.get(address)
+        if client is None:
+            client = MinimalERC20Client(self.w3, address, self._wallet_provider)
+            self._erc20_clients[address] = client
+        return client
+
+    def token_metadata(self, token: TokenReference) -> TokenMetadata:
+        address = self._resolve_token_address(token)
+        metadata = self._token_metadata.get(address)
+        if metadata is None:
+            metadata = TokenMetadata(
+                address=address,
+                decimals=self.token_decimals(address),
+                symbol=self.token_symbol(address),
+            )
+            self._token_metadata[address] = metadata
+        return metadata
+
+    def token_balance_for(self, token: TokenReference, address: str | None = None) -> int:
+        return self._erc20_client(token).balance_of(address or self.address)
+
+    def token_allowance_for(self, token: TokenReference, owner: str, spender: str) -> int:
+        return self._erc20_client(token).allowance(owner, spender)
+
+    def approve_token(self, token: TokenReference, spender: str, amount: int) -> dict[str, Any]:
+        return self._erc20_client(token).approve(spender, amount)
+
+    def token_decimals(self, token: TokenReference | None = None) -> int:
+        address = self.payment_token if token is None else self._resolve_token_address(token)
+        if address not in self._token_decimals:
+            self._token_decimals[address] = self._erc20_client(address).decimals()
+        return self._token_decimals[address]
+
+    def token_symbol(self, token: TokenReference | None = None) -> str:
+        address = self.payment_token if token is None else self._resolve_token_address(token)
+        if address not in self._token_symbols:
+            self._token_symbols[address] = self._erc20_client(address).symbol()
+        return self._token_symbols[address]
 
     def token_balance(self, address: str | None = None) -> int:
         return self._erc20_client().balance_of(address or self.address)
@@ -191,6 +251,7 @@ class ERC8183Client:
         envelope: dict[str, Any],
         *,
         expected_provider: str,
+        expected_currency: TokenReference | None = None,
         block_number: int | None = None,
     ) -> QuoteSignatureVerdict:
         """Verify a provider quote before the buyer creates or funds a job.
@@ -198,9 +259,10 @@ class ERC8183Client:
         ``expected_provider`` is deliberately out-of-band: obtain it from a
         trusted ERC-8004 discovery result or operator configuration, never from
         ``envelope["provider_address"]``. The quote must be accepted, carry a
-        positive integer price in this Commerce contract's payment token, bind
-        this chain and Commerce address, and have a valid EIP-191/ERC-1271
-        provider signature.
+        non-negative integer price in the expected payment token, bind this
+        chain and Commerce address, and have a valid EIP-191/ERC-1271 provider
+        signature. ``expected_currency`` is required for an explicit Buyer
+        selection; omitting it preserves the Commerce-default compatibility path.
         """
         response = envelope.get("response")
         if not isinstance(response, dict):
@@ -212,27 +274,54 @@ class ERC8183Client:
             return QuoteSignatureVerdict(valid=False, reason="quote terms are missing")
 
         price = terms.get("price")
-        valid_price = (isinstance(price, int) and not isinstance(price, bool) and price > 0) or (
+        valid_price = (isinstance(price, int) and not isinstance(price, bool) and price >= 0) or (
             isinstance(price, str)
             and price.isascii()
             and price.isdecimal()
-            and not price.startswith("0")
+            and (price == "0" or not price.startswith("0"))
         )
         if not valid_price:
             return QuoteSignatureVerdict(
-                valid=False, reason="quote price must be a positive integer"
+                valid=False, reason="quote price must be a non-negative integer"
             )
 
         currency = terms.get("currency")
         try:
             currency_address = Web3.to_checksum_address(currency)
-            payment_token = Web3.to_checksum_address(self.payment_token)
-        except (TypeError, ValueError):
-            return QuoteSignatureVerdict(valid=False, reason="quote currency is invalid")
-        if currency_address != payment_token:
-            return QuoteSignatureVerdict(
-                valid=False, reason="quote currency does not match payment token"
+            expected_address = (
+                Web3.to_checksum_address(self.payment_token)
+                if expected_currency is None
+                else self._resolve_token_address(expected_currency)
             )
+        except (KeyError, TypeError, ValueError):
+            return QuoteSignatureVerdict(valid=False, reason="quote currency is invalid")
+        if currency_address != expected_address:
+            return QuoteSignatureVerdict(
+                valid=False,
+                reason=(
+                    "quote currency does not match payment token"
+                    if expected_currency is None
+                    else "quote response currency mismatch"
+                ),
+            )
+
+        request = envelope.get("request")
+        request_terms = request.get("terms") if isinstance(request, dict) else None
+        request_currency = (
+            request_terms.get("currency") if isinstance(request_terms, dict) else None
+        )
+        if expected_currency is not None and request_currency is None:
+            return QuoteSignatureVerdict(valid=False, reason="quote request currency is missing")
+        if request_currency is not None:
+            try:
+                if Web3.to_checksum_address(request_currency) != expected_address:
+                    return QuoteSignatureVerdict(
+                        valid=False, reason="quote request currency mismatch"
+                    )
+            except (TypeError, ValueError):
+                return QuoteSignatureVerdict(
+                    valid=False, reason="quote request currency is invalid"
+                )
 
         signed_chain_id = envelope.get("chain_id")
         if (
@@ -252,7 +341,7 @@ class ERC8183Client:
 
     def approve_payment_token(self, spender: str, amount: int) -> dict[str, Any]:
         """Send ``approve(spender, amount)`` on the payment token."""
-        return self._erc20_client().approve(spender, amount)
+        return self.approve_token(self.payment_token, spender, amount)
 
     # ----------------------------------------------------------------- writes
 
@@ -280,6 +369,39 @@ class ERC8183Client:
         Pass ``skip_expiry_check=True`` to bypass the validation (e.g. for
         tests that intentionally exercise the revert path).
         """
+        self._validate_expiry(expired_at, skip_expiry_check)
+
+        return self.commerce.create_job(
+            provider=provider,
+            evaluator=self.router.address,
+            expired_at=expired_at,
+            description=description,
+            hook=hook if hook is not None else self.router.address,
+        )
+
+    def create_job_with_token(
+        self,
+        *,
+        asset: TokenReference,
+        provider: str = ZERO_ADDRESS,
+        expired_at: int,
+        description: str = "",
+        hook: str | None = None,
+        skip_expiry_check: bool = False,
+    ) -> dict[str, Any]:
+        """Create a routed job bound to a canonical asset or catalog address."""
+        token = self._resolve_job_creation_token(asset)
+        self._validate_expiry(expired_at, skip_expiry_check)
+        return self.commerce.create_job_with_token(
+            provider=provider,
+            evaluator=self.router.address,
+            expired_at=expired_at,
+            description=description,
+            hook=hook if hook is not None else self.router.address,
+            token=token,
+        )
+
+    def _validate_expiry(self, expired_at: int, skip_expiry_check: bool) -> None:
         if not skip_expiry_check:
             try:
                 import time
@@ -310,14 +432,6 @@ class ERC8183Client:
                     exc,
                 )
 
-        return self.commerce.create_job(
-            provider=provider,
-            evaluator=self.router.address,
-            expired_at=expired_at,
-            description=description,
-            hook=hook if hook is not None else self.router.address,
-        )
-
     def register_job(self, job_id: int, policy: str | None = None) -> dict[str, Any]:
         """Bind the configured policy (or an override) to a job on the Router."""
         return self.router.register_job(job_id, policy or self.policy.address)
@@ -333,50 +447,55 @@ class ERC8183Client:
         job_id: int,
         amount: int,
         *,
+        expected_token: TokenReference | None = None,
         approve_floor: int | None = None,
     ) -> dict[str, Any]:
-        """Fund a job, topping up the payment-token allowance if needed.
+        """Fund a job using its authoritative on-chain payment token.
 
-        Approval strategy (gas-aware, security-first):
+        The job token is read before any allowance or approval action. When
+        ``expected_token`` is provided, a mismatch raises
+        :class:`JobPaymentTokenMismatchError` before funds can move.
 
-        1. If ``allowance(client, commerce) >= amount`` → call ``fund`` only.
-        2. Otherwise approve ``max(amount, floor)`` where ``floor`` is:
-             - ``approve_floor`` if provided (``0`` = exact ``amount``).
-             - Else ``DEFAULT_APPROVE_FLOOR_UNITS * 10**decimals`` (≈100 of
-               the token, a stablecoin-friendly default).
-
-        The floor pattern saves approve transactions for streams of
-        small-budget jobs; large-budget jobs always fall back to exact
-        approve so residual allowance is bounded.
-
-        Note
-        ----
-        Callers who want full manual control should pre-approve via
-        ``erc8183.approve_payment_token(spender, cap)``; the allowance check
-        above will then detect the existing allowance and skip the approve.
+        Missing allowance is approved for exactly ``amount`` by default.
+        ``approve_floor`` remains an explicit legacy opt-in that approves
+        ``max(amount, approve_floor)``. A zero-price job never approves.
         """
+        if amount < 0:
+            raise ValueError("amount must be >= 0")
+        if approve_floor is not None and approve_floor < 0:
+            raise ValueError("approve_floor must be >= 0")
+        if not self._wallet_provider or not self.address:
+            raise RuntimeError(READ_ONLY_MESSAGE)
+
+        actual_token = self.job_payment_token(job_id)
+        if expected_token is not None:
+            expected_address = self._resolve_token_address(expected_token)
+            if expected_address != actual_token:
+                raise JobPaymentTokenMismatchError(
+                    job_id=job_id,
+                    expected_token=expected_address,
+                    actual_token=actual_token,
+                )
+
+        if amount == 0:
+            return self.commerce.fund(job_id, amount)
+
         # A self-broadcasting backend (e.g. twak) bundles approve+deposit in
         # its own fund operation — skip the SDK-side allowance management.
         # ``is True`` guards against MagicMock wallets in tests.
         if getattr(self._wallet_provider, "fund_bundles_approval", False) is True:
             return self.commerce.fund(job_id, amount)
 
-        current = self.token_allowance(self.address, self.commerce.address)
+        current = self.token_allowance_for(actual_token, self.address, self.commerce.address)
         if current < amount:
-            if approve_floor is None:
-                floor = DEFAULT_APPROVE_FLOOR_UNITS * (10 ** self.token_decimals())
-            else:
-                if approve_floor < 0:
-                    raise ValueError("approve_floor must be >= 0")
-                floor = approve_floor
-            cap = max(amount, floor)
+            cap = amount if approve_floor is None else max(amount, approve_floor)
             logger.debug(
                 "[ERC8183Client] topping up allowance: current=%s amount=%s cap=%s",
                 current,
                 amount,
                 cap,
             )
-            self.approve_payment_token(self.commerce.address, cap)
+            self.approve_token(actual_token, self.commerce.address, cap)
 
         return self.commerce.fund(job_id, amount)
 
@@ -436,6 +555,14 @@ class ERC8183Client:
 
     def get_job(self, job_id: int) -> Job:
         return self.commerce.get_job(job_id)
+
+    def job_payment_token(self, job_id: int) -> str:
+        """Return the checksummed token address bound to ``job_id``."""
+        return Web3.to_checksum_address(self.commerce.job_payment_token(job_id))
+
+    def is_payment_token_supported(self, token: TokenReference) -> bool:
+        """Read the Commerce allowlist for a canonical asset or address."""
+        return self.commerce.is_payment_token_supported(self._resolve_token_address(token))
 
     def get_job_status(self, job_id: int) -> JobStatus:
         return self.commerce.get_job(job_id).status

@@ -19,9 +19,8 @@ TWAK (Trust Wallet Agent Kit) is a self-custody wallet CLI whose encrypted mnemo
 | `broadcast.self` | self-broadcasting executor (CLI → RPC) |
 | `intents.erc8004` | the 3 ERC-8004 write intents below, on the canonical registry or matching `ERC8004_REGISTRY_ADDRESS` override |
 | `intents.erc8183` | the 13 ERC-8183 write intents below, on the canonical contract stack |
-| `x402.pay` | the delegated `TwakX402Payer` (`make_x402_payer()`) |
 
-**Not supported:** `sign.transaction` and `sign.typed_data` - twak exposes no raw-transaction or generic EIP-712 primitive (it signs ERC-8004/8183/x402 payloads internally via its own commands). Calls raise `UnsupportedWalletOperation`; use `WALLET_KIND=evm` when you need them.
+**Not supported:** `x402.pay` until `TwakX402Payer` implements `requestExact` (quote/`request` remain available via `make_x402_payer()` / `makeX402Payer()`). `sign.transaction` and `sign.typed_data` - twak exposes no raw-transaction or generic EIP-712 primitive (it signs ERC-8004/8183/x402 payloads internally via its own commands). Calls raise `UnsupportedWalletOperation`; use `WALLET_KIND=evm` when you need them.
 
 For canonical deployments, callers never special-case the wallet kind. `ERC8183Client` / `ERC8004Agent` route every write through `wallet.make_executor()`, and x402 goes through `wallet.make_x402_payer()` - so swapping EVM ↔ twak is a construction-time choice with no flow changes. `fund_bundles_approval = True`: twak's `erc8183 fund` does `approve` + `deposit` itself, so the SDK skips its own allowance top-up.
 

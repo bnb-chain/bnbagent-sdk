@@ -39,6 +39,8 @@ import { optimisticPolicyAbi } from "../src/abis/optimisticPolicy.js";
 import type { NetworkConfig } from "../src/config.js";
 import { NETWORKS } from "../src/config.js";
 import { ZERO_ADDRESS } from "../src/erc8183/types.js";
+import { JobPaymentTokenMismatchError } from "../src/errors.js";
+import { AssetId, getAsset } from "../src/networks/assets.js";
 import type {
   ExecutionContext,
   Intent,
@@ -48,6 +50,7 @@ import type {
 import {
   ERC8183_CLAIM_REFUND,
   ERC8183_CREATE_JOB,
+  ERC8183_CREATE_JOB_WITH_TOKEN,
   ERC8183_DISPUTE,
   ERC8183_FUND,
   ERC8183_REJECT,
@@ -67,6 +70,9 @@ const FAKE_COMMERCE = getAddress(`0x${"aa".repeat(20)}`);
 const FAKE_ROUTER = getAddress(`0x${"bb".repeat(20)}`);
 const FAKE_POLICY = getAddress(`0x${"cc".repeat(20)}`);
 const FAKE_TOKEN = getAddress(`0x${"dd".repeat(20)}`);
+const CUSTOM_TOKEN_INPUT = "0x1234567890abcdef1234567890abcdef12345678";
+const CUSTOM_TOKEN = getAddress(CUSTOM_TOKEN_INPUT);
+const TEST_TOKEN_DIFFERENT = getAddress(`0x${"12".repeat(20)}`);
 const WALLET_ADDRESS = getAddress(`0x${"99".repeat(20)}`);
 
 const { createPublicClientForMock, PaymasterMock } = vi.hoisted(() => ({
@@ -88,11 +94,9 @@ vi.mock("../src/core/paymaster.js", async (importOriginal) => {
   return { ...actual, Paymaster: PaymasterMock };
 });
 
-const {
-  ERC8183Client,
-  DEFAULT_APPROVE_FLOOR_UNITS,
-  ERC8183_PAYMASTER_CHAIN_IDS,
-} = await import("../src/erc8183/client.js");
+const { ERC8183Client, ERC8183_PAYMASTER_CHAIN_IDS } = await import(
+  "../src/erc8183/client.js"
+);
 
 function fakeNetwork(overrides: Partial<NetworkConfig> = {}): NetworkConfig {
   return {
@@ -138,11 +142,19 @@ function combinedReadHandler(results: Record<string, unknown>): MockHandler {
       if (!(decoded.functionName in results)) {
         continue;
       }
+      const configured = results[decoded.functionName];
+      const result =
+        typeof configured === "function"
+          ? configured({
+              args: decodeFunctionData({ abi, data }).args,
+              to: getAddress((params as [{ to: `0x${string}` }])[0].to),
+            })
+          : configured;
       return encodeFunctionResult({
         abi,
         functionName: decoded.functionName,
         // biome-ignore lint/suspicious/noExplicitAny: result shape varies per stubbed function
-        result: results[decoded.functionName] as any,
+        result: result as any,
       });
     }
     return "0x";
@@ -152,6 +164,8 @@ function combinedReadHandler(results: Record<string, unknown>): MockHandler {
 function defaultResults(): Record<string, unknown> {
   return {
     paymentToken: FAKE_TOKEN,
+    jobPaymentToken: FAKE_TOKEN,
+    isPaymentTokenSupported: false,
     decimals: 18,
     symbol: "USDT",
     balanceOf: 0n,
@@ -243,12 +257,17 @@ describe("ERC8183Client.create", () => {
     expect(client.address).toBeNull();
   });
 
-  it("fund() on a read-only client throws the clear wallet-required message (not a cryptic viem error)", async () => {
-    const { client } = await buildClient({});
-    await expect(client.fund(1n, 5_000n)).rejects.toThrow(
-      /wallet_provider is required for write operations \(client is read-only\)/,
-    );
-  });
+  it.each([0n, 5_000n])(
+    "fund(%s) on a read-only client fails before any post-construction RPC",
+    async (amount) => {
+      const { client, mock } = await buildClient({});
+      const rpcCount = mock.calls.length;
+      await expect(client.fund(1n, amount)).rejects.toThrow(
+        /wallet_provider is required for write operations \(client is read-only\)/,
+      );
+      expect(mock.calls).toHaveLength(rpcCount);
+    },
+  );
 
   it("rejects a network missing a required ERC-8183 contract address", async () => {
     await expect(
@@ -370,6 +389,281 @@ describe("ERC8183Client: token cache", () => {
     await expect(client.tokenDecimals()).resolves.toBe(18);
     await expect(client.tokenSymbol()).resolves.toBe("USDT");
   });
+
+  it("keeps per-token clients and metadata caches separate for 6/18 decimals", async () => {
+    const usdc = getAsset(97, AssetId.TEST_USDC).address;
+    const usdt = getAsset(97, AssetId.TEST_USDT).address;
+    const results = defaultResults();
+    results.decimals = ({ to }: { to: `0x${string}` }) =>
+      to === usdc ? 6 : 18;
+    results.symbol = ({ to }: { to: `0x${string}` }) =>
+      to === usdc ? "USDC" : "USDT";
+    const { client, mock } = await buildClient({ results });
+
+    const usdcMetadata = await client.tokenMetadata(usdc.toLowerCase());
+    expect(await client.tokenMetadata(usdc)).toBe(usdcMetadata);
+    const usdtMetadata = await client.tokenMetadata(AssetId.TEST_USDT);
+
+    expect(usdcMetadata).toEqual({
+      address: usdc,
+      decimals: 6,
+      symbol: "USDC",
+    });
+    expect(usdtMetadata).toEqual({
+      address: usdt,
+      decimals: 18,
+      symbol: "USDT",
+    });
+    const metadataCalls = mock.calls.filter((call) => {
+      if (call.method !== "eth_call") return false;
+      try {
+        const [{ data }] = call.params as [{ data: Hex }];
+        const name = decodeFunctionData({ abi: erc20Abi, data }).functionName;
+        return name === "decimals" || name === "symbol";
+      } catch {
+        return false;
+      }
+    });
+    expect(metadataCalls).toHaveLength(4);
+  });
+
+  it("isolates decimals and symbol caches when one metadata field fails", async () => {
+    const results = defaultResults();
+    let symbolCalls = 0;
+    results.decimals = 6;
+    results.symbol = () => {
+      symbolCalls += 1;
+      if (symbolCalls === 1) throw new Error("temporary symbol failure");
+      return "USDC";
+    };
+    const { client } = await buildClient({ results });
+
+    await expect(client.tokenDecimals(CUSTOM_TOKEN)).resolves.toBe(6);
+    await expect(client.tokenMetadata(CUSTOM_TOKEN_INPUT)).rejects.toThrow(
+      /temporary symbol failure/,
+    );
+    await expect(client.tokenMetadata(CUSTOM_TOKEN)).resolves.toEqual({
+      address: CUSTOM_TOKEN,
+      decimals: 6,
+      symbol: "USDC",
+    });
+    expect(symbolCalls).toBe(2);
+  });
+
+  it("keeps a cached symbol usable when decimals metadata fails", async () => {
+    const results = defaultResults();
+    let decimalsCalls = 0;
+    results.symbol = "CUSTOM";
+    results.decimals = () => {
+      decimalsCalls += 1;
+      throw new Error("decimals unavailable");
+    };
+    const { client } = await buildClient({ results });
+
+    await expect(client.tokenSymbol(CUSTOM_TOKEN_INPUT)).resolves.toBe(
+      "CUSTOM",
+    );
+    await expect(client.tokenMetadata(CUSTOM_TOKEN)).rejects.toThrow(
+      /decimals unavailable/,
+    );
+    await expect(client.tokenSymbol(CUSTOM_TOKEN)).resolves.toBe("CUSTOM");
+    expect(decimalsCalls).toBe(1);
+  });
+
+  it("keeps legacy helpers on Commerce.paymentToken", async () => {
+    const results = defaultResults();
+    results.balanceOf = 9n;
+    results.allowance = 8n;
+    const wallet = new StubWallet();
+    wallet.makeExecutorImpl = () => new RecordingExecutor();
+    const { client } = await buildClient({ walletProvider: wallet, results });
+
+    await expect(client.paymentToken()).resolves.toBe(FAKE_TOKEN);
+    await expect(client.tokenDecimals()).resolves.toBe(18);
+    await expect(client.tokenSymbol()).resolves.toBe("USDT");
+    await expect(client.tokenBalance()).resolves.toBe(9n);
+    await expect(
+      client.tokenAllowance(WALLET_ADDRESS, FAKE_COMMERCE),
+    ).resolves.toBe(8n);
+    await client.approvePaymentToken(FAKE_COMMERCE, 7n);
+    expect(wallet.signedTxs.at(-1)?.to).toBe(FAKE_TOKEN);
+  });
+
+  it("selected-token balance/allowance/approve helpers target that token", async () => {
+    const results = defaultResults();
+    results.balanceOf = 55n;
+    results.allowance = 44n;
+    const wallet = new StubWallet();
+    wallet.makeExecutorImpl = () => new RecordingExecutor();
+    const { client } = await buildClient({ walletProvider: wallet, results });
+
+    await expect(
+      client.tokenBalanceFor(CUSTOM_TOKEN_INPUT, WALLET_ADDRESS),
+    ).resolves.toBe(55n);
+    await expect(
+      client.tokenAllowanceFor(CUSTOM_TOKEN, WALLET_ADDRESS, FAKE_COMMERCE),
+    ).resolves.toBe(44n);
+    await client.approveToken(CUSTOM_TOKEN_INPUT, FAKE_COMMERCE, 33n);
+    expect(wallet.signedTxs.at(-1)?.to).toBe(CUSTOM_TOKEN);
+  });
+
+  it("exposes job token and support reads for canonical IDs and addresses", async () => {
+    const usdc = getAsset(97, AssetId.TEST_USDC).address;
+    const results = defaultResults();
+    results.jobPaymentToken = CUSTOM_TOKEN;
+    results.isPaymentTokenSupported = false;
+    const { client } = await buildClient({ results });
+
+    await expect(client.jobPaymentToken(7n)).resolves.toBe(CUSTOM_TOKEN);
+    await expect(
+      client.isPaymentTokenSupported(AssetId.TEST_USDC),
+    ).resolves.toBe(false);
+    await expect(
+      client.isPaymentTokenSupported(usdc.toLowerCase()),
+    ).resolves.toBe(false);
+  });
+});
+
+describe("ERC8183Client.verifyNegotiationQuote", () => {
+  const selected = getAsset(97, AssetId.TEST_USDC).address;
+
+  function quote(opts: {
+    requestCurrency?: unknown;
+    responseCurrency?: unknown;
+    price?: unknown;
+    chainId?: unknown;
+  }): Record<string, unknown> {
+    const requestTerms: Record<string, unknown> = {};
+    if (opts.requestCurrency !== undefined) {
+      requestTerms.currency = opts.requestCurrency;
+    }
+    return {
+      request: { terms: requestTerms },
+      response: {
+        accepted: true,
+        terms: {
+          price: Object.hasOwn(opts, "price") ? opts.price : "0",
+          currency: opts.responseCurrency ?? selected,
+        },
+      },
+      chain_id: opts.chainId ?? 97,
+    };
+  }
+
+  it("binds explicit AssetId to both request and response currency", async () => {
+    const { client } = await buildClient({
+      network: fakeNetwork({ chainId: 97 }),
+    });
+    const verdict = await client.verifyNegotiationQuote(
+      quote({ requestCurrency: selected.toLowerCase() }),
+      { expectedProvider: WALLET_ADDRESS, expectedCurrency: AssetId.TEST_USDC },
+    );
+    expect(verdict).toEqual({
+      valid: false,
+      reason: "missing or invalid negotiation_hash",
+    });
+    await expect(
+      client.verifyNegotiationQuote(
+        quote({ requestCurrency: AssetId.TEST_USDC }),
+        {
+          expectedProvider: WALLET_ADDRESS,
+          expectedCurrency: AssetId.TEST_USDC,
+        },
+      ),
+    ).resolves.toEqual({
+      valid: false,
+      reason: "missing or invalid negotiation_hash",
+    });
+  });
+
+  it("requires explicit request currency and rejects request/response drift", async () => {
+    const { client } = await buildClient({
+      network: fakeNetwork({ chainId: 97 }),
+    });
+    await expect(
+      client.verifyNegotiationQuote(quote({}), {
+        expectedProvider: WALLET_ADDRESS,
+        expectedCurrency: AssetId.TEST_USDC,
+      }),
+    ).resolves.toEqual({
+      valid: false,
+      reason: "quote request currency is missing",
+    });
+    await expect(
+      client.verifyNegotiationQuote(
+        quote({
+          requestCurrency: TEST_TOKEN_DIFFERENT,
+          responseCurrency: selected,
+        }),
+        { expectedProvider: WALLET_ADDRESS, expectedCurrency: selected },
+      ),
+    ).resolves.toEqual({
+      valid: false,
+      reason: "quote request currency mismatch",
+    });
+    await expect(
+      client.verifyNegotiationQuote(
+        quote({
+          requestCurrency: selected,
+          responseCurrency: TEST_TOKEN_DIFFERENT,
+        }),
+        { expectedProvider: WALLET_ADDRESS, expectedCurrency: selected },
+      ),
+    ).resolves.toEqual({
+      valid: false,
+      reason: "quote response currency mismatch",
+    });
+  });
+
+  it.each([true, -1, "00", "01", "1.5", "1e3", null, {}, []])(
+    "rejects malformed quote price %j",
+    async (price) => {
+      const { client } = await buildClient({
+        network: fakeNetwork({ chainId: 97 }),
+      });
+      await expect(
+        client.verifyNegotiationQuote(
+          quote({ requestCurrency: selected, price }),
+          { expectedProvider: WALLET_ADDRESS, expectedCurrency: selected },
+        ),
+      ).resolves.toEqual({
+        valid: false,
+        reason: "quote price must be a non-negative integer",
+      });
+    },
+  );
+
+  it("preserves the old no-currency path against Commerce paymentToken", async () => {
+    const results = defaultResults();
+    results.paymentToken = FAKE_TOKEN;
+    const { client } = await buildClient({ results });
+    const verdict = await client.verifyNegotiationQuote(
+      quote({ responseCurrency: FAKE_TOKEN, chainId: 97 }),
+      { expectedProvider: WALLET_ADDRESS },
+    );
+    expect(verdict).toEqual({
+      valid: false,
+      reason: "missing or invalid negotiation_hash",
+    });
+  });
+
+  it("fails closed on cross-chain expected AssetId and chain binding", async () => {
+    const { client } = await buildClient({
+      network: fakeNetwork({ chainId: 97 }),
+    });
+    await expect(
+      client.verifyNegotiationQuote(quote({ requestCurrency: selected }), {
+        expectedProvider: WALLET_ADDRESS,
+        expectedCurrency: AssetId.BINANCE_PEG_USDC,
+      }),
+    ).resolves.toMatchObject({ valid: false });
+    await expect(
+      client.verifyNegotiationQuote(
+        quote({ requestCurrency: selected, chainId: 56 }),
+        { expectedProvider: WALLET_ADDRESS, expectedCurrency: selected },
+      ),
+    ).resolves.toEqual({ valid: false, reason: "quote chain_id mismatch" });
+  });
 });
 
 describe("ERC8183Client.createJob", () => {
@@ -452,6 +746,86 @@ describe("ERC8183Client.createJob", () => {
     });
     expect(executor.intents).toHaveLength(1);
   });
+
+  it("createJobWithToken resolves current-chain canonical ID and emits the new intent", async () => {
+    const { wallet, executor } = wiredClient();
+    const { client } = await buildClient({ walletProvider: wallet });
+    const token = getAsset(97, AssetId.TEST_USDC).address;
+    await client.createJobWithToken({
+      asset: AssetId.TEST_USDC,
+      expiredAt: FAR_FUTURE,
+      description: "six decimals",
+      skipExpiryCheck: true,
+    });
+    expect(executor.intents[0]?.name).toBe(ERC8183_CREATE_JOB_WITH_TOKEN);
+    expect(executor.intents[0]?.kwargs).toMatchObject({
+      provider: ZERO_ADDRESS,
+      evaluator: FAKE_ROUTER,
+      hook: FAKE_ROUTER,
+      token,
+    });
+  });
+
+  it("accepts a lowercase current-chain catalog address", async () => {
+    const { wallet, executor } = wiredClient();
+    const { client } = await buildClient({ walletProvider: wallet });
+    const token = getAsset(97, AssetId.TEST_USDT).address;
+    await client.createJobWithToken({
+      asset: token.toLowerCase(),
+      expiredAt: FAR_FUTURE,
+      skipExpiryCheck: true,
+    });
+    expect(executor.intents[0]?.kwargs?.token).toBe(token);
+  });
+
+  it.each(["USDC", "USDT", AssetId.BINANCE_PEG_USDC])(
+    "rejects alias/cross-chain asset %s for a known chain",
+    async (asset) => {
+      const { wallet, executor } = wiredClient();
+      const { client } = await buildClient({ walletProvider: wallet });
+      await expect(
+        client.createJobWithToken({
+          asset,
+          expiredAt: FAR_FUTURE,
+          skipExpiryCheck: true,
+        }),
+      ).rejects.toThrow();
+      expect(executor.intents).toHaveLength(0);
+    },
+  );
+
+  it("rejects a non-catalog address on a known chain", async () => {
+    const { wallet, executor } = wiredClient();
+    const { client } = await buildClient({ walletProvider: wallet });
+    await expect(
+      client.createJobWithToken({
+        asset: CUSTOM_TOKEN,
+        expiredAt: FAR_FUTURE,
+        skipExpiryCheck: true,
+      }),
+    ).rejects.toThrow(/not registered/);
+    expect(executor.intents).toHaveLength(0);
+  });
+
+  it("custom chain accepts only a direct address", async () => {
+    const { wallet, executor } = wiredClient();
+    const network = fakeNetwork({ chainId: 12_345, name: "custom" });
+    const { client } = await buildClient({ walletProvider: wallet, network });
+    await client.createJobWithToken({
+      asset: CUSTOM_TOKEN_INPUT,
+      expiredAt: FAR_FUTURE,
+      skipExpiryCheck: true,
+    });
+    expect(executor.intents[0]?.kwargs?.token).toBe(CUSTOM_TOKEN);
+
+    await expect(
+      client.createJobWithToken({
+        asset: AssetId.TEST_USDC,
+        expiredAt: FAR_FUTURE,
+        skipExpiryCheck: true,
+      }),
+    ).rejects.toThrow(/chain_id=12345/);
+  });
 });
 
 describe("ERC8183Client.registerJob", () => {
@@ -481,11 +855,12 @@ describe("ERC8183Client.registerJob", () => {
   });
 });
 
-describe("ERC8183Client.fund: approval floor strategy", () => {
+describe("ERC8183Client.fund: job-token approval strategy", () => {
   async function primedClient(opts: {
     allowance?: bigint;
     decimals?: number;
     walletProvider?: StubWallet;
+    jobToken?: `0x${string}`;
   }) {
     const wallet = opts.walletProvider ?? new StubWallet();
     if (!wallet.makeExecutorImpl) {
@@ -495,6 +870,7 @@ describe("ERC8183Client.fund: approval floor strategy", () => {
     const results = defaultResults();
     results.allowance = opts.allowance ?? 0n;
     results.decimals = opts.decimals ?? 18;
+    results.jobPaymentToken = opts.jobToken ?? FAKE_TOKEN;
     const { client, mock } = await buildClient({
       walletProvider: wallet,
       results,
@@ -528,6 +904,24 @@ describe("ERC8183Client.fund: approval floor strategy", () => {
     }).length;
   }
 
+  function commerceCallCount(
+    mock: Awaited<ReturnType<typeof buildClient>>["mock"],
+    functionName: string,
+  ): number {
+    return mock.calls.filter((call) => {
+      if (call.method !== "eth_call") return false;
+      try {
+        const [{ data }] = call.params as [{ data: Hex }];
+        return (
+          decodeFunctionData({ abi: agenticCommerceAbi, data }).functionName ===
+          functionName
+        );
+      } catch {
+        return false;
+      }
+    }).length;
+  }
+
   it("skips approve when allowance is already sufficient", async () => {
     const { client, wallet } = await primedClient({
       allowance: 10_000n,
@@ -538,7 +932,7 @@ describe("ERC8183Client.fund: approval floor strategy", () => {
     expect(wallet.signedTxs).toHaveLength(0);
   });
 
-  it("approves the default floor when amount is below the floor", async () => {
+  it("approves the exact amount by default", async () => {
     const { client, wallet } = await primedClient({
       allowance: 0n,
       decimals: 6,
@@ -547,13 +941,10 @@ describe("ERC8183Client.fund: approval floor strategy", () => {
     expect(wallet.signedTxs).toHaveLength(1);
     const decoded = decodedApprove(wallet);
     expect(decoded.functionName).toBe("approve");
-    expect(decoded.args).toEqual([
-      FAKE_COMMERCE,
-      DEFAULT_APPROVE_FLOOR_UNITS * 10n ** 6n,
-    ]);
+    expect(decoded.args).toEqual([FAKE_COMMERCE, 1n * 10n ** 6n]);
   });
 
-  it("approves the exact amount when it is above the default floor", async () => {
+  it("approves a large amount exactly by default", async () => {
     const { client, wallet } = await primedClient({
       allowance: 0n,
       decimals: 6,
@@ -582,10 +973,141 @@ describe("ERC8183Client.fund: approval floor strategy", () => {
   });
 
   it("rejects a negative approveFloor", async () => {
-    const { client, wallet } = await primedClient({ allowance: 0n });
+    const { client, wallet, mock } = await primedClient({ allowance: 0n });
+    const rpcCount = mock.calls.length;
     await expect(client.fund(1n, 5n, { approveFloor: -1n })).rejects.toThrow(
       /approve_floor must be >= 0/,
     );
+    expect(mock.calls).toHaveLength(rpcCount);
+    expect(wallet.signedTxs).toHaveLength(0);
+  });
+
+  it("rejects a negative amount before wallet or RPC validation", async () => {
+    const { client, wallet, mock } = await primedClient({ allowance: 0n });
+    const rpcCount = mock.calls.length;
+    (
+      client as unknown as {
+        walletProvider: WalletProvider | null;
+        address: `0x${string}` | null;
+      }
+    ).walletProvider = null;
+    (client as unknown as { address: `0x${string}` | null }).address = null;
+    await expect(client.fund(1n, -1n)).rejects.toThrow(/amount must be >= 0/);
+    expect(mock.calls).toHaveLength(rpcCount);
+    expect(wallet.signedTxs).toHaveLength(0);
+  });
+
+  it("negative amount wins over a negative approveFloor", async () => {
+    const { client, mock } = await primedClient({ allowance: 0n });
+    const rpcCount = mock.calls.length;
+    await expect(client.fund(1n, -1n, { approveFloor: -2n })).rejects.toThrow(
+      /amount must be >= 0/,
+    );
+    expect(mock.calls).toHaveLength(rpcCount);
+  });
+
+  it.each([
+    [5, undefined, /amount must be a bigint/],
+    [5n, 1, /approve_floor must be a bigint/],
+  ] as const)(
+    "rejects non-bigint amount/floor without implicit conversion",
+    async (amount, approveFloor, message) => {
+      const { client, mock } = await primedClient({ allowance: 0n });
+      const rpcCount = mock.calls.length;
+      await expect(
+        client.fund(1n, amount as unknown as bigint, {
+          approveFloor: approveFloor as unknown as bigint | undefined,
+        }),
+      ).rejects.toThrow(message);
+      expect(mock.calls).toHaveLength(rpcCount);
+    },
+  );
+
+  it.each([
+    ["wallet", 0n],
+    ["wallet", 5n],
+    ["address", 0n],
+    ["address", 5n],
+  ] as const)(
+    "fails for a missing %s with amount %s before job-token RPC",
+    async (missing, amount) => {
+      const { client, mock } = await primedClient({ allowance: 0n });
+      const rpcCount = mock.calls.length;
+      if (missing === "wallet") {
+        (
+          client as unknown as { walletProvider: WalletProvider | null }
+        ).walletProvider = null;
+      } else {
+        (client as unknown as { address: `0x${string}` | null }).address = null;
+      }
+      await expect(client.fund(1n, amount)).rejects.toThrow(
+        /wallet_provider is required for write operations \(client is read-only\)/,
+      );
+      expect(mock.calls).toHaveLength(rpcCount);
+    },
+  );
+
+  it("uses the non-default job token for allowance and approve", async () => {
+    const { client, wallet, mock } = await primedClient({
+      allowance: 0n,
+      jobToken: CUSTOM_TOKEN,
+    });
+    await client.fund(2n, 99n);
+    expect(commerceCallCount(mock, "jobPaymentToken")).toBe(1);
+    expect(allowanceCallCount(mock)).toBe(1);
+    expect(wallet.signedTxs).toHaveLength(1);
+    expect(wallet.signedTxs[0]?.to).toBe(CUSTOM_TOKEN);
+    expect(decodedApprove(wallet).args).toEqual([FAKE_COMMERCE, 99n]);
+    expect(commerceCallCount(mock, "paymentToken")).toBe(0);
+  });
+
+  it("throws a typed mismatch before ERC-20 or fund actions", async () => {
+    const { client, wallet, mock } = await primedClient({
+      allowance: 0n,
+      jobToken: FAKE_TOKEN,
+    });
+    let caught: unknown;
+    try {
+      await client.fund(7n, 5n, { expectedToken: CUSTOM_TOKEN_INPUT });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(JobPaymentTokenMismatchError);
+    expect(caught).toMatchObject({
+      jobId: 7n,
+      expectedToken: CUSTOM_TOKEN,
+      actualToken: FAKE_TOKEN,
+    });
+    expect(allowanceCallCount(mock)).toBe(0);
+    expect(wallet.signedTxs).toHaveLength(0);
+  });
+
+  it("direct-address expectedToken only checksums and does not require catalog membership", async () => {
+    const { client, mock } = await primedClient({
+      allowance: 10n,
+      jobToken: CUSTOM_TOKEN,
+    });
+    await client.fund(8n, 5n, { expectedToken: CUSTOM_TOKEN_INPUT });
+    expect(commerceCallCount(mock, "jobPaymentToken")).toBe(1);
+    expect(allowanceCallCount(mock)).toBe(1);
+  });
+
+  it("resolves a canonical expected token for the current chain", async () => {
+    const usdc = getAsset(97, AssetId.TEST_USDC).address;
+    const { client, mock } = await primedClient({
+      allowance: 10n,
+      jobToken: usdc,
+    });
+    await client.fund(3n, 5n, { expectedToken: AssetId.TEST_USDC });
+    expect(commerceCallCount(mock, "jobPaymentToken")).toBe(1);
+    expect(allowanceCallCount(mock)).toBe(1);
+  });
+
+  it("zero amount validates the job token but never reads allowance or approves", async () => {
+    const { client, wallet, mock } = await primedClient({ allowance: 0n });
+    await client.fund(1n, 0n, { expectedToken: FAKE_TOKEN.toLowerCase() });
+    expect(commerceCallCount(mock, "jobPaymentToken")).toBe(1);
+    expect(allowanceCallCount(mock)).toBe(0);
     expect(wallet.signedTxs).toHaveLength(0);
   });
 
@@ -601,6 +1123,7 @@ describe("ERC8183Client.fund: approval floor strategy", () => {
       walletProvider: wallet,
     });
     await client.fund(1n, 5_000n);
+    expect(commerceCallCount(mock, "jobPaymentToken")).toBe(1);
     expect(allowanceCallCount(mock)).toBe(0);
     expect(wallet.signedTxs).toHaveLength(0);
     const fundIntents = executor.intents.filter((i) => i.name === ERC8183_FUND);

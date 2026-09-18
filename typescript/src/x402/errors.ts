@@ -4,6 +4,8 @@
  * Port of `python/bnbagent/x402/errors.py`.
  */
 
+import type { AssetId } from "../networks/assets.js";
+
 /**
  * Base class for X402Signer-layer refusals.
  *
@@ -74,5 +76,32 @@ export class X402NoPayableRouteError extends X402SignerError {
   constructor(message?: string) {
     super(message);
     this.name = "X402NoPayableRouteError";
+  }
+}
+
+/** A wallet cannot pay the requested method for the exact expected asset. */
+export class UnsupportedWalletRouteError extends X402SignerError {
+  readonly walletKind: string;
+  readonly network: string;
+  readonly chainId: number;
+  readonly assetId: AssetId;
+  readonly transferMethod: string;
+
+  constructor(fields: {
+    walletKind: string;
+    network: string;
+    chainId: number;
+    assetId: AssetId;
+    transferMethod: string;
+  }) {
+    super(
+      `unsupported B402 wallet route: wallet_kind=${fields.walletKind}, network=${fields.network}, chain_id=${fields.chainId}, asset_id=${fields.assetId}, transfer_method=${fields.transferMethod}; the expected asset is fixed and no cross-asset fallback was attempted`,
+    );
+    this.name = "UnsupportedWalletRouteError";
+    this.walletKind = fields.walletKind;
+    this.network = fields.network;
+    this.chainId = fields.chainId;
+    this.assetId = fields.assetId;
+    this.transferMethod = fields.transferMethod;
   }
 }

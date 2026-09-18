@@ -39,8 +39,20 @@
  * Port of `python/bnbagent/erc8183/negotiation.py`.
  */
 
-import { getAddress } from "viem";
+import {
+  BaseError,
+  ContractFunctionRevertedError,
+  ContractFunctionZeroDataError,
+  getAddress,
+} from "viem";
 import { canonicalJson, keccakOfText } from "../core/canonicalJson.js";
+import {
+  type AssetId,
+  type PaymentAsset,
+  getAsset,
+  listAssets,
+  parseAssetId,
+} from "../networks/assets.js";
 import type { ERC8183Client } from "./client.js";
 import { JobDescription } from "./schema.js";
 
@@ -104,6 +116,47 @@ function requireString(data: Record<string, unknown>, key: string): string {
     throw new Error(`negotiation request missing required field: ${key}`);
   }
   return value;
+}
+
+function normalizeAtomicPrice(value: unknown, fieldName = "price"): string {
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) {
+    throw new Error(
+      `${fieldName} must be a canonical non-negative integer string`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Distinguish "this deployment has no multi-token surface" from "the chain
+ * could not answer".
+ *
+ * A Commerce that implements `isPaymentTokenSupported` reads a mapping and
+ * cannot revert, while one deployed before multi-token support has no such
+ * selector and its dispatcher reverts with empty returndata. So a revert that
+ * carries nothing back is a definite answer about the contract, whereas one
+ * carrying a reason string or a custom error is the function itself refusing
+ * and says nothing about the selector existing.
+ *
+ * Emptiness is read off `data`/`signature` rather than the revert text:
+ * viem populates those whenever there was returndata to decode, while the
+ * text for a bare revert is provider wording we should not depend on.
+ * Transport failures never reach this classification, so they keep failing
+ * closed.
+ */
+function lacksMultiTokenSurface(error: unknown): boolean {
+  if (!(error instanceof BaseError)) return false;
+  if (error.walk((e) => e instanceof ContractFunctionZeroDataError) !== null) {
+    return true;
+  }
+  const reverted = error.walk(
+    (e) => e instanceof ContractFunctionRevertedError,
+  ) as ContractFunctionRevertedError | null;
+  return (
+    reverted !== null &&
+    reverted.data === undefined &&
+    reverted.signature === undefined
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -174,7 +227,10 @@ export class TermSpecification {
       deliverables: requireString(data, "deliverables"),
       qualityStandards: requireString(data, "quality_standards"),
       successCriteria: (data.success_criteria as string[] | undefined) ?? null,
-      price: (data.price as string | undefined) ?? null,
+      price:
+        data.price === undefined || data.price === null
+          ? null
+          : normalizeAtomicPrice(data.price),
       currency: (data.currency as string | undefined) ?? null,
       evaluationRequired:
         (data.evaluation_required as boolean | undefined) ?? true,
@@ -289,6 +345,8 @@ export interface NegotiationResponseOpts {
   quoteExpiresAt?: number | null;
   reasonCode?: string | null;
   reason?: string | null;
+  /** Optional machine-readable rejection metadata. Omitted on legacy wire. */
+  details?: Record<string, unknown> | null;
 }
 
 /**
@@ -307,6 +365,7 @@ export class NegotiationResponse {
   readonly quoteExpiresAt: number | null;
   readonly reasonCode: string | null;
   readonly reason: string | null;
+  readonly details: Record<string, unknown> | null;
 
   constructor(opts: NegotiationResponseOpts) {
     this.accepted = opts.accepted;
@@ -315,6 +374,7 @@ export class NegotiationResponse {
     this.quoteExpiresAt = opts.quoteExpiresAt ?? null;
     this.reasonCode = opts.reasonCode ?? null;
     this.reason = opts.reason ?? null;
+    this.details = opts.details ?? null;
   }
 
   /** Return the response content (without hash). */
@@ -334,6 +394,9 @@ export class NegotiationResponse {
     }
     if (this.reason !== null) {
       result.reason = this.reason;
+    }
+    if (this.details !== null) {
+      result.details = this.details;
     }
     return result;
   }
@@ -393,6 +456,7 @@ export class NegotiationResponse {
       quoteExpiresAt: (data.quote_expires_at as number | undefined) ?? null,
       reasonCode: (data.reason_code as string | undefined) ?? null,
       reason: (data.reason as string | undefined) ?? null,
+      details: (data.details as Record<string, unknown> | undefined) ?? null,
     });
   }
 
@@ -757,6 +821,18 @@ export interface FromErc8183ClientOpts {
   now?: () => number;
 }
 
+/** Options accepted by {@link NegotiationHandler.fromErc8183ClientMulti}. */
+export interface FromErc8183ClientMultiOpts {
+  /** Canonical AssetId to atomic-unit price. Symbols and addresses are rejected. */
+  servicePrices: Readonly<Partial<Record<AssetId, string>>>;
+  estimatedCompletionSeconds?: number;
+  requireQualityStandards?: boolean;
+  walletProvider?: MessageSigner | null;
+  quoteSigner?: QuoteSigner | null;
+  quoteTtlSeconds?: number;
+  now?: () => number;
+}
+
 /** Options accepted by {@link NegotiationHandler.negotiate}. */
 export interface NegotiateOpts {
   /**
@@ -820,6 +896,20 @@ export class NegotiationHandler {
   private readonly chainId: number | null;
   private readonly verifyingContract: string | null;
   private readonly now: () => number;
+  private multiAsset = false;
+  private erc8183Client: ERC8183Client | null = null;
+  private configuredOffers = new Map<
+    string,
+    { asset: PaymentAsset; price: string }
+  >();
+  private activeOffers = new Map<
+    string,
+    { asset: PaymentAsset; price: string }
+  >();
+  // Latched, because a deployment does not grow the selector under a running
+  // seller; re-probing would spend one reverting call per negotiation. An
+  // upgraded stack is picked up on restart.
+  private singleTokenDeployment = false;
 
   constructor(opts: NegotiationHandlerOpts) {
     if (opts.walletProvider && opts.quoteSigner) {
@@ -847,7 +937,7 @@ export class NegotiationHandler {
       );
     }
 
-    this.servicePrice = opts.servicePrice;
+    this.servicePrice = normalizeAtomicPrice(opts.servicePrice, "servicePrice");
     this.currency = opts.currency;
     this.estimatedCompletion = opts.estimatedCompletionSeconds ?? 120;
     this.requireQualityStandards = opts.requireQualityStandards ?? true;
@@ -933,6 +1023,180 @@ export class NegotiationHandler {
     });
   }
 
+  /** Build a catalog-bound multi-asset seller and load its active snapshot. */
+  static async fromErc8183ClientMulti(
+    erc8183Client: ERC8183Client,
+    opts: FromErc8183ClientMultiOpts,
+  ): Promise<NegotiationHandler> {
+    const entries = Object.entries(opts.servicePrices);
+    if (entries.length === 0) {
+      throw new Error(
+        "servicePrices must contain at least one canonical AssetId",
+      );
+    }
+
+    const chainId = erc8183Client.network.chainId;
+    const configured = new Map<
+      string,
+      { asset: PaymentAsset; price: string }
+    >();
+    for (const [rawAssetId, rawPrice] of entries) {
+      const assetId = parseAssetId(rawAssetId);
+      const asset = getAsset(chainId, assetId);
+      const price = normalizeAtomicPrice(
+        rawPrice,
+        `service price for ${assetId}`,
+      );
+      configured.set(asset.address.toLowerCase(), { asset, price });
+    }
+
+    const defaults = listAssets(chainId).filter((asset) => asset.isDefault);
+    if (defaults.length !== 1) {
+      throw new Error(
+        `chain_id=${chainId} asset catalog must contain exactly one default asset`,
+      );
+    }
+
+    const handler = new NegotiationHandler({
+      servicePrice: "0",
+      currency: defaults[0].address,
+      estimatedCompletionSeconds: opts.estimatedCompletionSeconds,
+      requireQualityStandards: opts.requireQualityStandards,
+      walletProvider: opts.walletProvider,
+      quoteSigner: opts.quoteSigner,
+      quoteTtlSeconds: opts.quoteTtlSeconds,
+      chainId,
+      verifyingContract: erc8183Client.commerce.address,
+      now: opts.now,
+    });
+    handler.multiAsset = true;
+    handler.erc8183Client = erc8183Client;
+    handler.configuredOffers = configured;
+    await handler.refreshPaymentTokens();
+    return handler;
+  }
+
+  /** Refresh live Commerce allowlist state, clearing stale offers on failure. */
+  async refreshPaymentTokens(): Promise<readonly AssetId[]> {
+    const client = this.erc8183Client;
+    if (!this.multiAsset || client === null) return [];
+    this.activeOffers = new Map();
+    if (this.singleTokenDeployment) return this.refreshLegacyOffer(client);
+
+    const refreshed = new Map<string, { asset: PaymentAsset; price: string }>();
+    try {
+      for (const [address, offer] of this.configuredOffers) {
+        if (await client.isPaymentTokenSupported(offer.asset.address)) {
+          refreshed.set(address, offer);
+        }
+      }
+    } catch (error) {
+      if (lacksMultiTokenSurface(error)) {
+        this.singleTokenDeployment = true;
+        return this.refreshLegacyOffer(client);
+      }
+      throw new Error("payment-token refresh failed; active offers cleared", {
+        cause: error,
+      });
+    }
+    this.activeOffers = refreshed;
+    return [...refreshed.values()].map((offer) => offer.asset.assetId);
+  }
+
+  /**
+   * Narrow the configured catalog to the one token a single-token deployment
+   * can escrow. Assets the contract cannot hold stay inactive, so `negotiate`
+   * refuses them by name rather than quoting a price no job could be funded
+   * in — and the seller's default asset keeps working meanwhile.
+   */
+  private async refreshLegacyOffer(
+    client: ERC8183Client,
+  ): Promise<readonly AssetId[]> {
+    let legacyToken: string;
+    try {
+      legacyToken = (await client.paymentToken()).toLowerCase();
+    } catch (error) {
+      throw new Error("payment-token refresh failed; active offers cleared", {
+        cause: error,
+      });
+    }
+    const offer = this.configuredOffers.get(legacyToken);
+    if (offer === undefined) return [];
+    this.activeOffers = new Map([[legacyToken, offer]]);
+    return [offer.asset.assetId];
+  }
+
+  /**
+   * True once the bound Commerce deployment proved it has no multi-token
+   * surface. Callers use this to tell an operator that the stack — not the
+   * configuration — is what narrowed the offered assets.
+   */
+  get isSingleTokenDeployment(): boolean {
+    return this.singleTokenDeployment;
+  }
+
+  private supportedDetails(): Record<string, unknown> {
+    return {
+      supported_assets: this.multiAsset
+        ? [...this.activeOffers.values()].map((offer) => offer.asset.assetId)
+        : [],
+    };
+  }
+
+  private selectOffer(
+    requestedCurrency: string | null,
+  ): { currency: string; price: string } | null {
+    if (!this.multiAsset) {
+      if (requestedCurrency !== null) {
+        try {
+          if (getAddress(requestedCurrency) !== getAddress(this.currency)) {
+            return null;
+          }
+        } catch {
+          return null;
+        }
+      }
+      return { currency: this.currency, price: this.servicePrice };
+    }
+
+    // Omitted currency means "seller default": live catalog U if offered,
+    // otherwise the first configured active asset. A configured-but-disabled
+    // U stays fail-closed so we never silently switch tokens.
+    if (requestedCurrency !== null) {
+      let address: string;
+      try {
+        address = getAddress(requestedCurrency).toLowerCase();
+      } catch {
+        return null;
+      }
+      const offer = this.activeOffers.get(address);
+      return offer === undefined
+        ? null
+        : { currency: offer.asset.address, price: offer.price };
+    }
+
+    let defaultAddress: string;
+    try {
+      defaultAddress = getAddress(this.currency).toLowerCase();
+    } catch {
+      return null;
+    }
+    const defaultOffer = this.activeOffers.get(defaultAddress);
+    if (defaultOffer !== undefined) {
+      return {
+        currency: defaultOffer.asset.address,
+        price: defaultOffer.price,
+      };
+    }
+    if (this.configuredOffers.has(defaultAddress)) {
+      return null;
+    }
+    const firstActive = this.activeOffers.values().next().value;
+    return firstActive === undefined
+      ? null
+      : { currency: firstActive.asset.address, price: firstActive.price };
+  }
+
   /**
    * Process a negotiation request and return the result.
    *
@@ -966,14 +1230,45 @@ export class NegotiationHandler {
       });
     }
 
+    if (this.multiAsset) {
+      try {
+        await this.refreshPaymentTokens();
+      } catch {
+        return this.reject({
+          requestData: req.toDict(),
+          requestHash,
+          reasonCode: ReasonCode.UNSUPPORTED,
+          reason: "Payment-token availability could not be verified",
+          details: this.supportedDetails(),
+        });
+      }
+      if (opts.price !== undefined) {
+        return this.reject({
+          requestData: req.toDict(),
+          requestHash,
+          reasonCode: ReasonCode.AMBIGUOUS_TERMS,
+          reason: "A single price override is not valid for multi-asset offers",
+        });
+      }
+    }
+
+    const offer = this.selectOffer(req.terms.currency);
+    if (offer === null) {
+      return this.reject({
+        requestData: req.toDict(),
+        requestHash,
+        reasonCode: ReasonCode.UNSUPPORTED,
+        reason: "Requested payment token is unavailable",
+        details: this.supportedDetails(),
+      });
+    }
+
     // Per-request overrides fall back to the construction-time defaults.
     const { price } = opts;
     if (price !== undefined) {
       let valid = true;
       try {
-        if (!/^-?\d+$/.test(price) || BigInt(price) < 0n) {
-          valid = false;
-        }
+        normalizeAtomicPrice(price);
       } catch {
         valid = false;
       }
@@ -986,7 +1281,7 @@ export class NegotiationHandler {
         });
       }
     }
-    const effectivePrice = price !== undefined ? price : this.servicePrice;
+    const effectivePrice = price !== undefined ? price : offer.price;
     const effectiveEta =
       opts.estimatedCompletionSeconds !== undefined
         ? opts.estimatedCompletionSeconds
@@ -1012,7 +1307,7 @@ export class NegotiationHandler {
       qualityStandards: req.terms.qualityStandards,
       successCriteria: req.terms.successCriteria,
       price: effectivePrice,
-      currency: this.currency,
+      currency: offer.currency,
     });
 
     const response = new NegotiationResponse({
@@ -1124,12 +1419,14 @@ export class NegotiationHandler {
     reasonCode: string;
     reason: string;
     requestHash?: string;
+    details?: Record<string, unknown>;
   }): NegotiationResult {
     const requestHash = opts.requestHash ?? "";
     const response = new NegotiationResponse({
       accepted: false,
       reasonCode: opts.reasonCode,
       reason: opts.reason,
+      details: opts.details,
     });
     const responseHash = requestHash
       ? ensureHexPrefix(response.computeHash())

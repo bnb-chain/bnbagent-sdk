@@ -166,6 +166,18 @@ class JobError(BNBAgentError):
     pass
 
 
+class JobPaymentTokenMismatchError(JobError):
+    """The caller's expected token differs from the job's on-chain token."""
+
+    def __init__(self, job_id: int, expected_token: str, actual_token: str):
+        self.job_id = job_id
+        self.expected_token = expected_token
+        self.actual_token = actual_token
+        super().__init__(
+            f"job {job_id} payment token mismatch: expected {expected_token}, got {actual_token}"
+        )
+
+
 class NegotiationError(BNBAgentError):
     """
     Negotiation failed.

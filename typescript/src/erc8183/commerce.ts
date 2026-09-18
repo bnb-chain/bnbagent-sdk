@@ -26,6 +26,7 @@ import {
   ERC8183_CLAIM_REFUND,
   ERC8183_COMPLETE,
   ERC8183_CREATE_JOB,
+  ERC8183_CREATE_JOB_WITH_TOKEN,
   ERC8183_FUND,
   ERC8183_REJECT,
   ERC8183_SET_BUDGET,
@@ -55,6 +56,12 @@ export interface CreateJobOpts {
   expiredAt: bigint;
   description: string;
   hook?: string;
+}
+
+/** Arguments accepted by {@link CommerceClient.createJobWithToken}. */
+export interface CreateJobWithTokenOpts extends Omit<CreateJobOpts, "hook"> {
+  hook: string;
+  token: string;
 }
 
 /** Result of {@link CommerceClient.createJob} — `jobId` may be `null` if it
@@ -210,6 +217,14 @@ export class CommerceClient extends ContractBase {
     return null;
   }
 
+  private recoverCreatedJobId(result: TxResult): CreateJobResult {
+    let jobId = (result.jobId as bigint | null | undefined) ?? null;
+    if (jobId == null && result.receipt) {
+      jobId = this.parseJobCreatedId(result.receipt.logs);
+    }
+    return { ...result, jobId };
+  }
+
   /** Create a new job (`Open` state). */
   async createJob(opts: CreateJobOpts): Promise<CreateJobResult> {
     const hook = opts.hook ?? ZERO_ADDRESS;
@@ -236,15 +251,41 @@ export class CommerceClient extends ContractBase {
       },
       description: "create job",
     };
-    const result = await this.executeIntent(intent);
+    return this.recoverCreatedJobId(await this.executeIntent(intent));
+  }
 
-    // Semantic backends surface jobId directly; the local path parses it
-    // from the JobCreated event in the receipt.
-    let jobId = (result.jobId as bigint | null | undefined) ?? null;
-    if (jobId == null && result.receipt) {
-      jobId = this.parseJobCreatedId(result.receipt.logs);
-    }
-    return { ...result, jobId };
+  /** Create a new job bound to an explicitly selected payment token. */
+  async createJobWithToken(
+    opts: CreateJobWithTokenOpts,
+  ): Promise<CreateJobResult> {
+    const token = getAddress(opts.token);
+    const hook = getAddress(opts.hook);
+    const intent: Intent = {
+      name: ERC8183_CREATE_JOB_WITH_TOKEN,
+      kwargs: {
+        provider: opts.provider,
+        evaluator: opts.evaluator,
+        expiredAt: opts.expiredAt,
+        description: opts.description,
+        hook: opts.hook,
+        token,
+      },
+      call: {
+        address: this.address,
+        abi: this.abi,
+        functionName: "createJobWithToken",
+        args: [
+          getAddress(opts.provider),
+          getAddress(opts.evaluator),
+          opts.expiredAt,
+          opts.description,
+          hook,
+          token,
+        ],
+      },
+      description: "create job with token",
+    };
+    return this.recoverCreatedJobId(await this.executeIntent(intent));
   }
 
   async setProvider(
@@ -401,11 +442,37 @@ export class CommerceClient extends ContractBase {
   }
 
   async paymentToken(): Promise<`0x${string}`> {
+    return getAddress(
+      await this.callWithRetry(() =>
+        this.client.readContract({
+          address: this.address,
+          abi: agenticCommerceAbi,
+          functionName: "paymentToken",
+        }),
+      ),
+    );
+  }
+
+  async jobPaymentToken(jobId: bigint): Promise<`0x${string}`> {
+    return getAddress(
+      await this.callWithRetry(() =>
+        this.client.readContract({
+          address: this.address,
+          abi: agenticCommerceAbi,
+          functionName: "jobPaymentToken",
+          args: [jobId],
+        }),
+      ),
+    );
+  }
+
+  async isPaymentTokenSupported(token: string): Promise<boolean> {
     return this.callWithRetry(() =>
       this.client.readContract({
         address: this.address,
         abi: agenticCommerceAbi,
-        functionName: "paymentToken",
+        functionName: "isPaymentTokenSupported",
+        args: [getAddress(token)],
       }),
     );
   }

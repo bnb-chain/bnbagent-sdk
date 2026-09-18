@@ -11,7 +11,8 @@ import {
 } from "../src/signing/index.js";
 import { EIP3009_CANONICAL_FIELDS } from "../src/signing/policy.js";
 import { EVMWalletProvider } from "../src/wallets/evmWalletProvider.js";
-import { X402SignerError } from "../src/x402/errors.js";
+import { resolveExpectedEip3009Route } from "../src/x402/assets.js";
+import { X402PolicyError, X402SignerError } from "../src/x402/errors.js";
 import { type SignPaymentOptions, X402Signer } from "../src/x402/signer.js";
 
 const hostile = `\nFAKELOG\r\t\x1b[31m\u2028\u2029${"A".repeat(2 * 1024 * 1024)}`;
@@ -104,6 +105,24 @@ describe("signing error messages", () => {
 });
 
 describe("x402 rejection messages", () => {
+  // The signer binds every call to a catalog EIP-3009 route, so the baseline
+  // payload is derived from the route itself rather than restated here.
+  const route = resolveExpectedEip3009Route("eip155:56", "U");
+  const x402Domain = {
+    name: route.name,
+    version: route.version,
+    chainId: route.chainId,
+    verifyingContract: route.address,
+  };
+  const x402Types = {
+    EIP712Domain: [
+      { name: "name", type: "string" },
+      { name: "version", type: "string" },
+      { name: "chainId", type: "uint256" },
+      { name: "verifyingContract", type: "address" },
+    ],
+    ...types,
+  };
   let directory: string;
   let signer: X402Signer;
 
@@ -134,8 +153,8 @@ describe("x402 rejection messages", () => {
     async (key) => {
       const to = `0x${"2".repeat(40)}`;
       const options: SignPaymentOptions = {
-        domain: { ...domain },
-        types,
+        domain: { ...x402Domain },
+        types: { ...x402Types },
         message: {
           ...message,
           from: signer.walletAddress,
@@ -143,13 +162,14 @@ describe("x402 rejection messages", () => {
           value: 1,
           nonce: `0x${"3".repeat(64)}`,
         },
+        expectedRoute: route,
         expectedTo: to,
       };
       if (key === "types") {
         options.types = {
           Root: hostile,
         } as unknown as SignPaymentOptions["types"];
-      } else if (key in domain) {
+      } else if (key in x402Domain) {
         options.domain[key] = hostile;
       } else if (key === "expectedTo") {
         options.expectedTo = hostile;
@@ -165,7 +185,14 @@ describe("x402 rejection messages", () => {
       expect(caught).toBeInstanceOf(X402SignerError);
       const error = caught as Error;
       expectSafeMessage(error);
-      if (["types", "chainId", "validBefore", "validAfter"].includes(key)) {
+      if (["types", "chainId"].includes(key)) {
+        // The EIP-3009 route binding rejects a substituted domain or primary
+        // type before the wallet is reached, so no untrusted value is
+        // described at all and there is nothing to chain as a cause.
+        expect(error).toBeInstanceOf(X402PolicyError);
+        expect(error.cause).toBeUndefined();
+      }
+      if (["validBefore", "validAfter"].includes(key)) {
         expect(error.cause).toBeInstanceOf(PolicyViolation);
         expect((error.cause as Error).message).toBe(error.message);
       }

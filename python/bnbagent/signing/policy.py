@@ -23,7 +23,7 @@ import os
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from ..networks import known_payment_tokens
+from ..networks import known_eip3009_payment_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -122,8 +122,7 @@ class SigningPolicy:
         """Recommended fail-closed default for direct-SDK callers.
 
         Defaults are deliberately narrow:
-        - domain: only the U-token deployments registered in
-          ``bnbagent.networks``;
+        - domain: only active catalog assets verified for EIP-3009;
         - allowlist: only EIP-3009 ``TransferWithAuthorization`` and
           ``ReceiveWithAuthorization`` — the well-understood single-use
           authorisation pattern x402 uses;
@@ -136,7 +135,7 @@ class SigningPolicy:
         allowlisted by default; extend the policy if you need them.
         """
         return cls(
-            domain_allowlist=known_payment_tokens(),
+            domain_allowlist=known_eip3009_payment_tokens(),
             primary_type_allowlist=EIP3009_TYPES,
             primary_type_denylist=PERMIT_UNBOUNDED_TYPES,
             validity_required_primary_types=EIP3009_TYPES,

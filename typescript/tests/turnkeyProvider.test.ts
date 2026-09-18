@@ -34,6 +34,7 @@ import {
   SIGN_TYPED_DATA,
 } from "../src/wallets/capabilities.js";
 import { WalletIdentityMismatch } from "../src/wallets/errors.js";
+import { LocalExecutor } from "../src/wallets/localExecutor.js";
 
 const tkMocks = vi.hoisted(() => ({
   // Every `new Turnkey(config)` records its config here.
@@ -238,6 +239,16 @@ describe("construction and capability surface", () => {
       ]),
     );
     expect(TurnkeyWalletProvider.kind).toBe("turnkey");
+  });
+
+  it("keeps token-bound ERC-8183 writes on the generic LocalExecutor", () => {
+    const provider = new TurnkeyWalletProvider({
+      ...BASE_OPTS,
+      expectedChainId: 97,
+    });
+    const executor = provider.makeExecutor({ client: {} as never });
+    expect(executor).toBeInstanceOf(LocalExecutor);
+    expect(provider.expectedChainId).toBe(97);
   });
 
   it("address is synchronous and checksummed from lowercase input", () => {
