@@ -763,6 +763,37 @@ describe("NegotiationHandler", () => {
     expect(wallet.signMessage).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [undefined, "negotiation request missing required field: terms"],
+    [null, "negotiation request missing required field: terms"],
+    ["invalid", "negotiation request field terms must be an object"],
+    [42, "negotiation request field terms must be an object"],
+    [false, "negotiation request field terms must be an object"],
+    [[], "negotiation request field terms must be an object"],
+    [{}, "negotiation request missing required field: deliverables"],
+    [
+      { deliverables: "summary" },
+      "negotiation request missing required field: quality_standards",
+    ],
+  ])(
+    "rejects invalid terms %j with actionable validation",
+    async (terms, message) => {
+      const wallet = makeMockWallet();
+      const handler = makeHandler({ walletProvider: wallet, chainId: 97 });
+      const request = {
+        task_description: "do a thing",
+        ...(terms === undefined ? {} : { terms }),
+      };
+      expect(() => NegotiationRequest.fromDict(request)).toThrow(message);
+      const result = await handler.negotiate(request);
+      expect(result.accepted).toBe(false);
+      expect(result.response.reason_code).toBe(ReasonCode.AMBIGUOUS_TERMS);
+      expect(result.response.reason).toBe(`Invalid request format: ${message}`);
+      expect(result.providerSig).toBe("");
+      expect(wallet.signMessage).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects a request missing task_description", async () => {
     const handler = makeHandler();
     const result = await handler.negotiate({
