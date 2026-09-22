@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import math
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -191,9 +192,7 @@ def _http_status(result: dict, default: int) -> int:
 
 
 def _is_production() -> bool:
-    env = (
-        get_env("ENV") or get_env("ENVIRONMENT") or get_env("NODE_ENV") or ""
-    ).strip().lower()
+    env = (get_env("ENV") or get_env("ENVIRONMENT") or get_env("NODE_ENV") or "").strip().lower()
     return env in {"prod", "production", "live", "mainnet"}
 
 
@@ -203,11 +202,35 @@ async def _check_limiter(limiter: RateLimiter, key: str) -> None:
         await result
 
 
+def _build_response_limiter(*, global_limit: bool = False) -> SlidingWindowLimiter:
+    """Bound expensive public reads independently from quote/signing traffic."""
+
+    def positive_env(name: str, default: float) -> float:
+        try:
+            value = float(get_env(name, str(default), prefix=ERC8183_ENV_PREFIX))
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError
+            return value
+        except (ValueError, TypeError):
+            logger.warning("[ERC-8183] invalid %s; using default", name)
+            return default
+
+    name = "RESPONSE_GLOBAL_RATE_LIMIT" if global_limit else "RESPONSE_RATE_LIMIT"
+    maximum = positive_env(name, 300 if global_limit else 60)
+    return SlidingWindowLimiter(
+        max_requests=max(1, int(maximum)),
+        window_seconds=positive_env("RESPONSE_RATE_WINDOW", 60),
+        max_keys=1 if global_limit else 10_000,
+    )
+
+
 def _create_erc8183_routes(
     state: ERC8183State,
     *,
     negotiate_limiter: RateLimiter | None = None,
     global_negotiate_limiter: RateLimiter | None = None,
+    response_limiter: RateLimiter | None = None,
+    global_response_limiter: RateLimiter | None = None,
 ) -> APIRouter:
     router = APIRouter(tags=["ERC-8183"])
     default_limiter = _build_negotiate_limiter()
@@ -216,6 +239,12 @@ def _create_erc8183_routes(
         _build_global_negotiate_limiter(default_limiter.window_seconds)
         if global_negotiate_limiter is None
         else global_negotiate_limiter
+    )
+    response_limiter = _build_response_limiter() if response_limiter is None else response_limiter
+    global_response_limiter = (
+        _build_response_limiter(global_limit=True)
+        if global_response_limiter is None
+        else global_response_limiter
     )
 
     @router.get("/job/{job_id}")
@@ -228,7 +257,13 @@ def _create_erc8183_routes(
         return JSONResponse(result)
 
     @router.get("/job/{job_id}/response")
-    async def get_job_response(job_id: int):
+    async def get_job_response(job_id: int, request: Request):
+        client_ip = request.client.host if request.client else "unknown"
+        try:
+            await _check_limiter(global_response_limiter, "global")
+            await _check_limiter(response_limiter, client_ip)
+        except RateLimitExceeded:
+            raise HTTPException(status_code=429, detail="Too many requests") from None
         result = await state.job_ops.get_response(job_id)
         if not result.get("success"):
             # get_response distinguishes "no response exists" (not_found → 404)
@@ -309,6 +344,8 @@ def create_erc8183_app(
     funded_poll_interval: float | None = None,
     negotiate_limiter: RateLimiter | None = None,
     global_negotiate_limiter: RateLimiter | None = None,
+    response_limiter: RateLimiter | None = None,
+    global_response_limiter: RateLimiter | None = None,
 ) -> FastAPI:
     """Create a FastAPI application for an ERC-8183 provider agent.
 
@@ -328,7 +365,7 @@ def create_erc8183_app(
     funded_poll_interval
         Seconds between funded-job poll passes. Falls back to the
         ``ERC8183_FUNDED_POLL_INTERVAL`` env var (default ``30``).
-    negotiate_limiter, global_negotiate_limiter
+    negotiate_limiter, global_negotiate_limiter, response_limiter, global_response_limiter
         Optional application-owned limiters. Inject a shared backend for a
         multi-replica deployment; the defaults are process-local.
     """
@@ -337,6 +374,11 @@ def create_erc8183_app(
             "[ERC-8183] production is using an in-memory negotiate limiter; "
             "this is safe only for one replica. Inject both limiter arguments "
             "or enforce an equivalent shared/edge limit before scaling out."
+        )
+    if _is_production() and (response_limiter is None or global_response_limiter is None):
+        logger.warning(
+            "[ERC-8183] production is using process-local response limits; "
+            "inject shared limiters or enforce equivalent edge limits before scaling out."
         )
     state = create_erc8183_state(config)
     effective_poll_interval = funded_poll_interval or float(
@@ -502,6 +544,8 @@ def create_erc8183_app(
         state=state,
         negotiate_limiter=negotiate_limiter,
         global_negotiate_limiter=global_negotiate_limiter,
+        response_limiter=response_limiter,
+        global_response_limiter=global_response_limiter,
     )
     erc8183_app.include_router(router, prefix=prefix)
 

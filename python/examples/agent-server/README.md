@@ -53,16 +53,22 @@ ERC8183_FUNDED_POLL_INTERVAL=30    funded-job poll cadence (seconds)
 ERC8183_NEGOTIATE_RATE_LIMIT=120   /negotiate per-IP request budget
 ERC8183_NEGOTIATE_GLOBAL_RATE_LIMIT=1200 process-wide request budget
 ERC8183_NEGOTIATE_RATE_WINDOW=60   rate-limit window (seconds)
+ERC8183_RESPONSE_RATE_LIMIT=60    /job/{id}/response per-IP request budget
+ERC8183_RESPONSE_GLOBAL_RATE_LIMIT=300 response process-wide request budget
+ERC8183_RESPONSE_RATE_WINDOW=60   response rate-limit window (seconds)
 ERC8183_MAX_RESPONSE_BYTES=5242880 response_content cap (5 MB)
 ERC8183_MAX_METADATA_BYTES=262144  metadata cap (256 KB)
 ```
 
 The built-in rate limiters are process-local and are suitable for a single
 replica. Multi-replica deployments can pass application-owned
-`negotiate_limiter` and `global_negotiate_limiter` implementations to
+`negotiate_limiter`, `global_negotiate_limiter`, `response_limiter`, and
+`global_response_limiter` implementations to
 `create_erc8183_app()` (including an async shared backend), or enforce the
 same per-client and global limits at a trusted edge. Production emits a
-warning when either default remains in use.
+warning when default limits remain in use. Response lookup concurrency,
+negative caching and RPC scan bounds are described in
+[Response lookup limits](../../../docs/response-lookup-limits.md).
 
 The server binds to `127.0.0.1` by default. Set `HOST` explicitly only when a
 reverse proxy or deployment requires another interface. The unauthenticated
@@ -119,7 +125,7 @@ src/
 | --- | --- | --- |
 | POST | `/erc8183/negotiate` | Price negotiation (rate-limited) |
 | GET | `/erc8183/job/{id}` | Job details |
-| GET | `/erc8183/job/{id}/response` | Stored deliverable response |
+| GET | `/erc8183/job/{id}/response` | Stored deliverable response (rate-limited) |
 | GET | `/erc8183/job/{id}/verify` | Job verification |
 | GET | `/erc8183/status` | Agent status (wallet, contracts, service price) |
 | GET | `/erc8183/health` | Health check |

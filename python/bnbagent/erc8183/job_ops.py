@@ -17,8 +17,10 @@ import asyncio
 import inspect
 import json
 import logging
+import math
 import re
 import time
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -185,6 +187,10 @@ class ERC8183JobOps:
     allow_unsigned_jobs
         Compatibility escape hatch for legacy jobs. Defaults to ``False``;
         signed quote verification is mandatory in production by default.
+    response_cache_ttl, response_cache_max_entries, response_max_inflight
+        Response lookup protection: cache failures for 5 seconds (0 disables),
+        retain at most 1024 failures, and run at most 8 distinct lookups at once
+        by default. Concurrent callers for the same job share one lookup.
     """
 
     def __init__(
@@ -198,6 +204,9 @@ class ERC8183JobOps:
         service_prices: Mapping[AssetId | str, int] | None = None,
         agent_url: str | None = None,
         allow_unsigned_jobs: bool = False,
+        response_cache_ttl: float = 5.0,
+        response_cache_max_entries: int = 1024,
+        response_max_inflight: int = 8,
     ) -> None:
         if wallet_provider is None and provider_address is None:
             raise ValueError(
@@ -217,6 +226,19 @@ class ERC8183JobOps:
         self._service_prices = self._validate_service_prices(network, service_prices)
         self._agent_url = agent_url
         self._allow_unsigned_jobs = allow_unsigned_jobs
+
+        if not math.isfinite(response_cache_ttl) or response_cache_ttl < 0:
+            raise ValueError("response_cache_ttl must be finite and non-negative")
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            for value in (response_cache_max_entries, response_max_inflight)
+        ):
+            raise ValueError("response lookup capacities must be positive integers")
+        self._response_cache_ttl = response_cache_ttl
+        self._response_cache_max_entries = response_cache_max_entries
+        self._response_max_inflight = response_max_inflight
+        self._response_misses: OrderedDict[int, tuple[float, dict[str, Any]]] = OrderedDict()
+        self._response_tasks: dict[int, asyncio.Task] = {}
 
         self._client: ERC8183Client | None = None
         self._deliverable_urls: dict[int, str] = {}
@@ -446,9 +468,62 @@ class ERC8183JobOps:
         return {"success": True, "status": result["status"]}
 
     async def get_response(self, job_id: int) -> dict[str, Any]:
-        """Retrieve stored deliverable (cache -> local file -> on-chain URL)."""
+        """Retrieve a deliverable with bounded, shared per-job lookup work.
+
+        Misses and transient failures retain their 404/503 classification and
+        expire after ``response_cache_ttl`` seconds. A cancelled HTTP caller
+        cannot cancel a lookup shared with other callers.
+        """
+        if isinstance(job_id, bool) or not isinstance(job_id, int) or not 0 < job_id < 2**256:
+            return {"success": False, "error": "Invalid job id", "error_code": ERR_NOT_FOUND}
         if not self._storage:
             return {"success": False, "error": "No storage configured"}
+        cached = self._response_misses.get(job_id)
+        if cached and job_id not in self._deliverable_urls:
+            expires, result = cached
+            if time.monotonic() < expires:
+                self._response_misses.move_to_end(job_id)
+                return dict(result)
+        self._response_misses.pop(job_id, None)
+        task = self._response_tasks.get(job_id)
+        if task is None:
+            if len(self._response_tasks) >= self._response_max_inflight:
+                return {
+                    "success": False,
+                    "error": "Response lookup is busy; retry later",
+                    "error_code": ERR_CHAIN_UNAVAILABLE,
+                    "retryable": True,
+                }
+
+            async def resolve():
+                try:
+                    result = await self._get_response_uncached(job_id)
+                    if (
+                        not result.get("success")
+                        and self._response_cache_ttl > 0
+                        and job_id not in self._deliverable_urls
+                        and result.get("error_code") in (ERR_NOT_FOUND, ERR_CHAIN_UNAVAILABLE)
+                    ):
+                        self._response_misses[job_id] = (
+                            time.monotonic() + self._response_cache_ttl,
+                            dict(result),
+                        )
+                        self._response_misses.move_to_end(job_id)
+                        while len(self._response_misses) > self._response_cache_max_entries:
+                            self._response_misses.popitem(last=False)
+                    return result
+                finally:
+                    self._response_tasks.pop(job_id, None)
+
+            task = asyncio.create_task(resolve())
+            self._response_tasks[job_id] = task
+            # Consume exceptions even when all callers disconnect. Awaiters
+            # still receive the exception normally through the task.
+            task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+        return dict(await asyncio.shield(task))
+
+    async def _get_response_uncached(self, job_id: int) -> dict[str, Any]:
+        """Cache -> local file -> status check -> bounded on-chain URL lookup."""
 
         url = self._deliverable_urls.get(job_id)
         if url:
@@ -467,6 +542,22 @@ class ERC8183JobOps:
             except Exception as exc:
                 logger.warning(f"[ERC8183JobOps] get_response({job_id}) file read failed: {exc}")
 
+        status_result = await self.get_job_status(job_id)
+        if not status_result.get("success"):
+            if status_result.get("error_code") == ERR_NOT_FOUND:
+                return dict(status_result)
+            return {
+                "success": False,
+                "error": "Temporary chain/RPC error",
+                "error_code": ERR_CHAIN_UNAVAILABLE,
+                "retryable": True,
+            }
+        if status_result.get("status") in (JobStatus.OPEN, JobStatus.FUNDED):
+            return {
+                "success": False,
+                "error": f"Response not found for job {job_id}",
+                "error_code": ERR_NOT_FOUND,
+            }
         try:
             erc8183 = self._get_client()
             deliverable_url = await asyncio.to_thread(erc8183.get_deliverable_url, job_id)
@@ -495,7 +586,6 @@ class ERC8183JobOps:
         # submit older than the fallback scan window, storage hiccup) is a
         # resolution failure — retryable, not proof of absence. Only a job
         # that never reached SUBMITTED genuinely has no response.
-        status_result = await self.get_job_status(job_id)
         if not status_result.get("success") or status_result.get("status") in (
             JobStatus.SUBMITTED,
             JobStatus.COMPLETED,

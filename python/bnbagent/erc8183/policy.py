@@ -140,8 +140,7 @@ class PolicyClient(ContractClientMixin):
             from_block = max(0, current_block - _FALLBACK)
             to_block = "latest"
         else:
-            from_block = 0
-            to_block = "latest"
+            raise RpcRangeLimitError("Cannot bound deliverable query without a block height")
 
         try:
             logs = self.contract.events.JobInitialised().get_logs(

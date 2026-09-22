@@ -1037,18 +1037,18 @@ class TestGetResponseClassification:
         assert result["error_code"] == "chain_unavailable"
 
     @pytest.mark.asyncio
-    async def test_rate_limited_resolution_is_chain_unavailable_without_status_lookup(self):
+    async def test_rate_limited_resolution_is_chain_unavailable_after_status_check(self):
         from bnbagent.exceptions import RpcRangeLimitError
 
         storage = MagicMock(spec=["download", "upload"])
         ops = _make_ops(storage=storage)
         client = _inject_client(ops)
         client.get_deliverable_url.side_effect = RpcRangeLimitError("limit exceeded")
-        ops.get_job = AsyncMock()
+        ops.get_job = AsyncMock(return_value={"success": True, "status": JobStatus.SUBMITTED})
         result = await ops.get_response(1)
         assert result["success"] is False
         assert result["error_code"] == "chain_unavailable"
-        ops.get_job.assert_not_called()
+        ops.get_job.assert_awaited_once_with(1)
 
 
 class TestRetryableContract:
