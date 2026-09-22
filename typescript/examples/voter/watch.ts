@@ -36,11 +36,15 @@
  * manually, not in CI.
  */
 
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { DeliverableManifest } from "../../src/erc8183/index.js";
 import { ERC8183Client, EVMWalletProvider, loadEnv } from "../../src/index.js";
+import {
+  fetchPublicJson,
+  publicGatewayUrl,
+} from "../../src/utils/publicHttp.js";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const POLL_INTERVAL_MS = 12_000;
@@ -49,19 +53,18 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchManifest(
+export async function fetchManifest(
   deliverableUrl: string,
   gatewayUrl: string,
 ): Promise<DeliverableManifest | null> {
   try {
-    const url = deliverableUrl.startsWith("ipfs://")
-      ? `${gatewayUrl.replace(/\/+$/, "")}/${deliverableUrl.slice("ipfs://".length)}`
-      : deliverableUrl;
-    const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
-    }
-    const data = (await res.json()) as Record<string, unknown>;
+    const url = publicGatewayUrl(deliverableUrl, gatewayUrl);
+    const data = await fetchPublicJson(url, {
+      timeoutMs: 15_000,
+      maxBytes: 8 * 1024 * 1024,
+    });
+    if (data === null)
+      throw new Error("Public manifest download refused or failed");
     return DeliverableManifest.fromDict(data);
   } catch (error) {
     console.log(
@@ -251,7 +254,12 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (
+  process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

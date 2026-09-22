@@ -21,11 +21,11 @@ import os
 import time
 from pathlib import Path
 
-import httpx
 from dotenv import load_dotenv
 
 from bnbagent.erc8183 import ERC8183Client
 from bnbagent.erc8183.schema import DeliverableManifest
+from bnbagent.utils.public_http import fetch_public_json, public_gateway_url
 from bnbagent.wallets import EVMWalletProvider
 
 ROOT = Path(__file__).resolve().parent
@@ -35,14 +35,8 @@ POLL_INTERVAL = 12  # seconds
 def fetch_manifest(deliverable_url: str, gateway_url: str) -> DeliverableManifest | None:
     """Download and parse a DeliverableManifest from IPFS."""
     try:
-        if deliverable_url.startswith("ipfs://"):
-            cid = deliverable_url[len("ipfs://") :]
-            url = f"{gateway_url.rstrip('/')}/{cid}"
-        else:
-            url = deliverable_url
-        resp = httpx.get(url, timeout=15)
-        resp.raise_for_status()
-        return DeliverableManifest.from_dict(resp.json())
+        url = public_gateway_url(deliverable_url, gateway_url)
+        return DeliverableManifest.from_dict(fetch_public_json(url, max_bytes=8 * 1024 * 1024))
     except Exception as e:
         print(f"  [warn] could not fetch manifest: {e}")
         return None

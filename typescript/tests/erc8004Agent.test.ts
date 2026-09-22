@@ -548,6 +548,28 @@ describe("ERC8004Agent.parseAgentUri: SSRF guard (http/https path)", () => {
     ).resolves.toBeNull();
   });
 
+  it.each([
+    "::",
+    "64:ff9b::7f00:1",
+    "64:ff9b:1::1",
+    "ff02::1",
+    "2002:7f00:1::",
+    "2001:db8::1",
+    "3fff::1",
+  ])(
+    "never issues an HTTP request for special-use IPv6 %s (SRC-1659)",
+    async (address) => {
+      dnsLookupMock.mockResolvedValueOnce([{ address, family: 6 }]);
+      httpRequestMock.mockImplementation(() => {
+        throw new Error("must not connect");
+      });
+      expect(
+        await ERC8004Agent.parseAgentUri("http://agent.example/agent.json"),
+      ).toBeNull();
+      expect(httpRequestMock).not.toHaveBeenCalled();
+    },
+  );
+
   /**
    * Wires `mock` (either `httpRequestMock` or `httpsRequestMock`) to emit a
    * canned response, and returns the request `options` object the SUT

@@ -2,7 +2,6 @@
 Test cases for ERC8004Agent SDK based on examples/basic_usage.py
 """
 
-import json
 from unittest.mock import Mock, patch
 
 import pytest
@@ -170,34 +169,16 @@ class TestERC8004Agent:
         assert "description" in agent_data
 
     def test_parse_agent_uri_http(self, sdk):
-        """Test parsing HTTP agent URI"""
-        with patch("bnbagent.erc8004.agent.requests.get") as mock_get:
-            body = json.dumps(
-                {"name": "Test Agent", "description": "Test Description"}
-            ).encode()
-            mock_response = Mock()
-            mock_response.headers = {"Content-Length": str(len(body))}
-            mock_response.iter_content = Mock(return_value=[body])
-            mock_response.raise_for_status = Mock()
-            mock_get.return_value = mock_response
+        with patch(
+            "bnbagent.erc8004.agent.fetch_public_json", return_value={"name": "Agent"}
+        ) as fetch:
+            assert sdk.parse_agent_uri("https://example.com/agent.json") == {"name": "Agent"}
+            fetch.assert_called_once_with("https://example.com/agent.json", timeout=10)
 
-            agent_data = sdk.parse_agent_uri("https://example.com/agent.json")
-
-            assert agent_data is not None
-            assert "name" in agent_data
-            assert "description" in agent_data
-
-    def test_parse_agent_uri_rejects_oversized_response(self, sdk):
-        """A response larger than the byte cap must be refused (DoS guard),
-        even when no Content-Length header is advertised."""
-        with patch("bnbagent.erc8004.agent.requests.get") as mock_get:
-            huge = b"x" * (2 * 1024 * 1024)  # 2 MB > 1 MB cap
-            mock_response = Mock()
-            mock_response.headers = {}  # force the streamed-byte check
-            mock_response.iter_content = Mock(return_value=[huge])
-            mock_response.raise_for_status = Mock()
-            mock_get.return_value = mock_response
-
+    def test_parse_agent_uri_download_failure_returns_none(self, sdk):
+        with patch(
+            "bnbagent.erc8004.agent.fetch_public_json", side_effect=ValueError("size limit")
+        ):
             assert sdk.parse_agent_uri("https://example.com/agent.json") is None
 
     def test_parse_agent_uri_blocks_cgnat_metadata(self, sdk):

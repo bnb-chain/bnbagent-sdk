@@ -8,10 +8,6 @@
  * Port of `python/bnbagent/erc8004/agent.py`.
  */
 
-import { lookup as dnsLookup } from "node:dns/promises";
-import * as http from "node:http";
-import * as https from "node:https";
-import { BlockList } from "node:net";
 import {
   type PublicClient,
   createPublicClient,
@@ -26,6 +22,7 @@ import {
   RelaySubmissionUnverifiedError,
   TransactionPendingError,
 } from "../errors.js";
+import { fetchPublicJson } from "../utils/publicHttp.js";
 import type { WalletProvider } from "../wallets/walletProvider.js";
 import { AgentURIGenerator } from "./agentUri.js";
 import { type Erc8004Config, getErc8004Config } from "./constants.js";
@@ -36,239 +33,6 @@ import {
   type WriteResult,
 } from "./contract.js";
 import { AgentEndpoint } from "./models.js";
-
-// ── SSRF guard (parseAgentUri's HTTP/HTTPS path) ──────────────────────────
-
-/** Cloud metadata hostnames blocked outright, before any DNS resolution. */
-const BLOCKED_HOSTNAMES = new Set([
-  "metadata.google.internal",
-  "metadata.goog",
-  "169.254.169.254",
-]);
-
-/**
- * Upper bound on the agent-URI HTTP body we will buffer + JSON-parse. The
- * remote endpoint is attacker-influenced (agentURI is on-chain metadata), so
- * an unbounded response could exhaust memory.
- */
-const MAX_AGENT_URI_BYTES = 1 * 1024 * 1024; // 1 MB
-
-/** DNS resolution timeout (ms) — an adversarial DNS server must not hang the caller. */
-const DNS_TIMEOUT_MS = 5_000;
-
-/** HTTP request timeout (ms) for fetching a parsed agent URI. */
-const HTTP_TIMEOUT_MS = 10_000;
-
-let cachedBlockList: BlockList | null = null;
-
-/**
- * Build (once) the `net.BlockList` of private/loopback/link-local/reserved
- * and RFC 6598 CGNAT ranges the SSRF guard refuses to connect to.
- *
- * Mirrors Python's `ipaddress` checks (`is_private`, `is_loopback`,
- * `is_link_local`, `is_reserved`) plus the explicit CGNAT `100.64.0.0/10`
- * carve-out (covers the Alibaba Cloud ECS metadata endpoint at
- * `100.100.100.200`, which `ipaddress` does not otherwise flag).
- */
-function getBlockList(): BlockList {
-  if (cachedBlockList) {
-    return cachedBlockList;
-  }
-  const bl = new BlockList();
-  // IPv4 private ranges (RFC 1918).
-  bl.addSubnet("10.0.0.0", 8, "ipv4");
-  bl.addSubnet("172.16.0.0", 12, "ipv4");
-  bl.addSubnet("192.168.0.0", 16, "ipv4");
-  // Loopback.
-  bl.addSubnet("127.0.0.0", 8, "ipv4");
-  // Link-local (includes the 169.254.169.254 cloud metadata address).
-  bl.addSubnet("169.254.0.0", 16, "ipv4");
-  // RFC 6598 Carrier-Grade NAT (covers Alibaba Cloud ECS metadata at
-  // 100.100.100.200, which is NOT private/loopback/link-local).
-  bl.addSubnet("100.64.0.0", 10, "ipv4");
-  // "This network" / reserved-for-future-use / broadcast.
-  bl.addSubnet("0.0.0.0", 8, "ipv4");
-  bl.addSubnet("240.0.0.0", 4, "ipv4");
-  bl.addAddress("255.255.255.255", "ipv4");
-  // IETF protocol assignments / benchmarking / documentation ranges that
-  // Python's `ipaddress.is_private`/`is_reserved` also refuse. Not normally
-  // internally routed, but included for parity with the Python SSRF guard.
-  bl.addSubnet("192.0.0.0", 24, "ipv4"); // IETF protocol assignments (covers 192.0.0.0/29, NAT64 discovery)
-  bl.addSubnet("192.0.2.0", 24, "ipv4"); // TEST-NET-1 (documentation)
-  bl.addSubnet("198.18.0.0", 15, "ipv4"); // network benchmarking
-  bl.addSubnet("198.51.100.0", 24, "ipv4"); // TEST-NET-2 (documentation)
-  bl.addSubnet("203.0.113.0", 24, "ipv4"); // TEST-NET-3 (documentation)
-  // IPv6 loopback, unique-local, and link-local.
-  bl.addAddress("::1", "ipv6");
-  bl.addSubnet("fc00::", 7, "ipv6");
-  bl.addSubnet("fe80::", 10, "ipv6");
-  cachedBlockList = bl;
-  return bl;
-}
-
-/** Unmap an IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) to its IPv4 form. */
-function unmapIpv4(address: string): string {
-  const match = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address);
-  return match ? match[1] : address;
-}
-
-/** Whether `ip` falls in a blocked (private/loopback/link-local/reserved/CGNAT) range. */
-function isBlockedIp(ip: string): boolean {
-  const unmapped = unmapIpv4(ip);
-  const type = unmapped.includes(":") ? "ipv6" : "ipv4";
-  if (unmapped === "169.254.169.254") {
-    return true;
-  }
-  return getBlockList().check(unmapped, type);
-}
-
-/**
- * Fetch `resolvedIp` over HTTP(S), sending the original `Host` header so the
- * remote server routes correctly, without following redirects, bounded to
- * {@link HTTP_TIMEOUT_MS} and a {@link MAX_AGENT_URI_BYTES} streamed cap.
- *
- * Never rejects: any failure (timeout, non-2xx status, oversized body,
- * transport error) resolves to `null`.
- */
-function fetchViaResolvedIp(params: {
-  isHttps: boolean;
-  resolvedIp: string;
-  port: number;
-  path: string;
-  hostname: string;
-  hostHeader: string;
-}): Promise<Buffer | null> {
-  const { isHttps, resolvedIp, port, path, hostname, hostHeader } = params;
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (value: Buffer | null) => {
-      if (!settled) {
-        settled = true;
-        resolve(value);
-      }
-    };
-
-    const mod = isHttps ? https : http;
-    const req = mod.request(
-      {
-        host: resolvedIp,
-        port,
-        path: path || "/",
-        method: "GET",
-        headers: { Host: hostHeader },
-        timeout: HTTP_TIMEOUT_MS,
-        // Connect to the DNS-resolved IP (preventing a rebind between the
-        // check and the request) while still presenting the original
-        // hostname for TLS server-name/cert-hostname validation.
-        ...(isHttps ? { servername: hostname } : {}),
-      },
-      (res) => {
-        const status = res.statusCode ?? 0;
-        if (status < 200 || status >= 300) {
-          res.destroy();
-          finish(null);
-          return;
-        }
-        const contentLength = res.headers["content-length"];
-        if (contentLength && Number(contentLength) > MAX_AGENT_URI_BYTES) {
-          res.destroy();
-          finish(null);
-          return;
-        }
-        const chunks: Buffer[] = [];
-        let total = 0;
-        res.on("data", (chunk: Buffer) => {
-          if (settled) return;
-          total += chunk.length;
-          if (total > MAX_AGENT_URI_BYTES) {
-            res.destroy();
-            finish(null);
-            return;
-          }
-          chunks.push(chunk);
-        });
-        res.on("end", () => finish(Buffer.concat(chunks)));
-        res.on("error", () => finish(null));
-      },
-    );
-    req.on("timeout", () => {
-      req.destroy();
-      finish(null);
-    });
-    req.on("error", () => finish(null));
-    req.end();
-  });
-}
-
-/**
- * SSRF-guarded fetch + JSON-parse of an `http(s)://` agent URI.
- *
- * Resolves the hostname, rejects blocked hostnames/IP ranges, then issues
- * the request against the resolved IP (not the hostname) to close the
- * DNS-rebinding window between check and use. Any failure returns `null`.
- */
-async function fetchAgentUriHttp(
-  agentUri: string,
-): Promise<Record<string, unknown> | null> {
-  let parsed: URL;
-  try {
-    parsed = new URL(agentUri);
-  } catch {
-    return null;
-  }
-  const hostname = parsed.hostname;
-  if (!hostname) {
-    return null;
-  }
-  if (BLOCKED_HOSTNAMES.has(hostname.toLowerCase())) {
-    return null;
-  }
-
-  let resolvedIp: string;
-  try {
-    const timeout = new Promise<never>((_, reject) => {
-      setTimeout(
-        () => reject(new Error("dns lookup timed out")),
-        DNS_TIMEOUT_MS,
-      );
-    });
-    // `{ all: true }` returns every address the resolver reports for this
-    // hostname (a name can have multiple A/AAAA records). Mirrors Python's
-    // `getaddrinfo` iteration, which rejects if ANY returned address is
-    // private/reserved — not just the one we happen to connect to.
-    const results = await Promise.race([
-      dnsLookup(hostname, { all: true }),
-      timeout,
-    ]);
-    if (results.length === 0 || results.some((r) => isBlockedIp(r.address))) {
-      return null;
-    }
-    resolvedIp = results[0].address;
-  } catch {
-    return null;
-  }
-
-  const isHttps = parsed.protocol === "https:";
-  const port = parsed.port ? Number(parsed.port) : isHttps ? 443 : 80;
-  const hostHeader = parsed.port ? `${hostname}:${parsed.port}` : hostname;
-
-  try {
-    const body = await fetchViaResolvedIp({
-      isHttps,
-      resolvedIp,
-      port,
-      path: `${parsed.pathname}${parsed.search}`,
-      hostname,
-      hostHeader,
-    });
-    if (body === null) {
-      return null;
-    }
-    return JSON.parse(body.toString("utf-8"));
-  } catch {
-    return null;
-  }
-}
 
 // ── ERC8004Agent ───────────────────────────────────────────────────────────
 
@@ -650,7 +414,7 @@ export class ERC8004Agent {
     }
 
     if (agentUri.startsWith("http://") || agentUri.startsWith("https://")) {
-      return fetchAgentUriHttp(agentUri);
+      return fetchPublicJson(agentUri);
     }
 
     return null;
