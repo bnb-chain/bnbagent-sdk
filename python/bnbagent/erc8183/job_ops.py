@@ -929,6 +929,9 @@ async def funded_job_watcher(
     — the caller decides what to do (e.g. delegate signing to a separate Agent).
     ``on_funded`` may be sync or async.
 
+    Jobs are verified before any callback, including retries. Permanent
+    verification failures are dropped; transient failures are retried.
+    The callback receives the verified job snapshot, not the discovery snapshot.
     Retry contract: a job fires once on success. ``on_funded`` raising, or
     returning ``False`` / ``{"retry": True}``, marks the job for retry on the
     next tick (after re-checking on-chain that it is still FUNDED and
@@ -944,6 +947,25 @@ async def funded_job_watcher(
 
     async def _fire(job: dict[str, Any]) -> None:
         job_id = job["jobId"]
+        try:
+            verification = await job_ops.verify_job(job_id)
+        except Exception:
+            logger.warning("[funded_job_watcher] verification failed for %s; will retry", job_id)
+            retry.add(job_id)
+            return
+        if not verification.get("valid"):
+            if verification.get("retryable"):
+                retry.add(job_id)
+            else:
+                retry.discard(job_id)
+                seen.add(job_id)
+            logger.warning(
+                "[funded_job_watcher] rejected job %s: %s",
+                job_id,
+                verification.get("error_code", "verification_failed"),
+            )
+            return
+        job = verification["job"]
         try:
             if is_async:
                 result = await on_funded(job)

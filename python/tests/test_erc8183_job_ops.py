@@ -745,6 +745,7 @@ class TestFundedJobWatcher:
         ops = ERC8183JobOps(provider_address=ME)
         job = {"jobId": 1, "provider": ME}
         ops.get_pending_jobs = AsyncMock(return_value={"success": True, "jobs": [job]})
+        ops.verify_job = AsyncMock(return_value={"valid": True, "job": job})
         ops.submit_result = AsyncMock()  # spy — must never be called
 
         seen: list[int] = []
@@ -838,6 +839,7 @@ class TestFundedJobWatcherRetry:
             return polls.pop(0) if polls else {"success": True, "jobs": []}
 
         ops.get_pending_jobs = get_pending_jobs
+        ops.verify_job = AsyncMock(return_value={"valid": True, "job": job})
         return ops
 
     @staticmethod
@@ -887,6 +889,7 @@ class TestFundedJobWatcherRetry:
     @pytest.mark.asyncio
     async def test_none_return_keeps_fire_once_compat(self):
         ops = ERC8183JobOps(provider_address=ME)
+        ops.verify_job = AsyncMock(return_value={"valid": True, "job": {"jobId": 1}})
         stop = asyncio.Event()
         poll_count = 0
 
