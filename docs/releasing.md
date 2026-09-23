@@ -25,7 +25,7 @@ subdirectories, where a bare relative pathspec would match nothing.
 ## Lanes
 
 - **npm stable** (`npm-publish.yml`, `release_type: production`): verifies,
-  publishes `--tag latest` with provenance, creates the Git tag and GitHub
+  publishes `--tag latest`, creates the Git tag and GitHub
   Release. Notes come from `typescript/scripts/release.ts changelog`.
 - **npm alpha** (`release_type: alpha`): publishes under the `alpha`
   dist-tag from any source ref. No Git tag, no GitHub Release.
@@ -34,6 +34,40 @@ subdirectories, where a bare relative pathspec would match nothing.
   bump, tags, creates the GitHub Release.
 - **Test PyPI** (`release_to_prod: false`): upload only — no version commit,
   tag, or Release.
+
+## npm publishing from multiple repositories
+
+The same workflow can publish from any authorized repository. There is no
+repository-name allowlist or private repository identifier in the source.
+
+Both npm lanes must be dispatched from the default branch (`main`). Alpha
+still accepts any source branch or commit through `source_ref`; production
+publishes the default branch. The alpha `target_version` defaults to `0.6.1`
+and can be set to another unreleased stable version (`X.Y.Z`).
+
+npm authenticates through OIDC rather than `NPM_TOKEN`. Configure a Trusted
+Publisher for each repository, with workflow `npm-publish.yml`, environment
+`npm-publish`, and `npm publish` allowed. Stable releases enable provenance
+when the publishing repository is public and disable it when it is private,
+because [npm only supports provenance for public source repositories](https://docs.npmjs.com/trusted-publishers/).
+Alpha disables provenance because `source_ref` may differ from the dispatch
+commit.
+
+The checked-in package metadata stays identical across repositories. At
+packaging time, each lane sets `repository.url` to the repository running
+the workflow so it matches the OIDC identity. Production applies this after
+the version commit; the repository-specific URL is not committed. Alpha
+also adapts older source branches. Both lanes check the URL in the tarball
+before publishing. The SDK's `built_with` identifier keeps its existing
+public-repository format; release-note comparison links use the publishing
+repository.
+
+Keep development changes synchronized across maintained repositories, including
+workflow fixes. Discover destinations from local Git remote configuration rather
+than publishing private repository names or links. Check branch tips before
+updating them and preserve independent changes through normal PRs. All publishing
+repositories use the same npm package and version namespace; coordinate release
+runs to avoid concurrent publishes of the same version.
 
 ## Latest policy
 
