@@ -35,10 +35,10 @@ subdirectories, where a bare relative pathspec would match nothing.
 - **Test PyPI** (`release_to_prod: false`): upload only — no version commit,
   tag, or Release.
 
-## npm publishing from either repository
+## npm publishing from multiple repositories
 
-Both `bnb-chain/bnbagent-sdk` and `bnb-chain/bnbagent-sdk-internal` can
-publish with the same workflow. There is no repository-name allowlist.
+The same workflow can publish from any authorized repository. There is no
+repository-name allowlist or private repository identifier in the source.
 
 Both npm lanes must be dispatched from the default branch (`main`). Alpha
 still accepts any source branch or commit through `source_ref`; production
@@ -53,7 +53,7 @@ because [npm only supports provenance for public source repositories](https://do
 Alpha disables provenance because `source_ref` may differ from the dispatch
 commit.
 
-The checked-in package metadata stays identical in both repositories. At
+The checked-in package metadata stays identical across repositories. At
 packaging time, each lane sets `repository.url` to the repository running
 the workflow so it matches the OIDC identity. Production applies this after
 the version commit; the repository-specific URL is not committed. Alpha
@@ -62,11 +62,12 @@ before publishing. The SDK's `built_with` identifier keeps its existing
 public-repository format; release-note comparison links use the publishing
 repository.
 
-Keep development changes synchronized between the public and internal
-repositories, including workflow fixes. Check both branch tips before
-updating them and preserve independent changes through normal PRs. Publishing
-from either repository uses the same npm package and version namespace;
-coordinate release runs to avoid concurrent publishes of the same version.
+Keep development changes synchronized across maintained repositories, including
+workflow fixes. Discover destinations from local Git remote configuration rather
+than publishing private repository names or links. Check branch tips before
+updating them and preserve independent changes through normal PRs. All publishing
+repositories use the same npm package and version namespace; coordinate release
+runs to avoid concurrent publishes of the same version.
 
 ## Latest policy
 
