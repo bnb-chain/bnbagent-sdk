@@ -35,6 +35,20 @@ subdirectories, where a bare relative pathspec would match nothing.
 - **Test PyPI** (`release_to_prod: false`): upload only — no version commit,
   tag, or Release.
 
+## npm publishing
+
+Both npm lanes must be dispatched from the default branch (`main`). Alpha
+accepts any source branch or commit through `source_ref`; production publishes
+the default branch. The alpha `target_version` defaults to `0.6.1` and can be
+set to another unreleased stable version (`X.Y.Z`).
+
+npm authenticates through OIDC rather than `NPM_TOKEN`. Configure the package's
+Trusted Publisher with this repository, workflow `npm-publish.yml`, environment
+`npm-publish`, and `npm publish` allowed.
+
+Before publishing, the workflow validates the package name, version, and
+repository URL in the built tarball.
+
 ## Latest policy
 
 Both packages are first-class: the most recent stable release of either

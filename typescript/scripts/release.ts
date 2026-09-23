@@ -30,7 +30,7 @@ const PACKAGES_DIR = "packages";
  * `bnbagent-vX.Y.Z` line on the shared GitHub Releases page.
  */
 export const RELEASE_TAG_PREFIX = "@bnbagent/sdk@v";
-const REPO_URL = "https://github.com/bnb-chain/bnbagent-sdk";
+const REPO_URL = `https://github.com/${process.env.GITHUB_REPOSITORY ?? "bnb-chain/bnbagent-sdk"}`;
 
 export function releaseTag(version: string): string {
   return `${RELEASE_TAG_PREFIX}${version}`;
