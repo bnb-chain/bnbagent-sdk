@@ -19,14 +19,14 @@ on:
       target_version:
         description: "Alpha target stable version (X.Y.Z)"
         required: true
-        default: "0.5.0"
+        default: "0.6.1"
         type: string
       existing_version:
         description: "Existing alpha version to verify without republishing (optional)"
         required: false
         type: string
       bump:
-        description: "Production version selection (current is for the first 0.5.0 release)"
+        description: "Production version selection (current reuses the package version)"
         required: true
         default: current
         type: choice
@@ -367,11 +367,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Apply the alpha version and build once
+      - name: Apply alpha package metadata and build once
         env:
           ALPHA_VERSION: ${{ needs.resolve.outputs.alpha_version }}
         run: |
-          npm pkg set "version=$ALPHA_VERSION"
+          # Align package metadata with the workflow identity before building.
+          npm pkg set "version=$ALPHA_VERSION" \
+            "repository.url=https://github.com/$GITHUB_REPOSITORY.git"
           pnpm run build
           git diff --check
 
@@ -412,7 +414,9 @@ jobs:
           fi
           tar -xOf "$TARBALL_PATH" package/package.json |
             jq -e --arg version "$ALPHA_VERSION" \
-              '.name == "@bnbagent/sdk" and .version == $version' >/dev/null
+              --arg repository "https://github.com/$GITHUB_REPOSITORY.git" \
+              '.name == "@bnbagent/sdk" and .version == $version
+                and .repository.url == $repository' >/dev/null
 
           cd "$CONSUMER_DIR"
           npm init -y >/dev/null
@@ -483,7 +487,9 @@ jobs:
           fi
           tar -xOf "$TARBALL" package/package.json |
             jq -e --arg version "$ALPHA_VERSION" \
-              '.name == "@bnbagent/sdk" and .version == $version' >/dev/null
+              --arg repository "https://github.com/$GITHUB_REPOSITORY.git" \
+              '.name == "@bnbagent/sdk" and .version == $version
+                and .repository.url == $repository' >/dev/null
           echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
 
       - name: Read registry state
@@ -664,6 +670,10 @@ jobs:
       - name: Freeze workspace dependencies for publishing
         run: pnpm exec tsx scripts/release.ts freeze
 
+      - name: Align package metadata with the publishing repository
+        # Apply metadata after the version commit, to the package being published.
+        run: npm pkg set "repository.url=https://github.com/$GITHUB_REPOSITORY.git"
+
       - name: Pack and verify the installable tarball
         env:
           V: ${{ steps.version.outputs.version }}
@@ -685,7 +695,9 @@ jobs:
           fi
           tar -xOf "$TARBALL_PATH" package/package.json |
             jq -e --arg version "$V" \
-              '.name == "@bnbagent/sdk" and .version == $version' >/dev/null
+              --arg repository "https://github.com/$GITHUB_REPOSITORY.git" \
+              '.name == "@bnbagent/sdk" and .version == $version
+                and .repository.url == $repository' >/dev/null
 
           cd "$CONSUMER_DIR"
           npm init -y >/dev/null

@@ -196,29 +196,79 @@ jobs:
           # For Test PyPI, you can use trusted publishing or API token
           # If using API token, set TEST_PYPI_API_TOKEN secret
 
-      - name: Commit version update
+      - name: Commit version update through the GitHub API
         if: success() && inputs.release_to_prod
+        id: version_commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add bnbagent/_version.py
-          if git diff --cached --quiet; then
+          if git diff --quiet HEAD -- bnbagent/_version.py; then
             echo "Version file already up to date; nothing to commit"
-          else
-            git commit -m "chore: bump version to ${{ inputs.version }}"
-            git push origin HEAD:${{ github.ref_name }}
+            echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          # GitHub signs this commit; no bot GPG private key is needed.
+          COMMIT_REQUEST="$(mktemp)"
+          trap 'rm -f "$COMMIT_REQUEST"' EXIT
+          python - <<'PYTHON' > "$COMMIT_REQUEST"
+          import base64
+          import json
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          mutation = """
+          mutation($input: CreateCommitOnBranchInput!) {
+            createCommitOnBranch(input: $input) {
+              commit { oid signature { isValid wasSignedByGitHub } }
+            }
+          }
+          """
+          payload = {
+              "branch": {
+                  "repositoryNameWithOwner": os.environ["GITHUB_REPOSITORY"],
+                  "branchName": os.environ["GITHUB_REF_NAME"],
+              },
+              "expectedHeadOid": subprocess.check_output(
+                  ["git", "rev-parse", "HEAD"], text=True
+              ).strip(),
+              "message": {"headline": f'chore: bump version to {os.environ["VERSION"]}'},
+              "fileChanges": {
+                  "additions": [{
+                      "path": "python/bnbagent/_version.py",
+                      "contents": base64.b64encode(Path("bnbagent/_version.py").read_bytes()).decode(),
+                  }],
+              },
+          }
+          json.dump({"query": mutation, "variables": {"input": payload}}, sys.stdout)
+          PYTHON
+          COMMIT_RESPONSE="$(gh api graphql --input "$COMMIT_REQUEST")"
+          if ! VERSION_COMMIT_SHA="$(jq -er '
+            .data.createCommitOnBranch.commit
+            | select(.signature.isValid == true and .signature.wasSignedByGitHub == true)
+            | .oid | select(test("^[0-9a-f]{40}$"))
+          ' <<< "$COMMIT_RESPONSE")"; then
+            echo "GitHub did not return a verified version commit; refusing to tag" >&2
+            exit 1
+          fi
+          echo "commit_sha=$VERSION_COMMIT_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Create Git tag
         if: success() && inputs.release_to_prod
         env:
           TARGET_TAG: ${{ steps.tags.outputs.target_tag }}
+          RELEASE_SHA: ${{ steps.version_commit.outputs.commit_sha }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TARGET_TAG" -m "Release bnbagent v${{ inputs.version }}"
+          # The API updates the remote branch, while local HEAD stays at checkout.
+          git fetch --no-tags origin "$RELEASE_SHA"
+          git tag -a "$TARGET_TAG" -m "Release bnbagent v${{ inputs.version }}" "$RELEASE_SHA"
           git push origin "$TARGET_TAG"
 
       - name: Create GitHub Release
