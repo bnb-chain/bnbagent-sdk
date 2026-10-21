@@ -39,6 +39,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { hashMessage, recoverMessageAddress } from "viem";
 import { NETWORKS, type NetworkConfig } from "../../config.js";
+import { getEnv } from "../../core/envUtil.js";
 import {
   type RelayVerifierOpts,
   type SecondaryConfirmation,
@@ -82,6 +83,22 @@ import {
 } from "../intents.js";
 import type { SignatureResult } from "../walletProvider.js";
 import { WalletProvider } from "../walletProvider.js";
+import {
+  APPROVAL_PROMPT_TAIL,
+  MAY_HAVE_PAID,
+  NOT_SENT_ERROR_CODES,
+  type TwakExecResult,
+  TwakPaymentNotSentError,
+  TwakPaymentStateUnknownError,
+  type TwakPaymentTerms,
+  type TwakPaymentTermsMismatchError,
+  type TwakPromptExecOpts,
+  checkSignPrompt,
+  errorCode,
+  paidBody,
+  promptAmount,
+  spawnWithPrompt,
+} from "./confirm.js";
 import { TwakX402Payer, type TwakX402PayerOptions } from "./x402.js";
 
 function isCliParserError(message: string, flag?: string): boolean {
@@ -113,6 +130,14 @@ function isCliParserError(message: string, flag?: string): boolean {
 
 /** Default per-CLI-invocation timeout. */
 export const DEFAULT_TWAK_TIMEOUT_MS = 120_000;
+
+/**
+ * twak release line whose `x402 request` pre-signing prompt the SDK parses
+ * and has verified against the real CLI (tests/twakRealCli.test.ts). Paid
+ * requests with `expectedTerms` refuse other releases unless the provider was
+ * built with `allowUnverifiedCliVersion: true`.
+ */
+export const TWAK_X402_VERIFIED_CLI = "0.20";
 
 /** twak v0.20.0's default public-receipt wait before it emits NETWORK_ERROR. */
 const TWAK_RECEIPT_TIMEOUT_SECONDS = 60;
@@ -220,13 +245,6 @@ const INSTALL_HINT =
   "`npm install -g @trustwallet/cli`, then configure it (see the " +
   "TWAKProvider prerequisites).";
 
-/** One finished CLI invocation, success or not. */
-interface TwakExecResult {
-  code: number;
-  stdout: string;
-  stderr: string;
-}
-
 interface TwakReceiptTimeout {
   txHash: `0x${string}`;
   chain: string;
@@ -270,6 +288,12 @@ type TwakExecSync = (
   args: string[],
   opts: { timeoutMs: number; env: NodeJS.ProcessEnv | undefined },
 ) => TwakExecResult;
+
+type TwakPromptExec = (
+  bin: string,
+  args: string[],
+  opts: TwakPromptExecOpts,
+) => Promise<TwakExecResult>;
 
 /** Node's execFile error shape (exit info rides on the thrown error). */
 interface ExecError {
@@ -333,14 +357,17 @@ const realExecSync: TwakExecSync = (bin, args, opts) => {
 
 let execImpl: TwakExec = realExec;
 let execSyncImpl: TwakExecSync = realExecSync;
+let promptExecImpl: TwakPromptExec = spawnWithPrompt;
 
 /**
  * Swap the subprocess layer (or restore it with `null`s). Test hook only —
  * lets the full envelope/argv logic run without a real twak binary.
+ * `promptExec` runs the interactive `x402 request` (see `confirm.ts`).
  */
 export function _setTwakExecForTests(
   exec: TwakExec | null,
   execSync?: TwakExecSync | null,
+  promptExec?: TwakPromptExec | null,
 ): void {
   execImpl = exec ?? realExec;
   execSyncImpl =
@@ -350,6 +377,13 @@ export function _setTwakExecForTests(
           throw new Error("sync twak exec not stubbed for this test");
         }
       : realExecSync);
+  promptExecImpl =
+    promptExec ??
+    (exec
+      ? async () => {
+          throw new Error("interactive twak exec not stubbed for this test");
+        }
+      : spawnWithPrompt);
 }
 
 /**
@@ -408,6 +442,15 @@ export interface TWAKProviderOptions {
    * on-chain identity (INV-4).
    */
   autoCreate?: boolean;
+  /**
+   * Confirm x402 payments with a twak release other than
+   * {@link TWAK_X402_VERIFIED_CLI}. Off by default: the payment check reads
+   * twak's pre-signing prompt, whose wording or meaning a new release may
+   * change. A prompt that no longer parses is still declined either way.
+   * Setting `BNBAGENT_TWAK_ALLOW_UNVERIFIED_CLI=1` has the same effect
+   * without a code change.
+   */
+  allowUnverifiedCliVersion?: boolean;
 }
 
 type IntentHandler = (
@@ -445,6 +488,8 @@ export class TWAKProvider extends WalletProvider implements IntentExecutor {
   readonly #home: string | undefined;
   readonly #expectedAddress: string | undefined;
   readonly #autoCreate: boolean;
+  readonly #allowUnverifiedCliVersion: boolean;
+  #cliVerified = false;
   readonly #confirmTxUnseen: (
     hash: `0x${string}`,
     opts: RelayVerifierOpts,
@@ -473,6 +518,7 @@ export class TWAKProvider extends WalletProvider implements IntentExecutor {
     this.#home = opts.home;
     this.#expectedAddress = opts.expectedAddress;
     this.#autoCreate = opts.autoCreate ?? true;
+    this.#allowUnverifiedCliVersion = opts.allowUnverifiedCliVersion ?? false;
     this.#confirmTxUnseen = opts.confirmTxUnseen ?? confirmTxUnseen;
   }
 
@@ -596,6 +642,154 @@ export class TWAKProvider extends WalletProvider implements IntentExecutor {
       unverified.secondaryRpcResult = secondary;
     }
     return unverified;
+  }
+
+  /** Refuse a twak release whose x402 prompt the SDK was not verified on. */
+  async #requireVerifiedCli(): Promise<void> {
+    if (
+      this.#cliVerified ||
+      this.#allowUnverifiedCliVersion ||
+      getEnv("BNBAGENT_TWAK_ALLOW_UNVERIFIED_CLI") === "1"
+    ) {
+      return;
+    }
+    let result: TwakExecResult;
+    try {
+      result = await execImpl(this.#twakBin, ["--version"], {
+        timeoutMs: this.#timeoutMs,
+        env: this.#env(),
+      });
+    } catch (error) {
+      throw this.#spawnError([this.#twakBin, "--version"], error);
+    }
+    const version =
+      /\d+\.\d+\.\d+/u.exec(result.stdout)?.[0] ??
+      (result.stdout.trim() || "unknown");
+    const verified = new RegExp(
+      `^${TWAK_X402_VERIFIED_CLI.replaceAll(".", "\\.")}\\.\\d+$`,
+      "u",
+    );
+    if (!verified.test(version)) {
+      throw new Error(
+        `twak ${version} is not verified for x402 payments: the SDK checks twak's pre-signing prompt and was verified on twak ${TWAK_X402_VERIFIED_CLI}.x. Install @trustwallet/cli@${TWAK_X402_VERIFIED_CLI} or a @bnbagent/sdk release verified on ${version}; allowUnverifiedCliVersion: true or BNBAGENT_TWAK_ALLOW_UNVERIFIED_CLI=1 tries anyway (a prompt that no longer parses is still declined).`,
+      );
+    }
+    this.#cliVerified = true;
+  }
+
+  /** Run a paid `x402 request` with `--yes`; exit 0 is the body verbatim. */
+  async #runPaid(args: string[]): Promise<unknown> {
+    const cmd = [this.#twakBin, ...args, "--json"];
+    let result: TwakExecResult;
+    try {
+      result = await execImpl(this.#twakBin, [...args, "--json"], {
+        timeoutMs: this.#timeoutMs,
+        env: this.#env(),
+      });
+    } catch (error) {
+      throw this.#spawnError(cmd, error);
+    }
+    if (result.code !== 0) {
+      throw new Error(this.#formatError(cmd, result.stdout, result.stderr));
+    }
+    return paidBody(result.stdout);
+  }
+
+  /**
+   * Run `twak <args> --json`, answering its pre-signing prompt: `y` only if
+   * the final terms equal `expected`, otherwise `n` and throw
+   * {@link TwakPaymentTermsMismatchError} (nothing was signed).
+   *
+   * Exit 0 returns the endpoint body verbatim (any JSON). Failures throw
+   * {@link TwakPaymentNotSentError} when no payment can have left twak
+   * (before the `y`, twak reports it cancelled / needing Permit2 approval,
+   * or the verified twak release exited 0 without asking) and
+   * {@link TwakPaymentStateUnknownError} otherwise.
+   */
+  async #runConfirmed(
+    args: string[],
+    expected: TwakPaymentTerms,
+    onConfirm: ((terms: TwakPaymentTerms) => void) | undefined,
+  ): Promise<unknown> {
+    const cmd = [this.#twakBin, ...args, "--json"];
+    let mismatch = null as TwakPaymentTermsMismatchError | null;
+    let callbackError: unknown;
+    let confirmed = false;
+    let result: TwakExecResult;
+    try {
+      result = await promptExecImpl(this.#twakBin, [...args, "--json"], {
+        timeoutMs: this.#timeoutMs,
+        env: this.#env(),
+        onPrompt: (stderr) => {
+          mismatch = checkSignPrompt(stderr, expected);
+          if (mismatch === null && onConfirm !== undefined) {
+            try {
+              onConfirm({ ...expected, amount: promptAmount(stderr) });
+            } catch (error) {
+              // runs inside the child-process callbacks: decline, report later
+              callbackError = error;
+              return "n";
+            }
+          }
+          confirmed = mismatch === null;
+          return confirmed ? "y" : "n";
+        },
+      });
+    } catch (error) {
+      const failure = this.#spawnError(cmd, error);
+      if (confirmed) {
+        throw new TwakPaymentStateUnknownError(
+          `${failure.message}; ${MAY_HAVE_PAID}`,
+          { cause: failure },
+        );
+      }
+      throw new TwakPaymentNotSentError(failure);
+    }
+    if (mismatch !== null) {
+      throw mismatch;
+    }
+    if (callbackError !== undefined) {
+      throw new TwakPaymentNotSentError(
+        callbackError instanceof Error
+          ? callbackError
+          : new Error(String(callbackError)),
+      );
+    }
+    if (
+      result.code === 0 &&
+      !result.stdout.trim() &&
+      result.stderr.endsWith(APPROVAL_PROMPT_TAIL)
+    ) {
+      throw new TwakPaymentNotSentError(
+        new Error(
+          "twak stopped at its Permit2 approval prompt, so nothing was signed; approve Permit2 for this token first or pass autoApprove: true",
+        ),
+      );
+    }
+    // The verified release signs only after this prompt was answered, so an
+    // exit 0 that never asked paid nothing. Another release might sign
+    // without asking; there the body stays a payment and keeps the budget.
+    if (result.code === 0 && !confirmed && this.#cliVerified) {
+      throw new TwakPaymentNotSentError(
+        new Error(
+          "twak returned the endpoint's response without asking to sign a payment (the paid request got no 402 challenge), so nothing was paid and the response is not returned as a paid x402 result",
+        ),
+      );
+    }
+    if (result.code === 0) {
+      return paidBody(result.stdout);
+    }
+    const failure = new Error(
+      this.#formatError(cmd, result.stdout, result.stderr),
+    );
+    const code = errorCode(result.stdout);
+    if (!confirmed || (code !== undefined && NOT_SENT_ERROR_CODES.has(code))) {
+      throw new TwakPaymentNotSentError(failure);
+    }
+    throw new TwakPaymentStateUnknownError(
+      `${failure.message}; ${MAY_HAVE_PAID}`,
+      { cause: failure },
+    );
   }
 
   /** Sync variant for the base-class `address` getter / `exists()` only. */
@@ -893,6 +1087,22 @@ export class TWAKProvider extends WalletProvider implements IntentExecutor {
    * (TOCTOU backstop between a prior quote and this request). On success
    * the JSON is the paid endpoint's response body verbatim, with no
    * payment-receipt metadata (gaps S-7).
+   *
+   * With `expectedTerms` (what {@link TwakX402Payer} always passes),
+   * `--yes` is omitted: twak re-fetches the challenge and shows the final
+   * amount, token contract, network and recipient before signing, and the
+   * provider confirms only if the recipient, token contract and network
+   * equal `expectedTerms` and the amount is not above it (throwing
+   * {@link TwakPaymentTermsMismatchError} otherwise). `onConfirm` receives
+   * the terms twak is about to sign, with the final amount. Without
+   * `expectedTerms`, twak auto-confirms whatever the re-fetched challenge
+   * asks for, up to `maxPayment`.
+   *
+   * Exit 0 returns the endpoint body verbatim (any JSON, including bodies
+   * with their own `error` field). With `expectedTerms`, failures throw
+   * {@link TwakPaymentNotSentError} (wrapping the cause) when no payment
+   * can have been sent, or {@link TwakPaymentStateUnknownError} once the
+   * payment was confirmed.
    */
   async x402Request(
     url: string,
@@ -904,18 +1114,34 @@ export class TWAKProvider extends WalletProvider implements IntentExecutor {
       preferMethod?: string;
       preferAsset?: string;
       autoApprove?: boolean;
+      expectedTerms?: TwakPaymentTerms;
+      /** Receives the terms twak is about to sign (final amount) before `y`. */
+      onConfirm?: (terms: TwakPaymentTerms) => void;
     },
-  ): Promise<Record<string, unknown>> {
+  ): Promise<unknown> {
     rejectSensitiveArgvUrl(url);
-    await this.#ensure();
+    if (opts.expectedTerms === undefined) {
+      await this.#ensure();
+    } else {
+      try {
+        await this.#ensure();
+        await this.#requireVerifiedCli();
+      } catch (error) {
+        throw new TwakPaymentNotSentError(
+          error instanceof Error ? error : new Error(String(error)),
+        );
+      }
+    }
     const args = [
       "x402",
       "request",
       url,
       "--max-payment",
       String(opts.maxPayment),
-      "--yes",
     ];
+    if (opts.expectedTerms === undefined) {
+      args.push("--yes");
+    }
     if (opts.method && opts.method !== "GET") {
       args.push("--method", opts.method);
     }
@@ -934,7 +1160,10 @@ export class TWAKProvider extends WalletProvider implements IntentExecutor {
     if (opts.autoApprove) {
       args.push("--auto-approve");
     }
-    return this._run(args);
+    if (opts.expectedTerms === undefined) {
+      return this.#runPaid(args);
+    }
+    return this.#runConfirmed(args, opts.expectedTerms, opts.onConfirm);
   }
 
   /**

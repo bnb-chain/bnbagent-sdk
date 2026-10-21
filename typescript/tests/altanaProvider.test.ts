@@ -12,9 +12,18 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getAddress } from "viem";
+import {
+  type PublicClient,
+  decodeFunctionData,
+  getAddress,
+  keccak256,
+} from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NETWORKS } from "../src/config.js";
+import { listAssets } from "../src/networks/assets.js";
+import { PASSKEY_REVOKE_ABI } from "../src/wallets/altana/passkey.js";
+import type { AltanaNetworkConfig } from "../src/wallets/altana/types.js";
 import {
   BROADCAST_SELF,
   CALLS_ARBITRARY,
@@ -355,7 +364,7 @@ describe("AltanaWalletProvider — session management", () => {
     const granted = fakeSession();
     sdkMocks.grantSessionMock.mockResolvedValueOnce(granted);
     const permissions = {
-      calls: [{ to: WALLET }],
+      calls: [{ to: WALLET, signature: "submit(uint256,bytes32,bytes)" }],
       spend: [{ limit: 9n, period: "day" as const }],
     };
     const session = await provider.grantSession({
@@ -371,7 +380,7 @@ describe("AltanaWalletProvider — session management", () => {
       unknown
     >;
     expect(forwarded.wallet).toEqual({ address: ADMIN_ADDRESS });
-    expect(forwarded.permissions).toBe(permissions);
+    expect(forwarded.permissions).toEqual(permissions);
     expect(forwarded.expiry).toBe(EXPIRY);
     expect((forwarded.signer as { address: `0x${string}` }).address).toBe(
       ADMIN_ADDRESS,
@@ -380,6 +389,77 @@ describe("AltanaWalletProvider — session management", () => {
     expect("sessionSigner" in forwarded).toBe(false);
     expect("feeToken" in forwarded).toBe(false);
     expect("register" in forwarded).toBe(false);
+  });
+
+  it.each([
+    ["no signature (Porto: any function)", { to: WALLET }],
+    [
+      "no target (Porto: any contract)",
+      { signature: "submit(uint256,bytes32,bytes)" },
+    ],
+    [
+      "a 0x value that is not a 4-byte selector",
+      { to: WALLET, signature: "0x3232323200" },
+    ],
+    [
+      "the any-function selector with trailing whitespace",
+      { to: WALLET, signature: "0x32323232 " },
+    ],
+    [
+      "the any-target address",
+      { to: `0x${"32".repeat(20)}`, signature: "approve(address,uint256)" },
+    ],
+    [
+      "a catalog payment token",
+      {
+        to: listAssets(56)[0]?.address,
+        signature: "transfer(address,uint256)",
+      },
+    ],
+    [
+      "the Registry's setApprovalForAll",
+      {
+        to: NETWORKS["bsc-mainnet"].registryContract,
+        signature: "setApprovalForAll(address,bool)",
+      },
+    ],
+  ] as const)(
+    "grantSession refuses a call permission with %s before submitting anything (audit L12)",
+    async (_label, call) => {
+      const provider = new AltanaWalletProvider({
+        privateKey: ADMIN_PK,
+        nonceRetry: { delayMs: 0 },
+      });
+
+      await expect(
+        provider.grantSession({
+          permissions: { calls: [call as never], spend: [] },
+          expiry: EXPIRY,
+        }),
+      ).rejects.toThrow(/^grantSession: permissions\.calls\[0\]|forbidden/);
+      expect(sdkMocks.grantSessionMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("grantSession forwards a hex selector lowercased", async () => {
+    const provider = new AltanaWalletProvider({
+      privateKey: ADMIN_PK,
+      nonceRetry: { delayMs: 0 },
+    });
+    sdkMocks.grantSessionMock.mockResolvedValueOnce(fakeSession());
+
+    await provider.grantSession({
+      permissions: { calls: [{ to: WALLET, signature: "0xABCDEF12" }] },
+      expiry: EXPIRY,
+    });
+
+    expect(
+      (
+        sdkMocks.grantSessionMock.mock.calls[0]?.[0] as {
+          permissions: { calls: unknown[] };
+        }
+      ).permissions.calls,
+    ).toEqual([{ to: WALLET, signature: "0xabcdef12" }]);
   });
 
   it("grantSession forwards register: false on 0.5.0+, and refuses it with upgrade guidance on older SDKs", async () => {
@@ -507,6 +587,170 @@ describe("AltanaWalletProvider — session management", () => {
     await expect(provider.revokeSession(CALLS_ID)).rejects.toThrow(
       new RegExp(`FAILED for revokeSession.*${CALLS_ID}`),
     );
+  });
+
+  // SRC-1634: the Altana SDK revokes every session as a secp256k1 key.
+  function passkeySigner(): AltanaSignerT {
+    return {
+      type: "passkey",
+      address: getAddress(`0x${"33".repeat(20)}`),
+      publicKey: `0x${"44".repeat(64)}`,
+      signDigest: async () => `0x${"55".repeat(64)}`,
+    };
+  }
+
+  it("grantSession forwards passkey and secp256k1 session signers alike", async () => {
+    const provider = new AltanaWalletProvider({
+      privateKey: ADMIN_PK,
+      nonceRetry: { delayMs: 0 },
+    });
+    const passkey = passkeySigner();
+    const secp = fakeSession().signer;
+    await provider.grantSession({
+      permissions: {},
+      expiry: EXPIRY,
+      sessionSigner: passkey,
+    });
+    await provider.grantSession({
+      permissions: {},
+      expiry: EXPIRY,
+      sessionSigner: secp,
+    });
+    const forwarded = sdkMocks.grantSessionMock.mock.calls.map(
+      ([opts]) => (opts as { sessionSigner: unknown }).sessionSigner,
+    );
+    expect(forwarded).toEqual([passkey, secp]);
+  });
+
+  // A real P256 key and its grant-time WebAuthn-P256 key hash, from the
+  // SRC-1634 reproduction (Altana SDK 0.7.1 createHeadlessPasskey).
+  const P256_KEY: `0x${string}` =
+    "0xe740b003d0d463a3afa394d5bd95efd4881e7c4f1854dfd2a5103847cca3900d7c613a8668fcbdbf7fd72d4f8e846edfe11b717914d7543a9d2817993f705d1e";
+  const GRANTED_KEY_HASH =
+    "0x40d1602902217757fb3b53879489120b5facdcfc5485f2e30eefdfa0ce0dcf9f";
+  const KEYSTORE = getAddress(`0x${"6b".repeat(20)}`);
+
+  function passkeyAdmin() {
+    return new AltanaWalletProvider({
+      privateKey: ADMIN_PK,
+      nonceRetry: { delayMs: 0 },
+      network: {
+        chainId: 97,
+        keyStore: KEYSTORE,
+      } as unknown as AltanaNetworkConfig,
+    });
+  }
+
+  function keyStoreReader(registered: boolean | Error) {
+    const readContract = vi.fn(async () => {
+      if (registered instanceof Error) {
+        throw registered;
+      }
+      return registered;
+    });
+    return {
+      readContract,
+      client: { readContract } as unknown as PublicClient,
+    };
+  }
+
+  function submittedCalls(): { to: string; data: `0x${string}` }[] {
+    return (
+      sdkMocks.executeMock.mock.calls[0]?.[0] as {
+        calls: { to: string; data: `0x${string}` }[];
+      }
+    ).calls;
+  }
+
+  it("revokeSession revokes a passkey session under its WebAuthn-P256 key hash, KeyStore entry included", async () => {
+    sdkMocks.executeMock.mockResolvedValueOnce({
+      callsId: CALLS_ID,
+      status: "CONFIRMED",
+      transactionHash: FAKE_TX_HASH,
+    });
+    const provider = passkeyAdmin();
+    const reader = keyStoreReader(true);
+    const passkeySession = {
+      ...fakeSession(),
+      signer: { ...passkeySigner(), publicKey: P256_KEY },
+      publicKey: P256_KEY,
+    };
+
+    const result = await provider.revokeSession(passkeySession, {
+      client: reader.client,
+    });
+
+    expect(result.status).toBe("CONFIRMED");
+    expect(sdkMocks.revokeSessionMock).not.toHaveBeenCalled();
+    expect(reader.readContract).toHaveBeenCalledWith(
+      expect.objectContaining({
+        address: KEYSTORE,
+        functionName: "isValidKey",
+        args: [provider.address, keccak256(P256_KEY)],
+      }),
+    );
+    const [keyStoreCall, accountCall] = submittedCalls();
+    expect(keyStoreCall.to).toBe(KEYSTORE);
+    expect(
+      decodeFunctionData({ abi: PASSKEY_REVOKE_ABI, data: keyStoreCall.data }),
+    ).toEqual({
+      functionName: "revokeKey",
+      args: [provider.address, keccak256(P256_KEY)],
+    });
+    expect(accountCall.to).toBe(provider.address);
+    expect(
+      decodeFunctionData({ abi: PASSKEY_REVOKE_ABI, data: accountCall.data }),
+    ).toEqual({ functionName: "revoke", args: [GRANTED_KEY_HASH] });
+  });
+
+  it("revokeSession revokes an unregistered passkey session given only its 64-byte key", async () => {
+    sdkMocks.executeMock.mockResolvedValueOnce({
+      callsId: CALLS_ID,
+      status: "CONFIRMED",
+    });
+    const provider = passkeyAdmin();
+
+    await provider.revokeSession(P256_KEY, {
+      client: keyStoreReader(false).client,
+    });
+
+    const calls = submittedCalls();
+    expect(calls).toHaveLength(1);
+    expect(
+      decodeFunctionData({ abi: PASSKEY_REVOKE_ABI, data: calls[0].data }).args,
+    ).toEqual([GRANTED_KEY_HASH]);
+    expect(sdkMocks.revokeSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("revokeSession submits nothing when the KeyStore state cannot be read, and surfaces relay FAILED", async () => {
+    const provider = passkeyAdmin();
+    await expect(
+      provider.revokeSession(P256_KEY, {
+        client: keyStoreReader(new Error("rpc down")).client,
+      }),
+    ).rejects.toThrow(
+      /could not read.*KeyStore.*rpc down.*nothing was submitted/,
+    );
+    expect(sdkMocks.executeMock).not.toHaveBeenCalled();
+
+    sdkMocks.executeMock.mockResolvedValueOnce({
+      callsId: CALLS_ID,
+      status: "FAILED",
+    });
+    await expect(
+      provider.revokeSession(P256_KEY, {
+        client: keyStoreReader(true).client,
+      }),
+    ).rejects.toThrow(/FAILED for revokeSession/);
+  });
+
+  it("revokeSession still sends secp256k1 sessions through the Altana SDK", async () => {
+    const provider = passkeyAdmin();
+    const secpKey = fakeSession().publicKey;
+    expect(secpKey).toMatch(/^0x04[0-9a-f]{128}$/u);
+    await provider.revokeSession(secpKey);
+    expect(sdkMocks.revokeSessionMock).toHaveBeenCalledTimes(1);
+    expect(sdkMocks.executeMock).not.toHaveBeenCalled();
   });
 });
 
@@ -649,6 +893,52 @@ describe("AltanaWalletProvider — entry points", () => {
       expect(provider.mode).toBe("admin");
       expect(provider.kind).toBe("altana");
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("adminFromKeystore with create: false refuses to mint a new admin key (SRC-1779)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "altana-keystore-"));
+    try {
+      expect(() =>
+        AltanaWalletProvider.adminFromKeystore({
+          password: "test-password-123",
+          walletsDir: dir,
+          create: false,
+        }),
+      ).toThrow(/no keystore in .* and create is false/);
+      expect(EVMWalletProvider.listWallets(dir)).toEqual([]);
+
+      new EVMWalletProvider({
+        password: "test-password-123",
+        privateKey: ADMIN_PK,
+        walletsDir: dir,
+      });
+      const loaded = AltanaWalletProvider.adminFromKeystore({
+        password: "test-password-123",
+        walletsDir: dir,
+        create: false,
+      });
+      expect(loaded.address).toBe(ADMIN_ADDRESS);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("adminFromKeystore warns when its default get-or-create mints a new admin key", () => {
+    const dir = mkdtempSync(join(tmpdir(), "altana-keystore-"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const provider = AltanaWalletProvider.adminFromKeystore({
+        password: "test-password-123",
+        walletsDir: dir,
+      });
+      expect(EVMWalletProvider.listWallets(dir)).toEqual([provider.address]);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(`NEW admin key ${provider.address}`),
+      );
+    } finally {
+      warn.mockRestore();
       rmSync(dir, { recursive: true, force: true });
     }
   });

@@ -99,6 +99,11 @@ class TransactionPendingError(BNBAgentError):
     must surface ``tx_hash`` so the user can check later or safely retry, and
     must NOT treat this as a revert. Distinct from :class:`ContractError`,
     which means the transaction failed (reverted, rejected, or never broadcast).
+
+    ``relay_status`` is ``"public_tx_pending"`` (wait, never re-send the
+    nonce) or, for a relay/sponsored write whose hash is visible but never
+    mined in time, ``"receipt_timeout_but_tx_visible"`` (likely stuck in the
+    mempool: escalate rather than retry).
     """
 
     def __init__(
@@ -109,11 +114,44 @@ class TransactionPendingError(BNBAgentError):
     ):
         self.tx_hash = tx_hash
         self.timeout_seconds = timeout_seconds
+        self.relay_status = "public_tx_pending"
         super().__init__(
             message
             or (
                 f"Transaction {tx_hash} broadcast but not confirmed within "
                 f"{timeout_seconds}s; reconcile this hash before any rebroadcast."
+            )
+        )
+
+
+class RelaySubmissionUnverifiedError(BNBAgentError):
+    """
+    A relay (sponsored) write returned a transaction hash that no public RPC
+    could observe before the receipt wait gave up.
+
+    The transaction may never have been broadcast, or it may still appear:
+    do not resubmit blindly. Reconcile the hash and the wallet nonce first.
+    ``secondary_rpc_result`` records the multi-RPC check that ran before the
+    error was raised: ``"confirmed-unseen"`` (independent RPCs agree it is
+    absent), ``"inconclusive"``, or ``"not-checked"``.
+    """
+
+    def __init__(
+        self,
+        tx_hash: str,
+        timeout_seconds: int,
+        message: str | None = None,
+    ):
+        self.tx_hash = tx_hash
+        self.timeout_seconds = timeout_seconds
+        self.relay_status = "relay_submission_unverified"
+        self.secondary_rpc_result = "not-checked"
+        super().__init__(
+            message
+            or (
+                f"Relay returned transaction {tx_hash}, but no public RPC observed it "
+                f"within {timeout_seconds}s. Do not resubmit blindly; reconcile the "
+                "relay transaction and wallet nonce first."
             )
         )
 

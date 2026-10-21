@@ -21,6 +21,7 @@ from eth_account.messages import encode_defunct
 
 from bnbagent.config import NETWORKS
 from bnbagent.erc8004.contract import ContractInterface
+from bnbagent.exceptions import RelaySubmissionUnverifiedError, TransactionPendingError
 from bnbagent.wallets import (
     ExecutionContext,
     IntentExecutor,
@@ -198,6 +199,87 @@ _PAYMASTER_URL = "https://bsc-megafuel-testnet.nodereal.io"
 
 def _paymaster(url=_PAYMASTER_URL):
     return types.SimpleNamespace(paymaster_url=url)
+
+
+# ── sponsored receipt-timeout classification (SRC-1439, parity with TS) ──
+
+_RECEIPT_HASH = "0x" + "ab" * 32
+_DISPUTE = Intent(name=ERC8183_DISPUTE, kwargs={"job_id": 1})
+
+
+def _receipt_timeout_router(chain="bsctestnet"):
+    envelope = {
+        "error": f"Timed out waiting for receipt {_RECEIPT_HASH} on {chain}",
+        "errorCode": "NETWORK_ERROR",
+    }
+
+    def run(cmd, **kwargs):
+        if cmd[1] == "wallet" and cmd[2] == "status":
+            return _completed(cmd, {"agentWallet": "configured"})
+        return _completed(cmd, envelope, returncode=1)
+
+    return run
+
+
+def _sponsored_twak(web3, confirm=None):
+    twak = TWAKProvider(chain="bsctestnet", confirm_tx_unseen=confirm)
+    twak.make_executor(ExecutionContext(web3=web3, paymaster=_paymaster()))
+    return twak
+
+
+def test_receipt_timeout_unseen_everywhere_is_unverified():
+    web3 = MagicMock()
+    web3.eth.get_transaction.side_effect = Exception("not found")
+    confirm = MagicMock(return_value="confirmed-unseen")
+    twak = _sponsored_twak(web3, confirm)
+
+    with pytest.raises(RelaySubmissionUnverifiedError, match="Do not retry blindly") as raised:
+        _execute(twak, _DISPUTE, _receipt_timeout_router())
+
+    assert raised.value.tx_hash == _RECEIPT_HASH
+    assert raised.value.relay_status == "relay_submission_unverified"
+    assert raised.value.secondary_rpc_result == "confirmed-unseen"
+    web3.eth.get_transaction.assert_called_once_with(_RECEIPT_HASH)
+    confirm.assert_called_once_with(_RECEIPT_HASH, chain_id=97)
+
+
+def test_receipt_timeout_seen_by_fallback_rpcs_is_pending():
+    web3 = MagicMock()
+    web3.eth.get_transaction.side_effect = Exception("not found")
+    twak = _sponsored_twak(web3, MagicMock(return_value="seen"))
+
+    with pytest.raises(TransactionPendingError) as raised:
+        _execute(twak, _DISPUTE, _receipt_timeout_router())
+
+    assert raised.value.tx_hash == _RECEIPT_HASH
+    assert raised.value.relay_status == "receipt_timeout_but_tx_visible"
+
+
+def test_receipt_timeout_visible_on_the_public_rpc_is_pending():
+    web3 = MagicMock()
+    web3.eth.get_transaction.return_value = {"hash": _RECEIPT_HASH}
+    confirm = MagicMock()
+    twak = _sponsored_twak(web3, confirm)
+
+    with pytest.raises(TransactionPendingError, match="Do not retry") as raised:
+        _execute(twak, _DISPUTE, _receipt_timeout_router())
+
+    assert raised.value.relay_status == "receipt_timeout_but_tx_visible"
+    confirm.assert_not_called()
+
+
+def test_receipt_timeout_without_a_paymaster_or_on_another_chain_is_a_plain_failure():
+    # unsponsored: twak's own error, unchanged
+    twak = TWAKProvider(chain="bsctestnet", confirm_tx_unseen=MagicMock())
+    with pytest.raises(RuntimeError, match="Timed out waiting for receipt") as raised:
+        _execute(twak, _DISPUTE, _receipt_timeout_router())
+    classified = (TransactionPendingError, RelaySubmissionUnverifiedError)
+    assert not isinstance(raised.value, classified)
+
+    # sponsored, but the envelope names another chain
+    twak = _sponsored_twak(MagicMock())
+    with pytest.raises(RuntimeError, match="Timed out waiting for receipt"):
+        _execute(twak, _DISPUTE, _receipt_timeout_router(chain="bsc"))
 
 
 def test_make_executor_captures_paymaster_url_and_writes_carry_flag():
@@ -1428,7 +1510,7 @@ def test_x402_quote_https_only_error_surfaces():
             twak.x402_quote("http://insecure.example/paid")
 
 
-def _x402_request_router(output):
+def _x402_request_router(output, returncode=0):
     """Wallet probe succeeds; the x402 request gets ``output``."""
     calls: list[list[str]] = []
 
@@ -1436,7 +1518,7 @@ def _x402_request_router(output):
         calls.append(cmd)
         if cmd[1] == "wallet" and cmd[2] == "status":
             return _completed(cmd, {"agentWallet": "configured"})
-        return _completed(cmd, output)
+        return _completed(cmd, output, returncode=returncode)
 
     return run, calls
 
@@ -1503,8 +1585,9 @@ def test_x402_request_argv_includes_prefer_flags_only_when_set():
 
 
 def test_x402_request_settlement_rejected_error_surfaces():
-    # field-verified NETWORK_ERROR envelope: `error` set, no `success` field
-    run, _ = _x402_request_router(_x402_fixture("error_settlement_rejected.json"))
+    # field-verified NETWORK_ERROR envelope: `error` set, no `success` field;
+    # twak's handleCommandError always exits 1 with it
+    run, _ = _x402_request_router(_x402_fixture("error_settlement_rejected.json"), returncode=1)
     twak = TWAKProvider()
     with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
         with pytest.raises(RuntimeError, match="invalid_payload"):
@@ -1512,11 +1595,29 @@ def test_x402_request_settlement_rejected_error_surfaces():
 
 
 def test_x402_request_min_amount_error_surfaces():
-    run, _ = _x402_request_router(_x402_fixture("error_min_amount.json"))
+    run, _ = _x402_request_router(_x402_fixture("error_min_amount.json"), returncode=1)
     twak = TWAKProvider()
     with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
         with pytest.raises(RuntimeError, match="amountUsd must be at least 0.1"):
             twak.x402_request("https://pay.example/x402", max_payment=1000)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"error": "insufficient credit", "success": False},
+        [{"item": 1}],
+        None,
+        "plain text body",
+    ],
+)
+def test_x402_request_returns_the_paid_body_verbatim(body):
+    # exit 0 is the paid endpoint's body (SRC-1348): its own error/success
+    # fields are not twak failures, and any JSON shape is returned as is
+    run, _ = _x402_request_router(body)
+    twak = TWAKProvider()
+    with patch("bnbagent.wallets.twak_provider.subprocess.run", side_effect=run):
+        assert twak.x402_request("https://pay.example/x402", max_payment=1000) == body
 
 
 # ── live-CLI quirks surfaced by examples/twak (field-verified v0.18.0) ──

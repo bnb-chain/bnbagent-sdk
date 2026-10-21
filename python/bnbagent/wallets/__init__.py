@@ -16,7 +16,14 @@ from .mpc_wallet_provider import MPCWalletProvider
 from .protocols import MessageSigner, TypedDataSigner
 from .turnkey import TurnkeyWalletProvider
 from .twak_custody import materialize_twak_home
-from .twak_provider import TWAK_CHAIN_FOR_NETWORK, TWAKProvider
+from .twak_provider import (
+    TWAK_CHAIN_FOR_NETWORK,
+    TwakPaymentNotSentError,
+    TwakPaymentStateUnknownError,
+    TwakPaymentTerms,
+    TwakPaymentTermsMismatchError,
+    TWAKProvider,
+)
 from .wallet_provider import WalletProvider
 
 __all__ = [
@@ -24,6 +31,10 @@ __all__ = [
     "EVMWalletProvider",
     "MPCWalletProvider",
     "TWAKProvider",
+    "TwakPaymentNotSentError",
+    "TwakPaymentStateUnknownError",
+    "TwakPaymentTerms",
+    "TwakPaymentTermsMismatchError",
     "TurnkeyWalletProvider",
     "UnsupportedWalletOperation",
     "WalletIdentityMismatch",

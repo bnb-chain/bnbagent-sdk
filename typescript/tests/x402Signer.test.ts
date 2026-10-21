@@ -421,8 +421,9 @@ describe("X402Signer — negative value (SRC-1314)", () => {
 
   it("rejects an int256 schema through the x402 path even for a positive, in-cap value", async () => {
     // The field-shape pin standing alone: the amount guards have nothing to
-    // object to here, so this only passes if the wallet's SigningPolicy is
-    // genuinely reached — and the budget must be rolled back on the way out.
+    // object to here, so this only passes if the field shape is pinned
+    // (X402Signer, then the wallet's SigningPolicy) — and the budget must be
+    // left untouched.
     const p = payload({ value: 500_000n, fromAddr: signer.walletAddress });
     await expect(
       signer.signPayment({
@@ -593,6 +594,45 @@ describe("X402Signer — composition-time capability gate", () => {
     expect(supportsCalls).toBe(2);
     expect(signCalls).toBe(0);
   });
+
+  it.each([
+    ["value as int256", POISONED_TWA_FIELDS],
+    ["from/to swapped", [TWA_FIELDS[1], TWA_FIELDS[0], ...TWA_FIELDS.slice(2)]],
+    ["an extra field", [...TWA_FIELDS, { name: "memo", type: "string" }]],
+  ])(
+    "refuses a non-canonical EIP-3009 shape (%s) before a duck-typed wallet signs",
+    async (_label, fields) => {
+      // A duck-typed wallet runs no SigningPolicy, so X402Signer pins the
+      // TransferWithAuthorization field shape itself (SRC-1314 / SRC-1485).
+      let signed = 0;
+      const duck: TypedDataSigner = {
+        address: `0x${"a".repeat(40)}`,
+        signTypedData: async (): Promise<SignatureResult> => {
+          signed++;
+          throw new Error("must not be reached");
+        },
+      };
+      const s = new X402Signer(duck, {
+        maxValuePerCall: { [U_MAINNET]: 1_000_000n },
+        sessionBudget: { [U_MAINNET]: 5_000_000n },
+      });
+      const p = payload({ value: 500_000n, fromAddr: s.walletAddress });
+
+      await expect(
+        s.signPayment({
+          ...p,
+          types: {
+            EIP712Domain: EIP712DOMAIN_FIELDS,
+            TransferWithAuthorization: fields as typeof TWA_FIELDS,
+          },
+          expectedTo: p.message.to,
+        }),
+      ).rejects.toThrow(/canonical EIP-3009 field shape/);
+
+      expect(signed).toBe(0);
+      expect(s.budget.spent(U_MAINNET)).toBe(0n);
+    },
+  );
 
   it("passes a duck-typed signer without supports() and can sign", async () => {
     const duck: TypedDataSigner = {

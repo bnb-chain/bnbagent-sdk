@@ -48,7 +48,9 @@ const jobs = await ERC8183Client.create({
 });
 ```
 
-`defaultAgentPermissions` whitelists selector-bound registry/Commerce/Router/Policy calls and **always** includes a small native spend cap. The payment token is spend-cap-only: session keys cannot call `approve`, so Commerce allowance must be provisioned by the admin with `setErc8183Allowance()` and kept no higher than the session token cap. Zero it when revoking the session.
+`grantSession` generates a fresh secp256k1 session key when `sessionSigner` is omitted. A passkey (WebAuthn/P256) `sessionSigner` also works, but revoke such a session with this provider's `revokeSession`: the Altana SDK's own `revokeSession` (and earlier versions of this SDK) revoke every session as a secp256k1 key and cannot remove it. `revokeSession` recognises a passkey session from the session object or its bare 64-byte P256 public key.
+
+`defaultAgentPermissions` whitelists selector-bound registry/Commerce/Router/Policy calls and **always** includes a small native spend cap. The payment token is spend-cap-only: session keys cannot call `approve`, so Commerce allowance must be provisioned by the admin with `setErc8183Allowance()` and kept no higher than the session token cap. Zero it when revoking the session. `extraCalls` cannot put these back: it rejects calls to catalog payment tokens and to the registry's ERC-721 approval and transfer functions.
 
 Session persistence env vars:
 
@@ -138,15 +140,33 @@ Raw x402 signatures used to be a dead end here (confirmed on-chain: `ecrecover` 
 
 ```ts
 // admin, once per session
-await admin.approveX402SignatureChecker(session); // checker = Permit2
-await admin.setPermit2Allowance(USDC, 50_000_000n); // BOUNDED - see below
+const approved = await admin.approveX402SignatureChecker(session); // checker = Permit2
+const checkerBlock = approved.blockNumber; // persist next to the session file
+await admin.setPermit2Allowance(USDC, 50_000_000n, {
+  // BOUNDED - see below; locks down earlier sessions' stored allowances
+  permit2Cleanup: { client: archiveClient },
+});
 
 // agent (session mode)
 const payer = wallet.makeX402Payer({ sessionBudget: { [USDC]: 10_000_000n } });
 const result = await payer.request(url, { maxPayment: 1_000_000n });
 ```
 
-Security model: session **spend caps do not apply to Permit2 pulls** (the checker gate is independent of spend permissions), so the wallet→Permit2 allowance is the only on-chain ceiling on a leaked session key's x402 spending. Keep it bounded (`setPermit2Allowance`, sized like the old dedicated-EOA balance) and layer the in-process caps (`maxPayment`, `sessionBudget`) on top. Kill switches: `revokeX402SignatureChecker` (x402 only) or `revokeSession` (everything).
+Security model: session **spend caps do not apply to Permit2 pulls** (the checker gate is independent of spend permissions), so the wallet's outer approvals to Permit2 are the only on-chain ceiling on what a leaked session key can pull, **all of them**: as a Permit2 signature checker the session can sign for any token the wallet approved to Permit2, not only the x402 token. Keep the x402 allowance bounded (`setPermit2Allowance`, sized like the old dedicated-EOA balance), use a wallet with no other Permit2 approvals (an EOA that used Uniswap usually has some; set them to 0 first), and layer the in-process caps (`maxPayment`, `sessionBudget`) on top. Kill switches: `revokeX402SignatureChecker` (x402 only) or `revokeSession` (everything).
+
+A revoke does not remove a Permit2 allowance the session already signed: as a Permit2 signature checker the session can sign a `PermitSingle`, and once submitted that allowance lives in Permit2 under the wallet, independent of the session and its expiry. It pulls only through the wallet's outer `approve(Permit2, …)`, so both revokes are followed by a batch that sets that approval to 0 for every catalog token that has one (`result.permit2Reset`; `permit2Reset: false` skips it, since it also pauses x402 for the wallet's other sessions). The session can sign such an allowance for any token, but only the tokens in `result.permit2Reset.covered` are reset: if the wallet approved other tokens to Permit2 (an EOA that used Uniswap usually has), list them in `permit2Reset: { extraTokens }`, or pass `permit2Cleanup`, whose scan also resets the tokens it finds. Raising the approval again re-arms such allowances, which is why a non-zero `setPermit2Allowance` needs `permit2Cleanup` (lockdown and approval in one batch, scanning from the wallet's first EIP-7702 delegation, which the call finds itself; `client` must be on an RPC serving historical state, `eth_getProof` and logs) or `skipPermit2Cleanup: true` (no session of the wallet was ever a Permit2 checker). To lock down at revoke time as well:
+
+```ts
+await admin.revokeX402SignatureChecker(session, {
+  // scan Permit / Approval events from here, lock down what is still live
+  permit2Cleanup: { fromBlock: checkerBlock, client: archiveClient },
+});
+// or, separately:
+const live = await admin.listPermit2Allowances({ fromBlock: checkerBlock });
+await admin.lockdownPermit2Allowances(live);
+```
+
+`lockdownPermit2Allowances` calls Permit2 `lockdown` (and, optionally, `approve(Permit2, 0)`) in one relay batch; a locked-down allowance stays zero when Permit2 is approved again. The scan covers every stored Permit2 allowance of the wallet, including ones the admin set on purpose: pass their spenders as `permit2Cleanup.keepSpenders` (or filter the list yourself) if the wallet uses Permit2 elsewhere; a token that still has a kept allowance keeps its outer approval. The revoke-time and re-arm scans fail, instead of reporting nothing found, when their range does not show a Permit2 checker approval (a late `fromBlock`, or an RPC that served no logs). The default public BSC RPC serves `eth_getLogs` only for roughly the last hour of blocks; pass `client` (a viem `PublicClient` on an archive-capable RPC that returns an error, not an empty result, for a range it does not keep) and `chunkSize` as needed. Session expiry runs no code: retire a session by revoking it, so its outer approvals are reset.
 
 x402 is also the textbook fit for **ephemeral sessions** in the pinned 0.7.1 release: the facilitator verifies signatures through the account's ERC-1271, never the KeyStore registry, so `grantSession({ register: false })` buys the same payment power without the registration fee.
 

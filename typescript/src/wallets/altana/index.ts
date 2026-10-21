@@ -34,6 +34,20 @@ export type {
   AltanaSessionFromEnvOpts,
   AltanaWalletProviderOptions,
 } from "./provider.js";
+export { DEFAULT_PERMIT2_LOG_CHUNK, findDelegationBlock } from "./permit2.js";
+export type {
+  AltanaListPermit2AllowancesOpts,
+  AltanaPermit2Allowance,
+  AltanaPermit2CleanupOpts,
+  AltanaPermit2CleanupResult,
+  AltanaPermit2Pair,
+  AltanaPermit2ReapproveCleanupOpts,
+  AltanaPermit2ResetResult,
+  AltanaRevokeOpts,
+  AltanaRevokeResult,
+  AltanaSetPermit2AllowanceOpts,
+  AltanaSetPermit2AllowanceResult,
+} from "./permit2.js";
 export {
   ALTANA_SDK_PACKAGE,
   ALTANA_SDK_TESTED_VERSION,

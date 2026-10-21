@@ -26,6 +26,11 @@ import {
   type X402Quote,
   quoteFromCli,
 } from "../../x402/payer.js";
+import {
+  TwakPaymentNotSentError,
+  type TwakPaymentTerms,
+  TwakPaymentTermsMismatchError,
+} from "./confirm.js";
 import type { TWAKProvider } from "./provider.js";
 
 /**
@@ -36,6 +41,15 @@ import type { TWAKProvider } from "./provider.js";
  * check only constrains what the challenge claims.
  */
 export const DEFAULT_MAX_TIMEOUT_SECONDS = 3600;
+
+/** twak's default when a challenge entry names no transfer method. */
+const DEFAULT_TRANSFER_METHOD = "eip3009";
+
+/** Normalise a transfer method the way twak's `canonicalMethod` does. */
+function canonicalMethod(method: string | undefined): string {
+  const lower = (method ?? DEFAULT_TRANSFER_METHOD).toLowerCase();
+  return lower === "permit2" ? "permit2-exact" : lower;
+}
 
 /** Constructor options for {@link TwakX402Payer}. */
 export interface TwakX402PayerOptions {
@@ -107,9 +121,20 @@ export class TwakX402Payer implements X402Payer {
    * from the quoted terms (the CLI surfaces no settlement receipt).
    *
    * TOCTOU note: twak re-discovers the challenge between our quote and
-   * its payment. `--prefer-network`/`--prefer-asset` pin the route and
-   * `--max-payment` caps the damage, narrowing (not eliminating) the
-   * window in which the server could swap terms.
+   * its payment. `--prefer-network`/`--prefer-asset`/`--prefer-method` pin
+   * the route and `--max-payment` is set to the prechecked quoted amount
+   * (not `maxPayment`), so twak cannot pay more than the amount the session
+   * budget reserved. twak's pre-signing prompt is then confirmed only if
+   * its final amount, asset, network and payTo equal the prechecked ones
+   * (a drifted route throws before anything is signed).
+   *
+   * Budget: the reservation is released only when no payment can have
+   * been sent (twak failed before the confirmation, reported the payment
+   * cancelled / Permit2 approval required, or, on the verified twak
+   * release, returned a response without asking to sign). Once the payment was
+   * confirmed, a failure keeps the amount reserved and throws
+   * `TwakPaymentStateUnknownError`; a paid response is returned verbatim,
+   * even if its body reports an error.
    */
   async request(
     url: string,
@@ -130,7 +155,25 @@ export class TwakX402Payer implements X402Payer {
         `no payable route for ${url}: the quote's accepts list is empty (the twak client filters out routes on chains it cannot pay)`,
       );
     }
-    const option = quoted.accepts.find((o) => o.preferred) ?? quoted.accepts[0];
+    // twak applies --prefer-method before choosing the route it pays, so the
+    // route must be filtered the same way BEFORE the precheck below;
+    // otherwise the precheck validates one route and twak pays another.
+    const methodPref =
+      opts.preferMethod === undefined
+        ? undefined
+        : canonicalMethod(opts.preferMethod);
+    const candidates =
+      methodPref === undefined
+        ? quoted.accepts
+        : quoted.accepts.filter(
+            (o) => canonicalMethod(o.transferMethod) === methodPref,
+          );
+    if (candidates.length === 0) {
+      throw new X402NoPayableRouteError(
+        `no payable route for ${url} with transfer method "${methodPref}"`,
+      );
+    }
+    const option = candidates.find((o) => o.preferred) ?? candidates[0];
 
     // --- five-point precheck on the quoted terms -----------------------
     // 1. payTo: byte-equal vs the caller's committed recipient.
@@ -145,7 +188,8 @@ export class TwakX402Payer implements X402Payer {
         `quoted asset ${option.asset} != expected ${this.#expectedAsset} (asset is the EIP-712 verifyingContract for EIP-3009 routes)`,
       );
     }
-    // 3. amount: per-call cap (re-enforced below by twak --max-payment).
+    // 3. amount: per-call cap. twak's --max-payment below is the quoted
+    //    amount itself, which is at most this cap.
     if (option.amount > opts.maxPayment) {
       throw new X402AmountExceededError(
         `quoted amount ${option.amount} exceeds maxPayment ${opts.maxPayment} for ${option.asset}`,
@@ -161,44 +205,101 @@ export class TwakX402Payer implements X402Payer {
           `configured cap ${this.#maxTimeoutSeconds}`,
       );
     }
-    // 5. network/asset route pinning: passed through as --prefer-network /
-    //    --prefer-asset (TOCTOU narrowing — twak re-discovers the
-    //    challenge and must land on the route we prechecked).
+    // 5. network/asset/method route pinning: passed through as
+    //    --prefer-network / --prefer-asset / --prefer-method (TOCTOU
+    //    narrowing — twak re-discovers the challenge and must land on the
+    //    route we prechecked; its prompt does not show the transfer method).
 
-    // Reserve the QUOTED amount before the slow CLI call, roll back on
-    // failure (the CLI surfaces no settlement receipt to reconcile with).
+    // Reserve the QUOTED amount before the slow CLI call, roll back only if
+    // nothing can have been sent (the CLI surfaces no settlement receipt to
+    // reconcile with).
     this.#budget?.reserve(option.asset, option.amount);
-    let response: Record<string, unknown>;
+    let response: unknown;
+    const signed: TwakPaymentTerms[] = [];
+    // Keep only the confirmed amount reserved when twak signed less than quoted.
+    const releaseUnsigned = () => {
+      const paid = signed[0]?.amount;
+      if (paid !== undefined && paid < option.amount) {
+        this.#budget?.rollback(option.asset, option.amount - paid);
+      }
+    };
     try {
+      // twak re-fetches the challenge before paying and only checks its
+      // amount against --max-payment; capping it at the reserved quote keeps
+      // the budget ledger an upper bound on what twak can pay.
       response = await this.#provider.x402Request(url, {
-        maxPayment: opts.maxPayment,
+        maxPayment: option.amount,
         ...(opts.method !== undefined ? { method: opts.method } : {}),
         ...(opts.body !== undefined ? { body: opts.body } : {}),
         preferNetwork: option.network,
         preferAsset: option.asset,
-        ...(opts.preferMethod !== undefined
-          ? { preferMethod: opts.preferMethod }
-          : {}),
+        preferMethod: canonicalMethod(option.transferMethod),
         ...(opts.autoApprove !== undefined
           ? { autoApprove: opts.autoApprove }
           : {}),
+        // twak shows the re-fetched challenge's final terms before
+        // signing; the provider confirms only if they match these (the
+        // amount may be lower) and reports what it confirmed.
+        expectedTerms: {
+          amount: option.amount,
+          asset: option.asset,
+          network: option.network,
+          payTo: option.payTo,
+        },
+        onConfirm: (terms) => signed.push(terms),
       });
     } catch (error) {
-      this.#budget?.rollback(option.asset, option.amount);
+      if (error instanceof TwakPaymentTermsMismatchError) {
+        this.#budget?.rollback(option.asset, option.amount);
+        throw termsMismatch(error, option.payTo);
+      }
+      if (error instanceof TwakPaymentNotSentError) {
+        this.#budget?.rollback(option.asset, option.amount);
+        throw error.error;
+      }
+      releaseUnsigned();
       throw error;
     }
 
+    releaseUnsigned();
     const transaction = extractTxHash(response);
     return {
       success: true,
       response,
-      amount: option.amount,
+      amount: signed[0]?.amount ?? option.amount,
       asset: option.asset,
       network: option.network,
       payTo: option.payTo,
       ...(transaction ? { transaction } : {}),
     };
   }
+}
+
+function termsMismatch(
+  error: TwakPaymentTermsMismatchError,
+  quotedPayTo: string,
+): Error {
+  if (error.field === "payTo") {
+    return new X402RecipientMismatchError(
+      `twak's final payTo ${error.actual} != quoted ${quotedPayTo}; declined before signing`,
+    );
+  }
+  if (error.field === "amount") {
+    return new X402PolicyError(
+      `twak's final payment amount ${error.actual} exceeds quoted ${error.expected}; declined before signing`,
+      { cause: error },
+    );
+  }
+  if (error.field === "prompt") {
+    return new X402PolicyError(
+      `twak's confirmation prompt was not recognised (${JSON.stringify(error.actual)}); declined before signing`,
+      { cause: error },
+    );
+  }
+  return new X402PolicyError(
+    `twak's final payment ${error.field} ${JSON.stringify(error.actual)} != quoted ${JSON.stringify(error.expected)}; declined before signing`,
+    { cause: error },
+  );
 }
 
 /** Best-effort tx hash from the endpoint body (most bodies have none). */

@@ -301,6 +301,109 @@ describe("defaultAgentPermissions", () => {
     ).toThrow(/session calls to catalog payment tokens are forbidden/);
   });
 
+  it.each([
+    "approve(address,uint256)",
+    "setApprovalForAll(address,bool)",
+    "transferFrom(address,address,uint256)",
+    "safeTransferFrom(address,address,uint256)",
+    "safeTransferFrom(address,address,uint256,bytes)",
+    // other spellings of the same selectors
+    "function setApprovalForAll(address operator, bool approved)",
+    "0xa22cb465",
+  ])(
+    "cannot opt the Registry's ERC-721 %s into session-call permissions (SRC-1403)",
+    (signature) => {
+      const registry = getAddress(NETWORKS["bsc-testnet"].registryContract);
+      expect(() =>
+        defaultAgentPermissions({
+          chainId: 97,
+          tokenSpend: { limit: 1n },
+          extraCalls: [{ to: registry, signature }],
+        }),
+      ).toThrow(/Registry's ERC-721 approval and transfer functions/);
+    },
+  );
+
+  it.each([
+    ["the any-function selector on the Registry", "registry", "0x32323232"],
+    ["the any-function selector on another target", "other", "0x32323232"],
+    ["the any-target address", "any", "setApprovalForAll(address,bool)"],
+    ["the any-target address with approve", "any", "approve(address,uint256)"],
+  ] as const)(
+    "cannot use Porto's wildcard values in extraCalls: %s (audit L01)",
+    (_label, target, signature) => {
+      const to = {
+        registry: getAddress(NETWORKS["bsc-testnet"].registryContract),
+        other: getAddress(`0x${"12".repeat(20)}`),
+        any: `0x${"32".repeat(20)}` as const,
+      }[target];
+      expect(() =>
+        defaultAgentPermissions({
+          chainId: 97,
+          tokenSpend: { limit: 1n },
+          extraCalls: [{ to, signature }],
+        }),
+      ).toThrow(/any-target or any-function wildcard/);
+    },
+  );
+
+  it.each([
+    // Porto forwards these to the relay as the selector, verbatim
+    "0x32323232 ",
+    "0x3232323200",
+    "0x32323232zz",
+    "0x",
+    // Porto cannot parse these; neither can the check
+    "0X32323232",
+    " 0x32323232",
+    "32323232",
+    "*",
+    "not a signature",
+  ])(
+    "refuses an extraCalls signature that is not a function signature or an exact selector: %j (audit L12)",
+    (signature) => {
+      expect(() =>
+        defaultAgentPermissions({
+          chainId: 97,
+          tokenSpend: { limit: 1n },
+          extraCalls: [{ to: getAddress(`0x${"12".repeat(20)}`), signature }],
+        }),
+      ).toThrow(/needs a function signature or an exact 4-byte selector/);
+    },
+  );
+
+  it("lowercases a hex selector in extraCalls, as it is sent to the relay", () => {
+    const other = getAddress(`0x${"12".repeat(20)}`);
+    const permissions = defaultAgentPermissions({
+      chainId: 97,
+      tokenSpend: { limit: 1n },
+      extraCalls: [{ to: other, signature: "0xABCDEF12" }],
+    });
+    expect(permissions.calls).toContainEqual({
+      to: other,
+      signature: "0xabcdef12",
+    });
+  });
+
+  it("still allows other Registry functions, and approve on other targets, in extraCalls", () => {
+    const registry = getAddress(NETWORKS["bsc-testnet"].registryContract);
+    const other = getAddress(`0x${"12".repeat(20)}`);
+    const permissions = defaultAgentPermissions({
+      chainId: 97,
+      tokenSpend: { limit: 1n },
+      extraCalls: [
+        { to: registry, signature: "setAgentWallet(uint256,address,bytes)" },
+        { to: other, signature: "approve(address,uint256)" },
+      ],
+    });
+    expect(permissions.calls).toEqual(
+      expect.arrayContaining([
+        { to: registry, signature: "setAgentWallet(uint256,address,bytes)" },
+        { to: other, signature: "approve(address,uint256)" },
+      ]),
+    );
+  });
+
   it("expresses independent catalog-token caps for a multi-asset buyer", () => {
     const u = getAsset(97, AssetId.TEST_U);
     const usdc = getAsset(97, AssetId.TEST_USDC);

@@ -9,10 +9,15 @@
  * `Response` objects.
  */
 
-import { decodeFunctionData, getAddress } from "viem";
+import { type PublicClient, decodeFunctionData, getAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { erc20Abi } from "../src/abis/erc20.js";
+import { listAssets } from "../src/networks/assets.js";
+import {
+  PERMIT2_ALLOWANCE_ABI,
+  findDelegationBlock,
+} from "../src/wallets/altana/permit2.js";
 import {
   PAYMENT_SIGNATURE_HEADER,
   X_PAYMENT_HEADER,
@@ -39,13 +44,14 @@ const sdkMocks = vi.hoisted(() => {
   const approveSignatureCheckerMock = vi.fn();
   const revokeSignatureCheckerMock = vi.fn();
   const approveTokenForPermit2Mock = vi.fn();
+  const revokeSessionMock = vi.fn();
   // Flipped off to model a pre-x402 (0.3.3) install.
   const x402Surface = { enabled: true };
   const createClientMock = vi.fn(() => ({
     createWallet: createWalletMock,
     execute: executeMock,
     grantSession: vi.fn(),
-    revokeSession: vi.fn(),
+    revokeSession: revokeSessionMock,
     // signX402Payment is module-level in the real 0.4.0 SDK (positional
     // params), so it is NOT on the client mock.
     ...(x402Surface.enabled
@@ -66,6 +72,7 @@ const sdkMocks = vi.hoisted(() => {
     approveSignatureCheckerMock,
     revokeSignatureCheckerMock,
     approveTokenForPermit2Mock,
+    revokeSessionMock,
     createClientMock,
     x402Surface,
   };
@@ -129,6 +136,14 @@ function fakeSession(): AltanaSessionT {
 
 function sessionProvider() {
   return new AltanaWalletProvider({ session: fakeSession() });
+}
+
+/** Read client for the checker approval: current block 4 200, receipt in 4 242. */
+function blockClient(): PublicClient {
+  return {
+    getBlockNumber: vi.fn(async () => 4_200n),
+    getTransactionReceipt: vi.fn(async () => ({ blockNumber: 4_242n })),
+  } as unknown as PublicClient;
 }
 
 function adminProvider() {
@@ -201,6 +216,7 @@ beforeEach(() => {
   sdkMocks.approveSignatureCheckerMock.mockReset();
   sdkMocks.revokeSignatureCheckerMock.mockReset();
   sdkMocks.approveTokenForPermit2Mock.mockReset();
+  sdkMocks.revokeSessionMock.mockReset();
   sdkMocks.createClientMock.mockClear();
   sdkMocks.x402Surface.enabled = true;
   sdkMocks.createWalletMock.mockImplementation(
@@ -219,6 +235,7 @@ beforeEach(() => {
   sdkMocks.approveSignatureCheckerMock.mockResolvedValue(confirmed);
   sdkMocks.revokeSignatureCheckerMock.mockResolvedValue(confirmed);
   sdkMocks.approveTokenForPermit2Mock.mockResolvedValue(confirmed);
+  sdkMocks.revokeSessionMock.mockResolvedValue(confirmed);
 });
 
 describe("x402 capability gating", () => {
@@ -640,7 +657,9 @@ describe("admin x402 setup", () => {
   it("approveX402SignatureChecker defaults the checker to Permit2", async () => {
     const provider = adminProvider();
     const session = fakeSession();
-    await provider.approveX402SignatureChecker(session);
+    await provider.approveX402SignatureChecker(session, {
+      client: blockClient(),
+    });
     expect(sdkMocks.approveSignatureCheckerMock).toHaveBeenCalledTimes(1);
     const args = sdkMocks.approveSignatureCheckerMock.mock.calls[0][0];
     expect(getAddress(args.checker)).toBe(PERMIT2);
@@ -648,10 +667,55 @@ describe("admin x402 setup", () => {
     expect(args.wallet.address).toBe(provider.address);
   });
 
+  it("approveX402SignatureChecker reports the approval block for the later Permit2 cleanup (SRC-1609)", async () => {
+    const client = blockClient();
+
+    const result = await adminProvider().approveX402SignatureChecker(
+      fakeSession(),
+      { client },
+    );
+
+    expect(result.blockNumber).toBe(4_242n);
+    expect(client.getTransactionReceipt).toHaveBeenCalledWith({
+      hash: `0x${"fe".repeat(32)}`,
+    });
+  });
+
+  it("approveX402SignatureChecker falls back to the block before submitting when the receipt cannot be read (audit M03)", async () => {
+    const client = blockClient();
+    vi.mocked(client.getTransactionReceipt).mockRejectedValueOnce(
+      new Error("rpc down"),
+    );
+
+    const result = await adminProvider().approveX402SignatureChecker(
+      fakeSession(),
+      { client },
+    );
+
+    // the approval already landed; the earlier block only widens the scan
+    expect(result.status).toBe("CONFIRMED");
+    expect(result.blockNumber).toBe(4_200n);
+  });
+
+  it("approveX402SignatureChecker submits nothing when it cannot read the current block (audit M03)", async () => {
+    const client = blockClient();
+    vi.mocked(client.getBlockNumber).mockRejectedValueOnce(
+      new Error("rpc down"),
+    );
+
+    await expect(
+      adminProvider().approveX402SignatureChecker(fakeSession(), { client }),
+    ).rejects.toThrow(
+      /could not read the current block.*nothing was submitted/,
+    );
+    expect(sdkMocks.approveSignatureCheckerMock).not.toHaveBeenCalled();
+  });
+
   it("revokeX402SignatureChecker forwards a custom checker", async () => {
     const provider = adminProvider();
     await provider.revokeX402SignatureChecker(fakeSession(), {
       checker: USDC,
+      permit2Reset: false,
     });
     const args = sdkMocks.revokeSignatureCheckerMock.mock.calls[0][0];
     expect(args.checker).toBe(USDC);
@@ -663,13 +727,18 @@ describe("admin x402 setup", () => {
       status: "FAILED",
     });
     await expect(
-      adminProvider().approveX402SignatureChecker(fakeSession()),
+      adminProvider().approveX402SignatureChecker(fakeSession(), {
+        client: blockClient(),
+      }),
     ).rejects.toThrow(/FAILED.*approveSignatureChecker/);
   });
 
   it("setPermit2Allowance delegates a BOUNDED amount to the SDK's approveTokenForPermit2", async () => {
     const provider = adminProvider();
-    await provider.setPermit2Allowance(USDC, 123_456n, { feeToken: USDC });
+    await provider.setPermit2Allowance(USDC, 123_456n, {
+      feeToken: USDC,
+      skipPermit2Cleanup: true,
+    });
     expect(sdkMocks.approveTokenForPermit2Mock).toHaveBeenCalledTimes(1);
     const args = sdkMocks.approveTokenForPermit2Mock.mock.calls[0][0];
     expect(args.token).toBe(USDC);
@@ -684,8 +753,799 @@ describe("admin x402 setup", () => {
       sessionProvider().approveX402SignatureChecker(fakeSession()),
     ).rejects.toThrow(/admin/);
     await expect(
-      sessionProvider().setPermit2Allowance(USDC, 1n),
+      sessionProvider().setPermit2Allowance(USDC, 1n, {
+        skipPermit2Cleanup: true,
+      }),
     ).rejects.toThrow(/admin/);
+  });
+});
+
+// ── Permit2 allowance cleanup (SRC-1609) ─────────────────────────────────
+
+const ATTACKER = getAddress(`0x${"a7".repeat(20)}`);
+const ROUTER = getAddress(`0x${"b8".repeat(20)}`);
+const U_TOKEN = getAddress("0xcE24439F2D9C6a2289F741120FE202248B666666");
+const MAX_UINT160 = 2n ** 160n - 1n;
+
+type FakeLog =
+  | {
+      event: "Permit" | "Approval";
+      block: bigint;
+      token: `0x${string}`;
+      spender: `0x${string}`;
+    }
+  | {
+      event: "SignatureCheckerApprovalSet";
+      block: bigint;
+      isApproved: boolean;
+    };
+
+/** IthacaAccount keyHash of SESSION_PK's secp256k1 session key. */
+const SESSION_KEY_HASH =
+  "0xea55f7f59da1d578e72484420b656338d05351eee17640290f654e39bb58cf6d";
+
+/**
+ * A read client over fixed Permit2 logs, the wallet's checker approvals,
+ * stored allowances, the wallet's outer Permit2 approvals by token, and
+ * the block of its EIP-7702 delegation (it has code from then on).
+ */
+function permit2Chain(
+  logs: FakeLog[],
+  allowances: Record<string, bigint>,
+  outer: Record<string, bigint> = {},
+  delegatedAt = 0n,
+) {
+  const getLogs = vi.fn(
+    async (q: {
+      address: `0x${string}`;
+      event: { name: string };
+      args: {
+        owner?: `0x${string}`;
+        token?: `0x${string}`[];
+        keyHash?: `0x${string}`;
+        checker?: `0x${string}`;
+      };
+      fromBlock: bigint;
+      toBlock: bigint;
+    }) =>
+      logs
+        .filter(
+          (l) =>
+            l.event === q.event.name &&
+            l.block >= q.fromBlock &&
+            l.block <= q.toBlock &&
+            (q.args.token === undefined ||
+              ("token" in l && q.args.token.includes(l.token))),
+        )
+        .map((l) =>
+          "isApproved" in l
+            ? { args: { ...q.args, isApproved: l.isApproved } }
+            : {
+                args: {
+                  owner: q.args.owner,
+                  token: l.token,
+                  spender: l.spender,
+                },
+              },
+        ),
+  );
+  const readContract = vi.fn(
+    async (q: {
+      address: `0x${string}`;
+      args: readonly `0x${string}`[];
+    }) =>
+      // ERC-20 allowance(owner, Permit2) vs Permit2 allowance(owner, token, spender)
+      q.args.length === 2
+        ? (outer[getAddress(q.address)] ?? 0n)
+        : ([
+            allowances[`${q.args[1]}:${q.args[2]}`] ?? 0n,
+            281_474_976_710_655,
+            0,
+          ] as const),
+  );
+  const getBlockNumber = vi.fn(async () => 12_500n);
+  const getCode = vi.fn(async (q: { blockNumber: bigint }) =>
+    q.blockNumber >= delegatedAt ? "0xef0100deadbeef" : undefined,
+  );
+  const getProof = vi.fn(async (q: { blockNumber: bigint }) => ({
+    storageHash:
+      q.blockNumber >= delegatedAt ? `0x${"5a".repeat(32)}` : EMPTY_ROOT,
+  }));
+  const client = {
+    getLogs,
+    readContract,
+    getBlockNumber,
+    getCode,
+    getProof,
+  } as unknown as PublicClient;
+  return { client, getLogs, readContract, getBlockNumber, getCode, getProof };
+}
+
+const EMPTY_ROOT =
+  "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421";
+
+const LOGS: FakeLog[] = [
+  { event: "SignatureCheckerApprovalSet", block: 90n, isApproved: true },
+  { event: "Permit", block: 100n, token: U_TOKEN, spender: ATTACKER },
+  { event: "Approval", block: 12_000n, token: U_TOKEN, spender: ROUTER },
+  { event: "Permit", block: 12_001n, token: U_TOKEN, spender: ATTACKER },
+  { event: "Permit", block: 7_000n, token: USDC, spender: ATTACKER },
+];
+const ALLOWANCES = {
+  [`${U_TOKEN}:${ATTACKER}`]: MAX_UINT160,
+  [`${U_TOKEN}:${ROUTER}`]: 5n,
+  // the USDC permit was already spent / locked down
+};
+
+describe("Permit2 allowance cleanup (SRC-1609)", () => {
+  it("listPermit2Allowances scans Permit/Approval logs of this wallet in chunks and keeps live pairs", async () => {
+    const chain = permit2Chain(LOGS, ALLOWANCES);
+    const provider = adminProvider();
+
+    const found = await provider.listPermit2Allowances({
+      client: chain.client,
+      fromBlock: 0n,
+    });
+
+    expect(found).toEqual([
+      {
+        token: U_TOKEN,
+        spender: ATTACKER,
+        amount: MAX_UINT160,
+        expiration: 281_474_976_710_655,
+        nonce: 0,
+      },
+      {
+        token: U_TOKEN,
+        spender: ROUTER,
+        amount: 5n,
+        expiration: 281_474_976_710_655,
+        nonce: 0,
+      },
+    ]);
+    const ranges = chain.getLogs.mock.calls.map(([q]) => [
+      q.event.name,
+      q.fromBlock,
+      q.toBlock,
+    ]);
+    expect(ranges).toEqual([
+      ["Permit", 0n, 4_999n],
+      ["Approval", 0n, 4_999n],
+      ["Permit", 5_000n, 9_999n],
+      ["Approval", 5_000n, 9_999n],
+      ["Permit", 10_000n, 12_500n],
+      ["Approval", 10_000n, 12_500n],
+    ]);
+    for (const [q] of chain.getLogs.mock.calls) {
+      expect(getAddress(q.address)).toBe(PERMIT2);
+      expect(q.args.owner).toBe(provider.address);
+    }
+    // three distinct pairs read once each (the repeated permit is deduped)
+    expect(chain.readContract).toHaveBeenCalledTimes(3);
+  });
+
+  it("listPermit2Allowances narrows by token and works in session mode", async () => {
+    const chain = permit2Chain(LOGS, ALLOWANCES);
+    const found = await sessionProvider().listPermit2Allowances({
+      client: chain.client,
+      fromBlock: 0n,
+      toBlock: 9_999n,
+      tokens: [USDC],
+      chunkSize: 10_000n,
+    });
+    expect(found).toEqual([]);
+    const [q] = chain.getLogs.mock.calls[0] ?? [];
+    expect(q?.args).toEqual({ owner: WALLET, token: [USDC] });
+    expect(chain.getLogs).toHaveBeenCalledTimes(2);
+  });
+
+  it("lockdownPermit2Allowances submits Permit2 lockdown (and optional outer approve 0) as one batch", async () => {
+    const provider = adminProvider();
+    const pairs = [
+      { token: U_TOKEN, spender: ATTACKER },
+      { token: U_TOKEN, spender: ROUTER },
+    ];
+
+    await provider.lockdownPermit2Allowances(pairs, {
+      zeroOuterAllowance: true,
+    });
+
+    expect(sdkMocks.executeMock).toHaveBeenCalledTimes(1);
+    const { calls } = sdkMocks.executeMock.mock.calls[0][0] as {
+      calls: { to: `0x${string}`; data: `0x${string}` }[];
+    };
+    expect(calls).toHaveLength(2);
+    expect(getAddress(calls[0].to)).toBe(PERMIT2);
+    expect(calls[0].data.slice(0, 10)).toBe("0xcc53287f"); // lockdown((address,address)[])
+    const lockdown = decodeFunctionData({
+      abi: PERMIT2_ALLOWANCE_ABI,
+      data: calls[0].data,
+    });
+    expect(lockdown.args?.[0]).toEqual(pairs);
+    expect(calls[1].to).toBe(U_TOKEN);
+    const approve = decodeFunctionData({ abi: erc20Abi, data: calls[1].data });
+    expect(approve.functionName).toBe("approve");
+    expect(approve.args).toEqual([PERMIT2, 0n]);
+
+    await expect(provider.lockdownPermit2Allowances([])).resolves.toBeNull();
+    expect(sdkMocks.executeMock).toHaveBeenCalledTimes(1);
+    await expect(
+      sessionProvider().lockdownPermit2Allowances(pairs),
+    ).rejects.toThrow(/admin/);
+  });
+
+  it("revokeX402SignatureChecker with permit2Cleanup revokes first, then locks down what is still live", async () => {
+    const chain = permit2Chain(LOGS, ALLOWANCES);
+    const provider = adminProvider();
+
+    const result = await provider.revokeX402SignatureChecker(fakeSession(), {
+      permit2Cleanup: { client: chain.client, fromBlock: 0n },
+    });
+
+    expect(result.status).toBe("CONFIRMED");
+    expect(result.permit2Cleanup?.allowances.map((a) => a.spender)).toEqual([
+      ATTACKER,
+      ROUTER,
+    ]);
+    expect(result.permit2Cleanup?.lockdown?.status).toBe("CONFIRMED");
+    expect(
+      sdkMocks.revokeSignatureCheckerMock.mock.invocationCallOrder[0],
+    ).toBeLessThan(chain.getLogs.mock.invocationCallOrder[0] ?? 0);
+    const { calls } = sdkMocks.executeMock.mock.calls[0][0] as {
+      calls: { data: `0x${string}` }[];
+    };
+    expect(calls).toHaveLength(1);
+    expect(
+      decodeFunctionData({ abi: PERMIT2_ALLOWANCE_ABI, data: calls[0].data })
+        .args?.[0],
+    ).toEqual([
+      { token: U_TOKEN, spender: ATTACKER },
+      { token: U_TOKEN, spender: ROUTER },
+    ]);
+  });
+
+  it("revokeSession with permit2Cleanup and nothing live submits no lockdown", async () => {
+    const chain = permit2Chain(LOGS, {});
+    const result = await adminProvider().revokeSession(fakeSession(), {
+      permit2Cleanup: { client: chain.client, fromBlock: 0n },
+    });
+    expect(sdkMocks.revokeSessionMock).toHaveBeenCalledTimes(1);
+    expect(result.permit2Cleanup).toEqual({
+      allowances: [],
+      kept: [],
+      lockdown: null,
+    });
+    expect(sdkMocks.executeMock).not.toHaveBeenCalled();
+  });
+
+  it("keepSpenders leaves chosen allowances, and their token's outer approval, in place", async () => {
+    const chain = permit2Chain(
+      LOGS,
+      { ...ALLOWANCES, [`${USDC}:${ATTACKER}`]: 7n },
+      { [U_TOKEN]: 50n, [USDC]: 9n },
+    );
+
+    const result = await adminProvider().revokeX402SignatureChecker(
+      fakeSession(),
+      {
+        permit2Cleanup: {
+          client: chain.client,
+          fromBlock: 0n,
+          keepSpenders: [ROUTER.toLowerCase() as `0x${string}`],
+        },
+      },
+    );
+
+    const cleanup = result.permit2Cleanup;
+    expect(cleanup?.kept.map((a) => [a.token, a.spender])).toEqual([
+      [U_TOKEN, ROUTER],
+    ]);
+    expect(cleanup?.allowances.map((a) => [a.token, a.spender])).toEqual([
+      [U_TOKEN, ATTACKER],
+      [USDC, ATTACKER],
+    ]);
+    const { calls } = sdkMocks.executeMock.mock.calls[0][0] as {
+      calls: { to: `0x${string}`; data: `0x${string}` }[];
+    };
+    expect(
+      decodeFunctionData({ abi: PERMIT2_ALLOWANCE_ABI, data: calls[0].data })
+        .args?.[0],
+    ).toEqual([
+      { token: U_TOKEN, spender: ATTACKER },
+      { token: USDC, spender: ATTACKER },
+    ]);
+    // U still backs the kept router, so only USDC's outer approval is zeroed
+    expect(calls.slice(1).map((c) => c.to)).toEqual([USDC]);
+  });
+
+  it("reports a failed cleanup without hiding that the revoke went through", async () => {
+    const chain = permit2Chain(LOGS, ALLOWANCES);
+    chain.getLogs.mockRejectedValueOnce(
+      new Error("eth_getLogs range too large"),
+    );
+    await expect(
+      adminProvider().revokeX402SignatureChecker(fakeSession(), {
+        permit2Cleanup: { client: chain.client, fromBlock: 0n },
+      }),
+    ).rejects.toThrow(
+      new RegExp(
+        `revokeX402SignatureChecker succeeded \\(callsId ${CALLS_ID}\\), but the Permit2 cleanup failed: eth_getLogs range too large`,
+      ),
+    );
+    expect(sdkMocks.revokeSignatureCheckerMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks for the session's Permit2 checker approval on the wallet before trusting the scan", async () => {
+    const chain = permit2Chain(LOGS, ALLOWANCES);
+    const provider = adminProvider();
+
+    await provider.revokeSession(fakeSession(), {
+      permit2Cleanup: { client: chain.client, fromBlock: 0n },
+    });
+
+    const [q] = chain.getLogs.mock.calls[0] ?? [];
+    expect(q?.event.name).toBe("SignatureCheckerApprovalSet");
+    expect(q?.address).toBe(provider.address);
+    expect(q?.args).toEqual({ keyHash: SESSION_KEY_HASH, checker: PERMIT2 });
+    // a cached latest block could end the scan before the newest logs
+    for (const args of chain.getBlockNumber.mock.calls) {
+      expect(args).toEqual([{ cacheTime: 0 }]);
+    }
+  });
+
+  it.each([
+    // fromBlock after the approval (block 90), before the permit (block 100)
+    ["a fromBlock later than the approval", LOGS, 95n],
+    // only the revoke's own isApproved=false event is visible
+    [
+      "an RPC that serves no approval",
+      [
+        {
+          event: "SignatureCheckerApprovalSet",
+          block: 95n,
+          isApproved: false,
+        },
+      ] satisfies FakeLog[],
+      0n,
+    ],
+  ])(
+    "fails the cleanup instead of an empty success for %s (audit M03)",
+    async (_label, logs, fromBlock) => {
+      const chain = permit2Chain(logs, ALLOWANCES);
+
+      await expect(
+        adminProvider().revokeX402SignatureChecker(fakeSession(), {
+          permit2Cleanup: { client: chain.client, fromBlock },
+        }),
+      ).rejects.toThrow(
+        new RegExp(
+          `revokeX402SignatureChecker succeeded \\(callsId ${CALLS_ID}\\), but the Permit2 cleanup failed: the scan from block ${fromBlock} shows no Permit2 signature-checker approval`,
+        ),
+      );
+      expect(sdkMocks.revokeSignatureCheckerMock).toHaveBeenCalledTimes(1);
+      expect(sdkMocks.executeMock).not.toHaveBeenCalled();
+    },
+  );
+});
+
+const USDT = getAddress("0x55d398326f99059fF775485246999027B3197955");
+const OTHER_TOKEN = getAddress(`0x${"0d".repeat(20)}`);
+
+/** The `approve(Permit2, amount)` and `lockdown` calls of an execute batch. */
+function batchCalls(index = 0) {
+  const { calls } = sdkMocks.executeMock.mock.calls[index][0] as {
+    calls: { to: `0x${string}`; data: `0x${string}` }[];
+  };
+  return calls.map((c) =>
+    c.data.startsWith("0xcc53287f")
+      ? {
+          lockdown: decodeFunctionData({
+            abi: PERMIT2_ALLOWANCE_ABI,
+            data: c.data,
+          }).args?.[0],
+        }
+      : {
+          approve: c.to,
+          args: decodeFunctionData({ abi: erc20Abi, data: c.data }).args,
+        },
+  );
+}
+
+describe("outer Permit2 approval reset on revoke (SRC-1609, plan B)", () => {
+  it("revokeX402SignatureChecker sets every catalog token's non-zero outer Permit2 approval to 0 after the revoke", async () => {
+    const chain = permit2Chain([], {}, { [U_TOKEN]: 50n, [USDT]: 0n });
+
+    const result = await adminProvider().revokeX402SignatureChecker(
+      fakeSession(),
+      { client: chain.client, feeToken: USDC },
+    );
+
+    expect(result.status).toBe("CONFIRMED");
+    expect(result.permit2Reset?.tokens).toEqual([U_TOKEN]);
+    expect(result.permit2Reset?.batch?.status).toBe("CONFIRMED");
+    expect(result.permit2Cleanup).toBeUndefined();
+    expect(batchCalls()).toEqual([{ approve: U_TOKEN, args: [PERMIT2, 0n] }]);
+    expect(sdkMocks.executeMock.mock.calls[0][0].feeToken).toBe(USDC);
+    // the kill switch lands first; the reset reads only current approvals
+    expect(
+      sdkMocks.revokeSignatureCheckerMock.mock.invocationCallOrder[0],
+    ).toBeLessThan(sdkMocks.executeMock.mock.invocationCallOrder[0] ?? 0);
+    expect(chain.getLogs).not.toHaveBeenCalled();
+    const read = chain.readContract.mock.calls.map(([q]) =>
+      getAddress(q.address),
+    );
+    expect(read).toEqual(expect.arrayContaining([U_TOKEN, USDC, USDT]));
+  });
+
+  it("revokeSession resets them too, and submits nothing when no approval is left", async () => {
+    const chain = permit2Chain([], {});
+
+    const result = await adminProvider().revokeSession(fakeSession(), {
+      client: chain.client,
+    });
+
+    expect(sdkMocks.revokeSessionMock).toHaveBeenCalledTimes(1);
+    expect(result.permit2Reset).toEqual({
+      tokens: [],
+      covered: listAssets(56).map((a) => getAddress(a.address)),
+      batch: null,
+    });
+    expect(sdkMocks.executeMock).not.toHaveBeenCalled();
+  });
+
+  it("reports the catalog-only scope: a non-catalog token approved to Permit2 is neither read nor reset by default (audit L11)", async () => {
+    const chain = permit2Chain(
+      [],
+      { [`${OTHER_TOKEN}:${ATTACKER}`]: MAX_UINT160 },
+      { [U_TOKEN]: 50n, [OTHER_TOKEN]: 1_000n },
+    );
+
+    const result = await adminProvider().revokeSession(fakeSession(), {
+      client: chain.client,
+    });
+
+    expect(result.permit2Reset?.tokens).toEqual([U_TOKEN]);
+    expect(result.permit2Reset?.covered).not.toContain(OTHER_TOKEN);
+    expect(batchCalls()).toEqual([{ approve: U_TOKEN, args: [PERMIT2, 0n] }]);
+  });
+
+  it("permit2Reset.extraTokens extends the reset to other tokens without a log scan (audit L11)", async () => {
+    const chain = permit2Chain(
+      [],
+      {},
+      { [U_TOKEN]: 50n, [OTHER_TOKEN]: 1_000n },
+    );
+
+    const result = await adminProvider().revokeX402SignatureChecker(
+      fakeSession(),
+      { client: chain.client, permit2Reset: { extraTokens: [OTHER_TOKEN] } },
+    );
+
+    expect(result.permit2Reset?.tokens).toEqual([U_TOKEN, OTHER_TOKEN]);
+    expect(result.permit2Reset?.covered).toContain(OTHER_TOKEN);
+    expect(batchCalls()).toEqual([
+      { approve: U_TOKEN, args: [PERMIT2, 0n] },
+      { approve: OTHER_TOKEN, args: [PERMIT2, 0n] },
+    ]);
+    expect(chain.getLogs).not.toHaveBeenCalled();
+  });
+
+  it("with permit2Cleanup, also resets the outer approval of every token the scan found an allowance for (audit L11)", async () => {
+    const chain = permit2Chain(
+      [
+        { event: "SignatureCheckerApprovalSet", block: 90n, isApproved: true },
+        { event: "Permit", block: 100n, token: OTHER_TOKEN, spender: ATTACKER },
+      ],
+      { [`${OTHER_TOKEN}:${ATTACKER}`]: MAX_UINT160 },
+      { [OTHER_TOKEN]: 1_000n },
+    );
+
+    const result = await adminProvider().revokeSession(fakeSession(), {
+      permit2Cleanup: { client: chain.client, fromBlock: 90n },
+    });
+
+    expect(result.permit2Reset?.tokens).toEqual([OTHER_TOKEN]);
+    expect(batchCalls()).toEqual([
+      { lockdown: [{ token: OTHER_TOKEN, spender: ATTACKER }] },
+      { approve: OTHER_TOKEN, args: [PERMIT2, 0n] },
+    ]);
+  });
+
+  it("permit2Reset: false leaves the outer approvals alone", async () => {
+    const chain = permit2Chain([], {}, { [U_TOKEN]: 50n });
+
+    const result = await adminProvider().revokeSession(fakeSession(), {
+      client: chain.client,
+      permit2Reset: false,
+    });
+
+    expect(result.permit2Reset).toBeUndefined();
+    expect(chain.readContract).not.toHaveBeenCalled();
+    expect(sdkMocks.executeMock).not.toHaveBeenCalled();
+  });
+
+  it("joins a requested lockdown in one batch with the reset of permit2Reset.extraTokens, and spares a kept spender's token", async () => {
+    const chain = permit2Chain(LOGS, ALLOWANCES, {
+      [U_TOKEN]: 50n,
+      [USDC]: 9n,
+      [OTHER_TOKEN]: 3n,
+    });
+
+    const result = await adminProvider().revokeSession(fakeSession(), {
+      permit2Cleanup: {
+        client: chain.client,
+        fromBlock: 0n,
+        tokens: [U_TOKEN, USDC],
+        keepSpenders: [ROUTER],
+      },
+      permit2Reset: { extraTokens: [OTHER_TOKEN] },
+    });
+
+    expect(result.permit2Cleanup?.kept.map((a) => a.spender)).toEqual([ROUTER]);
+    // U still backs the kept router; USDC and the extra token are reset
+    expect(result.permit2Reset?.tokens).toEqual([USDC, OTHER_TOKEN]);
+    expect(sdkMocks.executeMock).toHaveBeenCalledTimes(1);
+    expect(batchCalls()).toEqual([
+      { lockdown: [{ token: U_TOKEN, spender: ATTACKER }] },
+      { approve: USDC, args: [PERMIT2, 0n] },
+      { approve: OTHER_TOKEN, args: [PERMIT2, 0n] },
+    ]);
+    expect(result.permit2Cleanup?.lockdown).toBe(result.permit2Reset?.batch);
+  });
+
+  it("reports a failed reset without hiding that the revoke went through", async () => {
+    const chain = permit2Chain([], {});
+    chain.readContract.mockRejectedValueOnce(new Error("rpc down"));
+
+    await expect(
+      adminProvider().revokeSession(fakeSession(), { client: chain.client }),
+    ).rejects.toThrow(
+      new RegExp(
+        `revokeSession succeeded \\(callsId ${CALLS_ID}\\), but the Permit2 cleanup failed: rpc down.*setPermit2Allowance\\(token, 0n\\)`,
+      ),
+    );
+    expect(sdkMocks.revokeSessionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the reset when the SDK has no x402 surface (no session can sign for Permit2)", async () => {
+    sdkMocks.x402Surface.enabled = false;
+    const chain = permit2Chain([], {}, { [U_TOKEN]: 50n });
+
+    const result = await adminProvider().revokeSession(fakeSession(), {
+      client: chain.client,
+    });
+
+    expect(result.status).toBe("CONFIRMED");
+    expect(result.permit2Reset).toBeUndefined();
+    expect(chain.readContract).not.toHaveBeenCalled();
+  });
+});
+
+describe("setPermit2Allowance re-arm guard (SRC-1609, plan B)", () => {
+  it("refuses a non-zero approval without permit2Cleanup or skipPermit2Cleanup, before submitting anything", async () => {
+    const provider = adminProvider();
+
+    await expect(
+      provider.setPermit2Allowance(U_TOKEN, 100n, {} as never),
+    ).rejects.toThrow(/re-arms every Permit2 allowance.*Nothing was submitted/);
+    await expect(
+      provider.setPermit2Allowance(U_TOKEN, 100n, {
+        skipPermit2Cleanup: true,
+        permit2Cleanup: { fromBlock: 0n },
+      } as never),
+    ).rejects.toThrow(/either permit2Cleanup or skipPermit2Cleanup/);
+    expect(sdkMocks.approveTokenForPermit2Mock).not.toHaveBeenCalled();
+    expect(sdkMocks.executeMock).not.toHaveBeenCalled();
+
+    // zeroing needs no choice
+    await provider.setPermit2Allowance(U_TOKEN, 0n);
+    expect(sdkMocks.approveTokenForPermit2Mock).toHaveBeenCalledTimes(1);
+  });
+
+  it("with permit2Cleanup, locks down the token's stored allowances and approves in one batch", async () => {
+    const chain = permit2Chain(LOGS, ALLOWANCES);
+
+    const result = await adminProvider().setPermit2Allowance(U_TOKEN, 100n, {
+      permit2Cleanup: { client: chain.client, fromBlock: 0n },
+      feeToken: USDC,
+    });
+
+    expect(result.permit2Cleanup?.allowances.map((a) => a.spender)).toEqual([
+      ATTACKER,
+      ROUTER,
+    ]);
+    expect(batchCalls()).toEqual([
+      {
+        lockdown: [
+          { token: U_TOKEN, spender: ATTACKER },
+          { token: U_TOKEN, spender: ROUTER },
+        ],
+      },
+      { approve: U_TOKEN, args: [PERMIT2, 100n] },
+    ]);
+    expect(sdkMocks.executeMock.mock.calls[0][0].feeToken).toBe(USDC);
+    expect(sdkMocks.approveTokenForPermit2Mock).not.toHaveBeenCalled();
+    const queries = chain.getLogs.mock.calls.map(([q]) => q);
+    // any session's Permit2 checker approval of this wallet counts
+    expect(queries[0]?.event.name).toBe("SignatureCheckerApprovalSet");
+    expect(queries[0]?.args).toEqual({ checker: PERMIT2 });
+    for (const q of queries.slice(1)) {
+      expect(q.args.token).toEqual([U_TOKEN]);
+    }
+  });
+
+  // an earlier session approved at 90 signed PermitSingle(U -> ATTACKER) at
+  // 100; a new session is approved at 12 400; the wallet was delegated at 50
+  const EARLIER_SESSION_LOGS: FakeLog[] = [
+    { event: "SignatureCheckerApprovalSet", block: 90n, isApproved: true },
+    { event: "Permit", block: 100n, token: U_TOKEN, spender: ATTACKER },
+    { event: "SignatureCheckerApprovalSet", block: 12_400n, isApproved: true },
+  ];
+
+  it("refuses a fromBlock after the wallet's delegation, such as the new session's approval block, so an earlier session's allowance is not re-armed (audit L10)", async () => {
+    const chain = permit2Chain(
+      EARLIER_SESSION_LOGS,
+      { [`${U_TOKEN}:${ATTACKER}`]: MAX_UINT160 },
+      {},
+      50n,
+    );
+
+    await expect(
+      adminProvider().setPermit2Allowance(U_TOKEN, 100n, {
+        permit2Cleanup: { client: chain.client, fromBlock: 12_400n },
+      }),
+    ).rejects.toThrow(
+      /already had code or storage at block 12399.*Omit fromBlock to scan from the wallet's first EIP-7702 delegation.*Nothing was submitted/,
+    );
+    expect(chain.getCode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        address: privateKeyToAccount(ADMIN_PK).address,
+        blockNumber: 12_399n,
+      }),
+    );
+    expect(sdkMocks.executeMock).not.toHaveBeenCalled();
+    expect(sdkMocks.approveTokenForPermit2Mock).not.toHaveBeenCalled();
+  });
+
+  it("without fromBlock, scans from the wallet's first delegation and locks the earlier session's allowance down with the re-approval (audit L10)", async () => {
+    const chain = permit2Chain(
+      EARLIER_SESSION_LOGS,
+      { [`${U_TOKEN}:${ATTACKER}`]: MAX_UINT160 },
+      {},
+      50n,
+    );
+
+    const result = await adminProvider().setPermit2Allowance(U_TOKEN, 100n, {
+      permit2Cleanup: { client: chain.client },
+    });
+
+    expect(result.permit2Cleanup?.allowances.map((a) => a.spender)).toEqual([
+      ATTACKER,
+    ]);
+    expect(batchCalls()).toEqual([
+      { lockdown: [{ token: U_TOKEN, spender: ATTACKER }] },
+      { approve: U_TOKEN, args: [PERMIT2, 100n] },
+    ]);
+    expect(chain.getLogs.mock.calls[0]?.[0].fromBlock).toBe(50n);
+  });
+
+  it("accepts an explicit fromBlock at the wallet's delegation", async () => {
+    const chain = permit2Chain(
+      EARLIER_SESSION_LOGS,
+      { [`${U_TOKEN}:${ATTACKER}`]: MAX_UINT160 },
+      {},
+      50n,
+    );
+
+    const result = await adminProvider().setPermit2Allowance(U_TOKEN, 100n, {
+      permit2Cleanup: { client: chain.client, fromBlock: 50n },
+    });
+
+    expect(result.permit2Cleanup?.allowances.map((a) => a.spender)).toEqual([
+      ATTACKER,
+    ]);
+  });
+
+  it("submits nothing when the wallet's first delegation cannot be found (audit L10)", async () => {
+    const chain = permit2Chain(EARLIER_SESSION_LOGS, {}, {}, 50n);
+    chain.getProof.mockRejectedValueOnce(
+      new Error("method eth_getProof not supported"),
+    );
+
+    await expect(
+      adminProvider().setPermit2Allowance(U_TOKEN, 100n, {
+        permit2Cleanup: { client: chain.client },
+      }),
+    ).rejects.toThrow(
+      /could not find the wallet's first EIP-7702 delegation \(method eth_getProof not supported\).*Nothing was submitted/,
+    );
+    expect(sdkMocks.executeMock).not.toHaveBeenCalled();
+  });
+
+  it("submits nothing when the wallet's code before fromBlock cannot be read (audit L10)", async () => {
+    const chain = permit2Chain(EARLIER_SESSION_LOGS, {}, {}, 50n);
+    chain.getCode.mockRejectedValueOnce(new Error("missing trie node"));
+
+    await expect(
+      adminProvider().setPermit2Allowance(U_TOKEN, 100n, {
+        permit2Cleanup: { client: chain.client, fromBlock: 50n },
+      }),
+    ).rejects.toThrow(
+      /could not read the wallet's code and storage at block 49 \(missing trie node\).*eth_getProof.*Nothing was submitted/,
+    );
+    expect(sdkMocks.executeMock).not.toHaveBeenCalled();
+  });
+
+  /** Delegated at 50, delegation cleared at 200 and set again at 9 000; storage kept. */
+  function redelegatedChain() {
+    const chain = permit2Chain(
+      EARLIER_SESSION_LOGS,
+      { [`${U_TOKEN}:${ATTACKER}`]: MAX_UINT160 },
+      {},
+      50n,
+    );
+    chain.getCode.mockImplementation(async (q: { blockNumber: bigint }) =>
+      (q.blockNumber >= 50n && q.blockNumber < 200n) || q.blockNumber >= 9_000n
+        ? "0xef0100deadbeef"
+        : undefined,
+    );
+    return chain;
+  }
+
+  it("refuses a fromBlock right after a cleared delegation was set again: the account's storage shows the earlier one (audit L10)", async () => {
+    const chain = redelegatedChain();
+
+    await expect(
+      adminProvider().setPermit2Allowance(U_TOKEN, 100n, {
+        permit2Cleanup: { client: chain.client, fromBlock: 9_000n },
+      }),
+    ).rejects.toThrow(/already had code or storage at block 8999/);
+    expect(sdkMocks.executeMock).not.toHaveBeenCalled();
+
+    // without fromBlock, the scan starts at the first delegation instead
+    const result = await adminProvider().setPermit2Allowance(U_TOKEN, 100n, {
+      permit2Cleanup: { client: chain.client },
+    });
+    expect(result.permit2Cleanup?.allowances.map((a) => a.spender)).toEqual([
+      ATTACKER,
+    ]);
+  });
+
+  it("findDelegationBlock binary-searches the first block with code or storage, across a cleared delegation", async () => {
+    const chain = permit2Chain([], {}, {}, 7_777n);
+
+    await expect(findDelegationBlock(chain.client, WALLET)).resolves.toBe(
+      7_777n,
+    );
+    // log2(12 500) reads plus the two bounds
+    expect(chain.getCode.mock.calls.length).toBeLessThanOrEqual(16);
+
+    await expect(
+      findDelegationBlock(redelegatedChain().client, WALLET),
+    ).resolves.toBe(50n);
+    await expect(
+      findDelegationBlock(permit2Chain([], {}, {}, 0n).client, WALLET),
+    ).resolves.toBe(0n);
+    await expect(
+      findDelegationBlock(permit2Chain([], {}, {}, 99_999n).client, WALLET),
+    ).rejects.toThrow(/has no code or storage at the latest block 12500/);
+  });
+
+  it("with permit2Cleanup, submits nothing when the scan shows no Permit2 checker approval", async () => {
+    const chain = permit2Chain(
+      LOGS.filter((l) => l.event !== "SignatureCheckerApprovalSet"),
+      ALLOWANCES,
+    );
+
+    await expect(
+      adminProvider().setPermit2Allowance(U_TOKEN, 100n, {
+        permit2Cleanup: { client: chain.client, fromBlock: 0n },
+      }),
+    ).rejects.toThrow(
+      /shows no Permit2 signature-checker approval for any session of this wallet.*skipPermit2Cleanup: true.*Nothing was submitted/,
+    );
+    expect(sdkMocks.executeMock).not.toHaveBeenCalled();
+    expect(sdkMocks.approveTokenForPermit2Mock).not.toHaveBeenCalled();
   });
 });
 
