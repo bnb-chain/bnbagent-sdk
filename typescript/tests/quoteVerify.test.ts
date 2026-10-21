@@ -31,6 +31,18 @@ function mockPublicClient() {
   };
 }
 
+function canonicalContent(envelope: Record<string, unknown>) {
+  const content = JSON.parse(buildJobDescription(envelope)) as Record<
+    string,
+    unknown
+  >;
+  return Object.fromEntries(
+    Object.entries(content).filter(
+      ([key]) => key !== "negotiation_hash" && key !== "provider_sig",
+    ),
+  );
+}
+
 function altanaSession(): Session {
   const signer = signerFromPrivateKey(PROVIDER_KEY);
   return {
@@ -123,9 +135,50 @@ describe("verifyQuoteSignature", () => {
       valid: true,
       method: "eip191",
       signer: provider,
+      signedContent: canonicalContent(envelope),
     });
     expect(publicClient.readContract).not.toHaveBeenCalled();
   });
+
+  it.each(["eip191", "erc1271"] as const)(
+    "exposes only authenticated content from a split %s envelope",
+    async (method) => {
+      const signed =
+        method === "eip191"
+          ? await signedEoaEnvelope()
+          : { envelope: await signedAltanaEnvelope(), provider: ALTANA_WALLET };
+      const { envelope, provider } = signed;
+      const expected = canonicalContent(envelope);
+      Object.assign(envelope, {
+        task: "attacker task",
+        terms: {},
+        price: "1",
+        currency: ALTANA_WALLET,
+      });
+      const publicClient = mockPublicClient();
+      publicClient.readContract.mockResolvedValue("0x1626ba7e");
+
+      const verdict = await verifyQuoteSignature({
+        envelope,
+        provider,
+        publicClient: publicClient as never,
+        expectedVerifyingContract: COMMERCE,
+      });
+
+      expect(verdict).toEqual({
+        valid: true,
+        method,
+        signer: provider,
+        signedContent: expected,
+      });
+      expect(verdict.valid && verdict.signedContent).toMatchObject({
+        task: "Summarize the report",
+        price: "1000000000000000000",
+        currency: "0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565",
+        terms: { deliverables: "summary", quality_standards: "accurate" },
+      });
+    },
+  );
 
   it("rejects a quote at its expiry using the verification block timestamp", async () => {
     const { envelope, provider } = await signedEoaEnvelope();
@@ -274,6 +327,7 @@ describe("verifyQuoteSignature", () => {
       valid: true,
       method: "erc1271",
       signer: ALTANA_WALLET,
+      signedContent: canonicalContent(envelope),
     });
     expect(publicClient.readContract).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -313,6 +367,7 @@ describe("verifyQuoteSignature", () => {
       valid: true,
       method: "erc1271",
       signer: ALTANA_WALLET,
+      signedContent: canonicalContent(negotiationEnvelope),
     });
     expect(latest).toEqual({
       valid: false,

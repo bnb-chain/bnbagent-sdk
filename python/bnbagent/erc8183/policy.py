@@ -22,7 +22,7 @@ from web3.contract import Contract
 
 from ..core.abis import load_abi
 from ..core.contract_mixin import ContractClientMixin
-from ..exceptions import RpcRangeLimitError
+from ..exceptions import NetworkError, RpcRangeLimitError
 from ..wallets.intents import ERC8183_DISPUTE, ERC8183_VOTE_REJECT, Intent
 from ..wallets.wallet_provider import WalletProvider
 from .types import Verdict
@@ -111,18 +111,25 @@ class PolicyClient(ContractClientMixin):
             self.contract.functions.isVoter(Web3.to_checksum_address(voter))
         )
 
-    def get_deliverable_url(self, job_id: int, *, hint_block: int | None = None) -> str | None:
+    def get_deliverable_url(
+        self, job_id: int, *, hint_block: int | None = None, require_log: bool = False
+    ) -> str | None:
         """Return the ``deliverable_url`` for a submitted job.
 
         Reads the ``JobInitialised`` event emitted by ``onSubmitted`` and
         parses ``optParams`` (JSON bytes) to extract ``deliverable_url``.
-        Returns ``None`` if the event is not found or the field is absent.
-        Raises :class:`~bnbagent.exceptions.RpcRangeLimitError` when the node
-        rejects the log query with a rate/range limit (``-32005``) — that is
-        retryable, not proof of absence.
+        Returns it only when it is a non-empty string; ``None`` when the event
+        is not found or carries no usable ``deliverable_url``, which is up to
+        the provider. A failed log query is not proof of absence: it raises
+        :class:`~bnbagent.exceptions.RpcRangeLimitError` for a rate/range limit
+        (``-32005``) and :class:`~bnbagent.exceptions.NetworkError` otherwise,
+        both retryable. With ``require_log``, finding no event raises
+        :class:`~bnbagent.exceptions.NetworkError` too: the policy emits it on
+        every submission, so for a job known to be submitted an empty result
+        means the RPC returned an incomplete one.
 
         Prefer calling ``ERC8183Client.get_deliverable_url`` which auto-resolves
-        ``hint_block`` via Commerce's ``JobSubmitted`` event.  If called directly
+        ``hint_block`` from the job's ``submittedAt``.  If called directly
         without ``hint_block`` a 1 000-block fallback window is used.
         """
         _TIGHT = 10  # blocks either side when hint is known
@@ -158,12 +165,17 @@ class PolicyClient(ContractClientMixin):
                     f"JobInitialised scan for job {job_id} hit the RPC "
                     f"range/rate limit; retry later"
                 ) from exc
-            logger.warning(
-                "[PolicyClient] get_deliverable_url(%s) event query failed: %s", job_id, exc
-            )
-            return None
+            raise NetworkError(
+                f"JobInitialised scan for job {job_id} failed; retry later"
+            ) from exc
 
         if not logs:
+            if require_log:
+                raise NetworkError(
+                    f"no JobInitialised log for submitted job {job_id} in blocks "
+                    f"{from_block}..{to_block}: the RPC returned an incomplete result; "
+                    "retry later"
+                )
             return None
 
         raw: bytes = logs[0]["args"].get("optParams", b"")
@@ -171,10 +183,11 @@ class PolicyClient(ContractClientMixin):
             return None
         try:
             params = json.loads(raw.decode("utf-8"))
-            return params.get("deliverable_url") or None
         except Exception as exc:
             logger.warning("[PolicyClient] get_deliverable_url(%s) parse failed: %s", job_id, exc)
             return None
+        url = params.get("deliverable_url") if isinstance(params, dict) else None
+        return url if isinstance(url, str) and url else None
 
     def dispute_window(self) -> int:
         return self._call_with_retry(self.contract.functions.disputeWindow())

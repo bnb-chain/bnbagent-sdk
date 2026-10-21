@@ -177,7 +177,7 @@ OptimisticPolicy surface:
 
 - **Writes**: `dispute` (client), `vote_reject` (voter), admin methods `add_voter`, `remove_voter`, `set_quorum`.
 - **Reads**: `check`, `submitted_at`, `disputed`, `reject_votes`, `has_voted`, `is_voter`, `dispute_window`, `vote_quorum`, `dispute_quorum_snapshot`, `active_voter_count`, `admin`, `commerce`, `router`.
-- `get_deliverable_url(job_id, *, hint_block=None)` - reads `JobInitialised.optParams` to extract `deliverable_url`. Pass `hint_block` (e.g. the block number of the `Disputed` event) to keep the `eth_getLogs` window tight and avoid RPC block-range limits.
+- `get_deliverable_url(job_id, *, hint_block=None, require_log=False)` - reads `JobInitialised.optParams` to extract `deliverable_url`, returned only when it is a non-empty string. `hint_block` is the block the submission landed in (not the `Disputed` block, which is later); `ERC8183Client.get_deliverable_url` resolves it from the job's `submittedAt`. A failed log query raises `RpcRangeLimitError` or `NetworkError` instead of returning `None`; with `require_log`, so does finding no event.
 
 ### `ERC8183JobOps` / `funded_job_watcher`
 

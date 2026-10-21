@@ -1,6 +1,7 @@
 """SRC-1623: bound work behind repeated and concurrent public lookups."""
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
@@ -158,16 +159,18 @@ async def test_invalid_job_ids_do_not_reach_rpc(job_id):
     ops.get_job.assert_not_awaited()
 
 
-def test_scan_respects_exact_block_budget():
+def test_submission_lookup_reads_a_bounded_number_of_blocks():
+    # Two seconds a block: the submission is in block 50,000 of 100,000, found
+    # in at most ceil(log2(100,001)) = 17 header reads and no log scan.
     client = object.__new__(ERC8183Client)
     client.commerce = MagicMock()
-    client.commerce.w3.eth.block_number = 100000
-    logs = client.commerce.contract.events.JobSubmitted.return_value.get_logs
-    logs.return_value = []
-    assert client._resolve_submit_block(1) is None
-    assert logs.call_count == 50
-    ranges = [(c.kwargs["from_block"], c.kwargs["to_block"]) for c in logs.call_args_list]
-    assert sum(end - start + 1 for start, end in ranges) == 50000
+    client.w3 = MagicMock()
+    client.w3.eth.block_number = 100000
+    client.w3.eth.get_block.side_effect = lambda n: {"timestamp": n * 2}
+    client.get_job = MagicMock(return_value=SimpleNamespace(submitted_at=100000))
+    assert client._resolve_submit_block(1) == 50000
+    assert client.w3.eth.get_block.call_count <= 17
+    client.commerce.contract.events.JobSubmitted.assert_not_called()
 
 
 def test_missing_height_does_not_fall_back_to_genesis():

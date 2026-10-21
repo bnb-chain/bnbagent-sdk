@@ -43,9 +43,9 @@ from ..wallets.wallet_provider import WalletProvider
 from .client import ERC8183Client
 from .config import ERC8183_ENV_PREFIX
 from .negotiation import NegotiationHandler, parse_job_description
-from .quote_verify import quote_content_error, verify_quote_signature
+from .quote_verify import _signed_content, quote_content_error, verify_quote_signature
 from .schema import SCHEMA_VERSION, DeliverableManifest
-from .types import JobStatus
+from .types import ZERO_ADDRESS, JobStatus
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +115,11 @@ ERR_CHAIN_UNAVAILABLE = "chain_unavailable"  # transient chain/RPC trouble (retr
 ERR_TX_PENDING = "tx_pending"  # tx broadcast but unconfirmed (NOT retryable)
 ERR_QUOTE_INVALID = "quote_invalid"  # unsigned, tampered, or stale-at-funding quote
 ERR_JOB_TOKEN_MISMATCH = "job_token_mismatch"  # quote/job/catalog token mismatch
+ERR_UNTRUSTED_ROUTING = "untrusted_routing"  # evaluator/hook/policy bypasses Router
+
+
+def _untrusted_routing(error: str) -> dict[str, Any]:
+    return {"valid": False, "error": error, "error_code": ERR_UNTRUSTED_ROUTING}
 
 
 def _exc_error_fields(exc: Exception) -> dict[str, Any]:
@@ -193,6 +198,9 @@ class ERC8183JobOps:
         retain at most 1024 entries in each cache, and run at most 8 distinct
         lookups at once. Success payloads also have a 16 MiB serialized-byte
         ceiling. Concurrent callers for the same job share one lookup.
+    allow_unrouted_jobs
+        Unsafe compatibility escape hatch for legacy jobs that were not
+        settled through the configured Router. Defaults to ``False``.
     """
 
     def __init__(
@@ -209,6 +217,7 @@ class ERC8183JobOps:
         response_cache_ttl: float = 5.0,
         response_cache_max_entries: int = 1024,
         response_max_inflight: int = 8,
+        allow_unrouted_jobs: bool = False,
     ) -> None:
         if wallet_provider is None and provider_address is None:
             raise ValueError(
@@ -228,6 +237,7 @@ class ERC8183JobOps:
         self._service_prices = self._validate_service_prices(network, service_prices)
         self._agent_url = agent_url
         self._allow_unsigned_jobs = allow_unsigned_jobs
+        self._allow_unrouted_jobs = allow_unrouted_jobs
 
         if not math.isfinite(response_cache_ttl) or response_cache_ttl < 0:
             raise ValueError("response_cache_ttl must be finite and non-negative")
@@ -663,6 +673,41 @@ class ERC8183JobOps:
                     "error_code": ERR_NOT_ASSIGNED,
                 }
 
+            client = self._get_client()
+            if not self._allow_unrouted_jobs:
+                try:
+                    router_address = Web3.to_checksum_address(client.router.address)
+                except (TypeError, ValueError):
+                    return _untrusted_routing("Configured Router address is invalid")
+                try:
+                    evaluator = Web3.to_checksum_address(job_result["evaluator"])
+                except (KeyError, TypeError, ValueError):
+                    return _untrusted_routing("Job evaluator is not the configured Router")
+                if evaluator != router_address:
+                    return _untrusted_routing("Job evaluator is not the configured Router")
+                try:
+                    hook = Web3.to_checksum_address(job_result["hook"])
+                except (KeyError, TypeError, ValueError):
+                    return _untrusted_routing("Job hook is not the configured Router")
+                if hook != router_address:
+                    return _untrusted_routing("Job hook is not the configured Router")
+                try:
+                    policy_raw = await asyncio.to_thread(client.router.job_policy, job_id)
+                except Exception:
+                    return self._chain_read_error()
+                try:
+                    policy = Web3.to_checksum_address(policy_raw)
+                except (TypeError, ValueError):
+                    return _untrusted_routing("Job is not registered with a Router policy")
+                if policy == Web3.to_checksum_address(ZERO_ADDRESS):
+                    return _untrusted_routing("Job is not registered with a Router policy")
+                try:
+                    whitelisted = await asyncio.to_thread(client.router.policy_whitelist, policy)
+                except Exception:
+                    return self._chain_read_error()
+                if not whitelisted:
+                    return _untrusted_routing("Job policy is not whitelisted by the Router")
+
             now = int(time.time())
             expired_at = job_result.get("expiredAt", 0)
             if expired_at <= now:
@@ -690,7 +735,6 @@ class ERC8183JobOps:
                     f"submit-deadline check: {exc}"
                 )
 
-            client = self._get_client()
             try:
                 raw_job_token = await asyncio.to_thread(client.job_payment_token, job_id)
             except Exception:
@@ -725,6 +769,7 @@ class ERC8183JobOps:
 
             description = job_result.get("description", "")
             quote_envelope: dict[str, Any] | None = None
+            quote_response: dict[str, Any] | None = None
             has_structured_description = False
             if description:
                 try:
@@ -734,6 +779,9 @@ class ERC8183JobOps:
                         raw = json.loads(description)
                         if isinstance(raw, dict):
                             quote_envelope = raw
+                            if isinstance(raw.get("response"), dict):
+                                quote_response = raw["response"]
+                                has_structured_description = True
                 except Exception as exc:
                     return {
                         "valid": False,
@@ -754,11 +802,19 @@ class ERC8183JobOps:
                 required = {
                     "negotiation_hash",
                     "provider_sig",
-                    "negotiated_at",
-                    "quote_expires_at",
                     "chain_id",
                 }
-                if not required.issubset(quote_envelope):
+                negotiated_at = quote_envelope.get("negotiated_at")
+                quote_expires_at = quote_envelope.get("quote_expires_at")
+                if quote_response is not None:
+                    # Match the time-field precedence used to build signed content.
+                    negotiated_at = negotiated_at or quote_response.get("negotiated_at")
+                    quote_expires_at = quote_expires_at or quote_response.get("quote_expires_at")
+                if (
+                    not required.issubset(quote_envelope)
+                    or negotiated_at is None
+                    or quote_expires_at is None
+                ):
                     return {
                         "valid": False,
                         "error": (
@@ -768,8 +824,6 @@ class ERC8183JobOps:
                         "error_code": ERR_QUOTE_INVALID,
                     }
 
-                negotiated_at = quote_envelope["negotiated_at"]
-                quote_expires_at = quote_envelope["quote_expires_at"]
                 if (
                     not isinstance(negotiated_at, int)
                     or isinstance(negotiated_at, bool)
@@ -788,7 +842,19 @@ class ERC8183JobOps:
                         "error_code": ERR_QUOTE_INVALID,
                     }
 
-                signed_price_raw = quote_envelope.get("price")
+                content_error = quote_content_error(quote_envelope)
+                if content_error:
+                    return {
+                        "valid": False,
+                        "error": content_error,
+                        "error_code": ERR_QUOTE_INVALID,
+                    }
+                # negotiation_hash commits to exactly this content and its
+                # signature is verified below, before the job is accepted;
+                # reading it here keeps every local check ahead of the
+                # funding-history search.
+                signed_content = _signed_content(quote_envelope)
+                signed_price_raw = signed_content.get("price")
                 if not isinstance(signed_price_raw, str) or not signed_price_raw.isdigit():
                     return {
                         "valid": False,
@@ -807,7 +873,7 @@ class ERC8183JobOps:
                         "error_code": ERR_BUDGET_TOO_LOW,
                     }
 
-                signed_currency_raw = quote_envelope.get("currency")
+                signed_currency_raw = signed_content.get("currency")
                 try:
                     if not isinstance(signed_currency_raw, str):
                         raise ValueError("currency is not a string")
@@ -821,13 +887,6 @@ class ERC8183JobOps:
                 if signed_currency != job_token:
                     return self._job_token_error()
 
-                content_error = quote_content_error(quote_envelope)
-                if content_error:
-                    return {
-                        "valid": False,
-                        "error": content_error,
-                        "error_code": ERR_QUOTE_INVALID,
-                    }
                 if funded_budget < effective_service_price:
                     return {
                         "valid": False,
@@ -872,6 +931,14 @@ class ERC8183JobOps:
                         "error": f"Provider quote rejected: {verdict.reason}",
                         "error_code": ERR_QUOTE_INVALID,
                     }
+
+                authenticated = dict(verdict.signed_content or {})
+                authenticated["negotiation_hash"] = quote_envelope["negotiation_hash"]
+                authenticated["provider_sig"] = quote_envelope["provider_sig"]
+                job_result = dict(job_result)
+                job_result["description"] = json.dumps(
+                    authenticated, sort_keys=True, separators=(",", ":")
+                )
 
             if effective_service_price > 0:
                 budget = job_result.get("budget", 0)
@@ -1066,17 +1133,17 @@ async def funded_job_watcher(
     stop: asyncio.Event | None = None,
     max_attempts: int = 5,
 ) -> None:
-    """Poll ``job_ops.get_pending_jobs()`` and fire ``on_funded(job)`` per FUNDED job.
+    """Poll pending jobs and fire ``on_funded`` with each verified FUNDED job.
 
     Signer-free detection loop for keyless services: it NEVER submits or settles
     — the caller decides what to do (e.g. delegate signing to a separate Agent).
     ``on_funded`` may be sync or async.
 
-    Jobs are verified before any callback, including retries. Permanent
-    verification failures are dropped; transient failures are retried.
-    The callback receives the verified job snapshot, not the discovery snapshot.
-    Retry contract: a job fires once on success. ``on_funded`` raising, or
-    returning ``False`` / ``{"retry": True}``, marks the job for retry on the
+    Jobs are verified before every callback, including retries, and the
+    callback receives the verified job snapshot, not the discovery snapshot.
+    Permanent verification failures are dropped; transient failures,
+    ``on_funded`` raising, or returning ``False`` / ``{"retry": True}``, mark
+    the job for retry on the
     next tick (after re-checking on-chain that it is still FUNDED and
     unexpired — ``get_pending_jobs`` reports each job only once, so retries
     are re-validated via ``get_job``). Attempts stop at ``max_attempts`` (5 by

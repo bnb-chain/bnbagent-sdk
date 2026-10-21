@@ -20,6 +20,10 @@ import { mockPublicClient } from "./helpers/mockTransport.js";
 
 const ME = `0x${"11".repeat(20)}` as const;
 const sockets: Server[] = [];
+// Two seconds a block: the submission lands in block 50,000 of 100,000.
+const SUBMITTED_AT = 100_000n;
+// Locating it reads at most ceil(log2(100,001)) block headers.
+const MAX_BLOCK_READS = 17;
 
 afterEach(async () => {
   for (const server of sockets.splice(0)) {
@@ -34,7 +38,15 @@ async function setup(
   status = JobStatus.SUBMITTED,
   options: Partial<ERC8183JobOpsCreateOpts> = {},
 ) {
-  const rpc = mockPublicClient({ eth_blockNumber: () => "0x186a0" });
+  const rpc = mockPublicClient({
+    eth_blockNumber: () => "0x186a0",
+    eth_getBlockByNumber: ([tag]) => ({
+      number: tag,
+      hash: `0x${"ab".repeat(32)}`,
+      timestamp: `0x${(BigInt(tag as string) * 2n).toString(16)}`,
+      transactions: [],
+    }),
+  });
   const commerce = new CommerceClient(rpc.client, ME);
   const getJob = vi.spyOn(commerce, "getJob").mockResolvedValue({
     id: 1n,
@@ -45,7 +57,10 @@ async function setup(
     description: "",
     budget: 1n,
     expiredAt: 9999999999n,
-    submittedAt: 0n,
+    submittedAt:
+      status === JobStatus.OPEN || status === JobStatus.FUNDED
+        ? 0n
+        : SUBMITTED_AT,
     deliverable: `0x${"00".repeat(32)}`,
     status,
   });
@@ -70,7 +85,9 @@ async function setup(
     ...options,
   });
   const logs = () => rpc.calls.filter((call) => call.method === "eth_getLogs");
-  return { rpc, client, getJob, policy, ops, storage, logs };
+  const blockReads = () =>
+    rpc.calls.filter((call) => call.method === "eth_getBlockByNumber");
+  return { rpc, client, getJob, policy, ops, storage, logs, blockReads };
 }
 
 describe("response lookup RPC budgets", () => {
@@ -109,19 +126,21 @@ describe("response lookup RPC budgets", () => {
     for (const id of [2, 3, 1]) await ops.getResponse(id);
     expect(storage.download).toHaveBeenCalledTimes(4);
   });
-  it("scans exactly 50,000 submission blocks and reuses a failed lookup", async () => {
-    const { ops, logs } = await setup();
+  it("bounds a lookup to a timestamp search and one log query, and reuses a failed lookup", async () => {
+    const { ops, logs, blockReads } = await setup();
     for (let n = 0; n < 3; n++) {
       expect((await ops.getResponse(1)).error_code).toBe("chain_unavailable");
     }
-    expect(logs()).toHaveLength(51); // 50 submission windows + one policy lookup.
-    const blocks = logs()
-      .slice(0, 50)
-      .reduce((total, call) => {
-        const range = call.params[0] as { fromBlock: string; toBlock: string };
-        return total + BigInt(range.toBlock) - BigInt(range.fromBlock) + 1n;
-      }, 0n);
-    expect(blocks).toBe(50_000n);
+    expect(blockReads().length).toBeLessThanOrEqual(MAX_BLOCK_READS);
+    expect(logs()).toHaveLength(1); // the policy lookup around the submission
+    const range = logs()[0]?.params[0] as {
+      fromBlock: string;
+      toBlock: string;
+    };
+    expect([BigInt(range.fromBlock), BigInt(range.toBlock)]).toEqual([
+      49_990n,
+      50_010n,
+    ]);
   });
 
   it.each([JobStatus.OPEN, JobStatus.FUNDED])(
@@ -138,7 +157,7 @@ describe("response lookup RPC budgets", () => {
   it("shares concurrent requests for the same job", async () => {
     const { ops, logs } = await setup();
     await Promise.all(Array.from({ length: 20 }, () => ops.getResponse(1)));
-    expect(logs()).toHaveLength(51);
+    expect(logs()).toHaveLength(1);
   });
 
   it("rejects distinct excess jobs before adding RPC work", async () => {
@@ -152,7 +171,7 @@ describe("response lookup RPC budgets", () => {
       error_code: "chain_unavailable",
       retryable: true,
     });
-    expect(logs()).toHaveLength(102);
+    expect(logs()).toHaveLength(2);
   });
 
   it("expires failures and allows a later successful response", async () => {
@@ -168,7 +187,7 @@ describe("response lookup RPC budgets", () => {
     now.mockReturnValue(1011);
     expect((await ops.getResponse(1)).success).toBe(true);
     expect(resolveUrl).toHaveBeenCalledTimes(1);
-    expect(logs()).toHaveLength(51);
+    expect(logs()).toHaveLength(1);
   });
 
   it("bounds failure cache storage and permits disabling it", async () => {
@@ -176,7 +195,7 @@ describe("response lookup RPC budgets", () => {
       responseCacheMaxEntries: 2,
     });
     for (const id of [1, 2, 3, 1]) await ops.getResponse(id);
-    expect(logs()).toHaveLength(204);
+    expect(logs()).toHaveLength(4);
     const other = await ERC8183JobOps.create({
       providerAddress: ME,
       storageProvider: {
@@ -188,7 +207,7 @@ describe("response lookup RPC budgets", () => {
     });
     await other.getResponse(1);
     await other.getResponse(1);
-    expect(logs()).toHaveLength(306);
+    expect(logs()).toHaveLength(6);
   });
 
   it.each([0, -1, Number.MAX_SAFE_INTEGER + 1, Number.NaN, 1.5])(
@@ -276,7 +295,7 @@ describe("response lookup RPC budgets", () => {
         })
       ).status,
     ).toBe(429);
-    expect(logs()).toHaveLength(51);
+    expect(logs()).toHaveLength(1);
   });
 
   it("honors an async global limiter before SDK/RPC", async () => {
@@ -297,6 +316,6 @@ describe("response lookup RPC budgets", () => {
     const { base, logs } = await serve();
     expect((await fetch(`${base}/1/response`)).status).toBe(503);
     expect((await fetch(`${base}/2/response`)).status).toBe(429);
-    expect(logs()).toHaveLength(51);
+    expect(logs()).toHaveLength(1);
   });
 });

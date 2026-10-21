@@ -114,6 +114,13 @@ class TestDeliverableManifest:
         with pytest.raises((KeyError, ValueError)):
             DeliverableManifest.from_dict(d)
 
+    @pytest.mark.parametrize("response", ["content", ["content"], None, 1])
+    def test_from_dict_rejects_non_mapping_response(self, response):
+        d = _manifest_dict()
+        d["response"] = response
+        with pytest.raises(ValueError, match="response must be an object"):
+            DeliverableManifest.from_dict(d)
+
     def test_to_dict_is_json_serializable(self):
         m = DeliverableManifest.from_dict(_manifest_dict())
         serialized = json.dumps(m.to_dict())

@@ -43,7 +43,7 @@ import {
   NegotiationHandler,
   buildJobDescription,
 } from "../src/erc8183/negotiation.js";
-import { type Job, JobStatus } from "../src/erc8183/types.js";
+import { type Job, JobStatus, ZERO_ADDRESS } from "../src/erc8183/types.js";
 import {
   RelayRejectedError,
   RelaySubmissionUnverifiedError,
@@ -59,6 +59,7 @@ const ME = getAddress(`0x${"aa".repeat(20)}`);
 const OTHER = getAddress(`0x${"bb".repeat(20)}`);
 const CLIENT_ADDR = getAddress(`0x${"cc".repeat(20)}`);
 const EVALUATOR = getAddress(`0x${"ee".repeat(20)}`);
+const POLICY = getAddress(`0x${"22".repeat(20)}`);
 const NOW = () => Math.floor(Date.now() / 1000);
 const SELLER_ACCOUNT = privateKeyToAccount(
   "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
@@ -116,7 +117,11 @@ interface MockErc8183Client {
     getJobsBatch: ReturnType<typeof vi.fn>;
     jobCounter: ReturnType<typeof vi.fn>;
   };
-  router: { address: `0x${string}` };
+  router: {
+    address: `0x${string}`;
+    jobPolicy: ReturnType<typeof vi.fn>;
+    policyWhitelist: ReturnType<typeof vi.fn>;
+  };
   policy: {
     address: `0x${string}`;
     disputeWindow: ReturnType<typeof vi.fn>;
@@ -144,7 +149,11 @@ function makeMockClient(): MockErc8183Client {
       getJobsBatch: vi.fn(),
       jobCounter: vi.fn(),
     },
-    router: { address: getAddress(`0x${"22".repeat(20)}`) },
+    router: {
+      address: EVALUATOR,
+      jobPolicy: vi.fn(async () => POLICY),
+      policyWhitelist: vi.fn(async () => true),
+    },
     policy: {
       address: getAddress(`0x${"33".repeat(20)}`),
       disputeWindow: vi.fn(),
@@ -169,6 +178,7 @@ async function makeOps(
     servicePrice?: bigint;
     agentUrl?: string | null;
     allowUnsignedJobs?: boolean;
+    allowUnroutedJobs?: boolean;
   } = {},
 ): Promise<ERC8183JobOps> {
   return ERC8183JobOps.create({
@@ -183,12 +193,14 @@ async function makeOps(
     servicePrice: opts.servicePrice ?? 0n,
     agentUrl: opts.agentUrl ?? null,
     allowUnsignedJobs: opts.allowUnsignedJobs ?? true,
+    allowUnroutedJobs: opts.allowUnroutedJobs,
   });
 }
 
 async function signedDescription(
   commerce: `0x${string}`,
   negotiatedAt: number,
+  nested = false,
 ): Promise<string> {
   const handler = new NegotiationHandler({
     servicePrice: "1000",
@@ -207,7 +219,8 @@ async function signedDescription(
     task_description: "Summarize the report",
     terms: { deliverables: "summary", quality_standards: "accurate" },
   });
-  return buildJobDescription(quote.toDict());
+  const envelope = quote.toDict();
+  return nested ? JSON.stringify(envelope) : buildJobDescription(envelope);
 }
 
 async function signedAltanaDescription(
@@ -277,6 +290,234 @@ describe("ERC8183JobOps: agent address / construction", () => {
 });
 
 describe("ERC8183JobOps.verifyJob", () => {
+  async function nestedQuoteOps({
+    budget = 1000n,
+    jobToken = getAddress(`0x${"44".repeat(20)}`),
+    rootBait = true,
+    allowUnsignedJobs = false,
+  } = {}) {
+    const negotiatedAt = NOW() - 60;
+    const ops = await makeOps({
+      wallet: makeWallet(SELLER_ACCOUNT.address),
+      allowUnsignedJobs,
+    });
+    const client = injectClient(ops);
+    client.policy.disputeWindow.mockResolvedValue(0n);
+    client.publicClient.getBlock.mockResolvedValue({
+      timestamp: BigInt(negotiatedAt + 30),
+    });
+    client.paymentToken.mockResolvedValue(jobToken);
+    client.jobPaymentToken.mockResolvedValue(jobToken);
+    let description = await signedDescription(
+      client.commerce.address,
+      negotiatedAt,
+      true,
+    );
+    if (rootBait) {
+      description = JSON.stringify({
+        ...JSON.parse(description),
+        task: "attacker task",
+        terms: {},
+        price: "1",
+        currency: OTHER,
+      });
+    }
+    client.getJob.mockResolvedValue(
+      makeJob({ provider: SELLER_ACCOUNT.address, budget, description }),
+    );
+    return { ops, client, description };
+  }
+
+  it.each([false, true])(
+    "accepts a native nested envelope with allowUnsignedJobs=%s",
+    async (allowUnsignedJobs) => {
+      const { ops, client, description } = await nestedQuoteOps({
+        rootBait: false,
+        allowUnsignedJobs,
+      });
+      const original = await ops.getJob(1);
+      const envelope = JSON.parse(description);
+      for (const field of [
+        "version",
+        "negotiated_at",
+        "quote_expires_at",
+        "task",
+      ]) {
+        expect(envelope).not.toHaveProperty(field);
+      }
+
+      const result = await ops.verifyJob(1);
+
+      expect(result.valid).toBe(true);
+      expect(result.job).toEqual({
+        ...original,
+        description: buildJobDescription(envelope),
+      });
+      expect(client.getJobFundedBlock).toHaveBeenCalledWith(1n, {
+        negotiatedAt: envelope.response.negotiated_at,
+        quoteExpiresAt: envelope.response.quote_expires_at,
+      });
+    },
+  );
+
+  it.each([
+    "negotiation_hash",
+    "provider_sig",
+    "chain_id",
+    "negotiated_at",
+    "quote_expires_at",
+  ])("requires native nested envelope metadata %s", async (field) => {
+    const { ops, client, description } = await nestedQuoteOps({
+      rootBait: false,
+      allowUnsignedJobs: true,
+    });
+    const envelope = JSON.parse(description);
+    const source = ["negotiated_at", "quote_expires_at"].includes(field)
+      ? envelope.response
+      : envelope;
+    delete source[field];
+    client.getJob.mockResolvedValue(
+      makeJob({
+        provider: SELLER_ACCOUNT.address,
+        description: JSON.stringify(envelope),
+      }),
+    );
+
+    const result = await ops.verifyJob(1);
+
+    expect(result.valid).toBe(false);
+    expect(result.error_code).toBe("quote_invalid");
+    expect(client.getJobFundedBlock).not.toHaveBeenCalled();
+  });
+
+  it.each(["negotiated_at", "quote_expires_at"])(
+    "rejects native nested envelope root time tampering: %s",
+    async (field) => {
+      const { ops, client, description } = await nestedQuoteOps({
+        rootBait: false,
+      });
+      const envelope = JSON.parse(description);
+      envelope[field] =
+        envelope.response[field] + (field === "negotiated_at" ? 1 : -1);
+      client.getJob.mockResolvedValue(
+        makeJob({
+          provider: SELLER_ACCOUNT.address,
+          description: JSON.stringify(envelope),
+        }),
+      );
+
+      const result = await ops.verifyJob(1);
+
+      expect(result.valid).toBe(false);
+      expect(result.error_code).toBe("quote_invalid");
+      expect(result.error).toContain("negotiation_hash mismatch");
+    },
+  );
+
+  it("uses canonical time fallback for a native nested envelope", async () => {
+    const { ops, client, description } = await nestedQuoteOps({
+      rootBait: false,
+    });
+    const envelope = {
+      ...JSON.parse(description),
+      negotiated_at: 0,
+      quote_expires_at: 0,
+    };
+    client.getJob.mockResolvedValue(
+      makeJob({
+        provider: SELLER_ACCOUNT.address,
+        description: JSON.stringify(envelope),
+      }),
+    );
+
+    const result = await ops.verifyJob(1);
+
+    expect(result.valid).toBe(true);
+    expect((result.job as OpResult).description).toBe(
+      buildJobDescription(envelope),
+    );
+    expect(client.getJobFundedBlock).toHaveBeenCalledWith(1n, {
+      negotiatedAt: envelope.response.negotiated_at,
+      quoteExpiresAt: envelope.response.quote_expires_at,
+    });
+  });
+
+  it("rejects a native nested envelope invalid signature with unsigned opt-in", async () => {
+    const { ops, client, description } = await nestedQuoteOps({
+      rootBait: false,
+      allowUnsignedJobs: true,
+    });
+    const envelope = { ...JSON.parse(description), provider_sig: "not-hex" };
+    client.getJob.mockResolvedValue(
+      makeJob({
+        provider: SELLER_ACCOUNT.address,
+        description: JSON.stringify(envelope),
+      }),
+    );
+
+    const result = await ops.verifyJob(1);
+
+    expect(result.valid).toBe(false);
+    expect(result.error_code).toBe("quote_invalid");
+    expect(result.error).toContain("missing or invalid provider_sig");
+  });
+
+  it("rejects a split envelope's lower root price", async () => {
+    const { ops } = await nestedQuoteOps({ budget: 999n, jobToken: OTHER });
+
+    const result = await ops.verifyJob(1);
+
+    expect(result.valid).toBe(false);
+    expect(result.error_code).toBe("budget_too_low");
+    expect(result.error).toContain("signed quote price (1000)");
+  });
+
+  it("rejects a split envelope's replacement root currency", async () => {
+    const { ops } = await nestedQuoteOps({ jobToken: OTHER });
+
+    const result = await ops.verifyJob(1);
+
+    expect(result.valid).toBe(false);
+    expect(result.error_code).toBe("job_token_mismatch");
+  });
+
+  it.each([getAddress(`0x${"44".repeat(20)}`), OTHER])(
+    "returns a canonical authenticated job with root currency %s",
+    async (rootCurrency) => {
+      const {
+        ops,
+        client,
+        description: splitDescription,
+      } = await nestedQuoteOps();
+      const description = JSON.stringify({
+        ...JSON.parse(splitDescription),
+        currency: rootCurrency,
+      });
+      client.getJob.mockResolvedValue(
+        makeJob({ provider: SELLER_ACCOUNT.address, description }),
+      );
+      const original = await ops.getJob(1);
+      const expectedDescription = buildJobDescription(JSON.parse(description));
+
+      const result = await ops.verifyJob(1);
+
+      expect(result.valid).toBe(true);
+      expect(result.job).toEqual({
+        ...original,
+        description: expectedDescription,
+      });
+      expect(
+        JSON.parse((result.job as OpResult).description as string),
+      ).toMatchObject({
+        task: "Summarize the report",
+        price: "1000",
+        currency: getAddress(`0x${"44".repeat(20)}`),
+        terms: { deliverables: "summary", quality_standards: "accurate" },
+      });
+      expect((await client.getJob()).description).toBe(description);
+    },
+  );
+
   it("accepts a valid funded job", async () => {
     const ops = await makeOps();
     const client = injectClient(ops);
@@ -284,6 +525,92 @@ describe("ERC8183JobOps.verifyJob", () => {
     const result = await ops.verifyJob(1);
     expect(result.valid).toBe(true);
     expect((result.job as OpResult).jobId).toBe(1);
+  });
+
+  it("rejects an evaluator outside the configured Router", async () => {
+    const ops = await makeOps();
+    const client = injectClient(ops);
+    client.getJob.mockResolvedValue(makeJob({ evaluator: OTHER }));
+
+    const result = await ops.verifyJob(1);
+
+    expect(result).toEqual({
+      valid: false,
+      error: "Job evaluator is not the configured Router",
+      error_code: "untrusted_routing",
+    });
+  });
+
+  it("rejects a hook outside the configured Router", async () => {
+    const ops = await makeOps();
+    const client = injectClient(ops);
+    client.getJob.mockResolvedValue(makeJob({ hook: OTHER }));
+
+    const result = await ops.verifyJob(1);
+
+    expect(result).toEqual({
+      valid: false,
+      error: "Job hook is not the configured Router",
+      error_code: "untrusted_routing",
+    });
+  });
+
+  it("rejects a job without a registered Router policy", async () => {
+    const ops = await makeOps();
+    const client = injectClient(ops);
+    client.getJob.mockResolvedValue(makeJob());
+    client.router.jobPolicy.mockResolvedValue(ZERO_ADDRESS);
+
+    const result = await ops.verifyJob(1);
+
+    expect(result).toEqual({
+      valid: false,
+      error: "Job is not registered with a Router policy",
+      error_code: "untrusted_routing",
+    });
+  });
+
+  it("rejects a Router policy that is not whitelisted", async () => {
+    const ops = await makeOps();
+    const client = injectClient(ops);
+    client.getJob.mockResolvedValue(makeJob());
+    client.router.policyWhitelist.mockResolvedValue(false);
+
+    const result = await ops.verifyJob(1);
+
+    expect(result).toEqual({
+      valid: false,
+      error: "Job policy is not whitelisted by the Router",
+      error_code: "untrusted_routing",
+    });
+  });
+
+  it("reports a Router policy timeout as a retryable chain error", async () => {
+    const ops = await makeOps();
+    const client = injectClient(ops);
+    client.getJob.mockResolvedValue(makeJob());
+    client.router.jobPolicy.mockRejectedValue(new Error("RPC timeout"));
+
+    const result = await ops.verifyJob(1);
+
+    expect(result).toEqual({
+      valid: false,
+      error: "Temporary chain/RPC error",
+      error_code: "chain_unavailable",
+      retryable: true,
+    });
+  });
+
+  it("allows an explicitly enabled legacy unrouted job", async () => {
+    const ops = await makeOps({ allowUnroutedJobs: true });
+    const client = injectClient(ops);
+    client.getJob.mockResolvedValue(makeJob({ evaluator: OTHER, hook: OTHER }));
+    client.router.jobPolicy.mockResolvedValue(ZERO_ADDRESS);
+    client.router.policyWhitelist.mockResolvedValue(false);
+
+    const result = await ops.verifyJob(1);
+
+    expect(result.valid).toBe(true);
   });
 
   it("accepts a provider-signed quote at its JobFunded block", async () => {
@@ -691,8 +1018,13 @@ describe("ERC8183JobOps.verifyJob", () => {
   it("warns when evaluator equals client (CLIENT_AS_EVALUATOR)", async () => {
     const ops = await makeOps();
     const client = injectClient(ops);
+    client.router.address = CLIENT_ADDR;
     client.getJob.mockResolvedValue(
-      makeJob({ evaluator: CLIENT_ADDR, client: CLIENT_ADDR }),
+      makeJob({
+        evaluator: CLIENT_ADDR,
+        hook: CLIENT_ADDR,
+        client: CLIENT_ADDR,
+      }),
     );
     const result = await ops.verifyJob(1);
     expect(result.valid).toBe(true);
@@ -1104,19 +1436,21 @@ describe("fundedJobWatcher", () => {
       success: true,
       jobs: [{ jobId: 1, provider: ME }],
     }));
-    ops.verifyJob = vi.fn(async () => ({
-      valid: true,
-      job: { jobId: 1, provider: ME },
-    }));
+    const verified = {
+      jobId: 1,
+      provider: ME,
+      description: "authenticated task",
+    };
+    ops.verifyJob = vi.fn(async () => ({ valid: true, job: verified }));
     const submitSpy = vi.fn();
     ops.submitResult = submitSpy as unknown as ERC8183JobOps["submitResult"];
 
     const controller = new AbortController();
     controller.abort(); // exit after exactly one poll pass
 
-    const seen: number[] = [];
+    const seen: Record<string, unknown>[] = [];
     async function onFunded(job: Record<string, unknown>) {
-      seen.push(job.jobId as number);
+      seen.push(job);
     }
 
     await fundedJobWatcher(ops, onFunded, {
@@ -1124,7 +1458,8 @@ describe("fundedJobWatcher", () => {
       stop: controller.signal,
     });
 
-    expect(seen).toEqual([1]);
+    expect(seen).toEqual([verified]);
+    expect(seen[0]).toBe(verified);
     expect(submitSpy).not.toHaveBeenCalled();
   });
 });
@@ -1193,10 +1528,7 @@ describe("fundedJobWatcher: retry semantics (BUG-04)", () => {
     job: Record<string, unknown>,
   ): Promise<ERC8183JobOps> {
     const ops = await makeOps({ providerAddress: ME });
-    ops.verifyJob = vi.fn(async () => ({
-      valid: true,
-      job: { jobId: 1, provider: ME },
-    }));
+    ops.verifyJob = vi.fn(async () => ({ valid: true, job }));
     const polls: OpResult[] = [{ success: true, jobs: [job] }];
     ops.getPendingJobs = vi.fn(
       async () => polls.shift() ?? { success: true, jobs: [] },
@@ -1223,7 +1555,10 @@ describe("fundedJobWatcher: retry semantics (BUG-04)", () => {
         error_code: "chain_unavailable",
         retryable: true,
       })
-      .mockResolvedValueOnce({ valid: true, job: { jobId: 1, provider: ME } });
+      .mockResolvedValueOnce({
+        valid: true,
+        job: { jobId: 1, description: "authenticated task" },
+      });
 
     const controller = new AbortController();
     const onFunded = vi.fn(() => controller.abort());
@@ -1236,6 +1571,46 @@ describe("fundedJobWatcher: retry semantics (BUG-04)", () => {
     await done;
     expect(ops.verifyJob).toHaveBeenCalledTimes(2);
     expect(onFunded).toHaveBeenCalledOnce();
+    expect(onFunded).toHaveBeenCalledWith({
+      jobId: 1,
+      description: "authenticated task",
+    });
+  });
+
+  it("dispatches the verified job on initial delivery and callback retry", async () => {
+    const ops = await opsWithOnePoll({
+      jobId: 1,
+      description: "attacker task",
+    });
+    ops.getJob = vi.fn(async () => ({
+      ...freshJob(),
+      description: "attacker task",
+    }));
+    const first = { jobId: 1, description: "authenticated task" };
+    const retried = { ...first, budget: "1000" };
+    ops.verifyJob = vi
+      .fn()
+      .mockResolvedValueOnce({ valid: true, job: first })
+      .mockResolvedValueOnce({ valid: true, job: retried });
+    const controller = new AbortController();
+    const received: Record<string, unknown>[] = [];
+    const onFunded = (job: Record<string, unknown>) => {
+      received.push(job);
+      if (received.length === 1) return false;
+      controller.abort();
+    };
+
+    const done = fundedJobWatcher(ops, onFunded, {
+      interval: 0.01,
+      stop: controller.signal,
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await done;
+
+    expect(received).toEqual([first, retried]);
+    expect(received[0]).toBe(first);
+    expect(received[1]).toBe(retried);
+    expect(ops.verifyJob).toHaveBeenCalledTimes(2);
   });
 
   it("re-fires a raising callback after on-chain re-validation", async () => {

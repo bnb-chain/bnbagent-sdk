@@ -44,6 +44,7 @@ class QuoteSignatureVerdict:
     method: str | None = None
     signer: str | None = None
     reason: str | None = None
+    signed_content: dict[str, Any] | None = None
 
 
 def _invalid(reason: str) -> QuoteSignatureVerdict:
@@ -149,6 +150,7 @@ def verify_quote_signature(
     content_error = quote_content_error(envelope)
     if content_error:
         return _invalid(content_error)
+    content = _signed_content(envelope)
 
     expiry = _quote_expiry(envelope)
     if expiry is not None:
@@ -168,7 +170,9 @@ def verify_quote_signature(
             encode_defunct(text=negotiation_hash), signature=provider_sig
         )
         if Web3.to_checksum_address(recovered) == provider_address:
-            return QuoteSignatureVerdict(valid=True, method="eip191", signer=provider_address)
+            return QuoteSignatureVerdict(
+                valid=True, method="eip191", signer=provider_address, signed_content=content
+            )
     except Exception:
         # Contract-account signatures are often not 65-byte EOA signatures.
         pass
@@ -193,4 +197,6 @@ def verify_quote_signature(
     if magic != _ERC1271_MAGIC_VALUE:
         return _invalid("ERC-1271 account rejected provider_sig")
 
-    return QuoteSignatureVerdict(valid=True, method="erc1271", signer=provider_address)
+    return QuoteSignatureVerdict(
+        valid=True, method="erc1271", signer=provider_address, signed_content=content
+    )

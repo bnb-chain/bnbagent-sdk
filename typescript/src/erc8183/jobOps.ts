@@ -26,6 +26,7 @@
 
 import { getAddress } from "viem";
 import type { NetworkConfig } from "../config.js";
+import { canonicalJson } from "../core/canonicalJson.js";
 import { getEnv } from "../core/envUtil.js";
 import { isRevertError, isTransientRpcError } from "../core/rpcError.js";
 import { describeError } from "../core/txSender.js";
@@ -48,9 +49,13 @@ import type { WalletProvider } from "../wallets/walletProvider.js";
 import { ERC8183Client } from "./client.js";
 import { ERC8183_ENV_PREFIX, resolveErc8183Network } from "./constants.js";
 import { NegotiationHandler, parseJobDescription } from "./negotiation.js";
-import { quoteContentError, verifyQuoteSignature } from "./quoteVerify.js";
+import {
+  quoteContentError,
+  signedContent,
+  verifyQuoteSignature,
+} from "./quoteVerify.js";
 import { DeliverableManifest, SCHEMA_VERSION } from "./schema.js";
-import { JobStatus } from "./types.js";
+import { JobStatus, ZERO_ADDRESS } from "./types.js";
 
 const DEFAULT_MAX_RESPONSE_BYTES = 5 * 1024 * 1024; // 5 MB
 const DEFAULT_MAX_METADATA_BYTES = 256 * 1024; // 256 KB
@@ -184,6 +189,7 @@ export const ERR_WRONG_STATUS = "wrong_status"; // job not in the required statu
 export const ERR_DESCRIPTION_INVALID = "description_invalid"; // malformed description (fail closed)
 export const ERR_QUOTE_INVALID = "quote_invalid"; // missing, altered, expired-at-funding, or invalid provider quote
 export const ERR_JOB_TOKEN_MISMATCH = "job_token_mismatch";
+export const ERR_UNTRUSTED_ROUTING = "untrusted_routing";
 export const ERR_SUBMIT_DEADLINE_PASSED = "submit_deadline_passed"; // past expiredAt - disputeWindow
 export const ERR_PAYLOAD_TOO_LARGE = "payload_too_large"; // response/metadata size cap hit
 export const ERR_METADATA_INVALID = "metadata_invalid"; // metadata not JSON-serializable (e.g. a bigint) — permanent
@@ -192,6 +198,10 @@ export const ERR_CHAIN_UNAVAILABLE = "chain_unavailable"; // transient chain/RPC
 export const ERR_TX_PENDING = "tx_pending"; // tx broadcast but unconfirmed (NOT retryable)
 export const ERR_TX_UNVERIFIED = "tx_unverified"; // relay hash not observed (NOT blindly retryable)
 export const ERR_RELAY_REJECTED = "relay_rejected"; // relay refused the submission (retryable only when definite)
+
+function untrustedRouting(error: string): OpResult {
+  return { valid: false, error, error_code: ERR_UNTRUSTED_ROUTING };
+}
 
 /**
  * Safe `{ error, error_code }` fields for an exception.
@@ -345,6 +355,11 @@ export interface ERC8183JobOpsCreateOpts {
   responseCacheMaxEntries?: number;
   /** Maximum active distinct response lookups (default 8). */
   responseMaxInflight?: number;
+  /**
+   * Unsafe compatibility escape hatch for legacy jobs that were not settled
+   * through the configured Router. Defaults to false.
+   */
+  allowUnroutedJobs?: boolean;
 }
 
 /**
@@ -381,6 +396,7 @@ export class ERC8183JobOps {
   >();
   private responseSuccessBytes = 0;
   private readonly responseTasks = new Map<number, Promise<OpResult>>();
+  private readonly allowUnroutedJobs: boolean;
 
   private client: ERC8183Client | null = null;
   private readonly deliverableUrls = new Map<number, string>();
@@ -400,6 +416,7 @@ export class ERC8183JobOps {
     responseCacheTtl: number;
     responseCacheMaxEntries: number;
     responseMaxInflight: number;
+    allowUnroutedJobs: boolean;
   }) {
     this.walletProvider = opts.walletProvider;
     this.agentAddressValue = opts.agentAddress;
@@ -422,6 +439,7 @@ export class ERC8183JobOps {
     this.responseCacheTtl = opts.responseCacheTtl;
     this.responseCacheMaxEntries = opts.responseCacheMaxEntries;
     this.responseMaxInflight = opts.responseMaxInflight;
+    this.allowUnroutedJobs = opts.allowUnroutedJobs;
   }
 
   static async create(
@@ -456,6 +474,7 @@ export class ERC8183JobOps {
       responseCacheTtl: opts.responseCacheTtl ?? 5,
       responseCacheMaxEntries: opts.responseCacheMaxEntries ?? 1024,
       responseMaxInflight: opts.responseMaxInflight ?? 8,
+      allowUnroutedJobs: opts.allowUnroutedJobs ?? false,
     });
   }
 
@@ -930,7 +949,7 @@ export class ERC8183JobOps {
    * `{ valid, error?, error_code?, job?, warnings? }`. */
   async verifyJob(jobId: number): Promise<OpResult> {
     try {
-      const jobResult = await this.getJob(jobId);
+      let jobResult = await this.getJob(jobId);
       if (!jobResult.success) {
         // getJob already returns a sanitized message + error_code.
         const fields: Record<string, unknown> = {
@@ -964,6 +983,60 @@ export class ERC8183JobOps {
         };
       }
 
+      const client = await this.getClient();
+      if (!this.allowUnroutedJobs) {
+        let routerAddress: `0x${string}`;
+        try {
+          routerAddress = getAddress(client.router.address);
+        } catch {
+          return untrustedRouting("Configured Router address is invalid");
+        }
+        let evaluator: `0x${string}`;
+        try {
+          evaluator = getAddress(String(jobResult.evaluator));
+        } catch {
+          return untrustedRouting("Job evaluator is not the configured Router");
+        }
+        if (evaluator !== routerAddress) {
+          return untrustedRouting("Job evaluator is not the configured Router");
+        }
+        let hook: `0x${string}`;
+        try {
+          hook = getAddress(String(jobResult.hook));
+        } catch {
+          return untrustedRouting("Job hook is not the configured Router");
+        }
+        if (hook !== routerAddress) {
+          return untrustedRouting("Job hook is not the configured Router");
+        }
+        let policyRaw: string;
+        try {
+          policyRaw = await client.router.jobPolicy(BigInt(jobId));
+        } catch {
+          return ERC8183JobOps.chainReadError();
+        }
+        let policy: `0x${string}`;
+        try {
+          policy = getAddress(policyRaw);
+        } catch {
+          return untrustedRouting("Job is not registered with a Router policy");
+        }
+        if (policy === getAddress(ZERO_ADDRESS)) {
+          return untrustedRouting("Job is not registered with a Router policy");
+        }
+        let whitelisted: boolean;
+        try {
+          whitelisted = await client.router.policyWhitelist(policy);
+        } catch {
+          return ERC8183JobOps.chainReadError();
+        }
+        if (!whitelisted) {
+          return untrustedRouting(
+            "Job policy is not whitelisted by the Router",
+          );
+        }
+      }
+
       const now = BigInt(Math.floor(Date.now() / 1000));
       // getJob stringifies bigint fields for transport; re-parse for compare.
       const expiredAt = BigInt(
@@ -976,8 +1049,6 @@ export class ERC8183JobOps {
           error_code: ERR_JOB_EXPIRED,
         };
       }
-
-      const client = await this.getClient();
 
       // OptimisticPolicy reverts `commerce.submit` with `SubmissionTooLate`
       // once `now > expiredAt - disputeWindow`. Detect that here so the
@@ -1053,12 +1124,21 @@ export class ERC8183JobOps {
 
       const description = (jobResult.description as string | undefined) ?? "";
       let quoteEnvelope: Record<string, unknown> | null = null;
+      let quoteResponse: Record<string, unknown> | null = null;
       let hasStructuredDescription = false;
       if (description) {
         try {
           hasStructuredDescription = parseJobDescription(description) !== null;
-          if (hasStructuredDescription) {
+          if (description.trimStart().startsWith("{")) {
             quoteEnvelope = JSON.parse(description) as Record<string, unknown>;
+            if (
+              quoteEnvelope.response !== null &&
+              typeof quoteEnvelope.response === "object" &&
+              !Array.isArray(quoteEnvelope.response)
+            ) {
+              quoteResponse = quoteEnvelope.response as Record<string, unknown>;
+              hasStructuredDescription = true;
+            }
           }
         } catch (error) {
           return {
@@ -1082,11 +1162,20 @@ export class ERC8183JobOps {
             error_code: ERR_QUOTE_INVALID,
           };
         }
+        // Match the time-field precedence used to build signed content.
+        const negotiatedAt = quoteResponse
+          ? quoteEnvelope.negotiated_at || quoteResponse.negotiated_at
+          : quoteEnvelope.negotiated_at;
+        const quoteExpiresAt = quoteResponse
+          ? quoteEnvelope.quote_expires_at || quoteResponse.quote_expires_at
+          : quoteEnvelope.quote_expires_at;
         if (
           quoteEnvelope.negotiation_hash === undefined ||
           quoteEnvelope.provider_sig === undefined ||
-          quoteEnvelope.negotiated_at === undefined ||
-          quoteEnvelope.quote_expires_at === undefined ||
+          negotiatedAt === undefined ||
+          negotiatedAt === null ||
+          quoteExpiresAt === undefined ||
+          quoteExpiresAt === null ||
           quoteEnvelope.chain_id === undefined
         ) {
           return {
@@ -1097,8 +1186,6 @@ export class ERC8183JobOps {
           };
         }
 
-        const negotiatedAt = quoteEnvelope.negotiated_at;
-        const quoteExpiresAt = quoteEnvelope.quote_expires_at;
         if (
           typeof negotiatedAt !== "number" ||
           !Number.isSafeInteger(negotiatedAt) ||
@@ -1116,7 +1203,18 @@ export class ERC8183JobOps {
           };
         }
 
-        const signedPriceRaw = quoteEnvelope.price;
+        const contentError = quoteContentError(quoteEnvelope);
+        if (contentError)
+          return {
+            valid: false,
+            error: contentError,
+            error_code: ERR_QUOTE_INVALID,
+          };
+        // negotiation_hash commits to exactly this content and its signature
+        // is verified below, before the job is accepted; reading it here keeps
+        // every local check ahead of the funding-history search.
+        const signed = signedContent(quoteEnvelope);
+        const signedPriceRaw = signed.price;
         if (
           typeof signedPriceRaw !== "string" ||
           !/^\d+$/.test(signedPriceRaw)
@@ -1139,7 +1237,7 @@ export class ERC8183JobOps {
           };
         }
 
-        const signedCurrencyRaw = quoteEnvelope.currency;
+        const signedCurrencyRaw = signed.currency;
         let signedCurrency: `0x${string}`;
         try {
           if (typeof signedCurrencyRaw !== "string") {
@@ -1156,13 +1254,6 @@ export class ERC8183JobOps {
         if (signedCurrency !== jobToken) {
           return ERC8183JobOps.jobTokenError();
         }
-        const contentError = quoteContentError(quoteEnvelope);
-        if (contentError)
-          return {
-            valid: false,
-            error: contentError,
-            error_code: ERR_QUOTE_INVALID,
-          };
         if (fundedBudget < effectiveServicePrice)
           return {
             valid: false,
@@ -1214,6 +1305,11 @@ export class ERC8183JobOps {
             error_code: ERR_QUOTE_INVALID,
           };
         }
+
+        const authenticated = { ...verdict.signedContent };
+        authenticated.negotiation_hash = quoteEnvelope.negotiation_hash;
+        authenticated.provider_sig = quoteEnvelope.provider_sig;
+        jobResult = { ...jobResult, description: canonicalJson(authenticated) };
       }
 
       if (effectiveServicePrice > 0n) {

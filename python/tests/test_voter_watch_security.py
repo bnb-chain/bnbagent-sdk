@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -68,11 +69,10 @@ def test_disputed_job_never_fetches_loopback_before_operator_choice(
 ):
     port, hits, payload = loopback_service
     manifest_hash = voter.DeliverableManifest.from_dict(payload).manifest_hash()
-    event = SimpleNamespace(get_logs=Mock(return_value=[{"args": {"deliverable": manifest_hash}}]))
     client = SimpleNamespace(
         policy=SimpleNamespace(
             has_voted=Mock(return_value=False),
-            contract=SimpleNamespace(events=SimpleNamespace(JobInitialised=lambda: event)),
+            dispute_window=Mock(return_value=3600),
         ),
         get_job=Mock(
             return_value=SimpleNamespace(
@@ -80,6 +80,8 @@ def test_disputed_job_never_fetches_loopback_before_operator_choice(
                 provider="provider",
                 budget=1,
                 status=SimpleNamespace(name="Submitted"),
+                deliverable=manifest_hash,
+                submitted_at=int(time.time()) - 60,
             )
         ),
         get_deliverable_url=Mock(return_value=f"http://127.0.0.1:{port}{path}"),
@@ -92,14 +94,18 @@ def test_disputed_job_never_fetches_loopback_before_operator_choice(
         return choice
 
     monkeypatch.setattr("builtins.input", respond)
-    voter.handle_disputed_job(client, 777, "voter", "https://gateway.example/ipfs/", 123)
+    gateway = "https://gateway.example/ipfs/"
+    # The refused download counts as a failed one: retried, then put to a vote.
+    for failures in range(voter.MANIFEST_DOWNLOAD_ATTEMPTS - 1):
+        with pytest.raises(voter.ManifestUnavailable):
+            voter.handle_disputed_job(client, 777, "voter", gateway, failures)
+    voter.handle_disputed_job(client, 777, "voter", gateway, voter.MANIFEST_DOWNLOAD_ATTEMPTS - 1)
 
     assert hits_at_prompt == [[]]
     assert hits == []
     output = capsys.readouterr().out
-    assert "no manifest available for review" in output
+    assert "deliverable unavailable: could not fetch manifest" in output
     assert "test-only-loopback-content" not in output
-    event.get_logs.assert_not_called()
     if choice == "r":
         client.vote_reject.assert_called_once_with(777)
     else:

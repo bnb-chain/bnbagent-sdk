@@ -7,6 +7,18 @@ For each disputed job:
   4. Prints the response content for review
   5. Prompts: [r]eject / [s]kip
 
+Under OptimisticPolicy silence past the voting window approves the job, so a
+disputed job is always put to a vote before its window closes:
+  - deliverable reviewable: prompted with its content;
+  - deliverable unavailable (the provider published no usable deliverable_url,
+    an unsupported URL, a malformed manifest, or a download failing
+    MANIFEST_DOWNLOAD_ATTEMPTS ticks in a row): prompted with a warning;
+  - deliverable not verified (the chain could not be read to look it up):
+    retried, and prompted with a warning once the window is within the
+    decision margin (VOTER_DECISION_MARGIN_SECONDS, default 30 minutes, at most
+    half the window).
+Text from the deliverable is printed escaped (see _printable).
+
 For each VoteCast event:
   - If rejectVotes >= voteQuorum → settles automatically and prints JobSettled result
 
@@ -17,9 +29,11 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import os
 import time
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -30,15 +44,65 @@ from bnbagent.wallets import EVMWalletProvider
 
 ROOT = Path(__file__).resolve().parent
 POLL_INTERVAL = 12  # seconds
+# Ticks a failing download is retried before the voter is asked to vote on an
+# unavailable deliverable: the provider controls whether it can be fetched.
+MANIFEST_DOWNLOAD_ATTEMPTS = 3
+MANIFEST_TIMEOUT = 15  # seconds for a whole download
+# A manifest carries up to MAX_RESPONSE_BYTES (5 MiB by default) of response.
+MANIFEST_MAX_BYTES = 8 * 1024 * 1024
+DEFAULT_DECISION_MARGIN = 30 * 60  # seconds
+MAX_LOG_RANGE = 1_000  # blocks per Disputed / VoteCast query
+_FETCHABLE_SCHEMES = ("ipfs://", "https://", "http://")
+
+
+class ManifestUnavailable(Exception):
+    """The deliverable could not be downloaded this time; retry on the next tick."""
+
+
+def _printable(value: object) -> str:
+    """``value`` as text a terminal shows as is.
+
+    Control, format and surrogate characters are escaped: from the provider's
+    deliverable they could rewrite lines already printed (such as the hash
+    check) or make ``print`` raise and the job never be prompted.
+    """
+    text = value if isinstance(value, str) else str(value)
+    return "".join(c if c.isprintable() or c in "\n\t" else ascii(c)[1:-1] for c in text)
+
+
+def decision_margin(window: float) -> float:
+    """Seconds before the voting window closes from which a disputed job is put to
+    a vote whatever is still unresolved: ``VOTER_DECISION_MARGIN_SECONDS``
+    (default 30 minutes), at most half the window."""
+    raw = os.environ.get("VOTER_DECISION_MARGIN_SECONDS", "").strip()
+    try:
+        configured = float(raw) if raw else DEFAULT_DECISION_MARGIN
+    except ValueError:
+        configured = math.nan
+    if not math.isfinite(configured) or configured < 0:
+        raise ValueError(
+            f"VOTER_DECISION_MARGIN_SECONDS must be a non-negative number of seconds, got {raw!r}"
+        )
+    return min(configured, window / 2)
 
 
 def fetch_manifest(deliverable_url: str, gateway_url: str) -> DeliverableManifest | None:
-    """Download and parse a DeliverableManifest from IPFS."""
+    """Download and parse a DeliverableManifest from IPFS; ``None`` if it is malformed.
+
+    The download goes through :func:`fetch_public_json`: public addresses only,
+    no redirects, at most ``MANIFEST_MAX_BYTES`` within ``MANIFEST_TIMEOUT``.
+    Raises :class:`ManifestUnavailable` when it cannot be downloaded, for any
+    reason: the provider controls the URL and the server.
+    """
     try:
         url = public_gateway_url(deliverable_url, gateway_url)
-        return DeliverableManifest.from_dict(fetch_public_json(url, max_bytes=8 * 1024 * 1024))
+        data = fetch_public_json(url, max_bytes=MANIFEST_MAX_BYTES, timeout=MANIFEST_TIMEOUT)
     except Exception as e:
-        print(f"  [warn] could not fetch manifest: {e}")
+        raise ManifestUnavailable(f"could not fetch manifest: {e}") from e
+    try:
+        return DeliverableManifest.from_dict(data)
+    except Exception as e:
+        print(f"  [warn] malformed manifest: {_printable(e)}")
         return None
 
 
@@ -62,55 +126,84 @@ def handle_disputed_job(
     job_id: int,
     voter: str,
     gateway_url: str,
-    hint_block: int | None = None,
+    download_failures: int = 0,
 ) -> None:
-    """Show job details and prompt voter to reject or skip."""
+    """Show job details and prompt voter to reject or skip.
+
+    The deliverable is reviewable, unavailable or not verified (see the module
+    docstring). Without prompting, a failed download raises
+    :class:`ManifestUnavailable` until it has failed
+    ``MANIFEST_DOWNLOAD_ATTEMPTS`` times (counted by the caller in
+    ``download_failures``), and a failed deliverable lookup propagates; both
+    stop being retried once the window is within :func:`decision_margin`.
+    Other chain reads propagate and are retried.
+    """
+    if erc8183.policy.has_voted(job_id, voter):
+        print(f"  job {job_id}: already voted — skipping.")
+        return
+
+    job = erc8183.get_job(job_id)
+    window = erc8183.policy.dispute_window()
+    # voteReject reverts from submittedAt + disputeWindow on
+    window_left = job.submitted_at + window - time.time()
+    if window_left <= 0:
+        print(f"  job {job_id}: voting window closed — skipping.")
+        return
+    deciding = window_left <= decision_margin(window)
+
+    manifest = None
+    unavailable = None  # the provider made nothing reviewable
+    unverified = None  # the chain could not be read to look the deliverable up
+    deliverable_url = None
+    try:
+        # The SDK locates the submission block from job.submitted_at, however
+        # long ago it was, and raises (never returns None) when it cannot read it.
+        deliverable_url = erc8183.get_deliverable_url(job_id)
+    except Exception as exc:
+        if not deciding:
+            raise
+        unverified = f"could not look the deliverable up on-chain ({exc})"
+    if unverified is None:
+        if not isinstance(deliverable_url, str) or not deliverable_url:
+            deliverable_url = None
+            unavailable = "the provider published no usable deliverable_url on-chain"
+        elif not deliverable_url.startswith(_FETCHABLE_SCHEMES):
+            unavailable = f"unsupported deliverable URL {deliverable_url!r}"
+        else:
+            try:
+                manifest = fetch_manifest(deliverable_url, gateway_url)
+            except ManifestUnavailable as exc:
+                if download_failures + 1 < MANIFEST_DOWNLOAD_ATTEMPTS and not deciding:
+                    raise
+                unavailable = str(exc)
+
     print(f"\n{'=' * 60}")
     print(f"  DISPUTED job_id={job_id}")
     print(f"{'=' * 60}")
-
-    already_voted = erc8183.policy.has_voted(job_id, voter)
-    if already_voted:
-        print("  Already voted on this job — skipping.")
-        return
-
-    # Read on-chain job details
-    job = erc8183.get_job(job_id)
     print(f"  client   : {job.client}")
     print(f"  provider : {job.provider}")
     print(f"  budget   : {job.budget}")
     print(f"  status   : {job.status.name}")
-
-    # Get deliverable_url from on-chain optParams
-    deliverable_url = erc8183.get_deliverable_url(job_id, hint_block=hint_block)
-    if deliverable_url:
-        print(f"  IPFS URL : {deliverable_url}")
-    else:
-        print("  [warn] no deliverable_url found on-chain")
-
-    # Fetch and display manifest
-    manifest = None
-    if deliverable_url:
-        manifest = fetch_manifest(deliverable_url, gateway_url)
+    print(f"  IPFS URL : {_printable(deliverable_url or '-')}")
 
     if manifest:
-        # Verify hash — use hint_block to stay within RPC block-range limits
-        _fb = max(0, (hint_block or 0) - 5_000)
-        _tb = (hint_block or 0) + 10 if hint_block else "latest"
-        logs = erc8183.policy.contract.events.JobInitialised().get_logs(
-            from_block=_fb, to_block=_tb, argument_filters={"jobId": job_id}
-        )
-        hash_ok = False
-        if logs:
-            on_chain_hash = logs[0]["args"]["deliverable"]
-            hash_ok = manifest.verify(on_chain_hash)
+        hash_ok = manifest.verify(job.deliverable)
         print(f"  hash ok  : {'✓' if hash_ok else '✗ MISMATCH'}")
         print(f"\n--- Deliverable content (job_id={manifest.job_id}) ---")
         content = manifest.response.get("content", "")
-        print(content)
+        print(_printable(content))
         print("---")
+    elif unverified:
+        print(f"  [!] deliverable not verified: {_printable(unverified)}")
+        print(
+            f"      the voting window closes in {window_left / 60:.0f} min; check the"
+            " deliverable another way (e.g. another RPC) before voting"
+        )
+    elif unavailable:
+        print(f"  [!] deliverable unavailable: {_printable(unavailable)}")
+        print("      there is nothing to review; the provider controls whether it can be fetched")
     else:
-        print("  (no manifest available for review)")
+        print("  (the manifest is malformed: there is no valid deliverable to review)")
 
     # Prompt for vote
     try:
@@ -126,6 +219,144 @@ def handle_disputed_job(
         print("  (waiting for VoteCast event to check quorum...)")
     else:
         print(f"  skipped job {job_id}")
+
+
+def _block_seconds_ago(erc8183: ERC8183Client, head: int, seconds: float) -> int:
+    """A block about ``seconds`` before ``head``, from the recent block time."""
+    sample = min(head, 1_000)
+    if sample == 0:
+        return 0
+    elapsed = (
+        erc8183.w3.eth.get_block(head)["timestamp"]
+        - erc8183.w3.eth.get_block(head - sample)["timestamp"]
+    )
+    if elapsed <= 0:
+        return 0
+    return max(0, head - int(seconds * sample / elapsed))
+
+
+def require_log_rpc(erc8183: ERC8183Client, rpc_url: str) -> None:
+    """Exit unless the RPC serves ``eth_getLogs`` for recent blocks and for blocks as
+    old as the voting window: a deliverable is looked up at its submission."""
+    head = erc8183.w3.eth.block_number
+    try:
+        erc8183.policy.contract.events.Disputed().get_logs(
+            from_block=max(0, head - 10), to_block=head
+        )
+    except Exception as exc:
+        raise SystemExit(
+            f"error: the RPC {rpc_url} does not serve eth_getLogs ({exc}); the voter reads "
+            "Disputed, VoteCast and JobInitialised logs. Set RPC_URL to an endpoint that does."
+        ) from exc
+    window = erc8183.policy.dispute_window()
+    old = _block_seconds_ago(erc8183, head, window)
+    try:
+        erc8183.policy.contract.events.Disputed().get_logs(from_block=old, to_block=old + 10)
+    except Exception as exc:
+        raise SystemExit(
+            f"error: the RPC {rpc_url} does not serve eth_getLogs for blocks as old as the "
+            f"voting window ({window / 3600:.1f} h, around block {old}): {exc}. A disputed "
+            "job's deliverable is read from its submission, up to that long ago. Set RPC_URL "
+            "to an archive endpoint."
+        ) from exc
+
+
+def _process_disputed_log(
+    log, erc8183, voter, gateway_url, seen_disputed, download_failures=None
+) -> bool:
+    """Handle one disputed log, marking its job seen only after success.
+
+    ``download_failures`` counts each job's failed manifest downloads across ticks.
+    """
+    if download_failures is None:
+        download_failures = {}
+    job_id = log["args"]["jobId"]
+    ts = time.strftime("%H:%M:%S")
+    print(f"[{ts}] Disputed event — jobId={job_id}")
+    if job_id in seen_disputed:
+        return True
+    try:
+        handle_disputed_job(erc8183, job_id, voter, gateway_url, download_failures.get(job_id, 0))
+    except ManifestUnavailable as exc:
+        download_failures[job_id] = download_failures.get(job_id, 0) + 1
+        print(f"  [warn] disputed job {job_id}: {_printable(exc)}; retrying next tick")
+        return False
+    except Exception as exc:
+        print(f"  [warn] failed to handle disputed job {job_id}: {_printable(exc)}")
+        return False
+    seen_disputed.add(job_id)
+    download_failures.pop(job_id, None)
+    return True
+
+
+def _retry_pending_disputed(
+    pending_disputed, erc8183, voter, gateway_url, seen_disputed, download_failures=None
+):
+    """Retry pending disputed logs and retain only those that still fail."""
+    for job_id, log in list(pending_disputed.items()):
+        if _process_disputed_log(
+            log, erc8183, voter, gateway_url, seen_disputed, download_failures
+        ):
+            del pending_disputed[job_id]
+
+
+class WatchState:
+    """What the loop carries across ticks."""
+
+    def __init__(self, last_block: int) -> None:
+        self.last_block = last_block
+        self.seen_disputed: set[int] = set()
+        self.pending_disputed: dict[int, Any] = {}
+        self.download_failures: dict[int, int] = {}
+        self.settled: set[int] = set()
+
+
+def poll_once(
+    erc8183: ERC8183Client, voter: str, gateway: str, quorum: int, state: WatchState
+) -> None:
+    """One tick: retry pending disputes, then read up to ``MAX_LOG_RANGE`` new blocks.
+
+    Raises when the chain cannot be read. ``state.last_block`` advances only once
+    both the Disputed and the VoteCast logs of the range were read, so a failed
+    read is retried from the same block instead of skipping its disputes.
+    """
+    _retry_pending_disputed(
+        state.pending_disputed,
+        erc8183,
+        voter,
+        gateway,
+        state.seen_disputed,
+        state.download_failures,
+    )
+    head = erc8183.w3.eth.block_number
+    if head <= state.last_block:
+        return
+    from_block = state.last_block + 1
+    to_block = min(head, state.last_block + MAX_LOG_RANGE)
+    events = erc8183.policy.contract.events
+    disputed_logs = events.Disputed().get_logs(from_block=from_block, to_block=to_block)
+    vote_logs = events.VoteCast().get_logs(from_block=from_block, to_block=to_block)
+
+    for log in disputed_logs:
+        job_id = log["args"]["jobId"]
+        if not _process_disputed_log(
+            log, erc8183, voter, gateway, state.seen_disputed, state.download_failures
+        ):
+            state.pending_disputed[job_id] = log
+
+    for log in vote_logs:
+        job_id = log["args"]["jobId"]
+        reject_votes = log["args"]["rejectVotes"]
+        caster = log["args"]["voter"]
+        ts = time.strftime("%H:%M:%S")
+        print(
+            f"[{ts}] VoteCast — jobId={job_id}  rejectVotes={reject_votes}/{quorum}  by={caster}"
+        )
+        if reject_votes >= quorum and job_id not in state.settled:
+            state.settled.add(job_id)
+            handle_quorum_reached(erc8183, job_id, reject_votes, quorum)
+
+    state.last_block = to_block
 
 
 def main() -> None:
@@ -145,6 +376,11 @@ def main() -> None:
     wallet = EVMWalletProvider(password="example", private_key=pk, persist=False)
     erc8183 = ERC8183Client(wallet, network=nc)
     voter = erc8183.address
+    try:
+        margin = decision_margin(erc8183.policy.dispute_window())
+    except ValueError as exc:
+        raise SystemExit(f"error: {exc}") from exc
+    require_log_rpc(erc8183, nc.rpc_url)
 
     quorum = erc8183.policy.vote_quorum()
 
@@ -156,49 +392,18 @@ def main() -> None:
     print(f"  listed   : {erc8183.policy.is_voter(voter)}")
     print(f"  quorum   : {quorum}")
     print(f"  gateway  : {gateway}")
+    print(f"  margin   : {margin:.0f} s before a voting window closes")
     print("\nWatching for Disputed / VoteCast events (Ctrl+C to stop)...\n")
 
-    seen_disputed: set[int] = set()
-    settled: set[int] = set()
-    last_block = erc8183.w3.eth.block_number
-
+    state = WatchState(last_block=erc8183.w3.eth.block_number)
     while True:
-        head = erc8183.w3.eth.block_number
-        if head > last_block:
-            # --- Disputed events ------------------------------------------------
-            disputed_logs = erc8183.policy.contract.events.Disputed().get_logs(
-                from_block=last_block + 1,
-                to_block=head,
+        try:
+            poll_once(erc8183, voter, gateway, quorum, state)
+        except Exception as exc:
+            print(
+                f"  [warn] poll failed ({_printable(exc)}); "
+                f"retrying from block {state.last_block + 1}"
             )
-            for log in disputed_logs:
-                job_id = log["args"]["jobId"]
-                ts = time.strftime("%H:%M:%S")
-                print(f"[{ts}] Disputed event — jobId={job_id}")
-                if job_id not in seen_disputed:
-                    seen_disputed.add(job_id)
-                    handle_disputed_job(
-                        erc8183, job_id, voter, gateway, hint_block=log["blockNumber"]
-                    )
-
-            # --- VoteCast events ------------------------------------------------
-            vote_logs = erc8183.policy.contract.events.VoteCast().get_logs(
-                from_block=last_block + 1,
-                to_block=head,
-            )
-            for log in vote_logs:
-                job_id = log["args"]["jobId"]
-                reject_votes = log["args"]["rejectVotes"]
-                caster = log["args"]["voter"]
-                ts = time.strftime("%H:%M:%S")
-                print(
-                    f"[{ts}] VoteCast — jobId={job_id}  "
-                    f"rejectVotes={reject_votes}/{quorum}  by={caster}"
-                )
-                if reject_votes >= quorum and job_id not in settled:
-                    settled.add(job_id)
-                    handle_quorum_reached(erc8183, job_id, reject_votes, quorum)
-
-            last_block = head
         time.sleep(POLL_INTERVAL)
 
 

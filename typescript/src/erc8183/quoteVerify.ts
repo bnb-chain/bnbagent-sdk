@@ -25,6 +25,7 @@ export type QuoteSigVerdict =
       valid: true;
       method: "eip191" | "erc1271";
       signer: `0x${string}`;
+      signedContent: Record<string, unknown>;
     }
   | { valid: false; reason: string };
 
@@ -44,7 +45,7 @@ export interface VerifyQuoteSignatureOpts {
   blockNumber?: bigint;
 }
 
-function signedContent(
+export function signedContent(
   envelope: Record<string, unknown>,
 ): Record<string, unknown> {
   if (
@@ -181,6 +182,7 @@ export async function verifyQuoteSignature(
 
   const contentError = quoteContentError(opts.envelope);
   if (contentError) return { valid: false, reason: contentError };
+  const content = signedContent(opts.envelope);
 
   const expiry = quoteExpiresAt(opts.envelope);
   if (expiry !== undefined && expiry !== null) {
@@ -203,7 +205,12 @@ export async function verifyQuoteSignature(
       signature: providerSig as `0x${string}`,
     });
     if (recovered === provider) {
-      return { valid: true, method: "eip191", signer: recovered };
+      return {
+        valid: true,
+        method: "eip191",
+        signer: recovered,
+        signedContent: content,
+      };
     }
   } catch {
     // ERC-1271 envelopes are not 65-byte EOA signatures; try the account path.
@@ -250,5 +257,10 @@ export async function verifyQuoteSignature(
     return { valid: false, reason: "ERC-1271 account rejected provider_sig" };
   }
 
-  return { valid: true, method: "erc1271", signer: provider };
+  return {
+    valid: true,
+    method: "erc1271",
+    signer: provider,
+    signedContent: content,
+  };
 }

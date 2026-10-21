@@ -25,11 +25,13 @@
 import {
   type ContractFunctionName,
   type Hex,
+  HttpRequestError,
   type TransactionRequestLegacy,
   decodeFunctionData,
   encodeFunctionResult,
   getAddress,
   hexToString,
+  stringToHex,
 } from "viem";
 import { describe, expect, it, vi } from "vitest";
 import { agenticCommerceAbi } from "../src/abis/agenticCommerce.js";
@@ -39,7 +41,11 @@ import { optimisticPolicyAbi } from "../src/abis/optimisticPolicy.js";
 import type { NetworkConfig } from "../src/config.js";
 import { NETWORKS } from "../src/config.js";
 import { ZERO_ADDRESS } from "../src/erc8183/types.js";
-import { JobPaymentTokenMismatchError } from "../src/errors.js";
+import {
+  JobPaymentTokenMismatchError,
+  NetworkError,
+  RpcRangeLimitError,
+} from "../src/errors.js";
 import { AssetId, getAsset } from "../src/networks/assets.js";
 import type {
   ExecutionContext,
@@ -1323,5 +1329,160 @@ describe("ERC8183Client: views", () => {
       (c) => c.method === "eth_blockNumber",
     );
     expect(blockNumberCalls).toHaveLength(1);
+  });
+
+  const SUBMITTED_JOB = {
+    id: 7n,
+    client: WALLET_ADDRESS,
+    provider: FAKE_TOKEN,
+    evaluator: FAKE_ROUTER,
+    description: "d",
+    budget: 100n,
+    expiredAt: 999n,
+    status: 3,
+    hook: ZERO_ADDRESS,
+    submittedAt: 45n,
+    deliverable: `0x${"aa".repeat(32)}` as const,
+  };
+
+  it("getDeliverableUrl without a hint locates the submit block from submittedAt (audit L07)", async () => {
+    // A lookup long after submission (a dispute days later) must still query
+    // the few blocks around the submission.
+    const results = defaultResults();
+    results.getJob = SUBMITTED_JOB;
+    const { client, mock } = await buildClient({ results });
+    mock.handlers.eth_blockNumber = () => "0xf4240"; // 1,000,000
+    vi.spyOn(client.publicClient, "getBlock").mockImplementation(
+      async ({ blockNumber } = {}) =>
+        ({ timestamp: (blockNumber ?? 0n) * 10n }) as never,
+    );
+    const lookup = vi
+      .spyOn(client.policy, "getDeliverableUrl")
+      .mockResolvedValue("ipfs://cid");
+
+    await expect(client.getDeliverableUrl(7n)).resolves.toBe("ipfs://cid");
+    // the job is submitted, so a missing JobInitialised log is an RPC failure (M09)
+    expect(lookup).toHaveBeenCalledWith(7n, {
+      hintBlock: 5n,
+      requireLog: true,
+    });
+    expect(mock.calls.some((c) => c.method === "eth_getLogs")).toBe(false);
+  });
+
+  it("getDeliverableUrl with an explicit hint does not require the log", async () => {
+    const { client } = await buildClient({ results: defaultResults() });
+    const lookup = vi
+      .spyOn(client.policy, "getDeliverableUrl")
+      .mockResolvedValue(null);
+
+    await expect(
+      client.getDeliverableUrl(7n, { hintBlock: 123n }),
+    ).resolves.toBeNull();
+    expect(lookup).toHaveBeenCalledWith(7n, { hintBlock: 123n });
+  });
+
+  it("getDeliverableUrl is null before the job is submitted", async () => {
+    const results = defaultResults();
+    results.getJob = { ...SUBMITTED_JOB, status: 1, submittedAt: 0n };
+    const { client } = await buildClient({ results });
+    const lookup = vi.spyOn(client.policy, "getDeliverableUrl");
+
+    await expect(client.getDeliverableUrl(7n)).resolves.toBeNull();
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it("getDeliverableUrl propagates errors while resolving the submit block", async () => {
+    const { client } = await buildClient({});
+    vi.spyOn(client, "getJob").mockRejectedValue(new Error("rpc down"));
+    const lookup = vi.spyOn(client.policy, "getDeliverableUrl");
+
+    await expect(client.getDeliverableUrl(7n)).rejects.toThrow("rpc down");
+    expect(lookup).not.toHaveBeenCalled();
+  });
+});
+
+describe("PolicyClient.getDeliverableUrl (audit M09)", () => {
+  async function policyWithLogs(readEvents: () => Promise<unknown>) {
+    const { client } = await buildClient({});
+    vi.spyOn(
+      client.policy as unknown as { readEvents: () => Promise<unknown> },
+      "readEvents",
+    ).mockImplementation(readEvents);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    return client.policy;
+  }
+
+  it.each<[string, string, string | null]>([
+    ["a string", '{"deliverable_url":"ipfs://cid"}', "ipfs://cid"],
+    ["an empty string", '{"deliverable_url":""}', null],
+    ["a number", '{"deliverable_url":123}', null],
+    ["an object", '{"deliverable_url":{"a":1}}', null],
+    ["an array", '{"deliverable_url":["ipfs://cid"]}', null],
+    ["null", '{"deliverable_url":null}', null],
+    ["absent", '{"other":"x"}', null],
+    ["an array of params", '["ipfs://cid"]', null],
+    ["a number of params", "123", null],
+    ["null params", "null", null],
+    ["not JSON", "not json", null],
+  ])(
+    "returns only a non-empty string deliverable_url: %s",
+    async (_label, params, expected) => {
+      const policy = await policyWithLogs(async () => [
+        { args: { optParams: stringToHex(params) } },
+      ]);
+
+      await expect(
+        policy.getDeliverableUrl(1n, { hintBlock: 100n }),
+      ).resolves.toBe(expected);
+    },
+  );
+
+  it.each<[string, () => unknown]>([
+    [
+      "HTTP 502",
+      () =>
+        new HttpRequestError({
+          url: "https://bsc-dataseed.binance.org/",
+          status: 502,
+          body: {},
+        }),
+    ],
+    ["a timeout", () => new Error("The request took too long to respond.")],
+  ])(
+    "throws a NetworkError, not null, when the log query fails with %s",
+    async (_label, make) => {
+      const error = make();
+      const policy = await policyWithLogs(async () => {
+        throw error;
+      });
+
+      const caught = await policy
+        .getDeliverableUrl(1n, { hintBlock: 100n })
+        .catch((e: unknown) => e);
+      expect(caught).toBeInstanceOf(NetworkError);
+      expect(caught).not.toBeInstanceOf(RpcRangeLimitError);
+      expect((caught as { cause?: unknown }).cause).toBe(error);
+    },
+  );
+
+  it("still throws RpcRangeLimitError for a range/rate limit", async () => {
+    const policy = await policyWithLogs(async () => {
+      throw new Error("-32005 limit exceeded");
+    });
+
+    await expect(
+      policy.getDeliverableUrl(1n, { hintBlock: 100n }),
+    ).rejects.toBeInstanceOf(RpcRangeLimitError);
+  });
+
+  it("treats no JobInitialised log as an RPC failure only when the log is required", async () => {
+    const policy = await policyWithLogs(async () => []);
+
+    await expect(
+      policy.getDeliverableUrl(1n, { hintBlock: 100n }),
+    ).resolves.toBeNull();
+    await expect(
+      policy.getDeliverableUrl(1n, { hintBlock: 100n, requireLog: true }),
+    ).rejects.toThrow(/incomplete result/);
   });
 });

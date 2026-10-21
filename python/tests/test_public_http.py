@@ -220,7 +220,8 @@ def test_voter_refuses_private_url_and_can_fetch_next_manifest():
     voter = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(voter)
     with patch.object(http.socket, "socket") as socket:
-        assert voter.fetch_manifest("http://127.0.0.1/", "https://gateway.example/ipfs") is None
+        with pytest.raises(voter.ManifestUnavailable):
+            voter.fetch_manifest("http://127.0.0.1/", "https://gateway.example/ipfs")
         socket.assert_not_called()
     with patch.object(voter, "fetch_public_json", return_value={}) as fetch:
         voter.fetch_manifest("ipfs://" + "Qm" + "a" * 44, "https://gateway.example/ipfs/")

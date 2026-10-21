@@ -48,8 +48,10 @@ outages remain retryable. `funded_job_watcher(max_attempts=5)` /
 retry reads and callback retries. On exhaustion the job is dropped for that
 watcher instance and logged for operator inspection.
 
-Open/funded jobs skip log resolution. A missing submission hint scans no more
-than 50,000 blocks in 50 windows by default, plus a bounded policy fallback.
+Open/funded jobs skip log resolution. Without a submission hint, the submission
+block is located from the job's `submittedAt` by a binary search over block
+timestamps (about log2 of the chain height in header reads, 26 on BSC mainnet),
+followed by one policy log query a few blocks wide.
 When the current height is unavailable and no hint is supplied, the policy
 query fails retryably instead of scanning from genesis. Per-call RPC timeouts
 remain the transport's responsibility.

@@ -21,8 +21,10 @@ unroutable. See the [IANA IPv6 registry](https://www.iana.org/assignments/iana-i
 
 Agent URI JSON is limited to 1 MiB and 10 seconds; voter manifests to 8 MiB and
 15 seconds. DNS has a 5-second budget within that total. JSON must be an object.
-IPFS URLs must contain a bare CID, with no path/query additions. Rejected voter
-downloads yield no manifest; the voter can still manually reject or skip the job.
+IPFS URLs must contain a bare CID, with no path/query additions. A rejected voter
+download counts as a failed download: the voter retries it for a few ticks, then
+prompts with a "deliverable unavailable" warning so the job can still be
+rejected or skipped (see the voter README).
 
 Compatibility: configure direct public URLs and public IPFS gateways. Redirecting
 gateways, private gateways and IPv6 translation-only destinations are refused

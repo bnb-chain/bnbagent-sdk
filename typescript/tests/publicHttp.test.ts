@@ -9,7 +9,10 @@ vi.mock("node:dns/promises", () => ({ lookup }));
 vi.mock("node:http", () => ({ request }));
 vi.mock("node:https", () => ({ request }));
 
-import { fetchManifest } from "../examples/voter/watch.js";
+import {
+  ManifestUnavailableError,
+  fetchManifest,
+} from "../examples/voter/watch.js";
 import {
   fetchPublicJson,
   isBlockedIp,
@@ -149,9 +152,9 @@ describe("public downloads", () => {
     expect(destroy).toHaveBeenCalledOnce();
   });
   it("voter refuses private URL and still accepts the next public manifest", async () => {
-    expect(
-      await fetchManifest("http://127.0.0.1/", "https://gateway.example/ipfs"),
-    ).toBeNull();
+    await expect(
+      fetchManifest("http://127.0.0.1/", "https://gateway.example/ipfs"),
+    ).rejects.toBeInstanceOf(ManifestUnavailableError);
     expect(request).not.toHaveBeenCalled();
     expect(
       await fetchManifest(

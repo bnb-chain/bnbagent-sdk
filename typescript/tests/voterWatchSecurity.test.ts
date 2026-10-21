@@ -11,7 +11,11 @@ import {
   it,
   vi,
 } from "vitest";
-import { handleDisputedJob } from "../examples/voter/watch.js";
+import {
+  MANIFEST_DOWNLOAD_ATTEMPTS,
+  ManifestUnavailableError,
+  handleDisputedJob,
+} from "../examples/voter/watch.js";
 import {
   DeliverableManifest,
   type ERC8183Client,
@@ -67,12 +71,16 @@ describe("disputed-job download boundary", () => {
         const output = vi.spyOn(console, "log").mockImplementation(() => {});
         const voteReject = vi.fn().mockResolvedValue({});
         const client = {
-          policy: { hasVoted: vi.fn().mockResolvedValue(false) },
+          policy: {
+            hasVoted: vi.fn().mockResolvedValue(false),
+            disputeWindow: vi.fn().mockResolvedValue(3600n),
+          },
           getJob: vi.fn().mockResolvedValue({
             client: "client",
             provider: "provider",
             budget: 1n,
             status: "Submitted",
+            submittedAt: BigInt(Math.floor(Date.now() / 1000) - 60),
             deliverable: DeliverableManifest.fromDict(payload).manifestHash(),
           }),
           getDeliverableUrl: vi
@@ -86,19 +94,28 @@ describe("disputed-job download boundary", () => {
           return choice;
         });
 
-        await handleDisputedJob(
-          client as unknown as ERC8183Client,
-          777,
-          "voter",
-          "https://gateway.example/ipfs/",
-          { question } as unknown as ReturnType<typeof createInterface>,
-        );
+        const handle = (downloadFailures: number) =>
+          handleDisputedJob(
+            client as unknown as ERC8183Client,
+            777,
+            "voter",
+            "https://gateway.example/ipfs/",
+            { question } as unknown as ReturnType<typeof createInterface>,
+            downloadFailures,
+          );
+        // The refused download counts as a failed one: retried, then voted on.
+        for (let n = 0; n < MANIFEST_DOWNLOAD_ATTEMPTS - 1; n++) {
+          await expect(handle(n)).rejects.toBeInstanceOf(
+            ManifestUnavailableError,
+          );
+        }
+        await handle(MANIFEST_DOWNLOAD_ATTEMPTS - 1);
 
         expect(hitsAtPrompt).toEqual([[]]);
         expect(hits).toEqual([]);
         expect(question).toHaveBeenCalledTimes(1);
-        expect(output).toHaveBeenCalledWith(
-          "  (no manifest available for review)",
+        expect(output.mock.calls.flat().join("\n")).toContain(
+          "deliverable unavailable: could not fetch manifest",
         );
         expect(output).not.toHaveBeenCalledWith("test-only-loopback-content");
         if (choice === "r") {

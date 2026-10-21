@@ -19,7 +19,7 @@ import { optimisticPolicyAbi } from "../abis/optimisticPolicy.js";
 import { ContractBase, type DecodedEventLog } from "../core/contractBase.js";
 import type { Paymaster } from "../core/paymaster.js";
 import { describeError } from "../core/txSender.js";
-import { RpcRangeLimitError } from "../errors.js";
+import { NetworkError, RpcRangeLimitError } from "../errors.js";
 import {
   ERC8183_DISPUTE,
   ERC8183_VOTE_REJECT,
@@ -40,6 +40,10 @@ export interface GetDeliverableUrlOpts {
    * the log scan to a tight `+-10` block window instead of a 1000-block
    * fallback. */
   hintBlock?: bigint;
+  /** Throw {@link NetworkError} when the scan finds no `JobInitialised` log:
+   * the policy emits it on every submission, so for a job known to be
+   * submitted an empty result means the RPC returned an incomplete one. */
+  requireLog?: boolean;
 }
 
 const TIGHT_WINDOW_BLOCKS = 10n;
@@ -282,15 +286,16 @@ export class PolicyClient extends ContractBase {
    * Return the `deliverable_url` for a submitted job.
    *
    * Reads the `JobInitialised` event emitted by `onSubmitted` and parses
-   * `optParams` (JSON bytes) to extract `deliverable_url`. Returns `null`
-   * if the event is not found or the field is absent. Throws
-   * {@link RpcRangeLimitError} when the node rejects the log query with a
-   * rate/range limit (`-32005`) — that is retryable, not proof of absence.
+   * `optParams` (JSON bytes) to extract `deliverable_url`. Returns it only
+   * when it is a non-empty string; `null` when the event is not found
+   * (unless `requireLog`) or carries no usable `deliverable_url`, which is
+   * up to the provider. A failed log query is not proof of absence: it
+   * throws {@link RpcRangeLimitError} for a rate/range limit (`-32005`) and
+   * {@link NetworkError} otherwise, both retryable.
    *
    * Prefer calling the ERC8183 facade's `getDeliverableUrl`, which
-   * auto-resolves `hintBlock` via Commerce's `JobSubmitted` event. If
-   * called directly without `hintBlock`, a 1000-block fallback window is
-   * used.
+   * auto-resolves `hintBlock` from the job's `submittedAt`. If called
+   * directly without `hintBlock`, a 1000-block fallback window is used.
    */
   async getDeliverableUrl(
     jobId: bigint,
@@ -342,13 +347,20 @@ export class PolicyClient extends ContractBase {
           `JobInitialised scan for job ${jobId} hit the RPC range/rate limit; retry later`,
         );
       }
-      console.warn(
-        `[PolicyClient] getDeliverableUrl(${jobId}) event query failed: ${message}`,
+      throw Object.assign(
+        new NetworkError(
+          `JobInitialised scan for job ${jobId} failed; retry later`,
+        ),
+        { cause: error },
       );
-      return null;
     }
 
     if (logs.length === 0) {
+      if (opts?.requireLog) {
+        throw new NetworkError(
+          `no JobInitialised log for submitted job ${jobId} in blocks ${fromBlock}..${toBlock}: the RPC returned an incomplete result; retry later`,
+        );
+      }
       return null;
     }
 
@@ -356,16 +368,19 @@ export class PolicyClient extends ContractBase {
     if (!raw || raw === "0x") {
       return null;
     }
+    let params: unknown;
     try {
-      const params = JSON.parse(hexToString(raw)) as {
-        deliverable_url?: string;
-      };
-      return params.deliverable_url || null;
+      params = JSON.parse(hexToString(raw));
     } catch (error) {
       console.warn(
         `[PolicyClient] getDeliverableUrl(${jobId}) parse failed: ${describeError(error)}`,
       );
       return null;
     }
+    const url =
+      params !== null && typeof params === "object"
+        ? (params as { deliverable_url?: unknown }).deliverable_url
+        : undefined;
+    return typeof url === "string" && url.length > 0 ? url : null;
   }
 }

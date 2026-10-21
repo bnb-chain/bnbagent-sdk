@@ -861,62 +861,53 @@ export class ERC8183Client {
    * Return the `deliverable_url` for a submitted job.
    *
    * Reads the `JobInitialised` event emitted by the policy and parses
-   * `optParams` JSON to extract `deliverable_url`. Returns `null` if the
-   * event is not found or the job has not been submitted yet.
+   * `optParams` JSON to extract `deliverable_url`, returned only when it is
+   * a non-empty string. `null` means the job is not submitted yet or its
+   * submission carries no usable `deliverable_url`, which is up to the
+   * provider.
    *
-   * When `hintBlock` is not provided the method self-resolves it by
-   * querying Commerce's `JobSubmitted` event first (tight 5-block window
-   * around current head, walking back in 1000-block steps until found).
-   * This avoids wide log scans that exceed NodeReal's block-range limit.
+   * When `hintBlock` is not provided the method self-resolves it from the
+   * job's on-chain `submittedAt` (see `resolveSubmitBlock`), so the log
+   * query stays a few blocks wide however long ago the job was submitted.
+   * Failing to read the chain throws ({@link NetworkError}, or
+   * {@link RpcRangeLimitError} for a range/rate limit) instead of returning
+   * `null`, including a submitted job whose `JobInitialised` log the RPC
+   * does not return.
    */
   async getDeliverableUrl(
     jobId: bigint,
     opts?: GetDeliverableUrlFacadeOpts,
   ): Promise<string | null> {
-    const hintBlock =
-      opts?.hintBlock ?? (await this.resolveSubmitBlock(jobId)) ?? undefined;
-    return this.policy.getDeliverableUrl(jobId, { hintBlock });
+    if (opts?.hintBlock !== undefined) {
+      return this.policy.getDeliverableUrl(jobId, {
+        hintBlock: opts.hintBlock,
+      });
+    }
+    const hintBlock = await this.resolveSubmitBlock(jobId);
+    if (hintBlock === null) {
+      return null;
+    }
+    return this.policy.getDeliverableUrl(jobId, {
+      hintBlock,
+      requireLog: true,
+    });
   }
 
   /**
-   * Find the block where `JobSubmitted` was emitted for `jobId`.
-   *
-   * Walks backwards from the current head in `step`-block windows so each
-   * individual RPC call stays within NodeReal's 5000-block limit. Returns
-   * the block number, or `null` if not found within `lookback`.
+   * First block of the second in which `jobId` was submitted: binary-searches
+   * block timestamps for the job's `submittedAt`. The submission
+   * (`JobSubmitted` / `JobInitialised`) is in that block or one of the few
+   * after it that share its timestamp. `null` while the job is unsubmitted.
    */
-  private async resolveSubmitBlock(
-    jobId: bigint,
-    lookback = 50_000n,
-    step = 1_000n,
-  ): Promise<bigint | null> {
-    let current: bigint;
-    try {
-      current = await this.client.getBlockNumber();
-    } catch {
+  private async resolveSubmitBlock(jobId: bigint): Promise<bigint | null> {
+    const { submittedAt } = await this.getJob(jobId);
+    if (submittedAt === 0n) {
       return null;
     }
-
-    if (lookback <= 0n || step <= 0n)
-      throw new Error("lookback and step must be positive");
-    const floorBound = current >= lookback ? current - lookback + 1n : 0n;
-    for (let end = current; end >= floorBound; end -= step) {
-      const start = end - step + 1n > floorBound ? end - step + 1n : floorBound;
-      try {
-        const events = await this.commerce.getJobSubmittedEvents(
-          start,
-          end,
-          jobId,
-        );
-        const blockNumber = events[0]?.blockNumber;
-        if (blockNumber !== undefined && blockNumber !== null) {
-          return blockNumber;
-        }
-      } catch {
-        // RPC hiccup on this window — try the next one.
-      }
-    }
-    return null;
+    return this.firstBlockAtOrAfter(
+      submittedAt,
+      await this.client.getBlockNumber(),
+    );
   }
 
   /** Simulate the verdict the Router would see right now. */
