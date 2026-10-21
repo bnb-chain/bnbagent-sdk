@@ -1275,7 +1275,7 @@ describe("LocalExecutor: relay rejection classification", () => {
     expect(sendRawCount(mock)).toBe(1);
   });
 
-  it("an ambiguous (definite=false) relay failure propagates and never self-pays", async () => {
+  it("an ambiguous relay failure reconciles the signed hash and never self-pays", async () => {
     const mock = mockPublicClient();
     const { paymaster } = makeFakePaymaster({
       ethSendRawTransaction: async () => {
@@ -1288,9 +1288,7 @@ describe("LocalExecutor: relay rejection classification", () => {
       paymaster,
     });
 
-    await expect(executor.execute(makeIntent())).rejects.toBeInstanceOf(
-      RelayRejectedError,
-    );
+    expect((await executor.execute(makeIntent())).status).toBe(1);
     expect(sendRawCount(mock)).toBe(0);
   });
 });

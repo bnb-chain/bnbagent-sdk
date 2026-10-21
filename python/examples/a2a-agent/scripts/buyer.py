@@ -177,7 +177,41 @@ def fund_job(quote: dict) -> int | None:
         raise SystemExit(f"provider quote verification failed: {verdict.reason}")
 
     provider = expected_provider
-    price = int(quote["response"]["terms"]["price"])
+    from web3 import Web3
+
+    terms = quote["response"]["terms"]
+    maximum = os.getenv("BUYER_MAX_PRICE", "")
+    chain_id = os.getenv("BUYER_CHAIN_ID", "")
+    token = os.getenv("BUYER_PAYMENT_TOKEN", "")
+    price_raw = terms.get("price")
+    if (
+        not maximum.isascii()
+        or not maximum.isdigit()
+        or int(maximum) <= 0
+        or not chain_id.isascii()
+        or not chain_id.isdigit()
+    ):
+        raise SystemExit(
+            "BUYER_MAX_PRICE (positive atomic units), BUYER_CHAIN_ID and "
+            "BUYER_PAYMENT_TOKEN are required before funding"
+        )
+    if not isinstance(price_raw, str) or not price_raw.isascii() or not price_raw.isdigit():
+        raise SystemExit("Quote price must be a non-negative integer string")
+    try:
+        approved_token = Web3.to_checksum_address(token)
+        signed_token = Web3.to_checksum_address(terms.get("currency"))
+    except (TypeError, ValueError):
+        raise SystemExit("Invalid buyer payment token or signed currency") from None
+    if (
+        int(chain_id) != client.w3.eth.chain_id
+        or quote.get("chain_id") != int(chain_id)
+        or approved_token != signed_token
+        or approved_token != Web3.to_checksum_address(client.payment_token)
+    ):
+        raise SystemExit("Quote chain/token does not match buyer authorization")
+    price = int(price_raw)
+    if price > int(maximum):
+        raise SystemExit("Quote price exceeds BUYER_MAX_PRICE")
     # Anchor the SAME signed terms on-chain so provider_sig stays verifiable:
     # ecrecover(negotiation_hash, provider_sig) == job.provider.
     description = build_job_description(quote)

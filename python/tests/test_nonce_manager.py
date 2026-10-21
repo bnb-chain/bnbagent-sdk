@@ -165,21 +165,23 @@ class TestHandleError:
         assert result is True
         assert mgr.get_nonce() == 5
 
-    def test_already_known_resyncs(self):
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "already known",
+            "replacement transaction underpriced",
+            "ALREADY KNOWN",
+            "nonce too low: already known",
+        ],
+    )
+    def test_ambiguous_error_does_not_authorize_new_nonce_retry(self, message):
         w3 = _make_w3(nonce=0)
         mgr = NonceManager.for_account(w3, FAKE_ADDRESS)
         mgr.get_nonce()
         w3.eth.get_transaction_count.return_value = 3
-        result = mgr.handle_error(Exception("already known"), 0)
-        assert result is True
-
-    def test_replacement_underpriced_resyncs(self):
-        w3 = _make_w3(nonce=0)
-        mgr = NonceManager.for_account(w3, FAKE_ADDRESS)
-        mgr.get_nonce()
-        w3.eth.get_transaction_count.return_value = 3
-        result = mgr.handle_error(Exception("replacement transaction underpriced"), 0)
-        assert result is True
+        assert mgr.handle_error(Exception(message), 0) is False
+        w3.eth.get_transaction_count.assert_called_once()
+        assert mgr.get_nonce() == 1
 
     def test_unrelated_error_returns_false(self):
         w3 = _make_w3(nonce=0)

@@ -23,7 +23,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Session, signerFromPrivateKey } from "@altananetwork/sdk";
-import { getAddress } from "viem";
+import {
+  ExecutionRevertedError,
+  HttpRequestError,
+  RpcRequestError,
+  TimeoutError,
+  getAddress,
+} from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ERC8183Client } from "../src/erc8183/client.js";
@@ -227,6 +233,30 @@ async function signedAltanaDescription(
 // ---------------------------------------------------------------------------
 
 describe("ERC8183JobOps: agent address / construction", () => {
+  it("permanently rejects garbage signatures and reuses the funding block", async () => {
+    const ops = await makeOps({
+      wallet: makeWallet(SELLER_ACCOUNT.address),
+      allowUnsignedJobs: false,
+    });
+    const client = injectClient(ops);
+    client.policy.disputeWindow.mockResolvedValue(0n);
+    const quote = JSON.parse(
+      await signedDescription(client.commerce.address, NOW() - 60),
+    );
+    quote.provider_sig = `0x${"00".repeat(65)}`;
+    client.getJob.mockResolvedValue(
+      makeJob({
+        provider: SELLER_ACCOUNT.address,
+        description: JSON.stringify(quote),
+      }),
+    );
+    for (let n = 0; n < 2; n++) {
+      const result = await ops.verifyJob(1);
+      expect(result.error_code).toBe("quote_invalid");
+      expect(result.retryable).not.toBe(true);
+    }
+    expect(client.getJobFundedBlock).toHaveBeenCalledTimes(1);
+  });
   it("uses the wallet address", async () => {
     const ops = await makeOps();
     expect(ops.agentAddress).toBe(ME);
@@ -1003,6 +1033,48 @@ describe("ERC8183JobOps: keyless (read/poll-only) construction", () => {
 });
 
 describe("fundedJobWatcher", () => {
+  it.each([false, true, "throws"])(
+    "caps retries, including failed reads=%s",
+    async (failedRead) => {
+      vi.useFakeTimers();
+      try {
+        const ops = await makeOps({ providerAddress: ME });
+        const controller = new AbortController();
+        const fresh = {
+          success: true,
+          jobId: 1,
+          status: JobStatus.FUNDED,
+          expiredAt: String(NOW() + 3600),
+        };
+        let polls = 0;
+        ops.getPendingJobs = vi.fn(async () => {
+          if (++polls === 8) controller.abort();
+          return { success: true, jobs: [fresh] };
+        });
+        ops.getJob = vi.fn(async () =>
+          failedRead ? { success: false } : fresh,
+        );
+        if (failedRead === "throws")
+          ops.getJob = vi.fn(async () => {
+            throw new Error("RPC down");
+          });
+        ops.verifyJob = vi.fn(async () => ({ valid: false, retryable: true }));
+        const work = vi.fn();
+        const done = fundedJobWatcher(ops, work, {
+          interval: 0.001,
+          maxAttempts: 3,
+          stop: controller.signal,
+        });
+        await vi.advanceTimersByTimeAsync(20);
+        await done;
+        expect(ops.verifyJob).toHaveBeenCalledTimes(failedRead ? 1 : 3);
+        expect(ops.getJob).toHaveBeenCalledTimes(2);
+        expect(work).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
   it("does not invoke seller work for a permanently invalid quote", async () => {
     const ops = await makeOps({ providerAddress: ME });
     ops.getPendingJobs = vi.fn(async () => ({
@@ -1032,7 +1104,10 @@ describe("fundedJobWatcher", () => {
       success: true,
       jobs: [{ jobId: 1, provider: ME }],
     }));
-    ops.verifyJob = vi.fn(async () => ({ valid: true }));
+    ops.verifyJob = vi.fn(async () => ({
+      valid: true,
+      job: { jobId: 1, provider: ME },
+    }));
     const submitSpy = vi.fn();
     ops.submitResult = submitSpy as unknown as ERC8183JobOps["submitResult"];
 
@@ -1118,7 +1193,10 @@ describe("fundedJobWatcher: retry semantics (BUG-04)", () => {
     job: Record<string, unknown>,
   ): Promise<ERC8183JobOps> {
     const ops = await makeOps({ providerAddress: ME });
-    ops.verifyJob = vi.fn(async () => ({ valid: true }));
+    ops.verifyJob = vi.fn(async () => ({
+      valid: true,
+      job: { jobId: 1, provider: ME },
+    }));
     const polls: OpResult[] = [{ success: true, jobs: [job] }];
     ops.getPendingJobs = vi.fn(
       async () => polls.shift() ?? { success: true, jobs: [] },
@@ -1145,7 +1223,7 @@ describe("fundedJobWatcher: retry semantics (BUG-04)", () => {
         error_code: "chain_unavailable",
         retryable: true,
       })
-      .mockResolvedValueOnce({ valid: true });
+      .mockResolvedValueOnce({ valid: true, job: { jobId: 1, provider: ME } });
 
     const controller = new AbortController();
     const onFunded = vi.fn(() => controller.abort());
@@ -1234,7 +1312,10 @@ describe("fundedJobWatcher: retry semantics (BUG-04)", () => {
 
   it("an undefined return keeps fire-once compatibility", async () => {
     const ops = await makeOps({ providerAddress: ME });
-    ops.verifyJob = vi.fn(async () => ({ valid: true }));
+    ops.verifyJob = vi.fn(async () => ({
+      valid: true,
+      job: { jobId: 1, provider: ME },
+    }));
     const controller = new AbortController();
     let pollCount = 0;
     ops.getPendingJobs = vi.fn(async () => {
@@ -1415,7 +1496,7 @@ describe("ERC8183JobOps.getResponse: SUBMITTED/COMPLETED vs FUNDED classificatio
     const ops = await makeOps({ providerAddress: ME, storage: fakeStorage() });
     const client = injectClient(ops);
     client.getDeliverableUrl.mockResolvedValue(null);
-    ops.getJob = vi.fn(async () => statusResult);
+    ops.getJob = vi.fn(async () => ({ provider: ME, ...statusResult }));
     return { ops, client };
   }
 
@@ -1458,19 +1539,20 @@ describe("ERC8183JobOps.getResponse: SUBMITTED/COMPLETED vs FUNDED classificatio
     expect(result.error_code).toBe("chain_unavailable");
   });
 
-  it("a rate-limited resolution is chain_unavailable without a status lookup", async () => {
-    const ops = await makeOps({ providerAddress: ME, storage: fakeStorage() });
-    const client = injectClient(ops);
+  it("a rate-limited resolution remains retryable after the status precheck", async () => {
+    const { ops, client } = await opsWithStatus({
+      success: true,
+      status: JobStatus.SUBMITTED,
+    });
     client.getDeliverableUrl.mockRejectedValue(
       new RpcRangeLimitError("limit exceeded"),
     );
-    const getJobSpy = vi.fn();
-    ops.getJob = getJobSpy;
-
     const result = await ops.getResponse(1);
     expect(result.success).toBe(false);
     expect(result.error_code).toBe("chain_unavailable");
-    expect(getJobSpy).not.toHaveBeenCalled();
+    expect(result.retryable).toBe(true);
+    expect(ops.getJob).toHaveBeenCalledOnce();
+    expect(client.getDeliverableUrl).toHaveBeenCalledOnce();
   });
 });
 
@@ -1523,5 +1605,178 @@ describe("ERC8183JobOps: retryable contract", () => {
     expect(fields.error_code).toBe("relay_rejected");
     expect(fields.retryable).toBe(false);
     expect(fields).not.toHaveProperty("rpc_error_code");
+  });
+});
+
+describe("ERC8183JobOps.verifyJob: transient RPC failures (audit M10)", () => {
+  // No "rpc", "network" or "timeout" in it, so only the error type can tell.
+  const URL = "https://bsc-dataseed.binance.org/";
+
+  async function signedJobOps() {
+    const ops = await makeOps({
+      wallet: makeWallet(SELLER_ACCOUNT.address),
+      allowUnsignedJobs: false,
+    });
+    const client = injectClient(ops);
+    client.policy.disputeWindow.mockResolvedValue(0n);
+    client.getJob.mockResolvedValue(
+      makeJob({
+        provider: SELLER_ACCOUNT.address,
+        description: await signedDescription(
+          client.commerce.address,
+          NOW() - 60,
+        ),
+      }),
+    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    return { ops, client };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each<[string, () => unknown]>([
+    [
+      "HTTP 502",
+      () => new HttpRequestError({ url: URL, status: 502, body: {} }),
+    ],
+    ["a viem timeout", () => new TimeoutError({ url: URL, body: {} })],
+    [
+      "ECONNRESET",
+      () =>
+        Object.assign(new TypeError("fetch failed"), {
+          cause: Object.assign(new Error("read ECONNRESET"), {
+            code: "ECONNRESET",
+          }),
+        }),
+    ],
+    [
+      "a node error",
+      () =>
+        new RpcRequestError({
+          url: URL,
+          body: {},
+          error: { code: -32000, message: "missing trie node" },
+        }),
+    ],
+    ["a log-range limit", () => new RpcRangeLimitError("limit exceeded")],
+  ])(
+    "is retryable when the funded-block scan fails with %s",
+    async (_l, make) => {
+      const { ops, client } = await signedJobOps();
+      client.getJobFundedBlock.mockRejectedValue(make());
+
+      const result = await ops.verifyJob(1);
+
+      expect(result.valid).toBe(false);
+      expect(result.error_code).toBe("chain_unavailable");
+      expect(result.retryable).toBe(true);
+    },
+  );
+
+  it("retries an unexpected error as internal_error; the quote checks still return quote_invalid without throwing", async () => {
+    const { ops, client } = await signedJobOps();
+    client.getJobFundedBlock.mockRejectedValue(
+      new TypeError("Cannot read properties of undefined"),
+    );
+
+    const result = await ops.verifyJob(1);
+
+    expect(result.error_code).toBe("internal_error");
+    expect(result.retryable).toBe(true);
+  });
+
+  it("stays permanent for a revert", async () => {
+    const { ops, client } = await signedJobOps();
+    client.getJobFundedBlock.mockRejectedValue(
+      new ExecutionRevertedError({ message: "execution reverted" }),
+    );
+
+    const result = await ops.verifyJob(1);
+
+    expect(result.error_code).toBe("internal_error");
+    expect(result.retryable).not.toBe(true);
+  });
+
+  it("caps the watcher's retries of an unexpected verification error at maxAttempts", async () => {
+    vi.useFakeTimers();
+    try {
+      const { ops, client } = await signedJobOps();
+      client.getJobFundedBlock.mockRejectedValue(new TypeError("boom"));
+      const polls: OpResult[] = [
+        {
+          success: true,
+          jobs: [{ jobId: 1, provider: SELLER_ACCOUNT.address }],
+        },
+      ];
+      ops.getPendingJobs = vi.fn(
+        async () => polls.shift() ?? { success: true, jobs: [] },
+      );
+      const controller = new AbortController();
+      const onFunded = vi.fn();
+
+      const done = fundedJobWatcher(ops, onFunded, {
+        interval: 0.01,
+        stop: controller.signal,
+        maxAttempts: 3,
+      });
+      await vi.advanceTimersByTimeAsync(200);
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(20);
+      await done;
+
+      expect(client.getJobFundedBlock).toHaveBeenCalledTimes(3);
+      expect(onFunded).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("classifies a transport error in getJob as chain_unavailable whatever the URL", async () => {
+    const { ops, client } = await signedJobOps();
+    client.getJob.mockRejectedValue(
+      new HttpRequestError({ url: URL, status: 502, body: {} }),
+    );
+
+    const result = await ops.getJob(1);
+
+    expect(result.error_code).toBe("chain_unavailable");
+    expect(result.retryable).toBe(true);
+  });
+
+  it("keeps a paid job in the funded-job watcher after a transient failure and delivers it on the retry", async () => {
+    vi.useFakeTimers();
+    try {
+      const { ops, client } = await signedJobOps();
+      client.getJobFundedBlock
+        .mockRejectedValueOnce(
+          new HttpRequestError({ url: URL, status: 502, body: {} }),
+        )
+        .mockResolvedValue(123n);
+      const polls: OpResult[] = [
+        {
+          success: true,
+          jobs: [{ jobId: 1, provider: SELLER_ACCOUNT.address }],
+        },
+      ];
+      ops.getPendingJobs = vi.fn(
+        async () => polls.shift() ?? { success: true, jobs: [] },
+      );
+      const controller = new AbortController();
+      const onFunded = vi.fn(() => controller.abort());
+
+      const done = fundedJobWatcher(ops, onFunded, {
+        interval: 0.01,
+        stop: controller.signal,
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await done;
+
+      expect(client.getJobFundedBlock).toHaveBeenCalledTimes(2);
+      expect(onFunded).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

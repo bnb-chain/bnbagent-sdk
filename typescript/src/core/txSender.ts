@@ -11,10 +11,11 @@
  * file mirrors.
  */
 
-import type {
-  PublicClient,
-  TransactionReceipt,
-  TransactionRequestLegacy,
+import {
+  type PublicClient,
+  type TransactionReceipt,
+  type TransactionRequestLegacy,
+  keccak256,
 } from "viem";
 import {
   RelaySubmissionUnverifiedError,
@@ -23,6 +24,7 @@ import {
 import type { TxResult } from "../wallets/intents.js";
 import type { WalletProvider } from "../wallets/walletProvider.js";
 import { NonceManager, type NonceManagerClient } from "./nonceManager.js";
+import { isAmbiguousBroadcast, isRateLimited } from "./rpcError.js";
 import {
   DEFAULT_GAS_FALLBACK,
   DEFAULT_RELAY_UNSEEN_TIMEOUT,
@@ -430,6 +432,7 @@ export async function sendSelfPayTx(
     account,
   );
   let lastError: unknown;
+  let txHash: `0x${string}` | undefined;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     const nonce = await nonceMgr.getNonce();
@@ -484,13 +487,21 @@ export async function sendSelfPayTx(
       };
 
       const signed = await walletProvider.signTransaction(tx);
-      const txHash = await client.sendRawTransaction({
-        serializedTransaction: signed.rawTransaction,
-      });
-
-      const timeoutSeconds =
-        params.receiptTimeoutSeconds ?? getDefaultReceiptTimeout();
-      return await waitForReceiptAndInterpret(client, txHash, timeoutSeconds);
+      // The response may be lost after the node accepts these bytes. Keep
+      // their identity before sending; an uncertain result must never cause
+      // the same operation to be signed again at a different nonce.
+      const localHash = keccak256(signed.rawTransaction);
+      try {
+        txHash = await client.sendRawTransaction({
+          serializedTransaction: signed.rawTransaction,
+        });
+      } catch (error) {
+        if (!isAmbiguousBroadcast(error)) {
+          throw error;
+        }
+        txHash = localHash;
+      }
+      break;
     } catch (error) {
       if (error instanceof TransactionPendingError) {
         // Not a failure and not retryable here.
@@ -509,12 +520,9 @@ export async function sendSelfPayTx(
         continue;
       }
 
-      // Rate limit -> backoff and retry. The nonce allocated by getNonce()
-      // above was consumed locally but the tx was not broadcast (the 429
-      // surfaced at gas-price fetch / pre-flight / send), so reset the
-      // cache: the next getNonce() re-seeds from the chain's pending count
-      // and reuses that nonce instead of skipping it — otherwise every retry
-      // burns a nonce and leaves a permanent gap that strands the account.
+      // Only pre-broadcast rate limits reach this branch. A send-time 429
+      // is ambiguous and was handled above without retrying the operation.
+      // Re-seed to avoid leaving a gap for an attempt that was never sent.
       if (isRateLimitError(error) && attempt < MAX_RETRIES - 1) {
         const delaySeconds = RETRY_BASE_DELAY * 2 ** attempt;
         console.warn(
@@ -525,18 +533,21 @@ export async function sendSelfPayTx(
         continue;
       }
 
-      // Any other error path (preflight revert, receipt timeout handled
-      // above, transient RPC failure): the cached nonce was already
-      // incremented in getNonce() but the tx may not have been mined or
-      // even broadcast. Invalidate the cache so the next caller re-seeds
-      // from chain instead of leaving a permanent nonce gap that strands
-      // every subsequent tx in mempool.
+      // Pre-broadcast failure or a deterministic rejection: let the next
+      // caller re-seed instead of leaving a nonce gap.
       nonceMgr.reset();
       throw error;
     }
   }
 
-  throw lastError;
+  if (!txHash) {
+    throw lastError;
+  }
+  // Receipt handling is outside the signing loop. A pending or reverted
+  // transaction must not cause this operation to be rebuilt and re-signed.
+  const timeoutSeconds =
+    params.receiptTimeoutSeconds ?? getDefaultReceiptTimeout();
+  return waitForReceiptAndInterpret(client, txHash, timeoutSeconds);
 }
 
 export function sleep(ms: number): Promise<void> {
@@ -548,8 +559,7 @@ export function maxBigint(a: bigint, b: bigint): bigint {
 }
 
 export function isRateLimitError(error: unknown): boolean {
-  const text = describeError(error).toLowerCase();
-  return text.includes("429") || text.includes("too many requests");
+  return isRateLimited(error);
 }
 
 /**

@@ -8,13 +8,8 @@ for common operations.
 
 from __future__ import annotations
 
-import concurrent.futures
-import ipaddress
-import json
 import logging
-import socket
 from typing import Any
-from urllib.parse import urlparse
 
 import requests
 from web3 import Web3
@@ -22,6 +17,7 @@ from web3 import Web3
 from ..constants import SCAN_API_URL
 from ..core.paymaster import Paymaster
 from ..exceptions import ERC8004PartialRegistrationError, TransactionPendingError
+from ..utils.public_http import fetch_public_json
 from ..wallets import WalletProvider
 from .agent_uri import AgentURIGenerator
 from .constants import get_erc8004_config
@@ -29,16 +25,6 @@ from .contract import ContractInterface
 from .models import AgentEndpoint
 
 logger = logging.getLogger(__name__)
-
-# RFC 6598 Carrier-Grade NAT range (100.64.0.0/10). Includes the Alibaba
-# Cloud ECS metadata endpoint at 100.100.100.200, which Python's ipaddress
-# does not classify as private / reserved / link-local.
-_CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
-
-# Upper bound on the agent-URI HTTP body we will buffer + JSON-parse. The
-# remote endpoint is attacker-influenced (agentURI is on-chain metadata), so
-# an unbounded response could exhaust memory.
-_MAX_AGENT_URI_BYTES = 1 * 1024 * 1024  # 1 MB
 
 
 class ERC8004Agent:
@@ -650,89 +636,7 @@ class ERC8004Agent:
         # Handle HTTP/HTTPS URL (with SSRF protection)
         if agent_uri.startswith("http://") or agent_uri.startswith("https://"):
             try:
-                # SSRF protection: block private/reserved IP ranges
-                parsed = urlparse(agent_uri)
-                hostname = parsed.hostname
-                if not hostname:
-                    return None
-
-                # Block known cloud metadata hostnames
-                _BLOCKED_HOSTNAMES = {
-                    "metadata.google.internal",
-                    "metadata.goog",
-                    "169.254.169.254",
-                }
-                if hostname.lower() in _BLOCKED_HOSTNAMES:
-                    return None
-
-                # Resolve hostname with a timeout to avoid hanging on
-                # adversarial DNS servers
-                def _resolve():
-                    return socket.getaddrinfo(hostname, None)
-
-                try:
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                        resolved_ips = pool.submit(_resolve).result(timeout=5)
-                except (concurrent.futures.TimeoutError, socket.gaierror, ValueError, OSError):
-                    return None
-
-                # Pick the first resolved IP and validate it
-                if not resolved_ips:
-                    return None
-
-                safe_ip_str = None
-                for _, _, _, _, sockaddr in resolved_ips:
-                    ip = ipaddress.ip_address(sockaddr[0])
-
-                    # Unmap IPv6-mapped IPv4 (e.g. ::ffff:127.0.0.1)
-                    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
-                        ip = ip.ipv4_mapped
-
-                    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-                        return None
-                    # Block cloud metadata IP
-                    if str(ip) == "169.254.169.254":
-                        return None
-                    # Block RFC 6598 CGNAT (covers Alibaba Cloud ECS metadata)
-                    if ip in _CGNAT_NETWORK:
-                        return None
-
-                    if safe_ip_str is None:
-                        safe_ip_str = str(ip)
-
-                if safe_ip_str is None:
-                    return None
-
-                # Build the request URL using the resolved IP directly to
-                # prevent DNS rebinding (a second resolution returning a
-                # different, internal IP).  The original Host header is
-                # preserved so the remote server routes correctly.
-                port = parsed.port
-                if port:
-                    netloc = f"{safe_ip_str}:{port}"
-                else:
-                    netloc = safe_ip_str
-                safe_url = parsed._replace(netloc=netloc).geturl()
-
-                response = requests.get(
-                    safe_url,
-                    timeout=10,
-                    allow_redirects=False,
-                    headers={"Host": hostname},
-                    stream=True,
-                )
-                response.raise_for_status()
-                cl = response.headers.get("Content-Length")
-                if cl and int(cl) > _MAX_AGENT_URI_BYTES:
-                    return None
-                data = bytearray()
-                for chunk in response.iter_content(chunk_size=8192):
-                    if not chunk:
-                        continue
-                    data.extend(chunk)
-                    if len(data) > _MAX_AGENT_URI_BYTES:
-                        return None
-                return json.loads(data.decode("utf-8"))
+                return fetch_public_json(agent_uri, timeout=10)
             except Exception:
                 return None
 

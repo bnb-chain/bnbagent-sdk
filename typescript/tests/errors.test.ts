@@ -92,7 +92,7 @@ describe("TransactionPendingError", () => {
   it("generates default message when not provided", () => {
     const error = new TransactionPendingError("0xabc123", 30);
     expect(error.message).toBe(
-      "Transaction 0xabc123 broadcast but not confirmed within 30s; check later or retry safely.",
+      "Transaction 0xabc123 not confirmed within 30s; reconcile this hash before any rebroadcast.",
     );
   });
 

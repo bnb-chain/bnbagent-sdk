@@ -17,8 +17,10 @@ import asyncio
 import inspect
 import json
 import logging
+import math
 import re
 import time
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -26,6 +28,7 @@ from web3 import Web3
 
 from ..config import NetworkConfig, resolve_network
 from ..core.config import get_env
+from ..core.rpc_errors import is_revert_error, is_transient_rpc_error
 from ..exceptions import RpcRangeLimitError, TransactionPendingError
 from ..networks import (
     AssetId,
@@ -40,7 +43,7 @@ from ..wallets.wallet_provider import WalletProvider
 from .client import ERC8183Client
 from .config import ERC8183_ENV_PREFIX
 from .negotiation import NegotiationHandler, parse_job_description
-from .quote_verify import verify_quote_signature
+from .quote_verify import quote_content_error, verify_quote_signature
 from .schema import SCHEMA_VERSION, DeliverableManifest
 from .types import JobStatus
 
@@ -185,6 +188,11 @@ class ERC8183JobOps:
     allow_unsigned_jobs
         Compatibility escape hatch for legacy jobs. Defaults to ``False``;
         signed quote verification is mandatory in production by default.
+    response_cache_ttl, response_cache_max_entries, response_max_inflight
+        Response lookup protection: cache results for 5 seconds (0 disables),
+        retain at most 1024 entries in each cache, and run at most 8 distinct
+        lookups at once. Success payloads also have a 16 MiB serialized-byte
+        ceiling. Concurrent callers for the same job share one lookup.
     """
 
     def __init__(
@@ -198,6 +206,9 @@ class ERC8183JobOps:
         service_prices: Mapping[AssetId | str, int] | None = None,
         agent_url: str | None = None,
         allow_unsigned_jobs: bool = False,
+        response_cache_ttl: float = 5.0,
+        response_cache_max_entries: int = 1024,
+        response_max_inflight: int = 8,
     ) -> None:
         if wallet_provider is None and provider_address is None:
             raise ValueError(
@@ -217,6 +228,22 @@ class ERC8183JobOps:
         self._service_prices = self._validate_service_prices(network, service_prices)
         self._agent_url = agent_url
         self._allow_unsigned_jobs = allow_unsigned_jobs
+
+        if not math.isfinite(response_cache_ttl) or response_cache_ttl < 0:
+            raise ValueError("response_cache_ttl must be finite and non-negative")
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            for value in (response_cache_max_entries, response_max_inflight)
+        ):
+            raise ValueError("response lookup capacities must be positive integers")
+        self._response_cache_ttl = response_cache_ttl
+        self._response_cache_max_entries = response_cache_max_entries
+        self._response_max_inflight = response_max_inflight
+        self._response_misses: OrderedDict[int, tuple[float, dict[str, Any]]] = OrderedDict()
+        self._response_tasks: dict[int, asyncio.Task] = {}
+        self._funded_blocks: OrderedDict[tuple[int, str], tuple[float, int]] = OrderedDict()
+        self._response_successes: OrderedDict[int, tuple[float, str]] = OrderedDict()
+        self._response_success_bytes = 0
 
         self._client: ERC8183Client | None = None
         self._deliverable_urls: dict[int, str] = {}
@@ -427,9 +454,7 @@ class ERC8183JobOps:
             # Return a generic message — the raw exception can embed the RPC
             # URL (and its API key) on transport errors. Classify here so
             # callers still get the right status without parsing the message.
-            is_net = any(
-                k in str(exc).lower() for k in ("timeout", "connection", "network", "rpc")
-            )
+            is_net = is_transient_rpc_error(exc)
             return {
                 "success": False,
                 "error": "Temporary chain/RPC error"
@@ -446,9 +471,84 @@ class ERC8183JobOps:
         return {"success": True, "status": result["status"]}
 
     async def get_response(self, job_id: int) -> dict[str, Any]:
-        """Retrieve stored deliverable (cache -> local file -> on-chain URL)."""
+        """Retrieve a deliverable with bounded, shared per-job lookup work.
+
+        Misses and transient failures retain their 404/503 classification and
+        expire after ``response_cache_ttl`` seconds. A cancelled HTTP caller
+        cannot cancel a lookup shared with other callers.
+        """
+        if isinstance(job_id, bool) or not isinstance(job_id, int) or not 0 < job_id < 2**256:
+            return {"success": False, "error": "Invalid job id", "error_code": ERR_NOT_FOUND}
         if not self._storage:
             return {"success": False, "error": "No storage configured"}
+        success = self._response_successes.pop(job_id, None)
+        if success:
+            self._response_success_bytes -= len(success[1].encode("utf-8"))
+            if time.monotonic() < success[0]:
+                self._response_successes[job_id] = success
+                self._response_success_bytes += len(success[1].encode("utf-8"))
+                return json.loads(success[1])
+        cached = self._response_misses.get(job_id)
+        if cached and job_id not in self._deliverable_urls:
+            expires, result = cached
+            if time.monotonic() < expires:
+                self._response_misses.move_to_end(job_id)
+                return dict(result)
+        self._response_misses.pop(job_id, None)
+        task = self._response_tasks.get(job_id)
+        if task is None:
+            if len(self._response_tasks) >= self._response_max_inflight:
+                return {
+                    "success": False,
+                    "error": "Response lookup is busy; retry later",
+                    "error_code": ERR_CHAIN_UNAVAILABLE,
+                    "retryable": True,
+                }
+
+            async def resolve():
+                try:
+                    result = await self._get_response_uncached(job_id)
+                    if result.get("success") and self._response_cache_ttl > 0:
+                        encoded = json.dumps(result, ensure_ascii=False)
+                        size = len(encoded.encode("utf-8"))
+                        if size <= 16 * 1024 * 1024:
+                            self._response_successes[job_id] = (
+                                time.monotonic() + self._response_cache_ttl,
+                                encoded,
+                            )
+                            self._response_success_bytes += size
+                            while (
+                                len(self._response_successes) > self._response_cache_max_entries
+                                or self._response_success_bytes > 16 * 1024 * 1024
+                            ):
+                                _, (_, evicted) = self._response_successes.popitem(last=False)
+                                self._response_success_bytes -= len(evicted.encode("utf-8"))
+                    if (
+                        not result.get("success")
+                        and self._response_cache_ttl > 0
+                        and job_id not in self._deliverable_urls
+                        and result.get("error_code") in (ERR_NOT_FOUND, ERR_CHAIN_UNAVAILABLE)
+                    ):
+                        self._response_misses[job_id] = (
+                            time.monotonic() + self._response_cache_ttl,
+                            dict(result),
+                        )
+                        self._response_misses.move_to_end(job_id)
+                        while len(self._response_misses) > self._response_cache_max_entries:
+                            self._response_misses.popitem(last=False)
+                    return result
+                finally:
+                    self._response_tasks.pop(job_id, None)
+
+            task = asyncio.create_task(resolve())
+            self._response_tasks[job_id] = task
+            # Consume exceptions even when all callers disconnect. Awaiters
+            # still receive the exception normally through the task.
+            task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+        return dict(await asyncio.shield(task))
+
+    async def _get_response_uncached(self, job_id: int) -> dict[str, Any]:
+        """Cache -> local file -> status check -> bounded on-chain URL lookup."""
 
         url = self._deliverable_urls.get(job_id)
         if url:
@@ -467,11 +567,28 @@ class ERC8183JobOps:
             except Exception as exc:
                 logger.warning(f"[ERC8183JobOps] get_response({job_id}) file read failed: {exc}")
 
+        status_result = await self.get_job(job_id)
+        if not status_result.get("success"):
+            if status_result.get("error_code") == ERR_NOT_FOUND:
+                return dict(status_result)
+            return {
+                "success": False,
+                "error": "Temporary chain/RPC error",
+                "error_code": ERR_CHAIN_UNAVAILABLE,
+                "retryable": True,
+            }
+        if str(status_result.get("provider", "")).lower() != self.agent_address.lower():
+            return {"success": False, "error": "Response not found", "error_code": ERR_NOT_FOUND}
+        if status_result.get("status") in (JobStatus.OPEN, JobStatus.FUNDED):
+            return {
+                "success": False,
+                "error": f"Response not found for job {job_id}",
+                "error_code": ERR_NOT_FOUND,
+            }
         try:
             erc8183 = self._get_client()
             deliverable_url = await asyncio.to_thread(erc8183.get_deliverable_url, job_id)
             if deliverable_url:
-                self._deliverable_urls[job_id] = deliverable_url
                 data = await self._storage.download(deliverable_url)
                 return {"success": True, **data}
         except RpcRangeLimitError as exc:
@@ -495,7 +612,6 @@ class ERC8183JobOps:
         # submit older than the fallback scan window, storage hiccup) is a
         # resolution failure — retryable, not proof of absence. Only a job
         # that never reached SUBMITTED genuinely has no response.
-        status_result = await self.get_job_status(job_id)
         if not status_result.get("success") or status_result.get("status") in (
             JobStatus.SUBMITTED,
             JobStatus.COMPLETED,
@@ -672,34 +788,6 @@ class ERC8183JobOps:
                         "error_code": ERR_QUOTE_INVALID,
                     }
 
-                funded_block = await asyncio.to_thread(
-                    client.get_job_funded_block,
-                    job_id,
-                    negotiated_at=negotiated_at,
-                    quote_expires_at=quote_expires_at,
-                )
-                if funded_block is None:
-                    return {
-                        "valid": False,
-                        "error": f"Job {job_id} was not funded inside the signed quote window",
-                        "error_code": ERR_QUOTE_INVALID,
-                    }
-
-                verdict = await asyncio.to_thread(
-                    verify_quote_signature,
-                    envelope=quote_envelope,
-                    provider=str(job_result.get("provider", "")),
-                    w3=client.w3,
-                    expected_verifying_contract=client.commerce.address,
-                    block_number=funded_block,
-                )
-                if not verdict.valid:
-                    return {
-                        "valid": False,
-                        "error": f"Provider quote rejected: {verdict.reason}",
-                        "error_code": ERR_QUOTE_INVALID,
-                    }
-
                 signed_price_raw = quote_envelope.get("price")
                 if not isinstance(signed_price_raw, str) or not signed_price_raw.isdigit():
                     return {
@@ -732,6 +820,58 @@ class ERC8183JobOps:
                     }
                 if signed_currency != job_token:
                     return self._job_token_error()
+
+                content_error = quote_content_error(quote_envelope)
+                if content_error:
+                    return {
+                        "valid": False,
+                        "error": content_error,
+                        "error_code": ERR_QUOTE_INVALID,
+                    }
+                if funded_budget < effective_service_price:
+                    return {
+                        "valid": False,
+                        "error": "Job budget is below service price",
+                        "error_code": ERR_BUDGET_TOO_LOW,
+                    }
+                cache_key = (job_id, quote_envelope["negotiation_hash"])
+                cached_block = self._funded_blocks.get(cache_key)
+                if cached_block and time.monotonic() < cached_block[0]:
+                    funded_block = cached_block[1]
+                    self._funded_blocks.move_to_end(cache_key)
+                else:
+                    funded_block = await asyncio.to_thread(
+                        client.get_job_funded_block,
+                        job_id,
+                        negotiated_at=negotiated_at,
+                        quote_expires_at=quote_expires_at,
+                    )
+                    if funded_block is not None:
+                        self._funded_blocks[cache_key] = (time.monotonic() + 60, funded_block)
+                        self._funded_blocks.move_to_end(cache_key)
+                        while len(self._funded_blocks) > 1024:
+                            self._funded_blocks.popitem(last=False)
+                if funded_block is None:
+                    return {
+                        "valid": False,
+                        "error": f"Job {job_id} was not funded inside the signed quote window",
+                        "error_code": ERR_QUOTE_INVALID,
+                    }
+
+                verdict = await asyncio.to_thread(
+                    verify_quote_signature,
+                    envelope=quote_envelope,
+                    provider=str(job_result.get("provider", "")),
+                    w3=client.w3,
+                    expected_verifying_contract=client.commerce.address,
+                    block_number=funded_block,
+                )
+                if not verdict.valid:
+                    return {
+                        "valid": False,
+                        "error": f"Provider quote rejected: {verdict.reason}",
+                        "error_code": ERR_QUOTE_INVALID,
+                    }
 
             if effective_service_price > 0:
                 budget = job_result.get("budget", 0)
@@ -773,14 +913,16 @@ class ERC8183JobOps:
             }
         except Exception as exc:
             logger.error(f"[ERC8183JobOps] verify_job({job_id}) failed: {exc}")
-            is_net = any(
-                k in str(exc).lower() for k in ("timeout", "connection", "network", "rpc")
-            )
+            # The content checks above return a permanent quote_invalid without
+            # raising. What reaches here is the chain's or the network's: only a
+            # revert is deterministic, anything else may pass on a retry, which
+            # funded_job_watcher caps at max_attempts.
+            is_net = is_transient_rpc_error(exc)
             return {
                 "valid": False,
                 "error": "Temporary chain/RPC error" if is_net else "Failed to verify job",
                 "error_code": ERR_CHAIN_UNAVAILABLE if is_net else ERR_INTERNAL,
-                "retryable": True,
+                "retryable": not is_revert_error(exc),
             }
 
     # ----------------------------------------------------- pending-job scanner
@@ -922,6 +1064,7 @@ async def funded_job_watcher(
     *,
     interval: float = 30.0,
     stop: asyncio.Event | None = None,
+    max_attempts: int = 5,
 ) -> None:
     """Poll ``job_ops.get_pending_jobs()`` and fire ``on_funded(job)`` per FUNDED job.
 
@@ -929,21 +1072,48 @@ async def funded_job_watcher(
     — the caller decides what to do (e.g. delegate signing to a separate Agent).
     ``on_funded`` may be sync or async.
 
+    Jobs are verified before any callback, including retries. Permanent
+    verification failures are dropped; transient failures are retried.
+    The callback receives the verified job snapshot, not the discovery snapshot.
     Retry contract: a job fires once on success. ``on_funded`` raising, or
     returning ``False`` / ``{"retry": True}``, marks the job for retry on the
     next tick (after re-checking on-chain that it is still FUNDED and
     unexpired — ``get_pending_jobs`` reports each job only once, so retries
-    are re-validated via ``get_job``). Retries stop naturally when the job
-    leaves FUNDED or expires. Any other return value (incl. ``None``) keeps
+    are re-validated via ``get_job``). Attempts stop at ``max_attempts`` (5 by
+    default), or when the job leaves FUNDED or expires. Failed retry reads
+    consume attempts too. Any other return value (incl. ``None``) keeps
     fire-once behavior. Pass an ``asyncio.Event`` as ``stop`` to end the
     loop; otherwise it runs until cancelled.
     """
+    if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or max_attempts <= 0:
+        raise ValueError("max_attempts must be a positive integer")
+    attempts: dict[int, int] = {}
     seen: set[int] = set()
     retry: set[int] = set()
     is_async = inspect.iscoroutinefunction(on_funded)
 
     async def _fire(job: dict[str, Any]) -> None:
         job_id = job["jobId"]
+        attempts[job_id] = attempts.get(job_id, 0) + 1
+        try:
+            verification = await job_ops.verify_job(job_id)
+        except Exception:
+            logger.warning("[funded_job_watcher] verification failed for %s; will retry", job_id)
+            retry.add(job_id)
+            return
+        if not verification.get("valid"):
+            if verification.get("retryable"):
+                retry.add(job_id)
+            else:
+                retry.discard(job_id)
+                seen.add(job_id)
+            logger.warning(
+                "[funded_job_watcher] rejected job %s: %s",
+                job_id,
+                verification.get("error_code", "verification_failed"),
+            )
+            return
+        job = verification["job"]
         try:
             if is_async:
                 result = await on_funded(job)
@@ -968,8 +1138,18 @@ async def funded_job_watcher(
             # Re-validate + re-fire previously failed jobs first, so a job
             # failing below is not retried within the same tick.
             for job_id in list(retry):
-                fresh = await job_ops.get_job(job_id)
+                if attempts.get(job_id, 0) >= max_attempts:
+                    retry.discard(job_id)
+                    seen.add(job_id)
+                    logger.warning("[funded_job_watcher] attempt limit reached for %s", job_id)
+                    continue
+                try:
+                    fresh = await job_ops.get_job(job_id)
+                except Exception:
+                    attempts[job_id] = attempts.get(job_id, 0) + 1
+                    continue
                 if not fresh.get("success"):
+                    attempts[job_id] = attempts.get(job_id, 0) + 1
                     continue  # transient read error — keep for next tick
                 if fresh.get("status") != JobStatus.FUNDED or fresh.get("expiredAt", 0) <= int(
                     time.time()

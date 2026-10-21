@@ -500,17 +500,17 @@ describe("sendTx: retry loop", () => {
     expect(wallet.signedTxs).toHaveLength(2);
   });
 
-  it("backs off once on a 429 and then retries successfully", async () => {
+  it("backs off once on a pre-broadcast 429 and then retries successfully", async () => {
     vi.useFakeTimers();
     let attempt = 0;
     const { contract, mock } = makeContract({
       handlers: {
-        eth_sendRawTransaction: () => {
+        eth_call: () => {
           attempt++;
           if (attempt === 1) {
             throw new Error("429 Too Many Requests");
           }
-          return FAKE_TX_HASH;
+          return "0x";
         },
       },
     });
@@ -527,10 +527,10 @@ describe("sendTx: retry loop", () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(resolved).toBe(true);
     expect(attempt).toBe(2);
-    expect(sendRawCount(mock)).toBe(2);
+    expect(sendRawCount(mock)).toBe(1);
   });
 
-  it("re-seeds the nonce on a 429 retry (no nonce gap)", async () => {
+  it("re-seeds the nonce on a pre-broadcast 429 retry (no nonce gap)", async () => {
     vi.useFakeTimers();
     let attempt = 0;
     let nonceReads = 0;
@@ -540,12 +540,12 @@ describe("sendTx: retry loop", () => {
           nonceReads++;
           return "0x5"; // pending nonce = 5, stable (tx never broadcast on attempt 1)
         },
-        eth_sendRawTransaction: () => {
+        eth_call: () => {
           attempt++;
           if (attempt === 1) {
             throw new Error("429 Too Many Requests");
           }
-          return FAKE_TX_HASH;
+          return "0x";
         },
       },
     });

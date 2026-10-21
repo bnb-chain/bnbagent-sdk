@@ -9,6 +9,7 @@
 
 import { bytesToHex, getAddress, numberToHex } from "viem";
 import { RelayRejectedError } from "../errors.js";
+import { rpcErrorReason } from "./rpcError.js";
 
 const RPC_TIMEOUT_MS = 30_000;
 
@@ -259,13 +260,15 @@ export class Paymaster {
         headers: txOptions,
       });
     } catch (error) {
-      // A JSON-RPC error is the relay explicitly refusing the submission:
-      // no nonce was consumed, so callers may safely retry or self-pay
-      // (definite). An HTTP/transport failure is ambiguous — the tx may or
-      // may not have entered the relay queue — so it must never trigger an
-      // automatic re-send (definite: false).
+      // Duplicate/consumed-nonce responses can follow an accepted submission.
+      // Reconcile those and transport failures by the signed hash. Other
+      // JSON-RPC rejections permit the ordinary self-pay fallback.
       if (error instanceof PaymasterRequestError && error.kind === "rpc") {
-        throw new RelayRejectedError(error.message, true, {
+        const ambiguous =
+          /already known|known transaction|nonce too low/iu.test(
+            rpcErrorReason(error),
+          );
+        throw new RelayRejectedError(error.message, !ambiguous, {
           rpcErrorCode: error.code,
           cause: error,
         });

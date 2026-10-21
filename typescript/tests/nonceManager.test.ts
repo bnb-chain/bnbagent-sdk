@@ -152,25 +152,19 @@ describe("handleError", () => {
     expect(await mgr.getNonce()).toBe(5);
   });
 
-  it("resyncs and returns true on 'already known'", async () => {
+  it.each([
+    "already known",
+    "replacement transaction underpriced",
+    "ALREADY KNOWN",
+    "nonce too low: already known",
+  ])("does not authorize a new-nonce retry after %s", async (message) => {
     const client = makeClient(undefined, 0);
     const mgr = NonceManager.forAccount(client as never, FAKE_ADDRESS);
     await mgr.getNonce();
     client.getTransactionCount.mockResolvedValue(3);
-    const result = await mgr.handleError(new Error("already known"), 0);
-    expect(result).toBe(true);
-  });
-
-  it("resyncs and returns true on 'replacement transaction underpriced'", async () => {
-    const client = makeClient(undefined, 0);
-    const mgr = NonceManager.forAccount(client as never, FAKE_ADDRESS);
-    await mgr.getNonce();
-    client.getTransactionCount.mockResolvedValue(3);
-    const result = await mgr.handleError(
-      new Error("replacement transaction underpriced"),
-      0,
-    );
-    expect(result).toBe(true);
+    expect(await mgr.handleError(new Error(message), 0)).toBe(false);
+    expect(client.getTransactionCount).toHaveBeenCalledTimes(1);
+    expect(await mgr.getNonce()).toBe(1);
   });
 
   it("returns false for unrelated errors and does not resync", async () => {

@@ -8,7 +8,7 @@ Exception types are defined in the top-level `bnbagent.exceptions` module and re
 
 ## Key Concepts
 
-- **NonceManager** -- thread-safe singleton that seeds from the chain on first use (`pending` block), then increments locally. Automatically re-syncs when a nonce-related RPC error is detected. Keyed by `(rpc_url, account)` so multiple clients sharing a wallet share one manager.
+- **NonceManager** -- thread-safe singleton that seeds from the chain on first use (`pending` block), then increments locally. Re-syncs after a `nonce too low` rejection. Ambiguous responses such as `already known` require tracking the original transaction hash instead of signing again. Keyed by `(rpc_url, account)` so multiple clients sharing a wallet share one manager.
 - **Paymaster** -- ERC-4337 paymaster client for sponsoring gas fees via services like MegaFuel. Exposes `isSponsorable()`, `eth_sendRawTransaction()`, and `eth_getTransactionCount()`.
 - **ContractClientMixin** -- mixin class that encapsulates build-sign-send logic with automatic nonce management and exponential-backoff retry on rate-limit and nonce errors. Prefers `WalletProvider.sign_transaction()` when available, falls back to raw `private_key` signing. Used by `ERC8183Client`, `CommerceClient`, `RouterClient`, and `PolicyClient`.
 
@@ -20,7 +20,7 @@ Exception types are defined in the top-level `bnbagent.exceptions` module and re
 | --- | --- |
 | `NonceManager.for_account(w3, account)` | Get or create a singleton for this wallet + RPC. |
 | `get_nonce()` | Return the next nonce (thread-safe). |
-| `handle_error(error, used_nonce)` | Re-sync from chain if nonce error; returns `True` to retry. |
+| `handle_error(error, used_nonce)` | Re-sync after a `nonce too low` rejection; returns `True` to retry. Returns `False` for `already known` or `replacement transaction underpriced`. |
 | `reset()` | Force re-seed on next `get_nonce()` call. |
 
 ### `Paymaster`

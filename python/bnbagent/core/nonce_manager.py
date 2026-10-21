@@ -173,17 +173,23 @@ class NonceManager:
 
     def handle_error(self, error: Exception, used_nonce: int) -> bool:
         """
-        Handle a transaction error. Re-syncs nonce from chain if the error
-        is nonce-related.
+        Re-sync after a nonce-too-low rejection. Already-known and underpriced
+        responses must be reconciled using the original transaction hash.
 
         Args:
             error: The exception raised by send_raw_transaction
             used_nonce: The nonce that was used in the failed transaction
 
         Returns:
-            True if the error was nonce-related and the caller should retry.
+            True for a nonce-too-low rejection that allows a retry.
         """
         error_str = str(error).lower()
+
+        if (
+            "already known" in error_str
+            or "replacement transaction underpriced" in error_str
+        ):
+            return False
 
         if not any(p in error_str for p in self._NONCE_ERROR_PATTERNS):
             return False

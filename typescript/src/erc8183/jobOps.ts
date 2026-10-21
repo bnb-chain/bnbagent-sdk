@@ -27,6 +27,7 @@
 import { getAddress } from "viem";
 import type { NetworkConfig } from "../config.js";
 import { getEnv } from "../core/envUtil.js";
+import { isRevertError, isTransientRpcError } from "../core/rpcError.js";
 import { describeError } from "../core/txSender.js";
 import {
   RelayRejectedError,
@@ -47,7 +48,7 @@ import type { WalletProvider } from "../wallets/walletProvider.js";
 import { ERC8183Client } from "./client.js";
 import { ERC8183_ENV_PREFIX, resolveErc8183Network } from "./constants.js";
 import { NegotiationHandler, parseJobDescription } from "./negotiation.js";
-import { verifyQuoteSignature } from "./quoteVerify.js";
+import { quoteContentError, verifyQuoteSignature } from "./quoteVerify.js";
 import { DeliverableManifest, SCHEMA_VERSION } from "./schema.js";
 import { JobStatus } from "./types.js";
 
@@ -95,11 +96,6 @@ function maxMetadataBytes(): number {
 function plainMessage(exc: unknown): string {
   return exc instanceof Error ? exc.message : String(exc);
 }
-
-/** Narrow keyword list used by `getJob`/`verifyJob`'s inline net-error
- * classification (kept separate from {@link TRANSIENT_ERROR_KEYWORDS} —
- * mirrors Python's two independent lists). */
-const NET_ERR_KEYWORDS = ["timeout", "connection", "network", "rpc"];
 
 /**
  * Depth-first walk of `exc` and its `.cause` chain (cycle-guarded, mirroring
@@ -343,6 +339,12 @@ export interface ERC8183JobOpsCreateOpts {
    * fail-closed before any work or submission begins.
    */
   allowUnsignedJobs?: boolean;
+  /** Cache failed response lookups for this many seconds (default 5; 0 disables). */
+  responseCacheTtl?: number;
+  /** Maximum cached failures (default 1024). */
+  responseCacheMaxEntries?: number;
+  /** Maximum active distinct response lookups (default 8). */
+  responseMaxInflight?: number;
 }
 
 /**
@@ -362,6 +364,23 @@ export class ERC8183JobOps {
   private readonly servicePrices: ReadonlyMap<AssetId, bigint> | null;
   private readonly agentUrl: string | null;
   private readonly allowUnsignedJobs: boolean;
+  private readonly responseCacheTtl: number;
+  private readonly responseCacheMaxEntries: number;
+  private readonly responseMaxInflight: number;
+  private readonly responseMisses = new Map<
+    number,
+    { expires: number; result: OpResult }
+  >();
+  private readonly fundedBlocks = new Map<
+    string,
+    { expires: number; block: bigint }
+  >();
+  private readonly responseSuccesses = new Map<
+    number,
+    { expires: number; json: string; bytes: number }
+  >();
+  private responseSuccessBytes = 0;
+  private readonly responseTasks = new Map<number, Promise<OpResult>>();
 
   private client: ERC8183Client | null = null;
   private readonly deliverableUrls = new Map<number, string>();
@@ -378,6 +397,9 @@ export class ERC8183JobOps {
     servicePrices: ReadonlyMap<AssetId, bigint> | null;
     agentUrl: string | null;
     allowUnsignedJobs: boolean;
+    responseCacheTtl: number;
+    responseCacheMaxEntries: number;
+    responseMaxInflight: number;
   }) {
     this.walletProvider = opts.walletProvider;
     this.agentAddressValue = opts.agentAddress;
@@ -387,6 +409,19 @@ export class ERC8183JobOps {
     this.servicePrices = opts.servicePrices;
     this.agentUrl = opts.agentUrl;
     this.allowUnsignedJobs = opts.allowUnsignedJobs;
+    if (!Number.isFinite(opts.responseCacheTtl) || opts.responseCacheTtl < 0) {
+      throw new Error("responseCacheTtl must be finite and non-negative");
+    }
+    if (
+      [opts.responseCacheMaxEntries, opts.responseMaxInflight].some(
+        (value) => !Number.isSafeInteger(value) || value <= 0,
+      )
+    ) {
+      throw new Error("Response lookup capacities must be positive integers");
+    }
+    this.responseCacheTtl = opts.responseCacheTtl;
+    this.responseCacheMaxEntries = opts.responseCacheMaxEntries;
+    this.responseMaxInflight = opts.responseMaxInflight;
   }
 
   static async create(
@@ -418,6 +453,9 @@ export class ERC8183JobOps {
       servicePrices,
       agentUrl: opts.agentUrl ?? null,
       allowUnsignedJobs: opts.allowUnsignedJobs ?? false,
+      responseCacheTtl: opts.responseCacheTtl ?? 5,
+      responseCacheMaxEntries: opts.responseCacheMaxEntries ?? 1024,
+      responseMaxInflight: opts.responseMaxInflight ?? 8,
     });
   }
 
@@ -660,9 +698,7 @@ export class ERC8183JobOps {
       // Return a generic message — the raw exception can embed the RPC URL
       // (and its API key) on transport errors. Classify here so callers
       // still get the right status without parsing the message.
-      const isNet = NET_ERR_KEYWORDS.some((k) =>
-        plainMessage(error).toLowerCase().includes(k),
-      );
+      const isNet = isTransientRpcError(error);
       return {
         success: false,
         error: isNet
@@ -682,8 +718,101 @@ export class ERC8183JobOps {
     return { success: true, status: result.status };
   }
 
-  /** Retrieve a stored deliverable (cache -> local file -> on-chain URL). */
+  /** Retrieve a deliverable with bounded, shared per-job lookup work. */
   async getResponse(jobId: number): Promise<OpResult> {
+    if (!Number.isSafeInteger(jobId) || jobId <= 0) {
+      return {
+        success: false,
+        error: "Invalid job id",
+        error_code: ERR_NOT_FOUND,
+      };
+    }
+    if (!this.storage)
+      return { success: false, error: "No storage configured" };
+    const success = this.responseSuccesses.get(jobId);
+    if (success) {
+      this.responseSuccesses.delete(jobId);
+      this.responseSuccessBytes -= success.bytes;
+      if (performance.now() < success.expires) {
+        this.responseSuccesses.set(jobId, success);
+        this.responseSuccessBytes += success.bytes;
+        return JSON.parse(success.json) as OpResult;
+      }
+    }
+    const cached = this.responseMisses.get(jobId);
+    if (
+      cached &&
+      !this.deliverableUrls.has(jobId) &&
+      performance.now() < cached.expires
+    ) {
+      this.responseMisses.delete(jobId);
+      this.responseMisses.set(jobId, cached);
+      return { ...cached.result };
+    }
+    this.responseMisses.delete(jobId);
+    let task = this.responseTasks.get(jobId);
+    if (!task) {
+      if (this.responseTasks.size >= this.responseMaxInflight) {
+        return {
+          success: false,
+          error: "Response lookup is busy; retry later",
+          error_code: ERR_CHAIN_UNAVAILABLE,
+          retryable: true,
+        };
+      }
+      // Defer work until the shared task is registered, and keep its slot
+      // until completion even if an HTTP caller disconnects.
+      task = Promise.resolve()
+        .then(() => this.getResponseUncached(jobId))
+        .then((result) => {
+          if (result.success && this.responseCacheTtl > 0) {
+            const json = JSON.stringify(result);
+            const bytes = Buffer.byteLength(json);
+            if (bytes <= 16 * 1024 * 1024) {
+              this.responseSuccesses.set(jobId, {
+                expires: performance.now() + this.responseCacheTtl * 1000,
+                json,
+                bytes,
+              });
+              this.responseSuccessBytes += bytes;
+              while (
+                this.responseSuccesses.size > this.responseCacheMaxEntries ||
+                this.responseSuccessBytes > 16 * 1024 * 1024
+              ) {
+                const oldest = this.responseSuccesses.keys().next().value;
+                if (oldest !== undefined) {
+                  this.responseSuccessBytes -=
+                    this.responseSuccesses.get(oldest)?.bytes ?? 0;
+                  this.responseSuccesses.delete(oldest);
+                }
+              }
+            }
+          }
+          if (
+            !result.success &&
+            this.responseCacheTtl > 0 &&
+            !this.deliverableUrls.has(jobId) &&
+            (result.error_code === ERR_NOT_FOUND ||
+              result.error_code === ERR_CHAIN_UNAVAILABLE)
+          ) {
+            this.responseMisses.set(jobId, {
+              expires: performance.now() + this.responseCacheTtl * 1000,
+              result: { ...result },
+            });
+            while (this.responseMisses.size > this.responseCacheMaxEntries) {
+              const oldest = this.responseMisses.keys().next().value;
+              if (oldest !== undefined) this.responseMisses.delete(oldest);
+            }
+          }
+          return result;
+        })
+        .finally(() => this.responseTasks.delete(jobId));
+      this.responseTasks.set(jobId, task);
+    }
+    return { ...(await task) };
+  }
+
+  private async getResponseUncached(jobId: number): Promise<OpResult> {
     if (!this.storage) {
       return { success: false, error: "No storage configured" };
     }
@@ -717,11 +846,40 @@ export class ERC8183JobOps {
       }
     }
 
+    const statusResult = await this.getJob(jobId);
+    if (!statusResult.success) {
+      if (statusResult.error_code === ERR_NOT_FOUND) return { ...statusResult };
+      return {
+        success: false,
+        error: "Temporary chain/RPC error",
+        error_code: ERR_CHAIN_UNAVAILABLE,
+        retryable: true,
+      };
+    }
+    if (
+      String(statusResult.provider ?? "").toLowerCase() !==
+      this.agentAddressValue.toLowerCase()
+    ) {
+      return {
+        success: false,
+        error: "Response not found",
+        error_code: ERR_NOT_FOUND,
+      };
+    }
+    if (
+      statusResult.status === JobStatus.OPEN ||
+      statusResult.status === JobStatus.FUNDED
+    ) {
+      return {
+        success: false,
+        error: `Response not found for job ${jobId}`,
+        error_code: ERR_NOT_FOUND,
+      };
+    }
     try {
       const client = await this.getClient();
       const deliverableUrl = await client.getDeliverableUrl(BigInt(jobId));
       if (deliverableUrl) {
-        this.deliverableUrls.set(jobId, deliverableUrl);
         const data = await this.storage.download(deliverableUrl);
         return { success: true, ...data };
       }
@@ -747,7 +905,6 @@ export class ERC8183JobOps {
     // older than the fallback scan window, storage hiccup) is a resolution
     // failure — retryable, not proof of absence. Only a job that never
     // reached SUBMITTED genuinely has no response.
-    const statusResult = await this.getJobStatus(jobId);
     if (
       !statusResult.success ||
       statusResult.status === JobStatus.SUBMITTED ||
@@ -959,33 +1116,6 @@ export class ERC8183JobOps {
           };
         }
 
-        const fundedBlock = await client.getJobFundedBlock(BigInt(jobId), {
-          negotiatedAt,
-          quoteExpiresAt,
-        });
-        if (fundedBlock === null) {
-          return {
-            valid: false,
-            error: `Job ${jobId} was not funded inside the signed quote window`,
-            error_code: ERR_QUOTE_INVALID,
-          };
-        }
-
-        const verdict = await verifyQuoteSignature({
-          envelope: quoteEnvelope,
-          provider: getAddress(String(jobResult.provider)),
-          publicClient: client.publicClient,
-          expectedVerifyingContract: client.commerce.address,
-          blockNumber: fundedBlock,
-        });
-        if (!verdict.valid) {
-          return {
-            valid: false,
-            error: `Provider quote rejected: ${verdict.reason}`,
-            error_code: ERR_QUOTE_INVALID,
-          };
-        }
-
         const signedPriceRaw = quoteEnvelope.price;
         if (
           typeof signedPriceRaw !== "string" ||
@@ -1025,6 +1155,64 @@ export class ERC8183JobOps {
         }
         if (signedCurrency !== jobToken) {
           return ERC8183JobOps.jobTokenError();
+        }
+        const contentError = quoteContentError(quoteEnvelope);
+        if (contentError)
+          return {
+            valid: false,
+            error: contentError,
+            error_code: ERR_QUOTE_INVALID,
+          };
+        if (fundedBudget < effectiveServicePrice)
+          return {
+            valid: false,
+            error: "Job budget is below service price",
+            error_code: ERR_BUDGET_TOO_LOW,
+          };
+        const key = `${jobId}:${quoteEnvelope.negotiation_hash}`;
+        const cachedBlock = this.fundedBlocks.get(key);
+        const fundedBlock =
+          cachedBlock && performance.now() < cachedBlock.expires
+            ? cachedBlock.block
+            : await client.getJobFundedBlock(BigInt(jobId), {
+                negotiatedAt,
+                quoteExpiresAt,
+              });
+        if (fundedBlock !== null) {
+          this.fundedBlocks.delete(key);
+          this.fundedBlocks.set(key, {
+            expires:
+              cachedBlock && performance.now() < cachedBlock.expires
+                ? cachedBlock.expires
+                : performance.now() + 60_000,
+            block: fundedBlock,
+          });
+          while (this.fundedBlocks.size > 1024) {
+            const oldest = this.fundedBlocks.keys().next().value;
+            if (oldest !== undefined) this.fundedBlocks.delete(oldest);
+          }
+        }
+        if (fundedBlock === null) {
+          return {
+            valid: false,
+            error: `Job ${jobId} was not funded inside the signed quote window`,
+            error_code: ERR_QUOTE_INVALID,
+          };
+        }
+
+        const verdict = await verifyQuoteSignature({
+          envelope: quoteEnvelope,
+          provider: getAddress(String(jobResult.provider)),
+          publicClient: client.publicClient,
+          expectedVerifyingContract: client.commerce.address,
+          blockNumber: fundedBlock,
+        });
+        if (!verdict.valid) {
+          return {
+            valid: false,
+            error: `Provider quote rejected: ${verdict.reason}`,
+            error_code: ERR_QUOTE_INVALID,
+          };
         }
       }
 
@@ -1066,14 +1254,16 @@ export class ERC8183JobOps {
       console.error(
         `[ERC8183JobOps] verify_job(${jobId}) failed: ${describeError(error)}`,
       );
-      const isNet = NET_ERR_KEYWORDS.some((k) =>
-        plainMessage(error).toLowerCase().includes(k),
-      );
+      // The content checks above return a permanent quote_invalid without
+      // throwing. What reaches here is the chain's or the network's: only a
+      // revert is deterministic, anything else may pass on a retry, which
+      // fundedJobWatcher caps at maxAttempts.
+      const isNet = isTransientRpcError(error);
       return {
         valid: false,
         error: isNet ? "Temporary chain/RPC error" : "Failed to verify job",
         error_code: isNet ? ERR_CHAIN_UNAVAILABLE : ERR_INTERNAL,
-        retryable: true,
+        retryable: !isRevertError(error),
       };
     }
   }
@@ -1258,6 +1448,8 @@ export interface FundedJobWatcherOpts {
   interval?: number;
   /** Ends the loop when aborted; otherwise it runs until the process exits. */
   stop?: AbortSignal;
+  /** Maximum attempts per job, including transient retry reads (default 5). */
+  maxAttempts?: number;
 }
 
 /** Resolves `true` if `signal` aborts before `ms` elapses, `false` if the
@@ -1305,8 +1497,9 @@ function sleep(ms: number): Promise<void> {
  * `{ retry: true }`, mark the job for retry on the next tick (after
  * re-checking on-chain that it is still FUNDED and unexpired —
  * `getPendingJobs` reports each job only once, so retries are re-validated
- * via `getJob`). Retries stop naturally when the job leaves FUNDED or
- * expires. Any other return value (incl. `undefined`) keeps fire-once
+ * via `getJob`). Attempts stop at `maxAttempts` (default 5), or when the job
+ * leaves FUNDED or expires. Failed retry reads also consume attempts.
+ * Any other return value (incl. `undefined`) keeps fire-once
  * behavior. Pass an `AbortSignal` as `stop` to end the loop; otherwise it
  * runs until cancelled.
  */
@@ -1318,11 +1511,16 @@ export async function fundedJobWatcher(
   const interval = opts.interval ?? 30;
   const stop = opts.stop;
 
+  const maxAttempts = opts.maxAttempts ?? 5;
+  if (!Number.isSafeInteger(maxAttempts) || maxAttempts <= 0)
+    throw new Error("maxAttempts must be a positive integer");
+  const attempts = new Map<number, number>();
   const seen = new Set<number>();
   const retry = new Set<number>();
 
   async function fire(job: Record<string, unknown>): Promise<void> {
     const jobId = job.jobId as number;
+    attempts.set(jobId, (attempts.get(jobId) ?? 0) + 1);
     let verification: OpResult;
     try {
       verification = await jobOps.verifyJob(jobId);
@@ -1348,7 +1546,7 @@ export async function fundedJobWatcher(
 
     let result: unknown;
     try {
-      result = await onFunded(job);
+      result = await onFunded(verification.job as Record<string, unknown>);
     } catch (error) {
       console.error(
         `[fundedJobWatcher] onFunded(${jobId}) failed; will retry: ${describeError(error)}`,
@@ -1376,8 +1574,21 @@ export async function fundedJobWatcher(
       // Re-validate + re-fire previously failed jobs first, so a job
       // failing below is not retried within the same tick.
       for (const jobId of [...retry]) {
-        const fresh = await jobOps.getJob(jobId);
+        if ((attempts.get(jobId) ?? 0) >= maxAttempts) {
+          retry.delete(jobId);
+          seen.add(jobId);
+          console.warn(`[fundedJobWatcher] attempt limit reached for ${jobId}`);
+          continue;
+        }
+        let fresh: OpResult;
+        try {
+          fresh = await jobOps.getJob(jobId);
+        } catch {
+          attempts.set(jobId, (attempts.get(jobId) ?? 0) + 1);
+          continue;
+        }
         if (!fresh.success) {
+          attempts.set(jobId, (attempts.get(jobId) ?? 0) + 1);
           continue; // transient read error — keep for next tick
         }
         const status = fresh.status as JobStatus;

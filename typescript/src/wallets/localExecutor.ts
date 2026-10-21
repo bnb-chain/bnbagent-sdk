@@ -368,10 +368,17 @@ export class LocalExecutor implements IntentExecutor {
     // RelaySubmissionUnverifiedError rather than an eternal wait on a
     // hash that cannot exist).
     const signedTxHash = keccak256(normalizeHash(signed.rawTransaction));
-    const rawHash = await paymaster.ethSendRawTransaction(
-      signed.rawTransaction,
-      { ...USER_AGENT_HEADERS },
-    );
+    let rawHash: string;
+    try {
+      rawHash = await paymaster.ethSendRawTransaction(signed.rawTransaction, {
+        ...USER_AGENT_HEADERS,
+      });
+    } catch (error) {
+      if (error instanceof RelayRejectedError && !error.definite) {
+        return { hash: signedTxHash, tx };
+      }
+      throw error;
+    }
     const relayHash = normalizeHash(rawHash);
     if (relayHash.toLowerCase() !== signedTxHash.toLowerCase()) {
       console.warn(

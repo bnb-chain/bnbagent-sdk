@@ -2,8 +2,10 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from eth_account import Account
 from eth_account.messages import encode_defunct
+from web3.exceptions import ContractLogicError
 
 from bnbagent.erc8183.negotiation import NegotiationHandler, build_job_description
 from bnbagent.erc8183.quote_verify import verify_quote_signature
@@ -46,6 +48,32 @@ def _w3(timestamp=NOW + 1):
     w3.eth.get_block.return_value = {"timestamp": timestamp}
     w3.eth.get_code.return_value = b""
     return w3
+
+
+def test_garbage_65_byte_signature_is_permanently_invalid():
+    envelope, provider = _signed_description()
+    envelope["provider_sig"] = "0x" + "00" * 65
+    assert not verify_quote_signature(envelope=envelope, provider=provider, w3=_w3()).valid
+
+
+@pytest.mark.parametrize("field", ["request", "response"])
+def test_malformed_nested_quote_is_invalid(field):
+    envelope, provider = _signed_description()
+    envelope[field] = {"terms": "not an object"} if field == "response" else "not an object"
+    assert not verify_quote_signature(envelope=envelope, provider=provider, w3=_w3()).valid
+
+
+def test_erc1271_revert_is_invalid_but_transport_failure_propagates():
+    envelope, provider = _signed_description()
+    envelope["provider_sig"] = "0x1234"
+    w3 = _w3()
+    w3.eth.get_code.return_value = b"\x01"
+    call = w3.eth.contract.return_value.functions.isValidSignature.return_value.call
+    call.side_effect = ContractLogicError("execution reverted")
+    assert not verify_quote_signature(envelope=envelope, provider=provider, w3=w3).valid
+    call.side_effect = TimeoutError("RPC timed out")
+    with pytest.raises(TimeoutError):
+        verify_quote_signature(envelope=envelope, provider=provider, w3=w3)
 
 
 def test_verifies_canonical_eip191_quote():

@@ -148,11 +148,11 @@ export class NegotiationError extends BNBAgentError {
 }
 
 /**
- * A transaction was broadcast successfully but its receipt did not arrive
- * within the timeout.
+ * A transaction was submitted, or its broadcast result is uncertain, and no
+ * receipt arrived within the timeout.
  *
  * This is NOT a failure: the transaction may still confirm on-chain. Callers
- * must surface ``txHash`` so the user can check later or safely retry, and
+ * must surface ``txHash`` and reconcile it before any resubmission, and
  * must NOT treat this as a revert. Distinct from {@link ContractError},
  * which means the transaction failed (reverted, rejected, or never broadcast).
  */
@@ -173,7 +173,7 @@ export class TransactionPendingError extends BNBAgentError {
   ) {
     super(
       message ||
-        `Transaction ${txHash} broadcast but not confirmed within ${timeoutSeconds}s; check later or retry safely.`,
+        `Transaction ${txHash} not confirmed within ${timeoutSeconds}s; reconcile this hash before any rebroadcast.`,
     );
     this.name = "TransactionPendingError";
   }

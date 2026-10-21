@@ -13,7 +13,6 @@ import datetime
 import json
 import os
 import sys
-import urllib.request
 from pathlib import Path
 
 from dotenv import dotenv_values, load_dotenv
@@ -24,6 +23,7 @@ load_dotenv(ROOT / ".env")
 from bnbagent.config import resolve_network  # noqa: E402
 from bnbagent.erc8183 import ERC8183Client, JobStatus, Verdict  # noqa: E402
 from bnbagent.erc8183.types import REASON_APPROVED, REASON_REJECTED  # noqa: E402
+from bnbagent.utils.public_http import fetch_public_json, public_gateway_url  # noqa: E402
 from bnbagent.wallets import EVMWalletProvider  # noqa: E402
 
 SCAN_TX = "https://testnet.bscscan.com/tx/0x"
@@ -163,16 +163,10 @@ def _resolve_deliverable(client: ERC8183Client, job_id: int) -> tuple[str | None
         return None, None
 
     gateway = os.environ.get("STORAGE_GATEWAY_URL", "https://gateway.pinata.cloud/ipfs/")
-    if url.startswith("ipfs://"):
-        fetch_url = gateway.rstrip("/") + "/" + url[len("ipfs://") :]
-    elif url.startswith(("http://", "https://")):
-        fetch_url = url
-    else:
-        return url, None
-
     try:
-        raw = urllib.request.urlopen(fetch_url, timeout=15).read()
-        text = raw.decode("utf-8", errors="replace")
+        fetch_url = public_gateway_url(url, gateway)
+        data = fetch_public_json(fetch_url, max_bytes=8 * 1024 * 1024, timeout=15)
+        text = json.dumps(data, ensure_ascii=False, indent=2)
         if len(text) > 2048:
             text = text[:2048] + "\n... (truncated — see URL above for full content)"
         return url, text

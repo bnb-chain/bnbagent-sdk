@@ -1,5 +1,5 @@
 import { type Session, signerFromPrivateKey } from "@altananetwork/sdk";
-import { getAddress } from "viem";
+import { ContractFunctionRevertedError, getAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -80,6 +80,34 @@ async function signedAltanaEnvelope(): Promise<Record<string, unknown>> {
 }
 
 describe("verifyQuoteSignature", () => {
+  it("treats an ERC-1271 revert as invalid while preserving RPC outages", async () => {
+    const envelope = await signedAltanaEnvelope();
+    const publicClient = mockPublicClient();
+    publicClient.readContract.mockRejectedValue(
+      new ContractFunctionRevertedError({
+        abi: [],
+        functionName: "isValidSignature",
+        message: "execution reverted",
+      }),
+    );
+    expect(
+      (
+        await verifyQuoteSignature({
+          envelope,
+          provider: ALTANA_WALLET,
+          publicClient: publicClient as never,
+        })
+      ).valid,
+    ).toBe(false);
+    publicClient.readContract.mockRejectedValue(new Error("RPC timeout"));
+    await expect(
+      verifyQuoteSignature({
+        envelope,
+        provider: ALTANA_WALLET,
+        publicClient: publicClient as never,
+      }),
+    ).rejects.toThrow("RPC timeout");
+  });
   it("verifies a canonical EIP-191 quote against the provider account", async () => {
     const { envelope, provider } = await signedEoaEnvelope();
     const publicClient = mockPublicClient();

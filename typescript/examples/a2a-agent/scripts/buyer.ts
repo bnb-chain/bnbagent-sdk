@@ -26,7 +26,7 @@
 
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { getAddress } from "viem";
 import { AgentURIGenerator, ERC8004Agent } from "../../../src/erc8004/index.js";
 import {
@@ -208,7 +208,7 @@ async function negotiate(messageUrl: string): Promise<Quote> {
   return quote;
 }
 
-async function fundJob(
+export async function fundJob(
   quote: Quote,
   discoveredProvider?: string,
 ): Promise<bigint | null> {
@@ -273,6 +273,28 @@ async function fundJob(
   }
 
   const price = BigInt(priceRaw);
+  const maximum = process.env.BUYER_MAX_PRICE ?? "";
+  const chainId = process.env.BUYER_CHAIN_ID ?? "";
+  const token = process.env.BUYER_PAYMENT_TOKEN ?? "";
+  if (
+    !/^\d+$/.test(maximum) ||
+    BigInt(maximum) <= 0n ||
+    !/^\d+$/.test(chainId) ||
+    !token
+  ) {
+    throw new Error(
+      "BUYER_MAX_PRICE (positive atomic units), BUYER_CHAIN_ID and BUYER_PAYMENT_TOKEN are required before funding",
+    );
+  }
+  if (
+    BigInt(chainId) !== BigInt(await client.publicClient.getChainId()) ||
+    quote.chain_id !== Number(chainId) ||
+    getAddress(token) !== getAddress(signedCurrency)
+  ) {
+    throw new Error("Quote chain/token does not match buyer authorization");
+  }
+  if (price > BigInt(maximum))
+    throw new Error("Quote price exceeds BUYER_MAX_PRICE");
   // Anchor the SAME signed terms on-chain so provider_sig stays verifiable:
   // EOA recovery or ERC-1271 verification resolves to job.provider.
   const description = buildJobDescription(quote);
@@ -332,7 +354,8 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.stack : error);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.stack : error);
+    process.exit(1);
+  });

@@ -650,8 +650,11 @@ class ERC8183Client:
         except Exception:
             return None
 
-        for end in range(current, max(0, current - lookback) - 1, -step):
-            start = max(0, end - step + 1)
+        if lookback <= 0 or step <= 0:
+            raise ValueError("lookback and step must be positive")
+        earliest = max(0, current - lookback + 1)
+        for end in range(current, earliest - 1, -step):
+            start = max(earliest, end - step + 1)
             try:
                 logs = self.commerce.contract.events.JobSubmitted().get_logs(
                     from_block=start,

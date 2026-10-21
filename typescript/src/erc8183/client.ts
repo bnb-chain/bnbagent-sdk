@@ -897,9 +897,11 @@ export class ERC8183Client {
       return null;
     }
 
-    const floorBound = current > lookback ? current - lookback : 0n;
+    if (lookback <= 0n || step <= 0n)
+      throw new Error("lookback and step must be positive");
+    const floorBound = current >= lookback ? current - lookback + 1n : 0n;
     for (let end = current; end >= floorBound; end -= step) {
-      const start = end - step + 1n > 0n ? end - step + 1n : 0n;
+      const start = end - step + 1n > floorBound ? end - step + 1n : floorBound;
       try {
         const events = await this.commerce.getJobSubmittedEvents(
           start,

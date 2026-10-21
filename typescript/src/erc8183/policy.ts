@@ -316,8 +316,9 @@ export class PolicyClient extends ContractBase {
           : 0n;
       toBlock = "latest";
     } else {
-      fromBlock = 0n;
-      toBlock = "latest";
+      throw new RpcRangeLimitError(
+        "Cannot bound deliverable query without a block height",
+      );
     }
 
     let logs: DecodedEventLog[];

@@ -548,6 +548,89 @@ describe("ERC8004Agent.parseAgentUri: SSRF guard (http/https path)", () => {
     ).resolves.toBeNull();
   });
 
+  describe.each(["http", "https"])(
+    "%s IPv6 destination validation",
+    (scheme) => {
+      it.each([
+        "::",
+        "0:0:0:0:0:0:0:0",
+        "64:ff9b::7f00:1",
+        "64:ff9b::a9fe:a9fe",
+        "64:ff9b:1::1",
+        "100::1",
+        "2001::1",
+        "ff02::1",
+        "2002:7f00:1::",
+        "2001:db8::1",
+        "3fff::1",
+        "::ffff:7f00:1",
+      ])("never connects to a disallowed DNS answer %s", async (address) => {
+        dnsLookupMock.mockResolvedValueOnce([{ address, family: 6 }]);
+        for (const transport of [httpRequestMock, httpsRequestMock]) {
+          transport.mockImplementation(() => {
+            throw new Error("must not connect");
+          });
+        }
+        expect(
+          await ERC8004Agent.parseAgentUri(
+            `${scheme}://agent.example/agent.json`,
+          ),
+        ).toBeNull();
+        expect(httpRequestMock).not.toHaveBeenCalled();
+        expect(httpsRequestMock).not.toHaveBeenCalled();
+      });
+
+      it.each([false, true])(
+        "rejects a mixed public/unspecified answer regardless of order (%s)",
+        async (unspecifiedFirst) => {
+          const answers = [
+            { address: "2606:4700:4700::1111", family: 6 },
+            { address: "::", family: 6 },
+          ];
+          dnsLookupMock.mockResolvedValueOnce(
+            unspecifiedFirst ? answers.reverse() : answers,
+          );
+          expect(
+            await ERC8004Agent.parseAgentUri(
+              `${scheme}://agent.example/agent.json`,
+            ),
+          ).toBeNull();
+          expect(httpRequestMock).not.toHaveBeenCalled();
+          expect(httpsRequestMock).not.toHaveBeenCalled();
+        },
+      );
+
+      it("preserves public IPv6 downloads and pins the validated address", async () => {
+        dnsLookupMock.mockResolvedValueOnce([
+          { address: "2606:4700:4700::1111", family: 6 },
+        ]);
+        const transport =
+          scheme === "https" ? httpsRequestMock : httpRequestMock;
+        const otherTransport =
+          scheme === "https" ? httpRequestMock : httpsRequestMock;
+        const captured = mockTransportResponse(transport, {
+          chunks: [JSON.stringify({ name: "Public IPv6 Agent" })],
+        });
+        expect(
+          await ERC8004Agent.parseAgentUri(
+            `${scheme}://agent.example/agent.json`,
+          ),
+        ).toEqual({ name: "Public IPv6 Agent" });
+        expect(captured.capturedOptions).toMatchObject({
+          host: "2606:4700:4700::1111",
+          headers: { Host: "agent.example" },
+        });
+        if (scheme === "https") {
+          expect(captured.capturedOptions?.servername).toBe("agent.example");
+          expect(captured.capturedOptions?.rejectUnauthorized).not.toBe(false);
+        }
+        expect(dnsLookupMock).toHaveBeenCalledTimes(1);
+        expect(transport).toHaveBeenCalledTimes(1);
+        expect(otherTransport).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   /**
    * Wires `mock` (either `httpRequestMock` or `httpsRequestMock`) to emit a
    * canned response, and returns the request `options` object the SUT

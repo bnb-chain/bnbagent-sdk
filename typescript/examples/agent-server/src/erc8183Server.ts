@@ -64,6 +64,10 @@ export interface Erc8183ServerOpts {
   /** Application-owned global limiter. Inject a shared backend when running
    * multiple replicas; defaults to an in-memory limiter. */
   globalNegotiateLimiter?: RateLimiter;
+  /** Per-client response limiter; inject a shared backend for multiple replicas. */
+  responseLimiter?: RateLimiter;
+  /** Global response limiter; defaults to a process-local budget. */
+  globalResponseLimiter?: RateLimiter;
 }
 
 /** A configured ERC-8183 server, ready to `listen()`. */
@@ -210,6 +214,33 @@ export async function createErc8183Server(
     );
   }
 
+  const responseWindow = readIntEnv("ERC8183_RESPONSE_RATE_WINDOW", 60);
+  const responseLimiter =
+    opts.responseLimiter ??
+    new SlidingWindowLimiter(
+      Math.max(1, Math.floor(readIntEnv("ERC8183_RESPONSE_RATE_LIMIT", 60))),
+      responseWindow,
+    );
+  const globalResponseLimiter =
+    opts.globalResponseLimiter ??
+    new SlidingWindowLimiter(
+      Math.max(
+        1,
+        Math.floor(readIntEnv("ERC8183_RESPONSE_GLOBAL_RATE_LIMIT", 300)),
+      ),
+      responseWindow,
+      1,
+    );
+  if (
+    ["prod", "production", "live", "mainnet"].includes(environment) &&
+    (!opts.responseLimiter || !opts.globalResponseLimiter)
+  ) {
+    console.warn(
+      "[erc8183Server] production is using process-local response limits; " +
+        "inject shared limiters or enforce equivalent edge limits before scaling out.",
+    );
+  }
+
   const routes: Route[] = [
     route("GET", `${prefix}/health`, ({ res }) =>
       sendJson(res, 200, { status: "ok", service: "ERC-8183 Agent" }),
@@ -269,17 +300,43 @@ export async function createErc8183Server(
       }
     }),
 
-    route("GET", `${prefix}/job/:id/response`, async ({ res, params }) => {
-      const result = await jobOps.getResponse(Number(params.id));
-      // getResponse distinguishes "no response" (not_found → 404) from
-      // "exists but temporarily unresolvable" (chain_unavailable → 503).
-      sendJson(res, result.success ? 200 : httpStatus(result, 404), result);
-    }),
+    route(
+      "GET",
+      `${prefix}/job/:id/response`,
+      async ({ res, params, clientIp }) => {
+        try {
+          await responseLimiter.check(clientIp);
+          await globalResponseLimiter.check("global");
+        } catch (error) {
+          if (error instanceof RateLimitExceeded) {
+            return sendJson(res, 429, { error: "Too many requests" });
+          }
+          throw error;
+        }
+        const result = await jobOps.getResponse(Number(params.id));
+        // getResponse distinguishes "no response" (not_found → 404) from
+        // "exists but temporarily unresolvable" (chain_unavailable → 503).
+        sendJson(res, result.success ? 200 : httpStatus(result, 404), result);
+      },
+    ),
 
-    route("GET", `${prefix}/job/:id/verify`, async ({ res, params }) => {
-      const result = await jobOps.verifyJob(Number(params.id));
-      sendJson(res, result.valid ? 200 : httpStatus(result, 400), result);
-    }),
+    route(
+      "GET",
+      `${prefix}/job/:id/verify`,
+      async ({ res, params, clientIp }) => {
+        try {
+          await responseLimiter.check(clientIp);
+          await globalResponseLimiter.check("global");
+        } catch (error) {
+          if (error instanceof RateLimitExceeded) {
+            return sendJson(res, 429, { error: "Too many requests" });
+          }
+          throw error;
+        }
+        const result = await jobOps.verifyJob(Number(params.id));
+        sendJson(res, result.valid ? 200 : httpStatus(result, 400), result);
+      },
+    ),
 
     route("GET", `${prefix}/job/:id`, async ({ res, params }) => {
       const result = await jobOps.getJob(Number(params.id));

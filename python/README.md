@@ -220,7 +220,7 @@ async def on_funded(job: dict) -> None:
 asyncio.run(funded_job_watcher(ops, on_funded, interval=30))
 ```
 
-`ERC8183JobOps.submit_result` handles on-chain verification, deliverable upload to storage, manifest hashing, and the `submit` transaction. The watcher is signer-free detection - it never submits or settles by itself. Settle is permissionless: run a separate operator script that calls `ERC8183Client.settle(jobId)` once the dispute window elapses.
+The watcher validates the job's quote, provider, budget, status, and deadlines before starting your business callback, including on retries. Permanent validation failures are skipped; temporary chain failures are retried. The callback receives the freshly verified job. `ERC8183JobOps.submit_result` verifies again before deliverable upload and the `submit` transaction, since on-chain state can change while work runs. The watcher never submits or settles by itself. Settle is permissionless: run a separate operator script that calls `ERC8183Client.settle(jobId)` once the dispute window elapses.
 
 `job` contains: `jobId`, `description`, `budget`, `client`, `provider`, `evaluator`, `status` (always `FUNDED`), `expiredAt`, `hook`.
 

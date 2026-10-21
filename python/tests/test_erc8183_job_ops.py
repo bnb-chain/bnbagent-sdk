@@ -745,6 +745,7 @@ class TestFundedJobWatcher:
         ops = ERC8183JobOps(provider_address=ME)
         job = {"jobId": 1, "provider": ME}
         ops.get_pending_jobs = AsyncMock(return_value={"success": True, "jobs": [job]})
+        ops.verify_job = AsyncMock(return_value={"valid": True, "job": job})
         ops.submit_result = AsyncMock()  # spy — must never be called
 
         seen: list[int] = []
@@ -838,6 +839,7 @@ class TestFundedJobWatcherRetry:
             return polls.pop(0) if polls else {"success": True, "jobs": []}
 
         ops.get_pending_jobs = get_pending_jobs
+        ops.verify_job = AsyncMock(return_value={"valid": True, "job": job})
         return ops
 
     @staticmethod
@@ -887,6 +889,7 @@ class TestFundedJobWatcherRetry:
     @pytest.mark.asyncio
     async def test_none_return_keeps_fire_once_compat(self):
         ops = ERC8183JobOps(provider_address=ME)
+        ops.verify_job = AsyncMock(return_value={"valid": True, "job": {"jobId": 1}})
         stop = asyncio.Event()
         poll_count = 0
 
@@ -998,7 +1001,7 @@ class TestGetResponseClassification:
         ops = _make_ops(storage=storage)
         client = _inject_client(ops)
         client.get_deliverable_url.return_value = None
-        ops.get_job = AsyncMock(return_value=status_result)
+        ops.get_job = AsyncMock(return_value={"provider": ME, **status_result})
         return ops
 
     @pytest.mark.asyncio
@@ -1034,18 +1037,20 @@ class TestGetResponseClassification:
         assert result["error_code"] == "chain_unavailable"
 
     @pytest.mark.asyncio
-    async def test_rate_limited_resolution_is_chain_unavailable_without_status_lookup(self):
+    async def test_rate_limited_resolution_is_chain_unavailable_after_status_check(self):
         from bnbagent.exceptions import RpcRangeLimitError
 
         storage = MagicMock(spec=["download", "upload"])
         ops = _make_ops(storage=storage)
         client = _inject_client(ops)
         client.get_deliverable_url.side_effect = RpcRangeLimitError("limit exceeded")
-        ops.get_job = AsyncMock()
+        ops.get_job = AsyncMock(
+            return_value={"success": True, "status": JobStatus.SUBMITTED, "provider": ME}
+        )
         result = await ops.get_response(1)
         assert result["success"] is False
         assert result["error_code"] == "chain_unavailable"
-        ops.get_job.assert_not_called()
+        ops.get_job.assert_awaited_once_with(1)
 
 
 class TestRetryableContract:
