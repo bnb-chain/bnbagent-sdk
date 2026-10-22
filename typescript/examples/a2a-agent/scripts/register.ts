@@ -5,8 +5,9 @@
  * (`{base}/.well-known/agent-card.json`) — built with `AgentEndpoint.a2a()`,
  * so buyers that discover this agent on-chain can fetch the card directly.
  *
- * TypeScript port of `python/examples/a2a-agent/scripts/register.py`
- * (EVM-only — the TS SDK ships no TWAK wallet).
+ * TypeScript port of `python/examples/a2a-agent/scripts/register.py`.
+ * This example is EVM-only by choice; the TS SDK does ship `TWAKProvider`
+ * (exported from `@bnbagent/sdk`) — see `typescript/README.md`.
  *
  * Run:
  *   pnpm -C typescript exec tsx examples/a2a-agent/scripts/register.ts

@@ -7,8 +7,9 @@
  * spec-named types). For a protocol-typed registration see
  * `../../a2a-agent/scripts/register.ts`.
  *
- * TypeScript port of `python/examples/agent-server/scripts/register.py`
- * (EVM-only — the TS SDK ships no TWAK wallet).
+ * TypeScript port of `python/examples/agent-server/scripts/register.py`.
+ * This example is EVM-only by choice; the TS SDK does ship `TWAKProvider`
+ * (exported from `@bnbagent/sdk`) — see `typescript/README.md`.
  *
  * Run:
  *   pnpm -C typescript exec tsx examples/agent-server/scripts/register.ts
