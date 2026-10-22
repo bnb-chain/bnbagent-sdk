@@ -7,6 +7,7 @@ Requires `httpx` (optional dependency).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -57,6 +58,8 @@ class IPFSStorageProvider(StorageProvider):
         pinning_api_key: str,
         gateway_url: str = "https://gateway.pinata.cloud/ipfs/",
         max_upload_bytes: int = DEFAULT_MAX_IPFS_UPLOAD_BYTES,
+        max_download_bytes: int = 8 * 1024 * 1024,
+        download_timeout: float = 30,
     ):
         if max_upload_bytes <= 0:
             raise ValueError("max_upload_bytes must be > 0")
@@ -64,6 +67,12 @@ class IPFSStorageProvider(StorageProvider):
         self._api_key = pinning_api_key
         self._gateway = gateway_url.rstrip("/")
         self._max_upload_bytes = max_upload_bytes
+        if not isinstance(max_download_bytes, int) or max_download_bytes <= 0:
+            raise ValueError("max_download_bytes must be a positive integer")
+        if not 0 < download_timeout < float("inf"):
+            raise ValueError("download_timeout must be positive and finite")
+        self._max_download_bytes = max_download_bytes
+        self._download_timeout = download_timeout
 
     @classmethod
     def from_env(cls) -> IPFSStorageProvider:
@@ -76,6 +85,7 @@ class IPFSStorageProvider(StorageProvider):
             pinning_api_key=api_key,
             gateway_url=os.getenv("STORAGE_GATEWAY_URL") or "https://gateway.pinata.cloud/ipfs/",
             max_upload_bytes=_max_upload_bytes_from_env(),
+            max_download_bytes=int(os.getenv("STORAGE_MAX_DOWNLOAD_BYTES", str(8 * 1024 * 1024))),
         )
 
     async def upload(self, data: dict, filename: str | None = None) -> str:
@@ -120,10 +130,28 @@ class IPFSStorageProvider(StorageProvider):
         cid = self._extract_cid(url)
         gateway_url = f"{self._gateway}/{cid}"
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(gateway_url)
-            resp.raise_for_status()
-            return resp.json()
+        async def read() -> dict:
+            async with httpx.AsyncClient(timeout=self._download_timeout) as client:
+                async with client.stream(
+                    "GET", gateway_url, headers={"Accept-Encoding": "identity"}
+                ) as resp:
+                    resp.raise_for_status()
+                    if resp.headers.get("content-encoding", "identity").lower() != "identity":
+                        raise StorageError("Compressed IPFS downloads are not supported")
+                    length = resp.headers.get("content-length")
+                    if length and int(length) > self._max_download_bytes:
+                        raise StorageError("IPFS download exceeds byte limit")
+                    body = bytearray()
+                    async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
+                        if len(body) + len(chunk) > self._max_download_bytes:
+                            raise StorageError("IPFS download exceeds byte limit")
+                        body.extend(chunk)
+                    data = json.loads(body)
+                    if not isinstance(data, dict):
+                        raise StorageError("IPFS download must be a JSON object")
+                    return data
+
+        return await asyncio.wait_for(read(), timeout=self._download_timeout)
 
     async def exists(self, url: str) -> bool:
         cid = self._extract_cid(url)

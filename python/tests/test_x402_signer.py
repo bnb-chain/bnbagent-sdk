@@ -352,8 +352,8 @@ def test_int256_schema_rejected_through_the_x402_path(signer):
     """Fix C standing alone: a positive, in-cap value with a poisoned schema.
 
     The amount guards have nothing to object to here, so this only passes if
-    the wallet's SigningPolicy is genuinely reached and pins the field shape —
-    and the budget must be rolled back on the way out.
+    the field shape is pinned (X402Signer, then the wallet's SigningPolicy),
+    and the budget must be left untouched.
     """
     p = _payload(value=500_000, from_addr=signer.wallet_address)
     p["types"] = {
@@ -608,6 +608,41 @@ def test_twak_wallet_rejected_at_construction_without_cli_calls():
         with pytest.raises(UnsupportedWalletOperation, match="delegated x402 payer"):
             X402Signer(TWAKProvider())
         run.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        [{**f, "type": "int256"} if f["name"] == "value" else f for f in TWA_FIELDS],
+        [TWA_FIELDS[1], TWA_FIELDS[0], *TWA_FIELDS[2:]],  # from/to swapped
+        [*TWA_FIELDS, {"name": "memo", "type": "string"}],
+    ],
+)
+def test_non_canonical_eip3009_shape_is_refused_before_a_duck_typed_wallet(fields):
+    """A duck-typed wallet runs no SigningPolicy, so X402Signer pins the
+    TransferWithAuthorization field shape itself (SRC-1314 / SRC-1485)."""
+    calls = []
+
+    class DuckSigner:
+        address = "0x" + "a" * 40
+
+        def sign_typed_data(self, domain, types, message):
+            calls.append(types)
+            return {"signature": b"\x01" * 65}
+
+    signer = X402Signer(
+        DuckSigner(),
+        max_value_per_call={U_MAINNET: 1_000_000},
+        session_budget={U_MAINNET: 5_000_000},
+    )
+    p = _payload(value=500_000, from_addr=signer.wallet_address)
+    p["types"] = {"EIP712Domain": EIP712DOMAIN_FIELDS, "TransferWithAuthorization": fields}
+
+    with pytest.raises(X402PolicyError, match="canonical EIP-3009 field shape"):
+        signer.sign_payment(**p, expected_to=p["message"]["to"])
+
+    assert calls == []
+    assert signer.budget.spent(U_MAINNET) == 0
 
 
 def test_duck_typed_signer_without_supports_constructs_and_signs():

@@ -23,12 +23,10 @@ function makeProvider(): IPFSStorageProvider {
 }
 
 function jsonResponse(body: unknown, ok = true, status = 200) {
-  return {
-    ok,
-    status,
-    statusText: ok ? "OK" : "Error",
-    json: async () => body,
-  };
+  return new Response(JSON.stringify(body), {
+    status: ok ? status : Math.max(status, 400),
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 afterEach(() => {
@@ -36,6 +34,63 @@ afterEach(() => {
 });
 
 describe("IPFSStorageProvider", () => {
+  it.each([true, false])(
+    "bounds downloads with declared length=%s",
+    async (declared) => {
+      const provider = new IPFSStorageProvider(
+        "https://pin.example",
+        "key",
+        "https://gateway.example/ipfs/",
+        1024,
+        16,
+      );
+      const cancel = vi.fn();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("x".repeat(32)));
+        },
+        cancel,
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(body, {
+              headers: declared ? { "content-length": "32" } : {},
+            }),
+        ),
+      );
+      await expect(provider.download(`ipfs://${VALID_CID}`)).rejects.toThrow(
+        /byte limit/,
+      );
+      expect(cancel).toHaveBeenCalled();
+    },
+  );
+
+  it("enforces a whole-download deadline on a stalled stream", async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = new IPFSStorageProvider(
+        "https://pin.example",
+        "key",
+        "https://gateway.example/ipfs/",
+        1024,
+        1024,
+        50,
+      );
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(new ReadableStream())),
+      );
+      const result = provider
+        .download(`ipfs://${VALID_CID}`)
+        .catch((error) => error);
+      await vi.advanceTimersByTimeAsync(51);
+      expect(await result).toBeInstanceOf(StorageError);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("upload posts to pinata with a Bearer auth header", async () => {
     const provider = makeProvider();
     const fetchMock = vi
@@ -126,7 +181,11 @@ describe("IPFSStorageProvider", () => {
     const provider = makeProvider();
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(jsonResponse({ unexpected: "response" })),
+      vi
+        .fn()
+        .mockImplementation(async () =>
+          jsonResponse({ unexpected: "response" }),
+        ),
     );
 
     await expect(provider.upload({ data: 1 })).rejects.toThrow(

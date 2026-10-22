@@ -39,6 +39,8 @@ export class IPFSStorageProvider extends StorageProvider {
     pinningApiKey: string,
     gatewayUrl: string = DEFAULT_GATEWAY_URL,
     maxUploadBytes: number = DEFAULT_MAX_UPLOAD_BYTES,
+    private readonly maxDownloadBytes: number = 8 * 1024 * 1024,
+    private readonly downloadTimeoutMs: number = 30_000,
   ) {
     super();
     if (!Number.isInteger(maxUploadBytes) || maxUploadBytes <= 0) {
@@ -48,6 +50,10 @@ export class IPFSStorageProvider extends StorageProvider {
     this.apiKey = pinningApiKey;
     this.gateway = gatewayUrl.replace(/\/+$/, "");
     this.maxUploadBytes = maxUploadBytes;
+    if (!Number.isSafeInteger(maxDownloadBytes) || maxDownloadBytes <= 0)
+      throw new Error("maxDownloadBytes must be a positive integer");
+    if (!Number.isFinite(downloadTimeoutMs) || downloadTimeoutMs <= 0)
+      throw new Error("downloadTimeoutMs must be positive and finite");
   }
 
   static fromEnv(): IPFSStorageProvider {
@@ -60,6 +66,7 @@ export class IPFSStorageProvider extends StorageProvider {
       apiKey,
       getEnv("STORAGE_GATEWAY_URL", DEFAULT_GATEWAY_URL) as string,
       IPFSStorageProvider.maxUploadBytesFromEnv(),
+      Number(getEnv("STORAGE_MAX_DOWNLOAD_BYTES", String(8 * 1024 * 1024))),
     );
   }
 
@@ -121,15 +128,53 @@ export class IPFSStorageProvider extends StorageProvider {
     const cid = IPFSStorageProvider.extractCid(url);
     const gatewayUrl = `${this.gateway}/${cid}`;
 
-    const resp = await fetch(gatewayUrl, {
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (!resp.ok) {
-      throw new StorageError(
-        `Gateway request failed: ${resp.status} ${resp.statusText}`,
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.downloadTimeoutMs);
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const abort = () => {
+      void reader?.cancel().catch(() => {});
+    };
+    controller.signal.addEventListener("abort", abort, { once: true });
+    try {
+      const resp = await fetch(gatewayUrl, {
+        signal: controller.signal,
+        redirect: "error",
+      });
+      if (!resp.ok) {
+        throw new StorageError(
+          `Gateway request failed: ${resp.status} ${resp.statusText}`,
+        );
+      }
+      const length = Number(resp.headers.get("content-length"));
+      if (length > this.maxDownloadBytes) {
+        await resp.body?.cancel();
+        throw new StorageError("IPFS download exceeds byte limit");
+      }
+      if (!resp.body) throw new StorageError("IPFS download has no body");
+      reader = resp.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (controller.signal.aborted)
+          throw new StorageError("IPFS download timed out");
+        if (done) break;
+        size += value.byteLength;
+        if (size > this.maxDownloadBytes)
+          throw new StorageError("IPFS download exceeds byte limit");
+        chunks.push(value);
+      }
+      const data: unknown = JSON.parse(
+        Buffer.concat(chunks, size).toString("utf8"),
       );
+      if (!data || typeof data !== "object" || Array.isArray(data))
+        throw new StorageError("IPFS download must be a JSON object");
+      return data as Record<string, unknown>;
+    } finally {
+      clearTimeout(timer);
+      controller.signal.removeEventListener("abort", abort);
+      await reader?.cancel().catch(() => {});
     }
-    return (await resp.json()) as Record<string, unknown>;
   }
 
   async exists(url: string): Promise<boolean> {

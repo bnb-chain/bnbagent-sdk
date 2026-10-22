@@ -1,7 +1,15 @@
 /** Reference verification for ERC-8183 provider quote signatures. */
 
 import type { PublicClient } from "viem";
-import { getAddress, hashMessage, parseAbi, recoverMessageAddress } from "viem";
+import {
+  BaseError,
+  ContractFunctionRevertedError,
+  ContractFunctionZeroDataError,
+  getAddress,
+  hashMessage,
+  parseAbi,
+  recoverMessageAddress,
+} from "viem";
 import { canonicalJson, keccakOfText } from "../core/canonicalJson.js";
 import { buildDescriptionContent } from "./negotiation.js";
 
@@ -17,6 +25,7 @@ export type QuoteSigVerdict =
       valid: true;
       method: "eip191" | "erc1271";
       signer: `0x${string}`;
+      signedContent: Record<string, unknown>;
     }
   | { valid: false; reason: string };
 
@@ -36,7 +45,7 @@ export interface VerifyQuoteSignatureOpts {
   blockNumber?: bigint;
 }
 
-function signedContent(
+export function signedContent(
   envelope: Record<string, unknown>,
 ): Record<string, unknown> {
   if (
@@ -70,6 +79,37 @@ function quoteExpiresAt(envelope: Record<string, unknown>): unknown {
     );
   }
   return envelope.quote_expires_at;
+}
+
+/** Pure validation, before any historical block search. */
+export function quoteContentError(
+  envelope: Record<string, unknown>,
+): string | null {
+  try {
+    const object = (value: unknown) =>
+      value !== null && typeof value === "object" && !Array.isArray(value);
+    if ("request" in envelope && !object(envelope.request))
+      return "invalid quote content";
+    if (
+      "response" in envelope &&
+      (!object(envelope.response) ||
+        !object((envelope.response as Record<string, unknown>).terms))
+    )
+      return "invalid quote content";
+    if (
+      keccakOfText(canonicalJson(signedContent(envelope))).toLowerCase() !==
+      String(envelope.negotiation_hash).toLowerCase()
+    )
+      return "negotiation_hash mismatch";
+    if (
+      typeof envelope.provider_sig !== "string" ||
+      !SIGNATURE_HEX.test(envelope.provider_sig)
+    )
+      return "missing or invalid provider_sig";
+  } catch {
+    return "invalid quote content";
+  }
+  return null;
 }
 
 /**
@@ -140,15 +180,9 @@ export async function verifyQuoteSignature(
     }
   }
 
-  let recomputed: string;
-  try {
-    recomputed = keccakOfText(canonicalJson(signedContent(opts.envelope)));
-  } catch {
-    return { valid: false, reason: "invalid quote content" };
-  }
-  if (recomputed.toLowerCase() !== negotiationHash.toLowerCase()) {
-    return { valid: false, reason: "negotiation_hash mismatch" };
-  }
+  const contentError = quoteContentError(opts.envelope);
+  if (contentError) return { valid: false, reason: contentError };
+  const content = signedContent(opts.envelope);
 
   const expiry = quoteExpiresAt(opts.envelope);
   if (expiry !== undefined && expiry !== null) {
@@ -171,7 +205,12 @@ export async function verifyQuoteSignature(
       signature: providerSig as `0x${string}`,
     });
     if (recovered === provider) {
-      return { valid: true, method: "eip191", signer: recovered };
+      return {
+        valid: true,
+        method: "eip191",
+        signer: recovered,
+        signedContent: content,
+      };
     }
   } catch {
     // ERC-1271 envelopes are not 65-byte EOA signatures; try the account path.
@@ -187,17 +226,41 @@ export async function verifyQuoteSignature(
     return { valid: false, reason: "provider signature is not valid" };
   }
 
-  const result = await opts.publicClient.readContract({
-    address: provider,
-    abi: ERC1271_ABI,
-    functionName: "isValidSignature",
-    args: [hashMessage(negotiationHash), providerSig as `0x${string}`],
-    ...(checker ? { account: checker } : {}),
-    ...block,
-  });
+  let result: unknown;
+  try {
+    result = await opts.publicClient.readContract({
+      address: provider,
+      abi: ERC1271_ABI,
+      functionName: "isValidSignature",
+      args: [hashMessage(negotiationHash), providerSig as `0x${string}`],
+      ...(checker ? { account: checker } : {}),
+      ...block,
+    });
+  } catch (error) {
+    const rejection =
+      error instanceof BaseError
+        ? error.walk(
+            (cause) =>
+              cause instanceof ContractFunctionRevertedError ||
+              cause instanceof ContractFunctionZeroDataError,
+          )
+        : error;
+    if (
+      rejection instanceof ContractFunctionRevertedError ||
+      rejection instanceof ContractFunctionZeroDataError
+    ) {
+      return { valid: false, reason: "ERC-1271 account rejected provider_sig" };
+    }
+    throw error;
+  }
   if (String(result).toLowerCase() !== ERC1271_MAGIC_VALUE) {
     return { valid: false, reason: "ERC-1271 account rejected provider_sig" };
   }
 
-  return { valid: true, method: "erc1271", signer: provider };
+  return {
+    valid: true,
+    method: "erc1271",
+    signer: provider,
+    signedContent: content,
+  };
 }

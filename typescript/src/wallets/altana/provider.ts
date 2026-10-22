@@ -40,6 +40,8 @@
 import { readFileSync, statSync } from "node:fs";
 import type { Abi, PublicClient } from "viem";
 import {
+  http,
+  createPublicClient,
   encodeFunctionData,
   hashMessage,
   getAddress as toChecksumAddress,
@@ -54,6 +56,7 @@ import {
   waitForReceiptAndInterpret,
 } from "../../core/txSender.js";
 import type { QuoteSigner } from "../../erc8183/negotiation.js";
+import { listAssets } from "../../networks/assets.js";
 import {
   BROADCAST_SELF,
   CALLS_ARBITRARY,
@@ -74,6 +77,31 @@ import {
   type TxResult,
 } from "../intents.js";
 import { WalletProvider } from "../walletProvider.js";
+import {
+  PASSKEY_REVOKE_ABI,
+  keyStoreKeyId,
+  passkeyRevokeCalls,
+} from "./passkey.js";
+import { checkSessionPermissions } from "./permissions.js";
+import {
+  type AltanaListPermit2AllowancesOpts,
+  type AltanaPermit2Allowance,
+  type AltanaPermit2CleanupOpts,
+  type AltanaPermit2Pair,
+  type AltanaPermit2ReapproveCleanupOpts,
+  type AltanaRevokeOpts,
+  type AltanaRevokeResult,
+  type AltanaSetPermit2AllowanceOpts,
+  type AltanaSetPermit2AllowanceResult,
+  findDelegationBlock,
+  hasCheckerApproval,
+  outerPermit2ApprovalCall,
+  permit2LockdownCalls,
+  planPermit2Cleanup,
+  scanPermit2Allowances,
+  sessionKeyHash,
+  usedAsAccountAt,
+} from "./permit2.js";
 import { loadAltanaSdk } from "./sdkLoader.js";
 import { deserializeSession } from "./session.js";
 import type {
@@ -115,6 +143,23 @@ const NONCE_ERROR_PATTERN = /InvalidNonce|nonce/i;
  */
 const MAX_EXPIRY_SECONDS = 100_000_000_000;
 
+/**
+ * A passkey session key is the flat 64-byte P256 `x || y` (Altana SDK
+ * `internal/passkey.js`); secp256k1 signers carry the 65-byte `0x04`-prefixed
+ * key, the only form the SDK's secp256k1 revoke can hash correctly.
+ */
+const P256_PUBLIC_KEY = /^0x[0-9a-fA-F]{128}$/u;
+
+function isPasskeySession(session: AltanaSession | `0x${string}`): boolean {
+  if (typeof session === "string") {
+    return P256_PUBLIC_KEY.test(session);
+  }
+  return (
+    session.signer?.type === "passkey" ||
+    P256_PUBLIC_KEY.test(session.publicKey)
+  );
+}
+
 /** Options accepted by the {@link AltanaWalletProvider} constructor. */
 export interface AltanaWalletProviderOptions {
   /**
@@ -145,7 +190,13 @@ export interface AltanaGrantSessionProviderOpts {
   permissions: AltanaSessionPermissions;
   /** Unix epoch seconds. */
   expiry: number;
-  /** Omit to let the SDK generate a fresh secp256k1 session signer. */
+  /**
+   * Omit to let the SDK generate a fresh secp256k1 session signer. A passkey
+   * (WebAuthn/P256) session must be revoked with this provider's
+   * {@link AltanaWalletProvider.revokeSession}: `@altananetwork/sdk`'s own
+   * `revokeSession` (0.5.1 through 0.9.0) derives the revocation key as
+   * secp256k1 and cannot remove it.
+   */
   sessionSigner?: AltanaSigner;
   /**
    * Register the session's public key in the KeyStore registry (default
@@ -170,6 +221,14 @@ export interface AltanaAdminFromKeystoreOpts {
   /** Override the keystore directory (default `~/.bnbagent/wallets/`). */
   walletsDir?: string;
   network?: AltanaNetwork;
+  /**
+   * `true` (default) follows EVMWalletProvider's get-or-create flow: with no
+   * `address` and an empty keystore directory, a new admin key is created,
+   * persisted and reported with a warning. Pass `false` (or an explicit
+   * `address`) in production, so a wrong or empty directory throws instead
+   * of silently making a fresh key the wallet's admin.
+   */
+  create?: boolean;
 }
 
 /** Options accepted by {@link AltanaWalletProvider.sessionFromEnv}. */
@@ -299,16 +358,31 @@ export class AltanaWalletProvider extends WalletProvider {
    * {@link EVMWalletProvider}'s keystore handling (scrypt + AES-128-CTR,
    * `~/.bnbagent/wallets/`) so one keystore can back both the local-signing
    * and the Altana identity of the same EOA. Follows EVMWalletProvider's
-   * get-or-create flow: a missing keystore is created and persisted.
+   * get-or-create flow unless `create: false`: a missing keystore is created
+   * and persisted, with a warning.
    */
   static adminFromKeystore(
     opts: AltanaAdminFromKeystoreOpts,
   ): AltanaWalletProvider {
+    const where = opts.walletsDir ?? "~/.bnbagent/wallets";
+    if (
+      opts.create === false &&
+      !EVMWalletProvider.keystoreExists(opts.address, opts.walletsDir)
+    ) {
+      throw new Error(
+        `adminFromKeystore: no keystore${opts.address ? ` for ${opts.address}` : ""} in ${where} and create is false; refusing to create a new admin key. Check walletsDir / address, or restore the keystore.`,
+      );
+    }
     const evm = new EVMWalletProvider({
       password: opts.password,
       address: opts.address,
       walletsDir: opts.walletsDir,
     });
+    if (evm.source === "created_new") {
+      console.warn(
+        `adminFromKeystore: no keystore in ${where}, so a NEW admin key ${evm.address} was created and saved there. It controls a fresh wallet with no funds or sessions. If you expected an existing admin, stop and check walletsDir / address (create: false makes this an error).`,
+      );
+    }
     return new AltanaWalletProvider({
       privateKey: evm.exportPrivateKey(),
       network: opts.network,
@@ -369,11 +443,21 @@ export class AltanaWalletProvider extends WalletProvider {
    * not a milliseconds timestamp) because a dead-on-arrival grant still
    * pays the registration fee — same rationale as `ERC8183Client.createJob`'s
    * expiredAt pre-flight.
+   *
+   * Every call permission must pass the checks `defaultAgentPermissions`
+   * applies to `extraCalls`, whoever built the set (SRC-1403): Porto
+   * would turn a missing `to` or `signature` into a wildcard, and send any
+   * `0x`-prefixed signature to the relay unchecked.
    */
   async grantSession(
     opts: AltanaGrantSessionProviderOpts,
   ): Promise<AltanaSession> {
     this.#requireAdmin("grantSession");
+    const permissions = checkSessionPermissions(
+      opts.permissions,
+      await this.#chainId(),
+      "grantSession: permissions",
+    );
     const expiry = opts.expiry;
     if (!Number.isInteger(expiry) || expiry <= 0) {
       throw new Error(
@@ -403,7 +487,7 @@ export class AltanaWalletProvider extends WalletProvider {
         sdkClient.grantSession({
           wallet,
           signer,
-          permissions: opts.permissions,
+          permissions,
           expiry: opts.expiry,
           ...(opts.sessionSigner ? { sessionSigner: opts.sessionSigner } : {}),
           ...(opts.register !== undefined ? { register: opts.register } : {}),
@@ -482,30 +566,58 @@ export class AltanaWalletProvider extends WalletProvider {
    * Revoke a session (by object or by its public key). Admin mode only.
    * Free at the protocol level (gas only); effect is immediate — the
    * session's next execute fails at the on-chain validator.
+   *
+   * Passkey (WebAuthn/P256) sessions, which the SDK's own revoke cannot
+   * remove, are revoked here directly: one relay batch with the account's
+   * `revoke` under the WebAuthn-P256 key hash, plus the KeyStore entry when
+   * the key is registered (read through `client`, default the network's
+   * public RPC). They are recognised by a passkey signer or by their
+   * 64-byte P256 public key, so a bare public key works too; the 65-byte
+   * `0x04`-prefixed secp256k1 key goes through the SDK as before.
+   *
+   * Revoking does not remove Permit2 allowances the session already signed
+   * (SRC-1609). Right after the revoke, one batch sets the outer
+   * `approve(Permit2, 0)` of the tokens in {@link AltanaRevokeOpts.permit2Reset}
+   * and locks down what `permit2Cleanup` found; the result lists the tokens
+   * covered in `permit2Reset.covered`.
    */
   async revokeSession(
     session: AltanaSession | `0x${string}`,
-    opts?: { feeToken?: `0x${string}` },
-  ): Promise<AltanaExecuteResult> {
+    opts?: AltanaRevokeOpts,
+  ): Promise<AltanaRevokeResult> {
     this.#requireAdmin("revokeSession");
     const sdkClient = await this.#sdkClient();
     const { wallet, signer } = await this.#adminWalletAndSigner();
-    const result = await this.#enqueue(() =>
-      this.#withNonceRetry("revokeSession", () =>
-        sdkClient.revokeSession({
-          wallet,
-          signer,
-          session,
-          ...(opts?.feeToken ? { feeToken: opts.feeToken } : {}),
-        }),
-      ),
-    );
+    const feeToken = opts?.feeToken ? { feeToken: opts.feeToken } : {};
+    let result: AltanaExecuteResult;
+    if (isPasskeySession(session)) {
+      const calls = await this.#passkeyRevokeCalls(
+        typeof session === "string" ? session : session.publicKey,
+        opts?.client,
+      );
+      result = await this.#enqueue(() =>
+        this.#withNonceRetry("revokeSession", () =>
+          sdkClient.execute({ wallet, signer, calls, ...feeToken }),
+        ),
+      );
+    } else {
+      result = await this.#enqueue(() =>
+        this.#withNonceRetry("revokeSession", () =>
+          sdkClient.revokeSession({ wallet, signer, session, ...feeToken }),
+        ),
+      );
+    }
     if (result.status === "FAILED") {
       throw new Error(
         `Altana relay reported FAILED for revokeSession (callsId ${result.callsId})`,
       );
     }
-    return result;
+    return this.#afterRevoke(
+      "revokeSession",
+      result,
+      typeof session === "string" ? session : session.publicKey,
+      opts,
+    );
   }
 
   /**
@@ -606,44 +718,194 @@ export class AltanaWalletProvider extends WalletProvider {
    * true)`. Without it, `isValidSignature` answers the facilitator with a
    * failure and every payment settles as invalid. Once per session per
    * rail; costs the relay fee + gas. Requires `@altananetwork/sdk` >= 0.4.0.
+   *
+   * The result carries the approval's `blockNumber`, read through `client`
+   * (default the network's public RPC): the block of its receipt, or the
+   * block current before submitting if the receipt cannot be read. Nothing
+   * is submitted when that first read fails. Store it with the session: it
+   * is the `fromBlock` for the Permit2 cleanup when the session is revoked.
    */
   async approveX402SignatureChecker(
     session: AltanaSession,
-    opts?: { checker?: `0x${string}`; feeToken?: `0x${string}` },
-  ): Promise<AltanaExecuteResult> {
-    return this.#setSignatureChecker("approveSignatureChecker", session, opts);
+    opts?: {
+      checker?: `0x${string}`;
+      feeToken?: `0x${string}`;
+      client?: PublicClient;
+    },
+  ): Promise<AltanaExecuteResult & { blockNumber: bigint }> {
+    this.#requireAdmin("approveSignatureChecker");
+    let before: bigint;
+    try {
+      const reader = opts?.client ?? (await this.#readClient());
+      before = await reader.getBlockNumber();
+    } catch (error) {
+      throw new Error(
+        `approveX402SignatureChecker: could not read the current block (${describeError(error)}); nothing was submitted. The block is the fromBlock for the revoke-time Permit2 cleanup; retry, or pass a client on a working RPC.`,
+        { cause: error },
+      );
+    }
+    const result = await this.#setSignatureChecker(
+      "approveSignatureChecker",
+      session,
+      opts,
+    );
+    const { blockNumber } = await this.#blockOf(result, opts?.client);
+    return { ...result, blockNumber: blockNumber ?? before };
   }
 
   /**
    * Revoke a checker approved via {@link approveX402SignatureChecker}
    * (admin). Immediate kill switch for the session's x402 signing —
    * cheaper-grained than revoking the whole session.
+   *
+   * Allowances the session already signed into Permit2 survive the revoke
+   * (SRC-1609); as in {@link revokeSession}, the revoke is followed by the
+   * {@link AltanaRevokeOpts.permit2Reset} batch and any `permit2Cleanup`
+   * lockdown. {@link listPermit2Allowances} and
+   * {@link lockdownPermit2Allowances} do the cleanup separately.
    */
   async revokeX402SignatureChecker(
     session: AltanaSession,
-    opts?: { checker?: `0x${string}`; feeToken?: `0x${string}` },
-  ): Promise<AltanaExecuteResult> {
-    return this.#setSignatureChecker("revokeSignatureChecker", session, opts);
+    opts?: AltanaRevokeOpts & { checker?: `0x${string}` },
+  ): Promise<AltanaRevokeResult> {
+    const result = await this.#setSignatureChecker(
+      "revokeSignatureChecker",
+      session,
+      opts,
+    );
+    return this.#afterRevoke(
+      "revokeX402SignatureChecker",
+      result,
+      session.publicKey,
+      opts,
+    );
+  }
+
+  /**
+   * Stored Permit2 (AllowanceTransfer) allowances this wallet granted since
+   * `fromBlock` that are still non-zero, from Permit2's `Permit` and
+   * `Approval` events. Includes allowances a session signed as a Permit2
+   * signature checker, which outlive the checker, the session and its
+   * expiry (SRC-1609), and any the admin set itself. Pure read; works in
+   * both modes. Requires `@altananetwork/sdk` >= 0.4.0.
+   */
+  async listPermit2Allowances(
+    opts: AltanaListPermit2AllowancesOpts,
+  ): Promise<AltanaPermit2Allowance[]> {
+    const { module } = await this.#x402Sdk();
+    const client = opts.client ?? (await this.#readClient());
+    return scanPermit2Allowances(
+      client,
+      toChecksumAddress(module.PERMIT2_ADDRESS),
+      this.#address,
+      opts,
+    );
+  }
+
+  /**
+   * Zero stored Permit2 allowances with Permit2's `lockdown` (admin), in one
+   * atomic relay batch. `zeroOuterAllowance` also sets `approve(Permit2, 0)`
+   * on every token in `pairs`. A locked-down allowance stays zero when the
+   * outer Permit2 approval is raised again. Returns `null` without
+   * submitting when `pairs` is empty.
+   */
+  async lockdownPermit2Allowances(
+    pairs: readonly AltanaPermit2Pair[],
+    opts?: { zeroOuterAllowance?: boolean },
+  ): Promise<AltanaExecuteResult | null> {
+    this.#requireAdmin("lockdownPermit2Allowances");
+    return this.#lockdown(
+      pairs,
+      opts?.zeroOuterAllowance ? pairs.map((p) => p.token) : [],
+    );
+  }
+
+  async #lockdown(
+    pairs: readonly AltanaPermit2Pair[],
+    zeroOuterFor: readonly `0x${string}`[],
+    feeToken?: `0x${string}`,
+  ): Promise<AltanaExecuteResult | null> {
+    if (pairs.length === 0 && zeroOuterFor.length === 0) {
+      return null;
+    }
+    const { module } = await this.#x402Sdk();
+    const result = await this._relayExecute(
+      permit2LockdownCalls(
+        toChecksumAddress(module.PERMIT2_ADDRESS),
+        pairs,
+        zeroOuterFor,
+      ),
+      "lockdown Permit2 allowances",
+      feeToken,
+    );
+    if (result.status === "FAILED") {
+      throw new Error(
+        `Altana relay reported FAILED for lockdownPermit2Allowances (callsId ${result.callsId})`,
+      );
+    }
+    return result;
   }
 
   /**
    * One-time x402 setup, step 2 of 2 (admin): `approve(Permit2, amount)`
    * on `token` through the relay. BOUNDED by design — session spend caps
    * do not apply to Permit2 pulls (the checker gate is independent of
-   * spend permissions), so this allowance is the on-chain ceiling on what
-   * a leaked session key can spend via x402. Size it like the old
-   * dedicated-EOA balance; top it up or zero it (amount = 0n) as needed.
+   * spend permissions), so this allowance, with any other outer Permit2
+   * approval of the wallet, is the on-chain ceiling on what a leaked
+   * session key can pull: as a Permit2 checker it can sign for any token
+   * approved to Permit2. Size it like the old dedicated-EOA balance; top
+   * it up or zero it (amount = 0n) as needed.
    * The relay races nothing here (admin queue applies as usual).
    *
-   * Delegates to the SDK's `approveTokenForPermit2` with an explicit
-   * `amount` (bounded-allowance support confirmed by the Altana team).
+   * Any non-zero `amount` also re-arms every stored Permit2 allowance a
+   * session signed earlier for `token` (SRC-1609), so it needs one of:
+   * - `permit2Cleanup`: scan `token`'s stored allowances from the wallet's
+   *   first EIP-7702 delegation, which the call finds itself (or from an
+   *   explicit `fromBlock` no later than that), and submit their
+   *   `lockdown` and the approval in one batch. `client` must serve
+   *   historical state, `eth_getProof` and those logs, and the scan must
+   *   show a Permit2 signature-checker approval, or nothing is submitted.
+   * - `skipPermit2Cleanup: true`: no session of this wallet was ever a
+   *   Permit2 signature checker.
+   *
+   * Otherwise, and for `amount = 0n`, delegates to the SDK's
+   * `approveTokenForPermit2` with an explicit `amount` (bounded-allowance
+   * support confirmed by the Altana team).
    */
+  setPermit2Allowance(
+    token: `0x${string}`,
+    amount: 0n,
+    opts?: { feeToken?: `0x${string}` },
+  ): Promise<AltanaSetPermit2AllowanceResult>;
+  setPermit2Allowance(
+    token: `0x${string}`,
+    amount: bigint,
+    opts: AltanaSetPermit2AllowanceOpts,
+  ): Promise<AltanaSetPermit2AllowanceResult>;
   async setPermit2Allowance(
     token: `0x${string}`,
     amount: bigint,
-    opts?: { feeToken?: `0x${string}` },
-  ): Promise<AltanaExecuteResult> {
+    opts?: {
+      feeToken?: `0x${string}`;
+      permit2Cleanup?: AltanaPermit2ReapproveCleanupOpts;
+      skipPermit2Cleanup?: boolean;
+    },
+  ): Promise<AltanaSetPermit2AllowanceResult> {
     this.#requireAdmin("setPermit2Allowance");
+    const cleanup = opts?.permit2Cleanup;
+    if (cleanup !== undefined && opts?.skipPermit2Cleanup) {
+      throw new Error(
+        "setPermit2Allowance: pass either permit2Cleanup or skipPermit2Cleanup, not both; nothing was submitted.",
+      );
+    }
+    if (cleanup !== undefined) {
+      return this.#reapprovePermit2(token, amount, cleanup, opts?.feeToken);
+    }
+    if (amount > 0n && opts?.skipPermit2Cleanup !== true) {
+      throw new Error(
+        "setPermit2Allowance: a non-zero Permit2 approval re-arms every Permit2 allowance a session of this wallet signed earlier (SRC-1609). Pass permit2Cleanup: { client } (an RPC serving historical state, eth_getProof and logs) to lock them down in the same batch, or skipPermit2Cleanup: true if no session of this wallet was ever approved as a Permit2 signature checker. Nothing was submitted.",
+      );
+    }
     const { client } = await this.#x402Sdk();
     const { wallet, signer } = await this.#adminWalletAndSigner();
     const result = await this.#enqueue(() =>
@@ -663,6 +925,97 @@ export class AltanaWalletProvider extends WalletProvider {
       );
     }
     return result;
+  }
+
+  /** `setPermit2Allowance` with `permit2Cleanup`: lockdown + approval, one batch. */
+  async #reapprovePermit2(
+    token: `0x${string}`,
+    amount: bigint,
+    cleanup: AltanaPermit2ReapproveCleanupOpts,
+    feeToken: `0x${string}` | undefined,
+  ): Promise<AltanaSetPermit2AllowanceResult> {
+    const { module } = await this.#x402Sdk();
+    const permit2 = toChecksumAddress(module.PERMIT2_ADDRESS);
+    const client = cleanup.client ?? (await this.#readClient());
+    const fromBlock = await this.#reapproveFromBlock(client, cleanup.fromBlock);
+    const scan = { ...cleanup, fromBlock, client };
+    if (
+      !(await hasCheckerApproval(
+        client,
+        this.#address,
+        undefined,
+        permit2,
+        scan,
+      ))
+    ) {
+      throw new Error(
+        `setPermit2Allowance: the scan from block ${fromBlock} shows no Permit2 signature-checker approval for any session of this wallet, so finding no allowances would prove nothing: the RPC served no logs for the range, or no session was ever approved (then pass skipPermit2Cleanup: true). Nothing was submitted.`,
+      );
+    }
+    const plan = planPermit2Cleanup(
+      await this.listPermit2Allowances({ ...scan, tokens: [token] }),
+      cleanup,
+    );
+    const result = await this._relayExecute(
+      [
+        ...permit2LockdownCalls(permit2, plan.lock, []),
+        outerPermit2ApprovalCall(permit2, token, amount),
+      ],
+      "setPermit2Allowance",
+      feeToken,
+    );
+    if (result.status === "FAILED") {
+      throw new Error(
+        `Altana relay reported FAILED for setPermit2Allowance (callsId ${result.callsId})`,
+      );
+    }
+    return {
+      ...result,
+      permit2Cleanup: {
+        allowances: plan.lock,
+        kept: plan.kept,
+        lockdown: result,
+      },
+    };
+  }
+
+  /**
+   * Where the re-arm scan starts: the wallet's first EIP-7702 delegation,
+   * or `explicit` once it is proven to be no later than that.
+   */
+  async #reapproveFromBlock(
+    client: PublicClient,
+    explicit: bigint | undefined,
+  ): Promise<bigint> {
+    if (explicit === undefined) {
+      try {
+        return await findDelegationBlock(client, this.#address);
+      } catch (error) {
+        throw new Error(
+          `setPermit2Allowance: could not find the wallet's first EIP-7702 delegation (${describeError(error)}); pass permit2Cleanup.client on an RPC that serves historical state and eth_getProof. Nothing was submitted.`,
+          { cause: error },
+        );
+      }
+    }
+    if (explicit === 0n) {
+      return explicit;
+    }
+    const before = explicit - 1n;
+    let used: boolean;
+    try {
+      used = await usedAsAccountAt(client, this.#address, before);
+    } catch (error) {
+      throw new Error(
+        `setPermit2Allowance: could not read the wallet's code and storage at block ${before} (${describeError(error)}), which proves that no session was approved as a Permit2 signature checker before fromBlock; pass permit2Cleanup.client on an RPC that serves historical state and eth_getProof. Nothing was submitted.`,
+        { cause: error },
+      );
+    }
+    if (used) {
+      throw new Error(
+        `setPermit2Allowance: the wallet already had code or storage at block ${before}, so a session approved as a Permit2 signature checker before fromBlock ${explicit} would be missed together with its allowances. Omit fromBlock to scan from the wallet's first EIP-7702 delegation. Nothing was submitted.`,
+      );
+    }
+    return explicit;
   }
 
   /**
@@ -721,20 +1074,22 @@ export class AltanaWalletProvider extends WalletProvider {
   async _relayExecute(
     calls: readonly AltanaCall[],
     label: string,
+    feeToken?: `0x${string}`,
   ): Promise<AltanaExecuteResult> {
     const sdkClient = await this.#sdkClient();
+    const fee = feeToken ? { feeToken } : {};
     if (this.#session) {
       const session = this.#session;
       return this.#enqueue(() =>
         this.#withNonceRetry(label, () =>
-          sdkClient.execute({ session, calls }),
+          sdkClient.execute({ session, calls, ...fee }),
         ),
       );
     }
     const { wallet, signer } = await this.#adminWalletAndSigner();
     return this.#enqueue(() =>
       this.#withNonceRetry(label, () =>
-        sdkClient.execute({ wallet, signer, calls }),
+        sdkClient.execute({ wallet, signer, calls, ...fee }),
       ),
     );
   }
@@ -811,11 +1166,208 @@ export class AltanaWalletProvider extends WalletProvider {
    * @internal Used by {@link AltanaX402Payer}.
    */
   async _x402ChainId(): Promise<number> {
+    return this.#chainId();
+  }
+
+  async #chainId(): Promise<number> {
     if (typeof this.#network !== "string") {
       return this.#network.chainId;
     }
     const sdk = await loadAltanaSdk();
     return this.#resolveNetwork(sdk).chainId;
+  }
+
+  /**
+   * Post-revoke Permit2 work; the revoke itself already succeeded. Runs
+   * the requested cleanup and, unless `permit2Reset: false`, resets the
+   * outer Permit2 approvals, in one batch. Nothing to do without the SDK's
+   * x402 surface, which a session needs to sign for Permit2 at all.
+   */
+  async #afterRevoke(
+    label: string,
+    revoked: AltanaExecuteResult,
+    sessionPublicKey: `0x${string}`,
+    opts: AltanaRevokeOpts | undefined,
+  ): Promise<AltanaRevokeResult> {
+    const cleanup = opts?.permit2Cleanup;
+    const reset = opts?.permit2Reset !== false;
+    if (cleanup === undefined && !reset) {
+      return revoked;
+    }
+    try {
+      let permit2: `0x${string}`;
+      try {
+        const { module } = await this.#x402Sdk();
+        permit2 = toChecksumAddress(module.PERMIT2_ADDRESS);
+      } catch (error) {
+        if (cleanup === undefined) {
+          return revoked;
+        }
+        throw error;
+      }
+      const client =
+        cleanup?.client ?? opts?.client ?? (await this.#readClient());
+      let plan: ReturnType<typeof planPermit2Cleanup> = { lock: [], kept: [] };
+      if (cleanup !== undefined) {
+        const approved = await hasCheckerApproval(
+          client,
+          this.#address,
+          sessionKeyHash(sessionPublicKey),
+          permit2,
+          cleanup,
+        );
+        if (!approved) {
+          throw new Error(
+            `the scan from block ${cleanup.fromBlock} shows no Permit2 signature-checker approval for this session, so finding no allowances would prove nothing: fromBlock is later than the approval (use the blockNumber approveX402SignatureChecker returned), the RPC served no logs for the range, or the session never approved Permit2`,
+          );
+        }
+        plan = planPermit2Cleanup(
+          await this.listPermit2Allowances({ ...cleanup, client }),
+          cleanup,
+        );
+      }
+      // a kept spender's token keeps its outer approval, or the spender breaks
+      const keptTokens = new Set(
+        plan.kept.map((a) => toChecksumAddress(a.token)),
+      );
+      const extraTokens = opts?.permit2Reset
+        ? (opts.permit2Reset.extraTokens ?? [])
+        : [];
+      const outer = reset
+        ? await this.#outerPermit2Approved(client, permit2, [
+            ...extraTokens,
+            ...plan.lock.map((a) => a.token),
+          ])
+        : { covered: [], approved: [] };
+      const resetTokens = outer.approved.filter((t) => !keptTokens.has(t));
+      const batch = await this.#lockdown(
+        plan.lock,
+        resetTokens,
+        opts?.feeToken,
+      );
+      return {
+        ...revoked,
+        ...(cleanup === undefined
+          ? {}
+          : {
+              permit2Cleanup: {
+                allowances: plan.lock,
+                kept: plan.kept,
+                lockdown: batch,
+              },
+            }),
+        ...(reset
+          ? {
+              permit2Reset: {
+                tokens: resetTokens,
+                covered: outer.covered,
+                batch,
+              },
+            }
+          : {}),
+      };
+    } catch (error) {
+      throw new Error(
+        `${label} succeeded (callsId ${revoked.callsId}), but the Permit2 cleanup failed: ${describeError(error)}. Allowances the session signed may still be live; set the tokens' outer approval to 0 with setPermit2Allowance(token, 0n), or run listPermit2Allowances and lockdownPermit2Allowances.`,
+        { cause: error },
+      );
+    }
+  }
+
+  /**
+   * Read the outer Permit2 approval of this chain's catalog tokens plus
+   * `extra`: the tokens read (`covered`) and those with a non-zero one.
+   */
+  async #outerPermit2Approved(
+    client: PublicClient,
+    permit2: `0x${string}`,
+    extra: readonly `0x${string}`[],
+  ): Promise<{ covered: `0x${string}`[]; approved: `0x${string}`[] }> {
+    let catalog: `0x${string}`[] = [];
+    try {
+      catalog = listAssets(await this.#chainId()).map((a) => a.address);
+    } catch {
+      // a custom network has no catalog: only the caller's tokens are checked
+    }
+    const tokens = [
+      ...new Set([...catalog, ...extra].map((t) => toChecksumAddress(t))),
+    ];
+    const approvals = await Promise.all(
+      tokens.map((token) =>
+        client.readContract({
+          address: token,
+          abi: erc20Abi,
+          functionName: "allowance",
+          args: [this.#address, permit2],
+        }),
+      ),
+    );
+    return {
+      covered: tokens,
+      approved: tokens.filter((_, i) => (approvals[i] ?? 0n) > 0n),
+    };
+  }
+
+  /** The batch revoking a passkey session key (see `./passkey.js`). */
+  async #passkeyRevokeCalls(
+    publicKey: `0x${string}`,
+    client: PublicClient | undefined,
+  ): Promise<AltanaCall[]> {
+    if (!P256_PUBLIC_KEY.test(publicKey)) {
+      throw new Error(
+        `revokeSession: a passkey session key must be the 64-byte P256 x || y public key; got ${publicKey.length / 2 - 1} bytes. Nothing was submitted.`,
+      );
+    }
+    const network = this.#resolveNetwork(await loadAltanaSdk());
+    let registered: boolean;
+    try {
+      const reader = client ?? (await this.#readClient());
+      registered = await reader.readContract({
+        address: network.keyStore,
+        abi: PASSKEY_REVOKE_ABI,
+        functionName: "isValidKey",
+        args: [this.#address, keyStoreKeyId(publicKey)],
+      });
+    } catch (error) {
+      throw new Error(
+        `revokeSession: could not read whether the passkey session is registered in the KeyStore (${describeError(error)}); nothing was submitted. Retry, or pass a client on a working RPC.`,
+        { cause: error },
+      );
+    }
+    return passkeyRevokeCalls(
+      this.#address,
+      network.keyStore,
+      publicKey,
+      registered,
+    );
+  }
+
+  /** Block of a relay result's transaction; the relay reports only its hash. */
+  async #blockOf(
+    result: AltanaExecuteResult,
+    client: PublicClient | undefined,
+  ): Promise<{ blockNumber?: bigint }> {
+    if (result.transactionHash === undefined) {
+      return {};
+    }
+    try {
+      const reader = client ?? (await this.#readClient());
+      const receipt = await reader.getTransactionReceipt({
+        hash: result.transactionHash,
+      });
+      return { blockNumber: receipt.blockNumber };
+    } catch {
+      return {};
+    }
+  }
+
+  /** Read client on the network's public RPC (Permit2 scans). */
+  async #readClient(): Promise<PublicClient> {
+    const network = this.#resolveNetwork(await loadAltanaSdk());
+    return createPublicClient({
+      chain: network.chain,
+      transport: http(network.publicRpcUrl),
+    }) as PublicClient;
   }
 
   /** Shared body of approve/revokeX402SignatureChecker (admin, queued). */

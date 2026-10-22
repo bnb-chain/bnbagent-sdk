@@ -582,12 +582,7 @@ export class CommerceClient extends ContractBase {
     }));
   }
 
-  /**
-   * `JobSubmitted(jobId, provider, deliverable)` — used by
-   * `ERC8183Client.getDeliverableUrl` to self-resolve the block a job was
-   * submitted in when no `hintBlock` is supplied (see that method's
-   * `_resolveSubmitBlock` walk-back).
-   */
+  /** `JobSubmitted(jobId, provider, deliverable)` events in a block range. */
   async getJobSubmittedEvents(
     fromBlock: bigint,
     toBlock: bigint | "latest" = "latest",

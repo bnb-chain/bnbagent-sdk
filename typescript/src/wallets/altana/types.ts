@@ -60,7 +60,10 @@ export interface AltanaSpendPermission {
 
 /** Mirrors `@altananetwork/sdk`'s `SessionPermissions`. */
 export interface AltanaSessionPermissions {
-  /** Allowed calls. If omitted, ALL targets are allowed — use carefully. */
+  /**
+   * Allowed calls. If omitted, the session gets no call permission (Porto
+   * sends an empty list), so it cannot call any contract.
+   */
   calls?: readonly AltanaCallPermission[];
   /** Per-token spending caps. */
   spend?: readonly AltanaSpendPermission[];

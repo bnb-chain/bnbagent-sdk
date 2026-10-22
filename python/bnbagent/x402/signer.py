@@ -24,6 +24,7 @@ from typing import Any
 from web3 import Web3
 
 from ..signing import PolicyViolation
+from ..signing.policy import EIP3009_CANONICAL_FIELDS
 from ..wallets import TypedDataSigner, UnsupportedWalletOperation
 from ..wallets.capabilities import SIGN_TYPED_DATA
 from .assets import ExpectedEIP3009Route, require_expected_eip3009_route
@@ -58,6 +59,25 @@ def _has_canonical_eip712_domain(domain: dict[str, Any], types: dict[str, Any]) 
         and set(field) == {"name", "type"}
         and (field["name"], field["type"]) == canonical
         for field, canonical in zip(fields, _CANONICAL_EIP712_DOMAIN_FIELDS, strict=True)
+    )
+
+
+def _has_canonical_eip3009_fields(types: dict[str, Any]) -> bool:
+    """Require the on-chain TransferWithAuthorization struct, field by field.
+
+    EIP-712 hashes field names, types and order into the typeHash, so any
+    other shape (e.g. ``value`` re-typed as ``int256``) is a different struct.
+    Checked here as well as in ``SigningPolicy`` because a duck-typed wallet
+    may not run the policy.
+    """
+    fields = types.get("TransferWithAuthorization")
+    if not isinstance(fields, list) or len(fields) != len(EIP3009_CANONICAL_FIELDS):
+        return False
+    return all(
+        isinstance(field, dict)
+        and set(field) == {"name", "type"}
+        and (field["name"], field["type"]) == canonical
+        for field, canonical in zip(fields, EIP3009_CANONICAL_FIELDS, strict=True)
     )
 
 
@@ -207,6 +227,12 @@ class X402Signer:
                 "typed data does not match the expected EIP-3009 route "
                 "(chain, token, method, name, or version)"
             )
+        if not _has_canonical_eip3009_fields(types):
+            raise X402PolicyError(
+                "types['TransferWithAuthorization'] does not match the canonical EIP-3009 "
+                "field shape (from address, to address, value uint256, validAfter uint256, "
+                "validBefore uint256, nonce bytes32)"
+            )
 
         # ── L0 recipient (cheapest check, fail fast) ───────────────
         msg_to = message.get("to")
@@ -230,9 +256,9 @@ class X402Signer:
 
         # ── L1 per-call value cap ─────────────────────────────────
         value = int(message.get("value", 0))
-        # int() widens rather than validates: the declared uint256 field-shape
-        # is not enforced here, so a negative slips through the one-sided cap
-        # test below and neutralises the session budget. Refuse before
+        # The field shape above pins value to uint256, but the message value is
+        # still attacker-supplied: a negative would slip through the one-sided
+        # cap test below and neutralise the session budget. Refuse before
         # reserve() so a rejected call still costs no budget.
         if value < 0:
             raise X402AmountExceededError(f"message['value'] must be non-negative, got {value}")

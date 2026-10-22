@@ -22,6 +22,7 @@
 import { getAddress as toChecksumAddress } from "viem";
 
 import { PolicyViolation } from "../signing/errors.js";
+import { EIP3009_CANONICAL_FIELDS } from "../signing/policy.js";
 import { describeValue, summarizeParserError } from "../utils/errorMessages.js";
 import { SIGN_TYPED_DATA } from "../wallets/capabilities.js";
 import { UnsupportedWalletOperation } from "../wallets/errors.js";
@@ -72,6 +73,32 @@ function hasCanonicalEip712Domain(
         Object.keys(field).length === 2 &&
         field.name === canonical.name &&
         field.type === canonical.type
+      );
+    })
+  );
+}
+
+/**
+ * Require the on-chain TransferWithAuthorization struct, field by field.
+ * EIP-712 hashes field names, types and order into the typeHash, so any other
+ * shape (e.g. `value` re-typed as `int256`) is a different struct. Checked
+ * here as well as in `SigningPolicy` because a duck-typed wallet may not run
+ * the policy.
+ */
+function hasCanonicalEip3009Fields(
+  types: Record<string, { name: string; type: string }[]>,
+): boolean {
+  const fields = types.TransferWithAuthorization;
+  return (
+    Array.isArray(fields) &&
+    fields.length === EIP3009_CANONICAL_FIELDS.length &&
+    fields.every((field, index) => {
+      const canonical = EIP3009_CANONICAL_FIELDS[index];
+      return (
+        canonical !== undefined &&
+        Object.keys(field).length === 2 &&
+        field.name === canonical[0] &&
+        field.type === canonical[1]
       );
     })
   );
@@ -273,6 +300,11 @@ export class X402Signer {
         "typed data does not match the expected EIP-3009 route (chain, token, method, name, or version)",
       );
     }
+    if (!hasCanonicalEip3009Fields(types)) {
+      throw new X402PolicyError(
+        "types.TransferWithAuthorization does not match the canonical EIP-3009 field shape (from address, to address, value uint256, validAfter uint256, validBefore uint256, nonce bytes32)",
+      );
+    }
 
     // ── L0 recipient (cheapest check, fail fast) ────────────────────────
     const msgTo = message.to;
@@ -309,10 +341,10 @@ export class X402Signer {
         { cause: summarizeParserError(e) },
       );
     }
-    // BigInt() widens rather than validates: the declared uint256 field-shape
-    // is not enforced here, so a negative slips through the one-sided cap test
-    // below and neutralises the session budget. Refuse before reserve() so a
-    // rejected call still costs no budget.
+    // The field shape above pins value to uint256, but the message value is
+    // still attacker-supplied: a negative would slip through the one-sided cap
+    // test below and neutralise the session budget. Refuse before reserve() so
+    // a rejected call still costs no budget.
     if (value < 0n) {
       throw new X402AmountExceededError(
         `message.value must be non-negative, got ${describeValue(value)}`,

@@ -1,9 +1,12 @@
 """Tests for ERC-8183 provider quote verification."""
 
+import json
 from unittest.mock import MagicMock, patch
 
+import pytest
 from eth_account import Account
 from eth_account.messages import encode_defunct
+from web3.exceptions import ContractLogicError
 
 from bnbagent.erc8183.negotiation import NegotiationHandler, build_job_description
 from bnbagent.erc8183.quote_verify import verify_quote_signature
@@ -14,7 +17,7 @@ CURRENCY = "0xc70B8741B8B07A6d61E54fd4B20f22Fa648E5565"
 PRIVATE_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
 
 
-def _signed_description() -> tuple[dict, str]:
+def _signed_description(*, nested=False) -> tuple[dict, str]:
     account = Account.from_key(PRIVATE_KEY)
     wallet = MagicMock()
     wallet.address = account.address
@@ -35,9 +38,10 @@ def _signed_description() -> tuple[dict, str]:
                 "terms": {"deliverables": "summary", "quality_standards": "accurate"},
             }
         )
-    import json
-
-    return json.loads(build_job_description(result.to_dict())), account.address
+    envelope = result.to_dict()
+    # The canonical content includes the negotiation timestamp used when signing.
+    envelope["negotiated_at"] = NOW
+    return (envelope if nested else json.loads(build_job_description(envelope))), account.address
 
 
 def _w3(timestamp=NOW + 1):
@@ -46,6 +50,32 @@ def _w3(timestamp=NOW + 1):
     w3.eth.get_block.return_value = {"timestamp": timestamp}
     w3.eth.get_code.return_value = b""
     return w3
+
+
+def test_garbage_65_byte_signature_is_permanently_invalid():
+    envelope, provider = _signed_description()
+    envelope["provider_sig"] = "0x" + "00" * 65
+    assert not verify_quote_signature(envelope=envelope, provider=provider, w3=_w3()).valid
+
+
+@pytest.mark.parametrize("field", ["request", "response"])
+def test_malformed_nested_quote_is_invalid(field):
+    envelope, provider = _signed_description()
+    envelope[field] = {"terms": "not an object"} if field == "response" else "not an object"
+    assert not verify_quote_signature(envelope=envelope, provider=provider, w3=_w3()).valid
+
+
+def test_erc1271_revert_is_invalid_but_transport_failure_propagates():
+    envelope, provider = _signed_description()
+    envelope["provider_sig"] = "0x1234"
+    w3 = _w3()
+    w3.eth.get_code.return_value = b"\x01"
+    call = w3.eth.contract.return_value.functions.isValidSignature.return_value.call
+    call.side_effect = ContractLogicError("execution reverted")
+    assert not verify_quote_signature(envelope=envelope, provider=provider, w3=w3).valid
+    call.side_effect = TimeoutError("RPC timed out")
+    with pytest.raises(TimeoutError):
+        verify_quote_signature(envelope=envelope, provider=provider, w3=w3)
 
 
 def test_verifies_canonical_eip191_quote():
@@ -63,8 +93,47 @@ def test_verifies_canonical_eip191_quote():
     assert verdict.valid is True
     assert verdict.method == "eip191"
     assert verdict.signer == provider
+    assert verdict.signed_content == {
+        key: value
+        for key, value in envelope.items()
+        if key not in {"negotiation_hash", "provider_sig"}
+    }
     w3.eth.get_block.assert_called_once_with(123)
     w3.eth.get_code.assert_not_called()
+
+
+@pytest.mark.parametrize("method", ["eip191", "erc1271"])
+def test_split_envelope_exposes_only_authenticated_content(method):
+    envelope, provider = _signed_description(nested=True)
+    expected = json.loads(build_job_description(envelope))
+    expected.pop("negotiation_hash")
+    expected.pop("provider_sig")
+    envelope.update(task="attacker task", terms={}, price="1", currency=COMMERCE)
+    w3 = _w3()
+    if method == "erc1271":
+        provider = COMMERCE
+        w3.eth.get_code.return_value = b"\x01"
+        w3.eth.contract.return_value.functions.isValidSignature.return_value.call.return_value = (
+            bytes.fromhex("1626ba7e")
+        )
+
+    verdict = verify_quote_signature(
+        envelope=envelope,
+        provider=provider,
+        w3=w3,
+        expected_verifying_contract=COMMERCE,
+    )
+
+    assert verdict.valid is True
+    assert verdict.method == method
+    assert verdict.signed_content == expected
+    assert verdict.signed_content["task"] == "Summarize the report"
+    assert verdict.signed_content["price"] == "1000"
+    assert verdict.signed_content["currency"] == CURRENCY
+    assert verdict.signed_content["terms"] == {
+        "deliverables": "summary",
+        "quality_standards": "accurate",
+    }
 
 
 def test_rejects_tampered_quote():

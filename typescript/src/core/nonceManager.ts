@@ -4,7 +4,7 @@
  * Production-grade nonce management for sequential blockchain transactions:
  *   - Seeds from "pending" on first use (captures in-mempool txs)
  *   - Local increment avoids RPC on every send
- *   - Auto re-syncs on nonce errors (too low, already known, underpriced)
+ *   - Re-syncs on nonce-too-low errors, never on ambiguous acceptance
  *   - Safe under concurrent `getNonce()` calls via a promise-chain mutex
  *   - Singleton per (rpcUrl, account) — shared across client instances
  *
@@ -135,17 +135,23 @@ export class NonceManager {
   }
 
   /**
-   * Handle a transaction error. Re-syncs the nonce from chain if the error
-   * is nonce-related.
+   * Re-sync after a nonce-too-low rejection. Already-known and underpriced
+   * responses must instead be reconciled using the original transaction hash.
    *
    * @param error - The error raised by broadcasting the transaction.
    * @param usedNonce - The nonce that was used in the failed transaction
    * (kept for logging/debugging parity with the Python implementation).
-   * @returns True if the error was nonce-related and the caller should retry.
+   * @returns True for a nonce-too-low rejection that allows a retry.
    */
   async handleError(error: unknown, usedNonce: number): Promise<boolean> {
     void usedNonce;
     const errorStr = String(error).toLowerCase();
+    if (
+      errorStr.includes("already known") ||
+      errorStr.includes("replacement transaction underpriced")
+    ) {
+      return false;
+    }
     if (!NONCE_ERROR_PATTERNS.some((pattern) => errorStr.includes(pattern))) {
       return false;
     }

@@ -580,6 +580,57 @@ class TestReads:
             is None
         )
 
+    @staticmethod
+    def _job(submitted_at: int):
+        from bnbagent.erc8183.types import Job, JobStatus
+
+        return Job(
+            id=7,
+            client="0x" + "01" * 20,
+            provider="0x" + "02" * 20,
+            evaluator=FAKE_ROUTER,
+            description="d",
+            budget=100,
+            expired_at=0,
+            status=JobStatus.SUBMITTED if submitted_at else JobStatus.FUNDED,
+            hook=FAKE_ROUTER,
+            submitted_at=submitted_at,
+        )
+
+    def test_get_deliverable_url_locates_the_submit_block_from_submitted_at(self, facade):
+        # Audit L07: a lookup long after submission (a dispute days later)
+        # must still query the few blocks around the submission.
+        facade.commerce.get_job.return_value = self._job(submitted_at=45)
+        facade.w3.eth.block_number = 1_000_000
+        facade.w3.eth.get_block.side_effect = lambda number: {"timestamp": int(number) * 10}
+        facade.policy.get_deliverable_url.return_value = "ipfs://cid"
+
+        assert facade.get_deliverable_url(7) == "ipfs://cid"
+        # the job is submitted, so a missing JobInitialised log is an RPC failure (M09)
+        facade.policy.get_deliverable_url.assert_called_once_with(
+            7, hint_block=5, require_log=True
+        )
+        facade.commerce.contract.events.JobSubmitted.assert_not_called()
+
+    def test_get_deliverable_url_with_an_explicit_hint_does_not_require_the_log(self, facade):
+        facade.policy.get_deliverable_url.return_value = None
+
+        assert facade.get_deliverable_url(7, hint_block=123) is None
+        facade.policy.get_deliverable_url.assert_called_once_with(7, hint_block=123)
+
+    def test_get_deliverable_url_is_none_before_submission(self, facade):
+        facade.commerce.get_job.return_value = self._job(submitted_at=0)
+
+        assert facade.get_deliverable_url(7) is None
+        facade.policy.get_deliverable_url.assert_not_called()
+
+    def test_get_deliverable_url_resolution_errors_propagate(self, facade):
+        facade.commerce.get_job.side_effect = RuntimeError("rpc down")
+
+        with pytest.raises(RuntimeError, match="rpc down"):
+            facade.get_deliverable_url(7)
+        facade.policy.get_deliverable_url.assert_not_called()
+
     def test_get_verdict_delegates_to_policy(self, facade):
         from bnbagent.erc8183.types import Verdict
 
@@ -608,14 +659,57 @@ class TestPolicyRangeLimit:
         with pytest.raises(RpcRangeLimitError):
             policy.get_deliverable_url(1)
 
-    def test_other_query_error_still_returns_none(self):
+    @pytest.mark.parametrize(
+        "error",
+        [Exception("some other rpc problem"), TimeoutError("timed out"), OSError("502")],
+    )
+    def test_other_query_error_raises_a_network_error_not_none(self, error):
+        # Audit M09: a failed lookup must not read as a missing deliverable.
+        from bnbagent.exceptions import NetworkError, RpcRangeLimitError
+
         policy = self._policy()
-        policy.contract.events.JobInitialised.return_value.get_logs.side_effect = Exception(
-            "some other rpc problem"
-        )
-        assert policy.get_deliverable_url(1) is None
+        policy.contract.events.JobInitialised.return_value.get_logs.side_effect = error
+        with pytest.raises(NetworkError) as raised:
+            policy.get_deliverable_url(1)
+        assert not isinstance(raised.value, RpcRangeLimitError)
+        assert raised.value.__cause__ is error
 
     def test_genuine_empty_returns_none(self):
         policy = self._policy()
         policy.contract.events.JobInitialised.return_value.get_logs.return_value = []
         assert policy.get_deliverable_url(1) is None
+
+    def test_empty_result_raises_when_the_log_is_required(self):
+        from bnbagent.exceptions import NetworkError
+
+        policy = self._policy()
+        policy.contract.events.JobInitialised.return_value.get_logs.return_value = []
+        with pytest.raises(NetworkError, match="incomplete result"):
+            policy.get_deliverable_url(1, hint_block=100, require_log=True)
+
+    @pytest.mark.parametrize(
+        "opt_params,expected",
+        [
+            (b'{"deliverable_url": "ipfs://cid"}', "ipfs://cid"),
+            (b'{"deliverable_url": ""}', None),
+            (b'{"deliverable_url": 123}', None),
+            (b'{"deliverable_url": {"a": 1}}', None),
+            (b'{"deliverable_url": ["ipfs://cid"]}', None),
+            (b'{"deliverable_url": null}', None),
+            (b'{"other": "x"}', None),
+            (b'["ipfs://cid"]', None),
+            (b"123", None),
+            (b"null", None),
+            (b"not json", None),
+            (b"\xff\xfe", None),
+            (b"", None),
+        ],
+    )
+    def test_only_a_non_empty_string_deliverable_url_is_returned(self, opt_params, expected):
+        # Audit M09: whatever the provider put in optParams, the voter gets a
+        # string or None, never another type.
+        policy = self._policy()
+        policy.contract.events.JobInitialised.return_value.get_logs.return_value = [
+            {"args": {"optParams": opt_params}}
+        ]
+        assert policy.get_deliverable_url(1, hint_block=100) == expected

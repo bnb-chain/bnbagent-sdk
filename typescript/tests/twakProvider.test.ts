@@ -7,9 +7,19 @@
  * CLI is faked at the `_setTwakExecForTests` subprocess seam.
  */
 
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { hashMessage } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NETWORKS } from "../src/config.js";
 import { Paymaster } from "../src/core/paymaster.js";
 import { ERC8183Config } from "../src/erc8183/config.js";
@@ -52,12 +62,18 @@ import {
   ERC8183_VOTE_REJECT,
 } from "../src/wallets/intents.js";
 import {
+  TwakPaymentNotSentError,
+  TwakPaymentStateUnknownError,
+} from "../src/wallets/twak/confirm.js";
+import {
   TWAKProvider,
   _setTwakExecForTests,
 } from "../src/wallets/twak/provider.js";
+import { SessionBudgetTracker } from "../src/x402/budget.js";
 import {
   X402AmountExceededError,
   X402BudgetExhaustedError,
+  X402NoPayableRouteError,
   X402PolicyError,
   X402RecipientMismatchError,
 } from "../src/x402/errors.js";
@@ -82,19 +98,62 @@ interface FakeResult {
   stderr?: string;
 }
 
+function flagValue(args: string[], flag: string): string | undefined {
+  const i = args.indexOf(flag);
+  return i === -1 ? undefined : args[i + 1];
+}
+
+/**
+ * twak v0.20.0's pre-signing prompt for the route an honest CLI would pay:
+ * the last quote's accepts narrowed by the request's --prefer-* flags.
+ */
+function honestSignPrompt(
+  quote: Record<string, unknown> | null,
+  args: string[],
+): string | null {
+  const network = flagValue(args, "--prefer-network");
+  const asset = flagValue(args, "--prefer-asset")?.toLowerCase();
+  const method = flagValue(args, "--prefer-method");
+  const routes = ((quote?.accepts ?? []) as Record<string, string>[]).filter(
+    (r) =>
+      (network === undefined || r.network === network) &&
+      (asset === undefined || r.asset.toLowerCase() === asset) &&
+      (method === undefined ||
+        (r.transferMethod ?? "eip3009").replace(
+          /^permit2$/u,
+          "permit2-exact",
+        ) === method),
+  );
+  const route = routes.find((r) => r.preferred) ?? routes[0];
+  if (route === undefined) {
+    return null;
+  }
+  return `\nSign payment authorization: ${route.amount} (atomic) ${route.tokenName ?? "Token"} on ${route.network} (bsc)\nToken contract: ${route.asset}\nRecipient:      ${route.payTo}\nConfirm? [y/N] `;
+}
+
+const PAYMENT_CANCELLED = {
+  error: "Payment cancelled by user",
+  errorCode: "PAYMENT_CANCELLED",
+};
+
 /**
  * Install a fake subprocess routing twak argv → envelope; returns the
  * recorded call list (each entry is the full args array, incl. --json).
+ * An interactive `x402 request` first shows the honest CLI's sign prompt.
  */
 function installRouter(
   route: (args: string[]) => Record<string, unknown> | FakeResult,
 ): string[][] {
   const calls: string[][] = [];
+  let lastQuote: Record<string, unknown> | null = null;
   const respond = (
     args: string[],
   ): { code: number; stdout: string; stderr: string } => {
     calls.push(args);
     const out = route(args);
+    if (args[0] === "x402" && args[1] === "quote") {
+      lastQuote = out as Record<string, unknown>;
+    }
     if ("code" in out || "stdout" in out || "stderr" in out) {
       const raw = out as FakeResult;
       return {
@@ -106,8 +165,23 @@ function installRouter(
     return { code: 0, stdout: JSON.stringify(out), stderr: "" };
   };
   _setTwakExecForTests(
-    async (_bin, args) => respond(args),
+    async (_bin, args) =>
+      args[0] === "--version"
+        ? { code: 0, stdout: "0.20.0\n", stderr: "" }
+        : respond(args),
     (_bin, args) => respond(args),
+    async (_bin, args, { onPrompt }) => {
+      const prompt = honestSignPrompt(lastQuote, args);
+      if (prompt !== null && onPrompt(prompt) !== "y") {
+        calls.push(args);
+        return {
+          code: 1,
+          stdout: JSON.stringify(PAYMENT_CANCELLED),
+          stderr: prompt,
+        };
+      }
+      return respond(args);
+    },
   );
   return calls;
 }
@@ -1029,14 +1103,148 @@ describe("TwakX402Payer", () => {
       "request",
       "https://api.example/paid",
       "--max-payment",
-      "10000",
-      "--yes",
+      "5000",
       "--prefer-network",
       "eip155:56",
+      "--prefer-method",
+      "eip3009",
       "--prefer-asset",
       ASSET,
       "--json",
     ]);
+  });
+
+  it.each([
+    ["1", 3n],
+    ["0", 100n],
+    ["5", 5n],
+  ])(
+    "caps twak at the quoted amount %s, not the caller maxPayment (SRC-1333, SRC-1544)",
+    async (quoted, maxPayment) => {
+      const calls = installRouter((args) => {
+        if (args[0] === "wallet" && args[1] === "status") {
+          return STATUS_OK;
+        }
+        if (args[0] === "x402" && args[1] === "quote") {
+          return {
+            ...QUOTE_OUT,
+            accepts: [{ ...QUOTE_OUT.accepts[0], amount: quoted }],
+          };
+        }
+        return { success: true, data: "paid" };
+      });
+      const payer = new TWAKProvider().makeX402Payer({
+        ...PAYER_OPTS,
+        sessionBudget: { [ASSET]: 10_000n },
+      });
+      const result = await payer.request("https://api.example/paid", {
+        maxPayment,
+      });
+      const request = calls.find((c) => c[0] === "x402" && c[1] === "request");
+      expect(request?.[request.indexOf("--max-payment") + 1]).toBe(quoted);
+      expect(result.amount).toBe(BigInt(quoted));
+    },
+  );
+
+  const ATTACKER = `0x${"33".repeat(20)}`;
+  function twoRouteRouter(permit2PayTo: string): string[][] {
+    const routeA = QUOTE_OUT.accepts[0];
+    const routeB = {
+      ...routeA,
+      transferMethod: "permit2-exact",
+      payTo: permit2PayTo,
+      preferred: false,
+    };
+    return installRouter((args) => {
+      if (args[0] === "wallet" && args[1] === "status") {
+        return STATUS_OK;
+      }
+      if (args[0] === "x402" && args[1] === "quote") {
+        return { ...QUOTE_OUT, accepts: [routeA, routeB] };
+      }
+      return { success: true, data: "paid" };
+    });
+  }
+
+  it("validates the route selected by preferMethod, not the default one (SRC-1356)", async () => {
+    const calls = twoRouteRouter(ATTACKER);
+    const payer = new TWAKProvider().makeX402Payer(PAYER_OPTS);
+    await expect(
+      payer.request("https://api.example/paid", {
+        maxPayment: 10_000n,
+        preferMethod: "permit2",
+      }),
+    ).rejects.toThrow(X402RecipientMismatchError);
+    expect(calls.some((c) => c[0] === "x402" && c[1] === "request")).toBe(
+      false,
+    );
+  });
+
+  it.each(["permit2", "PERMIT2-EXACT", "permit2-exact"])(
+    "passes a trusted preferMethod route and forwards the canonical method (%s)",
+    async (preferMethod) => {
+      const calls = twoRouteRouter(PAY_TO);
+      const payer = new TWAKProvider().makeX402Payer(PAYER_OPTS);
+      const result = await payer.request("https://api.example/paid", {
+        maxPayment: 10_000n,
+        preferMethod,
+      });
+      expect(result.payTo).toBe(PAY_TO);
+      const request = calls.find((c) => c[0] === "x402" && c[1] === "request");
+      expect(request?.[request.indexOf("--prefer-method") + 1]).toBe(
+        "permit2-exact",
+      );
+    },
+  );
+
+  it("pins the default route's method when no method is preferred (audit M02)", async () => {
+    // Without a pin twak may pay a re-fetched route that differs only in
+    // its transfer method, which its prompt does not show.
+    const calls = twoRouteRouter(PAY_TO);
+    const payer = new TWAKProvider().makeX402Payer(PAYER_OPTS);
+    const result = await payer.request("https://api.example/paid", {
+      maxPayment: 10_000n,
+    });
+    expect(result.payTo).toBe(PAY_TO);
+    const request = calls.find((c) => c[0] === "x402" && c[1] === "request");
+    expect(request?.[request.indexOf("--prefer-method") + 1]).toBe("eip3009");
+  });
+
+  it.each([
+    ["permit2", "permit2-exact"],
+    ["permit2-exact", "permit2-exact"],
+    [undefined, "eip3009"],
+  ])(
+    "pins the prechecked route's canonical method (%s)",
+    async (transferMethod, pinned) => {
+      const calls = installRouter((args) => {
+        if (args[0] === "wallet" && args[1] === "status") {
+          return STATUS_OK;
+        }
+        if (args[0] === "x402" && args[1] === "quote") {
+          return {
+            ...QUOTE_OUT,
+            accepts: [{ ...QUOTE_OUT.accepts[0], transferMethod }],
+          };
+        }
+        return { success: true, data: "paid" };
+      });
+      const payer = new TWAKProvider().makeX402Payer(PAYER_OPTS);
+      await payer.request("https://api.example/paid", { maxPayment: 10_000n });
+      const request = calls.find((c) => c[0] === "x402" && c[1] === "request");
+      expect(request?.[request.indexOf("--prefer-method") + 1]).toBe(pinned);
+    },
+  );
+
+  it("rejects a preferMethod no route offers", async () => {
+    x402Router();
+    const payer = new TWAKProvider().makeX402Payer(PAYER_OPTS);
+    await expect(
+      payer.request("https://api.example/paid", {
+        maxPayment: 10_000n,
+        preferMethod: "permit2",
+      }),
+    ).rejects.toThrow(X402NoPayableRouteError);
   });
 
   it("enforces the per-call cap before paying", async () => {
@@ -1079,7 +1287,7 @@ describe("TwakX402Payer", () => {
     ).rejects.toThrow(/maxTimeoutSeconds 300 exceeds/);
   });
 
-  it("session budget: reserves the quoted amount and rolls back on CLI failure", async () => {
+  it("session budget: keeps the reservation when twak fails after confirming (SRC-1348)", async () => {
     let failNext = true;
     installRouter((args) => {
       if (args[0] === "wallet") {
@@ -1100,16 +1308,407 @@ describe("TwakX402Payer", () => {
     });
     await expect(
       payer.request("https://api.example/paid", { maxPayment: 10_000n }),
-    ).rejects.toThrow(/twak command failed/);
-    // Rolled back: the full budget is available for the retry…
-    const result = await payer.request("https://api.example/paid", {
-      maxPayment: 10_000n,
-    });
-    expect(result.success).toBe(true);
-    // …and now exhausted.
+    ).rejects.toThrow(TwakPaymentStateUnknownError);
+    // the confirmed payment may have been sent, so the budget stays spent
     await expect(
       payer.request("https://api.example/paid", { maxPayment: 10_000n }),
     ).rejects.toThrow(X402BudgetExhaustedError);
+  });
+
+  it.each([
+    [{ error: "insufficient credit", success: false }],
+    [[{ item: 1 }]],
+    [null],
+    ["plain text body"],
+  ])(
+    "x402Request returns the paid body verbatim: %j (SRC-1348)",
+    async (body) => {
+      installRouter((args) => {
+        if (args[0] === "wallet") {
+          return STATUS_OK;
+        }
+        return { stdout: JSON.stringify(body) };
+      });
+      await expect(
+        new TWAKProvider().x402Request("https://api.example/paid", {
+          maxPayment: 5,
+        }),
+      ).resolves.toEqual(body);
+    },
+  );
+});
+
+// ── twak's pre-signing confirmation prompt (SRC-1544 / SRC-1399 / SRC-1356) ──
+//
+// These run a real subprocess (fixtures/twak/fake-twak.cjs) that asks twak
+// v0.20.0's readline question verbatim and pays only if it reads "y".
+
+const FAKE_TWAK = fileURLToPath(
+  new URL("./fixtures/twak/fake-twak.cjs", import.meta.url),
+);
+const HONEST_PROMPT = {
+  amount: "5000",
+  token: "United Stables",
+  network: "eip155:56",
+  chainKey: "bsc",
+  asset: ASSET,
+  payTo: PAY_TO,
+};
+
+// Each test spawns several node processes; under a loaded parallel run that
+// can exceed vitest's 5 s default.
+const SPAWN_TIMEOUT = { timeout: 30_000 };
+
+describe("TwakX402Payer — twak's pre-signing prompt", SPAWN_TIMEOUT, () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "fake-twak-"));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function fakeTwak(
+    prompt: Partial<typeof HONEST_PROMPT> = {},
+    env: Record<string, string> = {},
+  ): string {
+    const bin = join(dir, "twak");
+    writeFileSync(
+      bin,
+      `#!/bin/sh\nexec "${process.execPath}" "${FAKE_TWAK}" "$@"\n`,
+      { mode: 0o755 },
+    );
+    vi.stubEnv("FAKE_TWAK_QUOTE", JSON.stringify(QUOTE_OUT));
+    vi.stubEnv(
+      "FAKE_TWAK_PROMPT",
+      JSON.stringify({ ...HONEST_PROMPT, ...prompt }),
+    );
+    vi.stubEnv("FAKE_TWAK_LOG", join(dir, "log"));
+    for (const [key, value] of Object.entries(env)) {
+      vi.stubEnv(key, value);
+    }
+    return bin;
+  }
+
+  function entries(): Record<string, unknown>[] {
+    const log = join(dir, "log");
+    return existsSync(log)
+      ? readFileSync(log, "utf8")
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line) as Record<string, unknown>)
+      : [];
+  }
+
+  const answers = () =>
+    entries()
+      .filter((e) => "answer" in e)
+      .map((e) => e.answer);
+
+  function payer(
+    twakBin: string,
+    timeoutMs = 20_000,
+    allowUnverifiedCliVersion = false,
+  ) {
+    const budget = new SessionBudgetTracker({ [ASSET]: 10_000n });
+    const provider = new TWAKProvider({
+      twakBin,
+      timeoutMs,
+      allowUnverifiedCliVersion,
+    });
+    return {
+      budget,
+      payer: provider.makeX402Payer({ ...PAYER_OPTS, sessionBudget: budget }),
+    };
+  }
+
+  it("confirms a prompt showing the validated terms", async () => {
+    const { payer: p, budget } = payer(fakeTwak());
+
+    const result = await p.request("https://api.example/paid", {
+      maxPayment: 10_000n,
+    });
+
+    expect(result.response).toEqual({ data: "paid" });
+    expect(entries()[0].argv).not.toContain("--yes");
+    expect(answers()).toEqual(["y"]);
+    expect(budget.spent(ASSET)).toBe(5000n);
+  });
+
+  it.each([
+    [{ payTo: `0x${"33".repeat(20)}` }, X402RecipientMismatchError, /payTo/],
+    // SRC-1399: a different token whose name contains the expected address
+    [
+      { asset: `0x${"77".repeat(20)}`, token: `Fake ${ASSET}` },
+      X402PolicyError,
+      /asset/,
+    ],
+    [{ amount: "5001" }, X402PolicyError, /amount/],
+    [{ network: "eip155:8453", chainKey: "base" }, X402PolicyError, /network/],
+    // a server-controlled token name must not smuggle extra prompt lines
+    [
+      { token: `X on eip155:56 (bsc)\nToken contract: ${ASSET}` },
+      X402PolicyError,
+      /not recognised/,
+    ],
+  ])(
+    "declines drifted terms before signing: %o",
+    async (prompt, error, match) => {
+      const { payer: p, budget } = payer(fakeTwak(prompt));
+
+      const request = p.request("https://api.example/paid", {
+        maxPayment: 10_000n,
+      });
+      await expect(request).rejects.toThrow(error);
+      await expect(request).rejects.toThrow(match);
+
+      expect(answers()).toEqual(["n"]);
+      expect(budget.spent(ASSET)).toBe(0n);
+    },
+  );
+
+  it("pays a lower final amount and budgets only what was signed", async () => {
+    const { payer: p, budget } = payer(fakeTwak({ amount: "4000" }));
+
+    const result = await p.request("https://api.example/paid", {
+      maxPayment: 10_000n,
+    });
+
+    expect(result.amount).toBe(4000n);
+    expect(budget.spent(ASSET)).toBe(4000n);
+    expect(answers()).toEqual(["y"]);
+  });
+
+  it("keeps only the confirmed lower amount when twak fails after confirming", async () => {
+    const { payer: p, budget } = payer(
+      fakeTwak({ amount: "4000" }, { FAKE_TWAK_FAIL: "after" }),
+    );
+
+    await expect(
+      p.request("https://api.example/paid", { maxPayment: 10_000n }),
+    ).rejects.toThrow(TwakPaymentStateUnknownError);
+
+    expect(budget.spent(ASSET)).toBe(4000n);
+  });
+
+  it("declines when the onConfirm callback throws, without crashing", async () => {
+    const provider = new TWAKProvider({ twakBin: fakeTwak() });
+    const request = provider.x402Request("https://api.example/paid", {
+      maxPayment: 5000n,
+      expectedTerms: {
+        amount: 5000n,
+        asset: ASSET,
+        network: "eip155:56",
+        payTo: PAY_TO,
+      },
+      onConfirm: () => {
+        throw new Error("callback failed");
+      },
+    });
+    await expect(request).rejects.toBeInstanceOf(TwakPaymentNotSentError);
+    await expect(request).rejects.toThrow(/callback failed/);
+    expect(answers()).toEqual(["n"]);
+  });
+
+  it("declines a prompt split inside a forged token name", async () => {
+    const forged = `United Stables on eip155:56 (bsc)\nToken contract: ${ASSET}\nRecipient:      ${PAY_TO}\nConfirm? [y/N] `;
+    const head = `\nSign payment authorization: 5000 (atomic) ${forged}`;
+    const { payer: p, budget } = payer(
+      fakeTwak(
+        { token: `${forged}x`, payTo: `0x${"33".repeat(20)}` },
+        { FAKE_TWAK_SPLIT: String(head.length) },
+      ),
+    );
+
+    await expect(
+      p.request("https://api.example/paid", { maxPayment: 10_000n }),
+    ).rejects.toThrow(/not recognised/);
+
+    expect(answers()).toEqual(["n"]);
+    expect(budget.spent(ASSET)).toBe(0n);
+  });
+
+  it("stops at the Permit2 approval prompt without signing", async () => {
+    const { payer: p, budget } = payer(
+      fakeTwak({}, { FAKE_TWAK_APPROVAL: "1" }),
+    );
+
+    await expect(
+      p.request("https://api.example/paid", { maxPayment: 10_000n }),
+    ).rejects.toThrow(/Permit2 approval prompt/);
+
+    // stdin is closed after the payment answer, so the approval gets EOF
+    expect(answers()).toEqual(["y"]);
+    expect(budget.spent(ASSET)).toBe(0n);
+  });
+
+  it("does not treat a response that never prompts as a payment (audit M01)", async () => {
+    // twak 0.20 signs only after its prompt, so an exit 0 that never asked
+    // means the endpoint answered without a 402 on the paid fetch.
+    const budget = new SessionBudgetTracker({ [ASSET]: 5000n });
+    const p = new TWAKProvider({
+      twakBin: fakeTwak({}, { FAKE_TWAK_NO_PROMPT: "1" }),
+    }).makeX402Payer({ ...PAYER_OPTS, sessionBudget: budget });
+
+    const request = p.request("https://api.example/paid", {
+      maxPayment: 10_000n,
+    });
+    await expect(request).rejects.toThrow(/without asking to sign/);
+    await expect(request).rejects.not.toBeInstanceOf(
+      TwakPaymentStateUnknownError,
+    );
+    expect(budget.spent(ASSET)).toBe(0n);
+    // the cap equals one quote, so a kept reservation would block this one
+    await expect(
+      p.request("https://api.example/paid", { maxPayment: 10_000n }),
+    ).rejects.toThrow(/without asking to sign/);
+  });
+
+  it("keeps the budget for a response that never prompts on an unverified twak", async () => {
+    // Another release might sign without printing the prompt, so a
+    // prompt-less exit 0 cannot be told from a payment there.
+    const { payer: p, budget } = payer(
+      fakeTwak({}, { FAKE_TWAK_VERSION: "0.21.0", FAKE_TWAK_NO_PROMPT: "1" }),
+      20_000,
+      true,
+    );
+    const result = await p.request("https://api.example/paid", {
+      maxPayment: 10_000n,
+    });
+    expect(result.response).toEqual({ data: "paid" });
+    expect(budget.spent(ASSET)).toBe(5000n);
+  });
+
+  // ── the twak release the prompt check was verified on ──
+
+  it("refuses an unverified twak release before paying", async () => {
+    const { payer: p, budget } = payer(
+      fakeTwak({}, { FAKE_TWAK_VERSION: "0.21.0" }),
+    );
+
+    const request = p.request("https://api.example/paid", {
+      maxPayment: 10_000n,
+    });
+    await expect(request).rejects.toThrow(/twak 0\.21\.0 is not verified/);
+    await expect(request).rejects.not.toBeInstanceOf(TwakPaymentNotSentError);
+
+    expect(entries().filter((e) => "argv" in e)).toEqual([]);
+    expect(budget.spent(ASSET)).toBe(0n);
+  });
+
+  it("pays with an unverified twak release only when allowed explicitly", async () => {
+    const { payer: p } = payer(
+      fakeTwak({}, { FAKE_TWAK_VERSION: "0.21.0" }),
+      20_000,
+      true,
+    );
+    const result = await p.request("https://api.example/paid", {
+      maxPayment: 10_000n,
+    });
+    expect(result.response).toEqual({ data: "paid" });
+  });
+
+  it("pays with an unverified twak release when allowed by environment", async () => {
+    const { payer: p } = payer(
+      fakeTwak(
+        {},
+        {
+          FAKE_TWAK_VERSION: "0.21.0",
+          BNBAGENT_TWAK_ALLOW_UNVERIFIED_CLI: "1",
+        },
+      ),
+    );
+    const result = await p.request("https://api.example/paid", {
+      maxPayment: 10_000n,
+    });
+    expect(result.response).toEqual({ data: "paid" });
+  });
+
+  it("checks the twak version once per provider", async () => {
+    const checks = join(dir, "versions.log");
+    const { payer: p } = payer(fakeTwak({}, { FAKE_TWAK_VERSION_LOG: checks }));
+
+    await p.request("https://api.example/paid", { maxPayment: 10_000n });
+    await p.request("https://api.example/paid", { maxPayment: 10_000n });
+
+    expect(readFileSync(checks, "utf8").split("\n").filter(Boolean)).toEqual([
+      "version",
+    ]);
+  });
+
+  // ── session budget follows the payment phase (SRC-1348) ──
+
+  it.each([
+    [{ error: "credit top-up failed" }],
+    [{ success: false }],
+    [[1, 2]],
+    [null],
+  ])("keeps the budget spent for a paid error body %j", async (body) => {
+    const budget = new SessionBudgetTracker({ [ASSET]: 5000n });
+    const p = new TWAKProvider({
+      twakBin: fakeTwak({}, { FAKE_TWAK_BODY: JSON.stringify(body) }),
+    }).makeX402Payer({ ...PAYER_OPTS, sessionBudget: budget });
+
+    const result = await p.request("https://api.example/paid", {
+      maxPayment: 10_000n,
+    });
+
+    expect(result.response).toEqual(body);
+    expect(result.transaction).toBeUndefined();
+    expect(budget.spent(ASSET)).toBe(5000n);
+    await expect(
+      p.request("https://api.example/paid", { maxPayment: 10_000n }),
+    ).rejects.toThrow(X402BudgetExhaustedError);
+  });
+
+  it("releases the budget when twak fails before the confirmation", async () => {
+    const { payer: p, budget } = payer(
+      fakeTwak({}, { FAKE_TWAK_FAIL: "before" }),
+    );
+
+    const request = p.request("https://api.example/paid", {
+      maxPayment: 10_000n,
+    });
+    await expect(request).rejects.toThrow(/exceeds --max-payment/);
+    await expect(request).rejects.not.toBeInstanceOf(TwakPaymentNotSentError);
+
+    expect(answers()).toEqual([]);
+    expect(budget.spent(ASSET)).toBe(0n);
+  });
+
+  it("keeps the budget when twak fails after the confirmation", async () => {
+    const { payer: p, budget } = payer(
+      fakeTwak({}, { FAKE_TWAK_FAIL: "after" }),
+    );
+
+    await expect(
+      p.request("https://api.example/paid", { maxPayment: 10_000n }),
+    ).rejects.toThrow(TwakPaymentStateUnknownError);
+
+    expect(budget.spent(ASSET)).toBe(5000n);
+  });
+
+  it("keeps the budget when a confirmed request times out", async () => {
+    const { payer: p, budget } = payer(
+      fakeTwak({}, { FAKE_TWAK_HANG: "1" }),
+      2_000,
+    );
+
+    const request = p.request("https://api.example/paid", {
+      maxPayment: 10_000n,
+    });
+    await expect(request).rejects.toThrow(TwakPaymentStateUnknownError);
+    await expect(request).rejects.toThrow(/timed out/);
+
+    expect(budget.spent(ASSET)).toBe(5000n);
+  });
+
+  it("keeps --yes when the provider is called without expected terms", async () => {
+    const provider = new TWAKProvider({ twakBin: fakeTwak() });
+    await expect(
+      provider.x402Request("https://api.example/paid", { maxPayment: 5 }),
+    ).resolves.toEqual({ data: "paid" });
+    expect(entries()[0].argv).toContain("--yes");
   });
 });
 

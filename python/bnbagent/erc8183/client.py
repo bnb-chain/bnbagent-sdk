@@ -624,45 +624,39 @@ class ERC8183Client:
         """Return the ``deliverable_url`` for a submitted job.
 
         Reads the ``JobInitialised`` event emitted by the policy and parses
-        ``optParams`` JSON to extract ``deliverable_url``. Returns ``None``
-        if the event is not found or the job has not been submitted yet.
+        ``optParams`` JSON to extract ``deliverable_url``, returned only when
+        it is a non-empty string. ``None`` means the job is not submitted yet
+        or its submission carries no usable ``deliverable_url``, which is up
+        to the provider.
 
-        When ``hint_block`` is not provided the method self-resolves it by
-        querying Commerce's ``JobSubmitted`` event first (tight 5-block window
-        around current head, walking back in 1 000-block steps until found).
-        This avoids wide log scans that exceed NodeReal's block-range limit.
+        When ``hint_block`` is not provided the method self-resolves it from
+        the job's on-chain ``submittedAt`` (see :meth:`_resolve_submit_block`),
+        so the log query stays a few blocks wide however long ago the job was
+        submitted. Failing to read the chain raises
+        (:class:`~bnbagent.exceptions.NetworkError`, or
+        :class:`~bnbagent.exceptions.RpcRangeLimitError` for a range/rate
+        limit) instead of returning ``None``, including a submitted job whose
+        ``JobInitialised`` log the RPC does not return.
         """
+        if hint_block is not None:
+            return self.policy.get_deliverable_url(job_id, hint_block=hint_block)
+        hint_block = self._resolve_submit_block(job_id)
         if hint_block is None:
-            hint_block = self._resolve_submit_block(job_id)
-        return self.policy.get_deliverable_url(job_id, hint_block=hint_block)
-
-    def _resolve_submit_block(
-        self, job_id: int, *, lookback: int = 50_000, step: int = 1_000
-    ) -> int | None:
-        """Find the block where ``JobSubmitted`` was emitted for *job_id*.
-
-        Walks backwards from the current head in ``step``-block windows so
-        each individual RPC call stays within NodeReal's 5 000-block limit.
-        Returns the block number, or ``None`` if not found within ``lookback``.
-        """
-        try:
-            current = self.commerce.w3.eth.block_number
-        except Exception:
             return None
+        return self.policy.get_deliverable_url(job_id, hint_block=hint_block, require_log=True)
 
-        for end in range(current, max(0, current - lookback) - 1, -step):
-            start = max(0, end - step + 1)
-            try:
-                logs = self.commerce.contract.events.JobSubmitted().get_logs(
-                    from_block=start,
-                    to_block=end,
-                    argument_filters={"jobId": job_id},
-                )
-                if logs:
-                    return logs[0]["blockNumber"]
-            except Exception:
-                pass
-        return None
+    def _resolve_submit_block(self, job_id: int) -> int | None:
+        """Return the first block of the second in which *job_id* was submitted.
+
+        Binary-searches block timestamps for the job's ``submittedAt``; the
+        submission (``JobSubmitted`` / ``JobInitialised``) is in that block or
+        one of the few after it that share its timestamp. Returns ``None``
+        while the job is unsubmitted.
+        """
+        submitted_at = self.get_job(job_id).submitted_at
+        if not submitted_at:
+            return None
+        return self._first_block_at_or_after(submitted_at, self.w3.eth.block_number)
 
     def get_verdict(self, job_id: int, evidence: bytes = b"") -> tuple[Verdict, bytes]:
         """Simulate the verdict the Router would see right now."""

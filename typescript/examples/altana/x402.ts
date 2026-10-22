@@ -16,9 +16,12 @@
  *   X402_ENDPOINT     a paid endpoint answering 402 on BNB chain
  *   X402_TOKEN        payment token (default: BSC USDC 0x8AC7…580d)
  *   X402_MAX_PAYMENT  per-request cap, atomic units (default: 100000)
+ *   X402_ARCHIVE_RPC_URL  BSC RPC serving historical state, eth_getProof
+ *                     and logs since the wallet's EIP-7702 delegation
+ *                     (Permit2 cleanup)
  */
 
-import { getAddress } from "viem";
+import { http, createPublicClient, getAddress } from "viem";
 import { loadEnv } from "../../src/core/env.js";
 import { getEnv } from "../../src/core/envUtil.js";
 import {
@@ -42,12 +45,15 @@ async function main(): Promise<void> {
   const endpoint = requireEnv("X402_ENDPOINT");
   const token = getAddress((getEnv("X402_TOKEN") ?? USDC_BSC) as `0x${string}`);
   const maxPayment = BigInt(getEnv("X402_MAX_PAYMENT") ?? "100000");
-  const allowance = maxPayment * 5n; // the on-chain ceiling for this run
+  const allowance = maxPayment * 5n; // this token's on-chain ceiling for the run
   // Relay fees charged in this token instead of native BNB (lets a
   // BNB-less wallet run the whole flow); default: the payment token.
   const feeToken = getAddress(
     (getEnv("X402_FEE_TOKEN") ?? token) as `0x${string}`,
   );
+  const archive = createPublicClient({
+    transport: http(requireEnv("X402_ARCHIVE_RPC_URL")),
+  });
 
   const admin = new AltanaWalletProvider({ privateKey });
   console.log(`[1/7] wallet ${admin.address} — granting a 1h session`);
@@ -72,7 +78,11 @@ async function main(): Promise<void> {
   console.log(
     `[3/7] bounding the Permit2 allowance to ${allowance} of ${token}`,
   );
-  await admin.setPermit2Allowance(token, allowance, { feeToken });
+  // locks down Permit2 allowances any earlier session signed for the token
+  await admin.setPermit2Allowance(token, allowance, {
+    feeToken,
+    permit2Cleanup: { client: archive },
+  });
 
   const agent = new AltanaWalletProvider({ session });
   const payer = agent.makeX402Payer({

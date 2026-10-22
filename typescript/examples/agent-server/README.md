@@ -52,6 +52,13 @@ For multiple replicas, pass application-owned `negotiateLimiter` and
 shared backends are supported), or enforce equivalent limits at a trusted
 edge. Production emits a warning when either default remains in use.
 
+Response lookups have separate limits: 60 requests per client IP and 300 per
+process in a 60-second window. Configure the `ERC8183_RESPONSE_*` variables in
+`.env.example`; use `responseLimiter` and `globalResponseLimiter` for shared
+limits across replicas. The SDK also bounds concurrent lookups and briefly
+caches failed resolutions. See [response lookup limits](../../../docs/response-lookup-limits.md)
+for defaults and deployment guidance.
+
 ### One-time ERC-8004 registration
 
 ```bash

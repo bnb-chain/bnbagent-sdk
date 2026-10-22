@@ -37,8 +37,10 @@ Security / operational notes:
 - The wallet password is resolved by ``twak`` itself from the OS keychain or
   the ``TWAK_WALLET_PASSWORD`` environment variable; it is never passed on
   the command line by this provider.
-- ``--json`` is always appended (it implies ``--yes``, skipping interactive
-  confirmation, per the twak spec).
+- ``--json`` is always appended. It does not skip twak v0.20.0's
+  ``x402 request`` confirmation: that command confirms only with ``--yes``.
+  Paid requests from ``TwakX402Payer`` omit ``--yes`` and answer twak's
+  pre-signing prompt after checking the final terms (``x402_request``).
 
 Compatibility notes against ``twak`` v0.20.0 — the minimum supported version
 (v0.20.0 added ``--paymaster-url``, which this provider emits on every write
@@ -76,7 +78,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
@@ -85,6 +92,10 @@ from eth_account import Account
 from eth_account.messages import defunct_hash_message, encode_defunct
 
 from ..config import NETWORKS
+from ..core import relay_verifier
+from ..core.config import get_env
+from ..core.relay_verifier import SecondaryConfirmation
+from ..exceptions import RelaySubmissionUnverifiedError, TransactionPendingError
 from .capabilities import (
     BROADCAST_SELF,
     INTENTS_ERC8004,
@@ -143,6 +154,29 @@ def _is_cli_parser_error(message: str, *, flag: str | None = None) -> bool:
 
 DEFAULT_TWAK_BIN = "twak"
 DEFAULT_TIMEOUT = 120  # seconds per CLI invocation
+#: twak release line whose ``x402 request`` pre-signing prompt the SDK parses
+#: and has verified against the real CLI (tests/test_twak_real_cli.py). Paid
+#: requests with ``expected_terms`` refuse other releases unless the provider
+#: was built with ``allow_unverified_cli_version=True``.
+TWAK_X402_VERIFIED_CLI = "0.20"
+# twak v0.20.0's public-receipt wait before it reports NETWORK_ERROR.
+_TWAK_RECEIPT_TIMEOUT_SECONDS = 60
+_RECEIPT_TIMEOUT_RE = re.compile(r"Timed out waiting for receipt (0x[0-9a-fA-F]{64}) on (\S+)")
+_CHAIN_ID_FOR_TWAK_CHAIN = {"bsc": 56, "bsctestnet": 97}
+
+
+def _parse_receipt_timeout(stdout: str) -> tuple[str, str] | None:
+    """(tx hash, chain) of twak's receipt-timeout NETWORK_ERROR envelope."""
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict) or payload.get("errorCode") != "NETWORK_ERROR":
+        return None
+    error = payload.get("error")
+    match = _RECEIPT_TIMEOUT_RE.fullmatch(error.strip()) if isinstance(error, str) else None
+    return (match.group(1), match.group(2)) if match else None
+
 
 # Appended to command-failure errors: the failure is most often a missing
 # one-time setup step, so point the caller at the fix without claiming the
@@ -179,6 +213,125 @@ TWAK_CHAIN_FOR_NETWORK = {
     "bsc-mainnet": "bsc",
     "bsc-testnet": "bsctestnet",
 }
+
+
+@dataclass(frozen=True)
+class TwakPaymentTerms:
+    """The payment terms a caller has already validated for one x402 request.
+
+    ``TWAKProvider.x402_request`` compares these with the terms twak prints
+    in its pre-signing confirmation prompt: ``asset``, ``network`` and
+    ``pay_to`` must match exactly, and ``amount`` is the most twak may sign
+    (a lower final amount is confirmed).
+    """
+
+    amount: int
+    asset: str
+    network: str
+    pay_to: str
+
+
+class TwakPaymentTermsMismatchError(RuntimeError):
+    """twak was about to sign terms other than the validated ones.
+
+    The provider answered ``n`` to twak's confirmation prompt, so no payment
+    authorization was signed or sent. ``field`` is ``"amount"``, ``"asset"``,
+    ``"network"``, ``"pay_to"`` or ``"prompt"`` (unrecognised prompt).
+    """
+
+    def __init__(self, field: str, expected: str, actual: str) -> None:
+        self.field = field
+        self.expected = expected
+        self.actual = actual
+        relation = "exceeds" if field == "amount" else "does not match"
+        super().__init__(
+            f"twak's payment {field} {actual!r} {relation} the validated {expected!r}; "
+            "payment declined before signing"
+        )
+
+
+class TwakPaymentNotSentError(RuntimeError):
+    """A paid x402 request failed before twak could send a payment.
+
+    Raised by ``x402_request(expected_terms=...)`` for failures before the
+    provider confirmed twak's prompt, and for twak's own "payment cancelled"
+    / "Permit2 approval required" outcomes. ``error`` is the underlying
+    failure.
+    """
+
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+        super().__init__(str(error))
+
+
+class TwakPaymentStateUnknownError(RuntimeError):
+    """A paid x402 request failed after the provider confirmed the payment.
+
+    twak may already have sent the signed authorization, so the payment can
+    still settle. Reconcile with the merchant before retrying.
+    """
+
+
+# twak v0.20.0 ``x402 request`` without ``--yes`` prints this block to stderr
+# (dist/index.js makeReadlineConfirm) and waits for ``y`` on stdin before it
+# signs. The token name is server-controlled, so it may not contain newlines
+# and every marker must appear exactly once; anything else is declined.
+_SIGN_PROMPT_TAIL = "Confirm? [y/N] "
+_SIGN_PROMPT_RE = re.compile(
+    r"\nSign payment authorization: (?P<amount>\d+) \(atomic\) (?P<token>[^\n]*) "
+    r"on (?P<network>[^\s()]+) \((?P<chain>[^\s()]+)\)\n"
+    r"Token contract: (?P<asset>0x[0-9a-fA-F]{40})\n"
+    r"Recipient:\s+(?P<pay_to>0x[0-9a-fA-F]{40})\n"
+    r"Confirm\? \[y/N\] \Z"
+)
+_SIGN_PROMPT_MARKERS = ("Sign payment authorization:", "Token contract:", "Recipient:")
+# Asked after the payment prompt when a Permit2 route has no allowance and
+# --auto-approve is off. stdin is closed by then, so twak exits there with no
+# output, before broadcasting the approval or signing the permit.
+_APPROVAL_PROMPT_TAIL = "Approve unlimited Permit2 allowance? [y/N] "
+# A token name can embed a fake prompt tail, so a pipe read that stops inside
+# the name would look like a complete prompt. twak writes the prompt in one
+# write and then blocks on stdin; answer only once stderr has been quiet this
+# long, so the whole block (with any duplicated markers) is checked.
+_PROMPT_QUIET_SECONDS = 0.2
+# twak error codes that mean the confirmed payment was still not signed.
+_NOT_SENT_ERROR_CODES = frozenset({"PAYMENT_CANCELLED", "PERMIT2_APPROVAL_REQUIRED"})
+_MAY_HAVE_PAID = (
+    "the payment was confirmed and may have been sent, so the session budget "
+    "stays reserved; reconcile with the merchant before retrying"
+)
+
+
+def _error_code(stdout: str) -> str | None:
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return None
+    code = payload.get("errorCode") if isinstance(payload, dict) else None
+    return code if isinstance(code, str) else None
+
+
+def _check_sign_prompt(
+    text: str, expected: TwakPaymentTerms
+) -> TwakPaymentTermsMismatchError | None:
+    """Return None if twak's pending prompt shows ``expected`` (the amount may be lower)."""
+    match = _SIGN_PROMPT_RE.search(text)
+    if match is None or any(text.count(marker) != 1 for marker in _SIGN_PROMPT_MARKERS):
+        return TwakPaymentTermsMismatchError(
+            "prompt", "twak v0.20.0 confirmation prompt", text[-300:]
+        )
+    if int(match["amount"]) > expected.amount:
+        return TwakPaymentTermsMismatchError("amount", str(expected.amount), match["amount"])
+    shown = {
+        "asset": (expected.asset.lower(), match["asset"].lower()),
+        "network": (expected.network.lower(), match["network"].lower()),
+        "pay_to": (expected.pay_to.lower(), match["pay_to"].lower()),
+    }
+    for field, (want, got) in shown.items():
+        if want != got:
+            return TwakPaymentTermsMismatchError(field, want, got)
+    return None
+
 
 _ZERO_ADDRESS = "0x" + "00" * 20
 _ZERO_REASON = b"\x00" * 32
@@ -272,6 +425,16 @@ class TWAKProvider(WalletProvider, IntentExecutor):
             fed from the ``TWAK_WALLET_JSON`` bundle key) and a missing
             wallet raises instead of silently minting a new on-chain
             identity (INV-4).
+        confirm_tx_unseen: Secondary-confirmation seam for sponsored receipt
+            timeouts (tests replace the real multi-RPC probe). Default:
+            :func:`~bnbagent.core.relay_verifier.confirm_tx_unseen`.
+        allow_unverified_cli_version: Confirm x402 payments with a twak
+            release other than :data:`TWAK_X402_VERIFIED_CLI`. Off by
+            default: the payment check reads twak's pre-signing prompt, whose
+            wording or meaning a new release may change. A prompt that no
+            longer parses is still declined either way. Setting
+            ``BNBAGENT_TWAK_ALLOW_UNVERIFIED_CLI=1`` has the same effect
+            without a code change.
 
     Like ``EVMWalletProvider``, this provider auto-creates a wallet when none
     exists — see :meth:`_ensure_wallet` / :meth:`create_wallet` (disable with
@@ -306,6 +469,8 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         home: str | Path | None = None,
         expected_address: str | None = None,
         auto_create: bool = True,
+        allow_unverified_cli_version: bool = False,
+        confirm_tx_unseen: Callable[..., SecondaryConfirmation] | None = None,
     ):
         if chain.lower() not in _ALLOWED_CHAINS:
             raise ValueError(
@@ -320,6 +485,12 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         self._home = Path(home) if home is not None else None
         self._expected_address = expected_address
         self._auto_create = auto_create
+        self._allow_unverified_cli_version = allow_unverified_cli_version
+        self._cli_verified = False
+        self._confirm_tx_unseen = confirm_tx_unseen or relay_verifier.confirm_tx_unseen
+        # Public web3 from the ExecutionContext, used only to reconcile
+        # sponsored receipt timeouts.
+        self._web3: Any = None
         self._address: str | None = None
         self._ensured = False  # guards the one-shot lazy auto-create
         # Captured from the ExecutionContext (make_executor); forwarded to
@@ -328,7 +499,7 @@ class TWAKProvider(WalletProvider, IntentExecutor):
 
     # ── subprocess plumbing ──
 
-    def _run(self, args: list[str]) -> dict[str, Any]:
+    def _run(self, args: list[str], *, paid_body: bool = False) -> Any:
         """Run ``twak <args> --json`` and return the parsed JSON object.
 
         Failure = non-zero exit, a truthy ``error`` field, or ``success`` set
@@ -366,7 +537,78 @@ class TWAKProvider(WalletProvider, IntentExecutor):
             raise RuntimeError(
                 f"twak command timed out after {self._timeout}s: {_redact(cmd)}"
             ) from e
+        if paid_body:
+            return self._paid_body(cmd, proc.returncode, proc.stdout, proc.stderr)
+        timeout = _parse_receipt_timeout(proc.stdout) if self._paymaster_url else None
+        if timeout is not None and timeout[1] == self._chain:
+            raise self._classify_sponsored_receipt_timeout(timeout[0])
+        return self._interpret(cmd, proc.returncode, proc.stdout, proc.stderr)
 
+    def _classify_sponsored_receipt_timeout(self, tx_hash: str) -> Exception:
+        """Tell "visible but not mined" from "the relay hash is nowhere".
+
+        twak gave up waiting for the receipt of a sponsored write. If the
+        public chain (or two independent fallback RPCs) can see the hash, the
+        write is pending: waiting is right, re-sending is not. Otherwise the
+        relay may never have broadcast it: do not retry blindly.
+        """
+        visible = False
+        try:
+            visible = (
+                self._web3 is not None and self._web3.eth.get_transaction(tx_hash) is not None
+            )
+        except Exception:  # noqa: BLE001 - not found or RPC failure: not visible
+            visible = False
+        secondary: SecondaryConfirmation | str = "not-checked"
+        if not visible:
+            try:
+                secondary = self._confirm_tx_unseen(
+                    tx_hash, chain_id=_CHAIN_ID_FOR_TWAK_CHAIN[self._chain]
+                )
+            except Exception:  # noqa: BLE001 - treat a failing probe as no quorum
+                secondary = "inconclusive"
+            visible = secondary == "seen"
+        if visible:
+            pending = TransactionPendingError(
+                tx_hash,
+                _TWAK_RECEIPT_TIMEOUT_SECONDS,
+                f"TWAK sponsored transaction {tx_hash} is visible on the public chain, but "
+                "TWAK timed out waiting for its receipt. Do not retry until the transaction "
+                "or job state is reconciled.",
+            )
+            pending.relay_status = "receipt_timeout_but_tx_visible"
+            return pending
+        unverified = RelaySubmissionUnverifiedError(
+            tx_hash,
+            _TWAK_RECEIPT_TIMEOUT_SECONDS,
+            f"TWAK sponsored relay returned transaction {tx_hash}, but the SDK could not "
+            "verify it on the public chain after TWAK timed out waiting for its receipt. "
+            "Do not retry blindly; reconcile the relay transaction and wallet nonce before "
+            "issuing another write.",
+        )
+        if secondary in ("confirmed-unseen", "inconclusive"):
+            unverified.secondary_rpc_result = secondary
+        return unverified
+
+    def _paid_body(self, cmd: list[str], returncode: int, stdout: str, stderr: str) -> Any:
+        """An ``x402 request`` result: exit 0 is the paid endpoint's body verbatim.
+
+        The body may be any JSON (object, array, null, string) and may carry
+        its own ``error`` / ``success`` fields; they belong to the endpoint,
+        not to twak, whose own failures always exit non-zero.
+        """
+        if returncode != 0:
+            raise RuntimeError(self._format_error(cmd, stdout, stderr))
+        try:
+            return json.loads(stdout) if stdout.strip() else None
+        except json.JSONDecodeError:
+            return stdout
+
+    def _interpret(
+        self, cmd: list[str], returncode: int, stdout: str, stderr: str
+    ) -> dict[str, Any]:
+        """Parse one finished invocation with the field-verified envelope quirks."""
+        proc = subprocess.CompletedProcess(cmd, returncode, stdout, stderr)
         if proc.returncode != 0:
             # Quirk (field-verified v0.18.0): `x402 quote` exits non-zero on an
             # empty `accepts` list while emitting an explicit success envelope
@@ -391,6 +633,170 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         if data.get("error") or data.get("success") is False:
             raise RuntimeError(self._format_error(cmd, proc.stdout, proc.stderr))
         return data
+
+    def _require_verified_cli(self) -> None:
+        """Refuse a twak release whose x402 prompt the SDK was not verified on."""
+        if (
+            self._cli_verified
+            or self._allow_unverified_cli_version
+            or get_env("BNBAGENT_TWAK_ALLOW_UNVERIFIED_CLI") == "1"
+        ):
+            return
+        cmd = [self._twak_bin, "--version"]
+        env = {**os.environ, "HOME": str(self._home)} if self._home is not None else None
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=self._timeout, env=env
+            )
+        except FileNotFoundError as e:
+            raise RuntimeError(f"twak CLI not found (looked for {self._twak_bin!r})") from e
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(f"twak --version timed out after {self._timeout}s") from e
+        found = re.search(r"\d+\.\d+\.\d+", proc.stdout)
+        version = found.group(0) if found else (proc.stdout.strip() or "unknown")
+        if not re.fullmatch(rf"{re.escape(TWAK_X402_VERIFIED_CLI)}\.\d+", version):
+            raise RuntimeError(
+                f"twak {version} is not verified for x402 payments: the SDK checks "
+                f"twak's pre-signing prompt and was verified on twak "
+                f"{TWAK_X402_VERIFIED_CLI}.x. Install @trustwallet/cli@"
+                f"{TWAK_X402_VERIFIED_CLI} or a bnbagent release verified on "
+                f"{version}; allow_unverified_cli_version=True or "
+                "BNBAGENT_TWAK_ALLOW_UNVERIFIED_CLI=1 tries anyway (a prompt that no "
+                "longer parses is still declined)."
+            )
+        self._cli_verified = True
+
+    def _run_x402_confirmed(
+        self,
+        args: list[str],
+        expected: TwakPaymentTerms,
+        on_confirm: Callable[[TwakPaymentTerms], None] | None = None,
+    ) -> dict[str, Any]:
+        """Run ``twak <args> --json``, answering its pre-signing prompt on stdin.
+
+        twak prints the final payment terms and waits for ``y`` before it
+        signs. The provider answers ``y`` only if they equal ``expected``;
+        otherwise (or for an unrecognised prompt) it answers ``n`` and raises
+        :class:`TwakPaymentTermsMismatchError`, so nothing is signed. stdin is
+        closed right after the answer: twak cannot be confirmed twice, and it
+        exits once the request is done.
+
+        Exit 0 returns the endpoint body verbatim (any JSON). Failures raise
+        :class:`TwakPaymentNotSentError` when no payment can have left twak
+        (before the ``y``, twak reports it cancelled / needing Permit2
+        approval, or the verified twak release exited 0 without asking) and
+        :class:`TwakPaymentStateUnknownError` otherwise.
+        """
+        cmd = [self._twak_bin, *args, "--json"]
+        env = {**os.environ, "HOME": str(self._home)} if self._home is not None else None
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+            )
+        except FileNotFoundError as e:
+            missing = RuntimeError(
+                f"twak CLI not found (looked for {self._twak_bin!r}). "
+                "Install it with `npm install -g @trustwallet/cli`, then "
+                "configure it (see TWAKProvider prerequisites)."
+            )
+            raise TwakPaymentNotSentError(missing) from e
+
+        stdout_chunks: list[bytes] = []
+        stderr_buf = bytearray()
+        changed = threading.Condition()
+
+        def pump(stream: Any, sink: Any) -> None:
+            for chunk in iter(lambda: os.read(stream.fileno(), 4096), b""):
+                with changed:
+                    sink(chunk)
+                    changed.notify_all()
+            with changed:
+                changed.notify_all()
+
+        readers = [
+            threading.Thread(target=pump, args=(proc.stdout, stdout_chunks.append), daemon=True),
+            threading.Thread(target=pump, args=(proc.stderr, stderr_buf.extend), daemon=True),
+        ]
+        for reader in readers:
+            reader.start()
+
+        def close_stdin(reply: bytes = b"") -> None:
+            try:
+                proc.stdin.write(reply)
+                proc.stdin.close()
+            except OSError:
+                pass
+
+        deadline = time.monotonic() + self._timeout
+        mismatch: TwakPaymentTermsMismatchError | None = None
+        confirmed = False
+        pending_len, pending_since = 0, 0.0
+        try:
+            while True:
+                with changed:
+                    finished = proc.poll() is not None and not any(r.is_alive() for r in readers)
+                    if not finished:
+                        changed.wait(timeout=0.05)
+                    text = stderr_buf.decode("utf-8", errors="replace")
+                if finished:
+                    break
+                now = time.monotonic()
+                if now > deadline:
+                    proc.kill()
+                    timed_out = f"twak command timed out after {self._timeout}s: {_redact(cmd)}"
+                    if confirmed:
+                        raise TwakPaymentStateUnknownError(f"{timed_out}; {_MAY_HAVE_PAID}")
+                    raise TwakPaymentNotSentError(RuntimeError(timed_out))
+                if proc.stdin.closed or not text.endswith(_SIGN_PROMPT_TAIL):
+                    continue
+                if len(text) != pending_len:
+                    pending_len, pending_since = len(text), now
+                elif now - pending_since >= _PROMPT_QUIET_SECONDS:
+                    mismatch = _check_sign_prompt(text, expected)
+                    if mismatch is None and on_confirm is not None:
+                        signed = _SIGN_PROMPT_RE.search(text)
+                        on_confirm(replace(expected, amount=int(signed["amount"])))
+                    confirmed = mismatch is None
+                    close_stdin(b"y\n" if confirmed else b"n\n")
+        finally:
+            if not proc.stdin.closed:
+                close_stdin()
+            proc.wait()
+            for reader in readers:
+                reader.join(timeout=1)
+
+        if mismatch is not None:
+            raise mismatch
+        stdout = b"".join(stdout_chunks).decode("utf-8", errors="replace")
+        stderr = stderr_buf.decode("utf-8", errors="replace")
+        if proc.returncode == 0 and not stdout.strip() and stderr.endswith(_APPROVAL_PROMPT_TAIL):
+            raise TwakPaymentNotSentError(
+                RuntimeError(
+                    "twak stopped at its Permit2 approval prompt, so nothing was signed; "
+                    "approve Permit2 for this token first or pass auto_approve=True"
+                )
+            )
+        # The verified release signs only after this prompt was answered, so an
+        # exit 0 that never asked paid nothing. Another release might sign
+        # without asking; there the body stays a payment and keeps the budget.
+        if proc.returncode == 0 and not confirmed and self._cli_verified:
+            raise TwakPaymentNotSentError(
+                RuntimeError(
+                    "twak returned the endpoint's response without asking to sign a "
+                    "payment (the paid request got no 402 challenge), so nothing was "
+                    "paid and the response is not returned as a paid x402 result"
+                )
+            )
+        if proc.returncode == 0:
+            return self._paid_body(cmd, proc.returncode, stdout, stderr)
+        failure = RuntimeError(self._format_error(cmd, stdout, stderr))
+        if not confirmed or _error_code(stdout) in _NOT_SENT_ERROR_CODES:
+            raise TwakPaymentNotSentError(failure)
+        raise TwakPaymentStateUnknownError(f"{failure}; {_MAY_HAVE_PAID}")
 
     @staticmethod
     def _format_error(cmd: list[str], stdout: str, stderr: str) -> str:
@@ -684,17 +1090,45 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         prefer_method: str | None = None,
         prefer_asset: str | None = None,
         auto_approve: bool = False,
-    ) -> dict[str, Any]:
+        expected_terms: TwakPaymentTerms | None = None,
+        on_confirm: Callable[[TwakPaymentTerms], None] | None = None,
+    ) -> Any:
         """Make a paid x402 request via ``twak x402 request`` (twak pays).
 
         ``max_payment`` is required: it is the hard per-payment cap twak
         itself enforces (the wallet-layer backstop under the payer's policy
         checks). The ``--prefer-*`` flags narrow which challenge entry twak
         picks (TOCTOU backstop between a prior quote and this request).
+
+        With ``expected_terms`` (what :class:`~bnbagent.x402.TwakX402Payer`
+        always passes), ``--yes`` is omitted: twak re-fetches the challenge
+        and shows the final amount, token contract, network and recipient
+        before signing, and the provider confirms only if the recipient,
+        token contract and network equal ``expected_terms`` and the amount is
+        not above it (raising :class:`TwakPaymentTermsMismatchError`
+        otherwise). ``on_confirm`` receives the terms twak is about to sign,
+        with the final amount, just before the provider answers ``y``.
+        Without ``expected_terms``, twak auto-confirms whatever the re-fetched
+        challenge asks for, up to ``max_payment``.
+
+        Exit 0 returns the endpoint body verbatim (any JSON, including bodies
+        with their own ``error`` field). With ``expected_terms``, failures
+        raise :class:`TwakPaymentNotSentError` (wrapping the cause) when no
+        payment can have been sent, or :class:`TwakPaymentStateUnknownError`
+        once the payment was confirmed.
         """
         _reject_sensitive_argv_url(url)
-        self._ensure_wallet()
-        args = ["x402", "request", url, "--max-payment", str(max_payment), "--yes"]
+        if expected_terms is None:
+            self._ensure_wallet()
+        else:
+            try:
+                self._ensure_wallet()
+                self._require_verified_cli()
+            except Exception as e:
+                raise TwakPaymentNotSentError(e) from e
+        args = ["x402", "request", url, "--max-payment", str(max_payment)]
+        if expected_terms is None:
+            args.append("--yes")
         if method != "GET":
             args += ["--method", method]
         if body is not None:
@@ -711,7 +1145,9 @@ class TWAKProvider(WalletProvider, IntentExecutor):
         # goes to stderr (field-verified) — _run parses stdout only, never a
         # merged stream. On success the JSON is the paid endpoint's response
         # body verbatim, with NO payment-receipt metadata (gaps S-7).
-        return self._run(args)
+        if expected_terms is None:
+            return self._run(args, paid_body=True)
+        return self._run_x402_confirmed(args, expected_terms, on_confirm)
 
     def make_x402_payer(self, **payer_kwargs: Any):
         """Delegated x402 payer: twak builds/signs/settles the payment.
@@ -728,10 +1164,11 @@ class TWAKProvider(WalletProvider, IntentExecutor):
 
     def make_executor(self, context: ExecutionContext) -> IntentExecutor:
         """This wallet broadcasts its own transactions, so it *is* its own
-        executor. The web3 ``context`` is not needed, but a paymaster IS
-        honoured (twak v0.20.0, gaps REQ-2 shipped): its URL is captured here
-        and forwarded to every write command as ``--paymaster-url``, so twak
-        routes the broadcast through the SDK-configured sponsorship endpoint.
+        executor. The web3 connection is kept only to reconcile sponsored
+        receipt timeouts. A paymaster IS honoured (twak v0.20.0, gaps REQ-2
+        shipped): its URL is captured here and forwarded to every write
+        command as ``--paymaster-url``, so twak routes the broadcast through
+        the SDK-configured sponsorship endpoint.
         Because the executor is the provider itself, the latest
         ``make_executor`` context wins — the supported shape is one client
         per provider (which is how the facades construct them)."""
@@ -744,6 +1181,7 @@ class TWAKProvider(WalletProvider, IntentExecutor):
                 "--paymaster-url (v0.20.0)."
             )
         self._paymaster_url = url
+        self._web3 = context.web3
         return self
 
     def execute(self, intent: Intent) -> dict[str, Any]:

@@ -16,7 +16,7 @@
  * when the caller doesn't ask for one.
  */
 
-import { getAddress as toChecksumAddress } from "viem";
+import { getAddress as toChecksumAddress, toFunctionSelector } from "viem";
 import { NETWORKS } from "../../config.js";
 import { BNB_CHAIN_ADDRESSES } from "../../networks/addresses.js";
 import { getAssetByAddress, listAssets } from "../../networks/assets.js";
@@ -77,6 +77,150 @@ const REGISTRY_SIGNATURES = {
   setMetadata: "setMetadata(uint256,string,bytes)",
   setAgentURI: "setAgentURI(uint256,string)",
 } as const;
+
+/**
+ * The identity Registry's ERC-721 approval and transfer functions. A session
+ * allowed to call them could move the agent NFT or leave an approval that
+ * outlives the session (SRC-1403), so `extraCalls` cannot add them.
+ */
+const REGISTRY_FORBIDDEN_SELECTORS: ReadonlySet<string> = new Set(
+  [
+    "approve(address,uint256)",
+    "setApprovalForAll(address,bool)",
+    "transferFrom(address,address,uint256)",
+    "safeTransferFrom(address,address,uint256)",
+    "safeTransferFrom(address,address,uint256,bytes)",
+  ].map((signature) => toFunctionSelector(signature)),
+);
+
+/**
+ * Porto's call-permission wildcards (`Call.anyTarget` / `Call.anySelector`):
+ * the account matches them against every contract or every function, so
+ * they would bypass the token and Registry checks below.
+ */
+const PORTO_ANY_TARGET = "0x3232323232323232323232323232323232323232";
+const PORTO_ANY_SELECTOR = "0x32323232";
+
+/**
+ * The 4-byte selector the account receives for a call-permission signature,
+ * or `null`. Porto's `Key.toRelay` sends any `0x`-prefixed signature to the
+ * relay verbatim as the selector, so only an exact 4-byte hex value is one.
+ */
+function selectorOf(signature: string): string | null {
+  if (signature.startsWith("0x")) {
+    return /^0x[0-9a-fA-F]{8}$/u.test(signature)
+      ? signature.toLowerCase()
+      : null;
+  }
+  try {
+    return toFunctionSelector(signature);
+  } catch {
+    return null;
+  }
+}
+
+/** What a session's call permissions may not reach on one chain. */
+interface CallPermissionBoundary {
+  registry: string | undefined;
+  forbiddenTokens: ReadonlySet<string>;
+}
+
+function callPermissionBoundary(
+  chainId: number,
+  registry: `0x${string}` | undefined,
+  paymentToken: `0x${string}` | undefined,
+): CallPermissionBoundary {
+  const forbiddenTokens = new Set<string>(
+    paymentToken ? [paymentToken.toLowerCase()] : [],
+  );
+  try {
+    for (const asset of listAssets(chainId)) {
+      forbiddenTokens.add(asset.address.toLowerCase());
+    }
+  } catch {
+    // Unknown chains retain the legacy explicit paymentToken boundary.
+  }
+  return { registry: registry?.toLowerCase(), forbiddenTokens };
+}
+
+/**
+ * Check one call permission against `boundary`; returns it with a
+ * checksummed `to` and a hex selector lowercased. A missing `to` or
+ * `signature` is refused because Porto turns it into its any-target or
+ * any-function wildcard.
+ */
+function checkCallPermission(
+  call: { to?: string; signature?: string },
+  boundary: CallPermissionBoundary,
+  label: string,
+): StrictAgentCallPermission {
+  if (!call.to || !call.signature) {
+    throw new Error(`${label} must bind both to and signature`);
+  }
+  const to = toChecksumAddress(call.to);
+  const selector = selectorOf(call.signature);
+  if (
+    to.toLowerCase() === PORTO_ANY_TARGET ||
+    selector === PORTO_ANY_SELECTOR
+  ) {
+    throw new Error(
+      `${label} cannot use Porto's any-target or any-function wildcard (got ${JSON.stringify({ to: call.to, signature: call.signature })}): it would also grant the payment tokens and the Registry's ERC-721 approval and transfer functions`,
+    );
+  }
+  if (selector === null) {
+    throw new Error(
+      `${label} needs a function signature or an exact 4-byte selector (got ${JSON.stringify(call.signature)}): anything else reaches the Altana relay unchecked`,
+    );
+  }
+  if (boundary.forbiddenTokens.has(to.toLowerCase())) {
+    throw new Error(
+      "session calls to catalog payment tokens are forbidden: provision Commerce " +
+        "allowances outside the session so they cannot outlive session " +
+        "expiry or revocation",
+    );
+  }
+  if (
+    to.toLowerCase() === boundary.registry &&
+    REGISTRY_FORBIDDEN_SELECTORS.has(selector)
+  ) {
+    throw new Error(
+      `session calls to the Registry's ERC-721 approval and transfer functions are forbidden (got ${JSON.stringify(call.signature)}): an agent NFT approval would outlive session expiry or revocation`,
+    );
+  }
+  return {
+    to,
+    signature: call.signature.startsWith("0x") ? selector : call.signature,
+  };
+}
+
+/**
+ * Apply the `extraCalls` checks of {@link defaultAgentPermissions} to every
+ * call of an arbitrary permission set for `chainId`: both `to` and
+ * `signature` bound, no Porto wildcard, a parseable signature, no catalog
+ * payment token target, and none of the Registry's ERC-721 approval and
+ * transfer functions. Returns the permissions with the calls normalised.
+ */
+export function checkSessionPermissions(
+  permissions: AltanaSessionPermissions,
+  chainId: number,
+  label = "session permissions",
+): AltanaSessionPermissions {
+  if (permissions.calls === undefined) {
+    return permissions;
+  }
+  const preset = presetTargets(chainId);
+  const boundary = callPermissionBoundary(
+    chainId,
+    preset?.registry,
+    preset?.paymentToken,
+  );
+  return {
+    ...permissions,
+    calls: permissions.calls.map((call, i) =>
+      checkCallPermission(call, boundary, `${label}.calls[${i}]`),
+    ),
+  };
+}
 
 const COMMERCE_SIGNATURES = {
   createJob: "createJob(address,address,uint256,string,address)",
@@ -257,35 +401,19 @@ function compileAltanaPermissions(
     allow(targets.policy, [POLICY_SIGNATURES.voteReject]);
   }
 
-  const forbiddenTokenTargets = new Set<string>([
-    targets.paymentToken.toLowerCase(),
-  ]);
-  try {
-    for (const asset of listAssets(opts.chainId)) {
-      forbiddenTokenTargets.add(asset.address.toLowerCase());
-    }
-  } catch {
-    // Unknown chains retain the legacy explicit paymentToken boundary.
-  }
-
+  const boundary = callPermissionBoundary(
+    opts.chainId,
+    targets.registry,
+    targets.paymentToken,
+  );
   for (const extra of opts.extraCalls ?? []) {
-    if (!extra.to || !extra.signature) {
-      throw new Error(
-        "defaultAgentPermissions.extraCalls must bind both to and signature",
-      );
-    }
-    const to = toChecksumAddress(extra.to);
-    if (forbiddenTokenTargets.has(to.toLowerCase())) {
-      throw new Error(
-        "session calls to catalog payment tokens are forbidden: provision Commerce " +
-          "allowances outside the session so they cannot outlive session " +
-          "expiry or revocation",
-      );
-    }
-    calls.push({
-      to,
-      signature: extra.signature,
-    });
+    calls.push(
+      checkCallPermission(
+        extra,
+        boundary,
+        "defaultAgentPermissions.extraCalls",
+      ),
+    );
   }
 
   const dedupedCalls: AltanaCallPermission[] = [

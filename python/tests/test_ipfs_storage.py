@@ -117,25 +117,22 @@ class TestIPFSStorageProvider:
 
     @pytest.mark.asyncio
     async def test_download_from_gateway(self):
+        import httpx
+
         provider = _make_provider()
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"downloaded": True}
-        mock_response.raise_for_status = MagicMock()
+        requests = []
 
-        mock_client = AsyncMock()
-        mock_client.get.return_value = mock_response
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(200, json={"downloaded": True})
 
+        real_client = httpx.AsyncClient
         with patch(
-            "bnbagent.storage.ipfs_storage_provider.httpx.AsyncClient", return_value=mock_client
+            "bnbagent.storage.ipfs_storage_provider.httpx.AsyncClient",
+            side_effect=lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
         ):
-            result = await provider.download(f"ipfs://{VALID_CID}")
-
-        assert result["downloaded"] is True
-        mock_client.get.assert_called_once()
-        call_args = mock_client.get.call_args[0][0]
-        assert VALID_CID in call_args
+            assert await provider.download(f"ipfs://{VALID_CID}") == {"downloaded": True}
+        assert VALID_CID in str(requests[0].url)
 
     @pytest.mark.asyncio
     async def test_exists_true(self):
@@ -201,3 +198,65 @@ class TestIPFSStorageProvider:
     def test_extract_cid_accepts_valid_v0(self):
         cid = IPFSStorageProvider._extract_cid(f"ipfs://{VALID_CID}")
         assert cid == VALID_CID
+
+
+@pytest.mark.parametrize("declared", [False, True])
+async def test_download_caps_bytes_with_or_without_content_length(declared):
+    import httpx
+
+    provider = IPFSStorageProvider("https://pin.example", "key", max_download_bytes=16)
+
+    class Body(httpx.AsyncByteStream):
+        closed = False
+
+        async def __aiter__(self):
+            yield b"x" * 32
+
+        async def aclose(self):
+            self.closed = True
+
+    body = Body()
+
+    def handler(request):
+        return httpx.Response(
+            200, stream=body, headers={"content-length": "32"} if declared else {}
+        )
+
+    real_client = httpx.AsyncClient
+    with patch(
+        "bnbagent.storage.ipfs_storage_provider.httpx.AsyncClient",
+        side_effect=lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
+    ):
+        with pytest.raises(StorageError, match="byte limit"):
+            await provider.download(f"ipfs://{VALID_CID}")
+    assert body.closed
+
+
+async def test_download_deadline_includes_streamed_body():
+    import asyncio
+
+    import httpx
+
+    provider = IPFSStorageProvider("https://pin.example", "key", download_timeout=0.01)
+
+    class Body(httpx.AsyncByteStream):
+        closed = False
+
+        async def __aiter__(self):
+            await asyncio.sleep(10)
+            yield b"{}"
+
+        async def aclose(self):
+            self.closed = True
+
+    body = Body()
+    real_client = httpx.AsyncClient
+    with patch(
+        "bnbagent.storage.ipfs_storage_provider.httpx.AsyncClient",
+        side_effect=lambda **kw: real_client(
+            transport=httpx.MockTransport(lambda _: httpx.Response(200, stream=body)), **kw
+        ),
+    ):
+        with pytest.raises(asyncio.TimeoutError):
+            await provider.download(f"ipfs://{VALID_CID}")
+    assert body.closed

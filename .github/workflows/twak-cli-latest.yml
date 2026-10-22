@@ -1,0 +1,119 @@
+name: twak CLI compatibility
+
+# Weekly run of the real-CLI x402 tests against the newest twak releases, so a
+# changed pre-signing prompt is caught before users upgrade. `~0.20.0` is the
+# newest patch of the verified line (TWAK_X402_VERIFIED_CLI) and must pass as
+# is; `latest` runs with TWAK_CLI_ALLOW_UNVERIFIED=1. A green `latest` run is
+# the evidence needed to widen TWAK_X402_VERIFIED_CLI; a red one means the
+# prompt parser must be updated first.
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+jobs:
+  typescript:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cli: ["~0.20.0", "latest"]
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: typescript/package.json
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: typescript/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install twak ${{ matrix.cli }}
+        run: |
+          npm install --no-save --prefix "$RUNNER_TEMP/twak" "@trustwallet/cli@${{ matrix.cli }}"
+          "$RUNNER_TEMP/twak/node_modules/.bin/twak" --version
+
+      - name: Real-CLI x402 tests
+        env:
+          TWAK_CLI_BIN: ${{ runner.temp }}/twak/node_modules/.bin/twak
+          TWAK_CLI_ALLOW_UNVERIFIED: ${{ matrix.cli == 'latest' && '1' || '' }}
+        run: pnpm exec vitest run tests/twakRealCli.test.ts
+
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cli: ["~0.20.0", "latest"]
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Install dependencies
+        run: uv sync --extra dev --python 3.12
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install twak ${{ matrix.cli }}
+        run: |
+          npm install --no-save --prefix "$RUNNER_TEMP/twak" "@trustwallet/cli@${{ matrix.cli }}"
+          "$RUNNER_TEMP/twak/node_modules/.bin/twak" --version
+
+      - name: Real-CLI x402 tests
+        env:
+          TWAK_CLI_BIN: ${{ runner.temp }}/twak/node_modules/.bin/twak
+          TWAK_CLI_ALLOW_UNVERIFIED: ${{ matrix.cli == 'latest' && '1' || '' }}
+        run: uv run pytest tests/test_twak_real_cli.py
+
+  report:
+    # Scheduled-run failures notify only the last editor of the cron line, so
+    # a failure also opens (or updates) a tracking issue for the team.
+    needs: [typescript, python]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="twak CLI compatibility check failing"
+          body="The weekly real-CLI x402 run failed: $RUN_URL
+
+          If only the latest jobs failed, a new twak release changed the pre-signing flow: keep TWAK_X402_VERIFIED_CLI as it is and update the prompt check before widening it.
+          If a ~0.20.0 job failed, a patch release of the verified line changed it, and paid requests may already fail for users on that release."
+          existing=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

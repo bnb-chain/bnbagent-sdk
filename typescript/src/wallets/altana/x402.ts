@@ -14,9 +14,11 @@
  *
  * On-chain spend bound: session spend caps do NOT apply to Permit2 pulls
  * (the checker gate is independent of spend permissions — Altana docs), so
- * the wallet→Permit2 allowance is the only on-chain ceiling. Keep it
- * bounded via `AltanaWalletProvider.setPermit2Allowance` and treat the
- * caps here as the in-process guard on top.
+ * the wallet's outer Permit2 approvals are the only on-chain ceiling, every
+ * token's: a checker-approved session can sign for any token approved to
+ * Permit2. Keep the x402 one bounded via
+ * `AltanaWalletProvider.setPermit2Allowance`, leave no other token approved
+ * to Permit2, and treat the caps here as the in-process guard on top.
  *
  * One-time setup (admin, once per session): approve the checker
  * (`approveX402SignatureChecker`) and fund a bounded allowance

@@ -23,7 +23,7 @@ import { describe, expect, it } from "vitest";
 import { optimisticPolicyAbi } from "../src/abis/optimisticPolicy.js";
 import { PolicyClient } from "../src/erc8183/policy.js";
 import { Verdict } from "../src/erc8183/types.js";
-import { RpcRangeLimitError } from "../src/errors.js";
+import { NetworkError, RpcRangeLimitError } from "../src/errors.js";
 import {
   type SignedTx,
   WalletProvider,
@@ -305,7 +305,7 @@ describe("PolicyClient: getDeliverableUrl", () => {
     ).rejects.toBeInstanceOf(RpcRangeLimitError);
   });
 
-  it("swallows other event-query errors and returns null", async () => {
+  it("raises NetworkError on other event-query errors instead of returning null (audit M09)", async () => {
     const mock = mockPublicClient({
       eth_getLogs: () => {
         throw new Error("boom");
@@ -314,6 +314,6 @@ describe("PolicyClient: getDeliverableUrl", () => {
     const client = new PolicyClient(mock.client, CONTRACT_ADDRESS);
     await expect(
       client.getDeliverableUrl(1n, { hintBlock: 100n }),
-    ).resolves.toBeNull();
+    ).rejects.toBeInstanceOf(NetworkError);
   });
 });

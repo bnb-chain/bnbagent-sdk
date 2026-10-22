@@ -16,6 +16,8 @@ import type { WalletProvider } from "../src/wallets/walletProvider.js";
 
 const ME = getAddress(`0x${"aa".repeat(20)}`);
 const OTHER = getAddress(`0x${"77".repeat(20)}`);
+const ROUTER = getAddress(`0x${"cc".repeat(20)}`);
+const POLICY = getAddress(`0x${"dd".repeat(20)}`);
 const DEFAULT = getAsset(97, AssetId.TEST_U);
 const USDC = getAsset(97, AssetId.TEST_USDC);
 const USDT = getAsset(97, AssetId.TEST_USDT);
@@ -28,12 +30,12 @@ function job(overrides: Partial<Job> = {}): Job {
     id: 1n,
     client: getAddress(`0x${"bb".repeat(20)}`),
     provider: ME,
-    evaluator: getAddress(`0x${"cc".repeat(20)}`),
+    evaluator: ROUTER,
     description: "",
     budget: 1000n,
     expiredAt: BigInt(Math.floor(Date.now() / 1000) + 3600),
     status: JobStatus.FUNDED,
-    hook: getAddress(`0x${"cc".repeat(20)}`),
+    hook: ROUTER,
     deliverable: `0x${"00".repeat(32)}`,
     submittedAt: 0n,
     ...overrides,
@@ -57,6 +59,11 @@ function mockClient() {
     },
     network: { chainId: 97 },
     commerce: { address: getAddress(`0x${"11".repeat(20)}`) },
+    router: {
+      address: ROUTER,
+      jobPolicy: vi.fn(async () => POLICY),
+      policyWhitelist: vi.fn(async () => true),
+    },
     policy: { disputeWindow: vi.fn(async () => 0n) },
   };
 }

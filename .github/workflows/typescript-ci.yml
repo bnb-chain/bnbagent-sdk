@@ -74,3 +74,36 @@ jobs:
         run: |
           pnpm run example:x402
           pnpm run example:security
+
+  twak-cli:
+    # TwakX402Payer against the real twak CLI, fully offline: the test preloads
+    # tests/fixtures/twak/intercept-fetch.cjs into the CLI, which serves the
+    # x402 endpoint in-process and blocks every other host. Pinned to the
+    # release line in TWAK_X402_VERIFIED_CLI (keep the two in sync);
+    # twak-cli-latest.yml covers newer releases.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: typescript/package.json
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: typescript/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install the verified twak CLI
+        run: npm install --no-save --prefix "$RUNNER_TEMP/twak" @trustwallet/cli@0.20.0
+
+      - name: Real-CLI x402 tests
+        env:
+          TWAK_CLI_BIN: ${{ runner.temp }}/twak/node_modules/.bin/twak
+        run: pnpm exec vitest run tests/twakRealCli.test.ts

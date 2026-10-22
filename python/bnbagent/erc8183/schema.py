@@ -100,6 +100,8 @@ class DeliverableManifest:
                 f"Supported: {sorted(_SUPPORTED_VERSIONS)}"
             )
         response = d["response"]
+        if not isinstance(response, dict):
+            raise ValueError("DeliverableManifest.response must be an object")
         if "content" not in response:
             raise ValueError("DeliverableManifest.response must contain 'content'")
         for field_name in ("job_id", "chain_id", "contracts"):

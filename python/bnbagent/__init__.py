@@ -58,6 +58,7 @@ from .erc8183 import (
 from .exceptions import (
     BNBAgentError,
     ERC8004PartialRegistrationError,
+    RelaySubmissionUnverifiedError,
     TransactionPendingError,
 )
 
@@ -76,6 +77,7 @@ __all__ = [
     "NetworkConfig",
     "BNBAgentError",
     "TransactionPendingError",
+    "RelaySubmissionUnverifiedError",
     "ERC8004PartialRegistrationError",
     "load_env",
     # Transaction tuning

@@ -10,6 +10,7 @@ from typing import Any
 from eth_account import Account
 from eth_account.messages import defunct_hash_message, encode_defunct
 from web3 import Web3
+from web3.exceptions import BadFunctionCallOutput, ContractLogicError
 
 from .negotiation import _build_description_content
 
@@ -43,6 +44,7 @@ class QuoteSignatureVerdict:
     method: str | None = None
     signer: str | None = None
     reason: str | None = None
+    signed_content: dict[str, Any] | None = None
 
 
 def _invalid(reason: str) -> QuoteSignatureVerdict:
@@ -69,6 +71,28 @@ def _quote_expiry(envelope: dict[str, Any]) -> Any:
     if isinstance(response, dict):
         return envelope.get("quote_expires_at") or response.get("quote_expires_at")
     return envelope.get("quote_expires_at")
+
+
+def quote_content_error(envelope: dict[str, Any]) -> str | None:
+    """Validate untrusted signed content without any chain or historical scan."""
+    try:
+        if "request" in envelope and not isinstance(envelope["request"], dict):
+            return "invalid quote content"
+        if "response" in envelope:
+            response = envelope["response"]
+            if not isinstance(response, dict) or not isinstance(response.get("terms"), dict):
+                return "invalid quote content"
+        canonical = json.dumps(_signed_content(envelope), sort_keys=True, separators=(",", ":"))
+        digest = Web3.to_hex(Web3.keccak(text=canonical))
+        supplied = envelope.get("negotiation_hash")
+        if not isinstance(supplied, str) or digest.lower() != supplied.lower():
+            return "negotiation_hash mismatch"
+        signature = envelope.get("provider_sig")
+        if not isinstance(signature, str) or not _SIGNATURE_HEX.fullmatch(signature):
+            return "missing or invalid provider_sig"
+    except Exception:
+        return "invalid quote content"
+    return None
 
 
 def verify_quote_signature(
@@ -123,17 +147,10 @@ def verify_quote_signature(
         if w3.eth.chain_id != signed_chain_id:
             return _invalid("chain_id mismatch")
 
-    try:
-        canonical = json.dumps(
-            _signed_content(envelope), sort_keys=True, separators=(",", ":")
-        )
-        recomputed = Web3.keccak(text=canonical).hex()
-        if not recomputed.startswith("0x"):
-            recomputed = "0x" + recomputed
-    except (TypeError, ValueError):
-        return _invalid("invalid quote content")
-    if recomputed.lower() != negotiation_hash.lower():
-        return _invalid("negotiation_hash mismatch")
+    content_error = quote_content_error(envelope)
+    if content_error:
+        return _invalid(content_error)
+    content = _signed_content(envelope)
 
     expiry = _quote_expiry(envelope)
     if expiry is not None:
@@ -154,9 +171,9 @@ def verify_quote_signature(
         )
         if Web3.to_checksum_address(recovered) == provider_address:
             return QuoteSignatureVerdict(
-                valid=True, method="eip191", signer=provider_address
+                valid=True, method="eip191", signer=provider_address, signed_content=content
             )
-    except (TypeError, ValueError):
+    except Exception:
         # Contract-account signatures are often not 65-byte EOA signatures.
         pass
 
@@ -169,12 +186,17 @@ def verify_quote_signature(
     call_transaction = {"from": checker} if checker else {}
     digest = defunct_hash_message(text=negotiation_hash)
     signature_bytes = bytes.fromhex(provider_sig[2:])
-    result = contract.functions.isValidSignature(digest, signature_bytes).call(
-        call_transaction,
-        block_identifier=block_identifier,
-    )
+    try:
+        result = contract.functions.isValidSignature(digest, signature_bytes).call(
+            call_transaction,
+            block_identifier=block_identifier,
+        )
+    except (ContractLogicError, BadFunctionCallOutput):
+        return _invalid("ERC-1271 account rejected provider_sig")
     magic = Web3.to_hex(result).lower()
     if magic != _ERC1271_MAGIC_VALUE:
         return _invalid("ERC-1271 account rejected provider_sig")
 
-    return QuoteSignatureVerdict(valid=True, method="erc1271", signer=provider_address)
+    return QuoteSignatureVerdict(
+        valid=True, method="erc1271", signer=provider_address, signed_content=content
+    )
