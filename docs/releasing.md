@@ -24,30 +24,43 @@ subdirectories, where a bare relative pathspec would match nothing.
 
 ## Lanes
 
-- **npm stable** (`npm-publish.yml`, `release_type: production`): verifies,
-  publishes `--tag latest` with provenance, creates the Git tag and GitHub
-  Release. Notes come from `typescript/scripts/release.ts changelog`.
+- **npm stable** (`npm-publish.yml`, `release_type: production`): packs and
+  verifies the root tarball, publishes the re-encoded verified tarball under
+  `--tag latest` with provenance, and creates the Git tag and GitHub Release
+  through the GitHub API. Notes come from
+  `typescript/scripts/release.ts changelog`.
 - **npm alpha** (`release_type: alpha`): publishes under the `alpha`
-  dist-tag from any source ref. No Git tag, no GitHub Release.
+  dist-tag from a commit reachable on a branch of this repository (`origin/*`).
+  No Git tag, no GitHub Release.
 - **PyPI production** (`pypi-release.yaml`, `release_to_prod: true`): must be
-  dispatched from the default branch; tests, publishes, commits the version
-  bump, tags, creates the GitHub Release.
-- **Test PyPI** (`release_to_prod: false`): upload only — no version commit,
-  tag, or Release.
+  dispatched from the default branch; runs tests, verifies the wheel/sdist and
+  vendored ABIs, smoke-imports each artifact in a fresh environment with the
+  locked runtime dependencies, commits the version bump, publishes to PyPI, and
+  creates the tag and GitHub Release through the GitHub API.
+- **Test PyPI** (`release_to_prod: false`): runs tests, verifies the built
+  artifacts from a repository branch commit, and uploads to Test PyPI — no
+  version commit, tag, or Release.
 
 ## npm publishing
 
 Both npm lanes must be dispatched from the default branch (`main`). Alpha
-accepts any source branch or commit through `source_ref`; production publishes
-the default branch. The alpha `target_version` defaults to `0.6.1` and can be
-set to another unreleased stable version (`X.Y.Z`).
+accepts a branch or commit through `source_ref`, provided the resolved commit
+is reachable from `refs/heads/*` on `origin` (commits only on external fork
+pull requests are refused); production publishes the default branch. The alpha
+`target_version` defaults to `0.6.1` and can be set to another unreleased
+stable version (`X.Y.Z`).
 
 npm authenticates through OIDC rather than `NPM_TOKEN`. Configure the package's
 Trusted Publisher with this repository, workflow `npm-publish.yml`, environment
 `npm-publish`, and `npm publish` allowed.
 
-Before publishing, the workflow validates the package name, version, and
-repository URL in the built tarball.
+Before publishing, the workflow strips `publishConfig`, packs with
+`--ignore-scripts`, validates every tar header (POSIX ustar with an empty
+prefix field, `typeflag`, path normalization, uniqueness) and
+`package/package.json` (`name`, `version`, `repository.url`), then re-encodes
+the verified entries into a clean archive. The smoke install and
+`npm publish` both use that re-encoded archive, never the raw `npm pack`
+output.
 
 ## Latest policy
 
@@ -60,15 +73,27 @@ resolve a specific package's version; use the PyPI/npm registries for that.
 ## Recovery from partial failures
 
 - **PyPI published but tag/Release missing**: re-dispatch with the same
-  version; the workflow detects the version on PyPI, skips the upload, and
-  repairs the tag/Release. If the tag also exists, the preflight refuses —
-  create the Release manually from the existing tag.
+  version; the workflow verifies that the wheel and sdist SHA-256 digests on
+  PyPI match the locally built artifacts, skips the duplicate upload, and
+  repairs the tag/Release. If the digests differ or the tag already exists,
+  the preflight refuses.
 - **npm published but tag/Release missing**: re-dispatch production with
-  `bump: current`; `release.ts` skips versions already on npm and resumes an
-  untagged release commit (see `prepare` in `typescript/scripts/release.ts`).
+  `bump: current`; `release.ts` verifies that `dist.integrity` (SHA-512) on
+  npm matches the locally verified tarball before skipping the upload and
+  resuming an untagged release commit. The comparison uses the re-encoded
+  archive, so it only matches versions published by this workflow after the
+  archive was re-encoded; `@bnbagent/sdk@0.6.1` and earlier were published from
+  the raw `npm pack` output and must be repaired by hand.
+- **Tag created but Release missing**: both lanes create the tag ref through
+  the GitHub API before the Release, and a re-dispatch refuses once the tag
+  exists. Check that the tag points at the released commit, then create the
+  Release by hand with `gh release create <tag> --verify-tag`.
 
 ## Invariants worth keeping
 
+- The tag ref is created with `POST /git/refs` at the released commit, then
+  the Release is attached with `--verify-tag`. `gh release create --target`
+  is ignored when the tag already exists, so it must not create the tag.
 - Release notes are generated and the previous tag is resolved BEFORE the
   new tag is created (an after-the-fact `git describe` would find the new
   tag and produce an empty range).

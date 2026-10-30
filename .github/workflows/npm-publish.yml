@@ -84,8 +84,23 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.source_ref }}
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify source_ref belongs to a repository branch
+        # fetch-depth: 0 already fetched every branch into refs/remotes/origin;
+        # a later git fetch would have no credentials (persist-credentials: false).
+        run: |
+          set -euo pipefail
+          if [[ -z "$(git for-each-ref --count=1 refs/remotes/origin/)" ]]; then
+            echo "Checkout did not fetch any repository branches" >&2
+            exit 1
+          fi
+          SOURCE_SHA="$(git rev-parse --verify HEAD)"
+          if [[ -z "$(git branch -r --contains "$SOURCE_SHA" 'origin/*')" ]]; then
+            echo "Refusing alpha release: $SOURCE_SHA is not reachable from any branch of $GITHUB_REPOSITORY" >&2
+            exit 1
+          fi
 
       - name: Setup Node 24
         uses: actions/setup-node@v4
@@ -374,6 +389,7 @@ jobs:
           # Align package metadata with the workflow identity before building.
           npm pkg set "version=$ALPHA_VERSION" \
             "repository.url=https://github.com/$GITHUB_REPOSITORY.git"
+          npm pkg delete publishConfig
           pnpm run build
           git diff --check
 
@@ -401,7 +417,7 @@ jobs:
           PACK_DIR="$RUNNER_TEMP/npm-pack"
           CONSUMER_DIR="$(mktemp -d)"
           mkdir -p "$PACK_DIR"
-          npm pack --json --pack-destination "$PACK_DIR" >/dev/null
+          npm pack --ignore-scripts --json --pack-destination "$PACK_DIR" >/dev/null
           mapfile -t TARBALLS < <(find "$PACK_DIR" -maxdepth 1 -type f -name '*.tgz')
           if [[ "${#TARBALLS[@]}" -ne 1 ]]; then
             echo "Expected exactly one tarball, found ${#TARBALLS[@]}" >&2
@@ -412,15 +428,18 @@ jobs:
             echo "Unexpected tarball filename: ${TARBALLS[0]}" >&2
             exit 1
           fi
-          tar -xOf "$TARBALL_PATH" package/package.json |
-            jq -e --arg version "$ALPHA_VERSION" \
-              --arg repository "https://github.com/$GITHUB_REPOSITORY.git" \
-              '.name == "@bnbagent/sdk" and .version == $version
-                and .repository.url == $repository' >/dev/null
+          CLEAN_DIR="$RUNNER_TEMP/npm-clean"
+          CLEAN_TARBALL="$CLEAN_DIR/bnbagent-sdk-$ALPHA_VERSION.tgz"
+          mkdir -p "$CLEAN_DIR"
+          pnpm exec tsx scripts/release.ts verify-tarball \
+            "$TARBALL_PATH" \
+            "$ALPHA_VERSION" \
+            "https://github.com/$GITHUB_REPOSITORY.git" \
+            --repack "$CLEAN_TARBALL"
 
           cd "$CONSUMER_DIR"
           npm init -y >/dev/null
-          npm install --ignore-scripts --no-audit --no-fund "$TARBALL_PATH"
+          npm install --ignore-scripts --no-audit --no-fund "$CLEAN_TARBALL"
           node --input-type=module -e \
             "await import('@bnbagent/sdk'); const { getBuiltWithValue } = await import('@bnbagent/sdk/erc8004'); const expected = 'https://github.com/bnb-chain/bnbagent-sdk#v' + process.env.ALPHA_VERSION; if (getBuiltWithValue() !== expected) throw new Error('unexpected built_with version')"
           node -e \
@@ -430,7 +449,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bnbagent-sdk-${{ needs.resolve.outputs.alpha_version }}
-          path: ${{ runner.temp }}/npm-pack/*.tgz
+          path: ${{ runner.temp }}/npm-clean/*.tgz
           if-no-files-found: error
           retention-days: 7
 
@@ -467,7 +486,7 @@ jobs:
       - name: Install OIDC-capable npm
         run: npm install --global npm@11.15.0
 
-      - name: Verify artifact identity
+      - name: Verify artifact identity and repack clean archive
         id: artifact
         env:
           ALPHA_VERSION: ${{ needs.resolve.outputs.alpha_version }}
@@ -480,17 +499,143 @@ jobs:
             echo "Expected exactly one tarball, found ${#TARBALLS[@]}" >&2
             exit 1
           fi
-          TARBALL="$PWD/package/bnbagent-sdk-$ALPHA_VERSION.tgz"
-          if [[ "${TARBALLS[0]}" != "$TARBALL" ]]; then
+          RAW_TARBALL="$PWD/package/bnbagent-sdk-$ALPHA_VERSION.tgz"
+          if [[ "${TARBALLS[0]}" != "$RAW_TARBALL" ]]; then
             echo "Unexpected tarball filename: ${TARBALLS[0]}" >&2
             exit 1
           fi
-          tar -xOf "$TARBALL" package/package.json |
-            jq -e --arg version "$ALPHA_VERSION" \
-              --arg repository "https://github.com/$GITHUB_REPOSITORY.git" \
-              '.name == "@bnbagent/sdk" and .version == $version
-                and .repository.url == $repository' >/dev/null
-          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          CLEAN_TARBALL="$RUNNER_TEMP/bnbagent-sdk-$ALPHA_VERSION.clean.tgz"
+          INTEGRITY="$(
+            RAW_TARBALL="$RAW_TARBALL" \
+            CLEAN_TARBALL="$CLEAN_TARBALL" \
+            EXPECTED_VERSION="$ALPHA_VERSION" \
+            EXPECTED_REPO="https://github.com/$GITHUB_REPOSITORY.git" \
+            node <<'NODE'
+          const { createHash } = require("node:crypto");
+          const { readFileSync, writeFileSync } = require("node:fs");
+          const posix = require("node:path/posix");
+          const { gunzipSync, gzipSync } = require("node:zlib");
+
+          const rawBuf = gunzipSync(readFileSync(process.env.RAW_TARBALL));
+          if (rawBuf.length === 0 || rawBuf.length % 512 !== 0) {
+            throw new Error(`Invalid tar length: ${rawBuf.length}`);
+          }
+          const readAscii = (b) => {
+            const z = b.indexOf(0);
+            return (z >= 0 ? b.subarray(0, z) : b).toString("utf8");
+          };
+          const parseOctal = (b, f) => {
+            const s = readAscii(b).trim();
+            if (!s) return 0;
+            if (!/^[0-7]+$/.test(s)) throw new Error(`Bad octal ${f}: ${s}`);
+            return Number.parseInt(s, 8);
+          };
+          const isZero = (b) => b.every((x) => x === 0);
+          const encodeHeader = (name, mode, size) => {
+            const nb = Buffer.from(name, "utf8");
+            if (nb.length === 0 || nb.length > 100) throw new Error(`Path length: ${name}`);
+            const h = Buffer.alloc(512, 0);
+            nb.copy(h, 0);
+            h.write(`${(mode & 0o7777).toString(8).padStart(7, "0")}\0`, 100, "ascii");
+            h.write("0000000\0", 108, "ascii");
+            h.write("0000000\0", 116, "ascii");
+            h.write(`${size.toString(8).padStart(11, "0")}\0`, 124, "ascii");
+            h.write("00000000000\0", 136, "ascii");
+            h.write("0", 156, "ascii");
+            h.write("ustar\0", 257, "ascii");
+            h.write("00", 263, "ascii");
+            h.fill(0x20, 148, 156);
+            let sum = 0;
+            for (let i = 0; i < 512; i++) sum += h[i];
+            h.write(`${sum.toString(8).padStart(6, "0")}\0 `, 148, "ascii");
+            return h;
+          };
+
+          const seen = new Set();
+          const files = [];
+          let manifest = null;
+          let off = 0;
+          let eof = false;
+          while (off < rawBuf.length) {
+            const hdr = rawBuf.subarray(off, off + 512);
+            if (isZero(hdr)) {
+              eof = true;
+              off += 512;
+              continue;
+            }
+            if (eof) throw new Error("Trailing non-zero block after EOF");
+            const storedSum = parseOctal(hdr.subarray(148, 156), "checksum");
+            let calcSum = 0;
+            for (let i = 0; i < 512; i++) calcSum += i >= 148 && i < 156 ? 0x20 : hdr[i];
+            if (storedSum !== calcSum) throw new Error("Header checksum mismatch");
+
+            const tb = hdr[156];
+            const tf = tb === 0 ? "\0" : String.fromCharCode(tb);
+            if (tf !== "0" && tf !== "\0" && tf !== "5") {
+              throw new Error(`Disallowed tar typeflag: ${JSON.stringify(tf)}`);
+            }
+            if (hdr.subarray(257, 265).toString("latin1") !== "ustar\u000000") {
+              throw new Error("Tar entry header is not POSIX ustar");
+            }
+            if (!isZero(hdr.subarray(345, 500))) {
+              throw new Error("Tar entry uses the ustar prefix field");
+            }
+            const rawPath = readAscii(hdr.subarray(0, 100));
+            if (!rawPath || rawPath.startsWith("/") || rawPath.split("/").some((s) => s === ".." || s === ".")) {
+              throw new Error(`Unsafe tar path: ${rawPath}`);
+            }
+            const norm = posix.normalize(rawPath).replace(/\/+$/, "");
+            if (norm !== "package" && !norm.startsWith("package/")) {
+              throw new Error(`Unexpected root in tar path: ${norm}`);
+            }
+            const size = parseOctal(hdr.subarray(124, 136), "size");
+            const mode = parseOctal(hdr.subarray(100, 108), "mode") || 0o644;
+            if (tf === "5" && size !== 0) throw new Error("Non-zero directory size");
+            const dataStart = off + 512;
+            const paddedEnd = dataStart + Math.ceil(size / 512) * 512;
+            if (paddedEnd > rawBuf.length) throw new Error("Truncated tar entry");
+            if (seen.has(norm)) throw new Error(`Duplicate tar entry: ${norm}`);
+            seen.add(norm);
+            if (tf !== "5") {
+              const data = Buffer.from(rawBuf.subarray(dataStart, dataStart + size));
+              if (norm === "package/package.json") {
+                manifest = JSON.parse(data.toString("utf8"));
+              }
+              files.push({ path: norm, mode, data });
+            }
+            off = paddedEnd;
+          }
+
+          if (!manifest || typeof manifest !== "object") throw new Error("Missing package/package.json");
+          if (manifest.name !== "@bnbagent/sdk") throw new Error(`Unexpected name: ${manifest.name}`);
+          if (manifest.version !== process.env.EXPECTED_VERSION) {
+            throw new Error(`Unexpected version: ${manifest.version}`);
+          }
+          if (manifest.repository?.url !== process.env.EXPECTED_REPO) {
+            throw new Error(`Unexpected repository.url: ${manifest.repository?.url}`);
+          }
+          if (Object.hasOwn(manifest, "publishConfig")) {
+            throw new Error("Tarball package.json must not contain publishConfig");
+          }
+          const cleanManifest = { ...manifest };
+          delete cleanManifest.publishConfig;
+          delete cleanManifest.scripts;
+          const cleanManifestBuf = Buffer.from(`${JSON.stringify(cleanManifest, null, 2)}\n`, "utf8");
+          const outChunks = [];
+          for (const f of files) {
+            const d = f.path === "package/package.json" ? cleanManifestBuf : f.data;
+            outChunks.push(encodeHeader(f.path, f.mode, d.length), d);
+            const pad = (512 - (d.length % 512)) % 512;
+            if (pad) outChunks.push(Buffer.alloc(pad, 0));
+          }
+          outChunks.push(Buffer.alloc(1024, 0));
+          const cleanTgz = gzipSync(Buffer.concat(outChunks));
+          writeFileSync(process.env.CLEAN_TARBALL, cleanTgz);
+          process.stdout.write(`sha512-${createHash("sha512").update(cleanTgz).digest("base64")}`);
+          NODE
+          )"
+          echo "tarball=$CLEAN_TARBALL" >> "$GITHUB_OUTPUT"
+          echo "integrity=$INTEGRITY" >> "$GITHUB_OUTPUT"
 
       - name: Read registry state
         id: registry
@@ -498,7 +643,7 @@ jobs:
           ALPHA_VERSION: ${{ needs.resolve.outputs.alpha_version }}
         run: |
           set -euo pipefail
-          TAGS="$(npm dist-tag ls "@bnbagent/sdk" 2>/dev/null || true)"
+          TAGS="$(npm dist-tag ls "@bnbagent/sdk" --registry=https://registry.npmjs.org 2>/dev/null || true)"
           ALPHA_TAG="$(awk '$1 == "alpha:" { print $2 }' <<<"$TAGS")"
           LATEST_TAG="$(awk '$1 == "latest:" { print $2 }' <<<"$TAGS")"
 
@@ -506,7 +651,7 @@ jobs:
             EXISTS=true
           else
             EXACT="$(
-              npm view "@bnbagent/sdk@$ALPHA_VERSION" version --prefer-online 2>/dev/null || true
+              npm view "@bnbagent/sdk@$ALPHA_VERSION" version --registry=https://registry.npmjs.org --prefer-online 2>/dev/null || true
             )"
             if [[ "$EXACT" == "$ALPHA_VERSION" ]]; then
               EXISTS=true
@@ -524,20 +669,31 @@ jobs:
           # workflow_dispatch runs from main while source_ref may be another
           # commit, so alpha provenance would identify the dispatcher commit.
           NPM_CONFIG_PROVENANCE: "false"
+          TARBALL: ${{ steps.artifact.outputs.tarball }}
+        # Step env keys are case-insensitive, so lowercase proxy variables can
+        # only be cleared from the shell.
         run: >-
-          npm publish "${{ steps.artifact.outputs.tarball }}"
+          env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY
+          -u http_proxy -u https_proxy -u all_proxy
+          -u NPM_CONFIG_PROXY -u NPM_CONFIG_HTTPS_PROXY
+          -u npm_config_proxy -u npm_config_https_proxy
+          npm publish "$TARBALL"
           --access public
           --tag alpha
           --ignore-scripts
+          --registry=https://registry.npmjs.org
+          --strict-ssl=true
           --json
 
       - name: Check prerelease dist-tags
         env:
           ALPHA_VERSION: ${{ needs.resolve.outputs.alpha_version }}
+          TARGET_VERSION: ${{ inputs.target_version }}
+          EXPECTED_INTEGRITY: ${{ steps.artifact.outputs.integrity }}
           PREVIOUS_LATEST: ${{ steps.registry.outputs.latest }}
         run: |
           set -euo pipefail
-          TAGS="$(npm dist-tag ls "@bnbagent/sdk" 2>/dev/null || true)"
+          TAGS="$(npm dist-tag ls "@bnbagent/sdk" --registry=https://registry.npmjs.org 2>/dev/null || true)"
           ALPHA_TAG="$(awk '$1 == "alpha:" { print $2 }' <<<"$TAGS")"
           LATEST_TAG="$(awk '$1 == "latest:" { print $2 }' <<<"$TAGS")"
 
@@ -550,6 +706,16 @@ jobs:
           fi
           if [[ -n "$PREVIOUS_LATEST" && "$LATEST_TAG" != "$PREVIOUS_LATEST" ]]; then
             echo "latest changed from $PREVIOUS_LATEST to $LATEST_TAG" >&2
+            exit 1
+          fi
+          STABLE_CHECK="$(npm view "@bnbagent/sdk@$TARGET_VERSION" version --registry=https://registry.npmjs.org 2>/dev/null || true)"
+          if [[ "$STABLE_CHECK" == "$TARGET_VERSION" ]]; then
+            echo "Refusing alpha run: stable version $TARGET_VERSION appeared on npm" >&2
+            exit 1
+          fi
+          REMOTE_INTEGRITY="$(npm view "@bnbagent/sdk@$ALPHA_VERSION" dist.integrity --registry=https://registry.npmjs.org 2>/dev/null || true)"
+          if [[ -n "$REMOTE_INTEGRITY" && "$REMOTE_INTEGRITY" != "$EXPECTED_INTEGRITY" ]]; then
+            echo "Published integrity $REMOTE_INTEGRITY does not match expected $EXPECTED_INTEGRITY" >&2
             exit 1
           fi
 
@@ -661,20 +827,24 @@ jobs:
           } >> RELEASE_NOTES.md
 
       - name: Commit version bump through the GitHub API
+        id: commit
         if: steps.version.outputs.commit == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           V: ${{ steps.version.outputs.version }}
-        run: pnpm exec tsx scripts/release.ts commit "$V"
+        run: pnpm exec tsx scripts/release.ts commit "$V" >> "$GITHUB_OUTPUT"
 
       - name: Freeze workspace dependencies for publishing
         run: pnpm exec tsx scripts/release.ts freeze
 
       - name: Align package metadata with the publishing repository
         # Apply metadata after the version commit, to the package being published.
-        run: npm pkg set "repository.url=https://github.com/$GITHUB_REPOSITORY.git"
+        run: |
+          npm pkg set "repository.url=https://github.com/$GITHUB_REPOSITORY.git"
+          npm pkg delete publishConfig
 
       - name: Pack and verify the installable tarball
+        id: pack
         env:
           V: ${{ steps.version.outputs.version }}
         run: |
@@ -682,7 +852,7 @@ jobs:
           PACK_DIR="$RUNNER_TEMP/npm-pack"
           CONSUMER_DIR="$(mktemp -d)"
           mkdir -p "$PACK_DIR"
-          npm pack --json --pack-destination "$PACK_DIR" >/dev/null
+          npm pack --ignore-scripts --json --pack-destination "$PACK_DIR" >/dev/null
           mapfile -t TARBALLS < <(find "$PACK_DIR" -maxdepth 1 -type f -name '*.tgz')
           if [[ "${#TARBALLS[@]}" -ne 1 ]]; then
             echo "Expected exactly one tarball, found ${#TARBALLS[@]}" >&2
@@ -693,36 +863,67 @@ jobs:
             echo "Unexpected tarball filename: ${TARBALLS[0]}" >&2
             exit 1
           fi
-          tar -xOf "$TARBALL_PATH" package/package.json |
-            jq -e --arg version "$V" \
-              --arg repository "https://github.com/$GITHUB_REPOSITORY.git" \
-              '.name == "@bnbagent/sdk" and .version == $version
-                and .repository.url == $repository' >/dev/null
+          # Publish the archive re-encoded from the verified entries, never the
+          # raw npm pack output.
+          CLEAN_TARBALL="$RUNNER_TEMP/bnbagent-sdk-$V.clean.tgz"
+          pnpm exec tsx scripts/release.ts verify-tarball \
+            "$TARBALL_PATH" \
+            "$V" \
+            "https://github.com/$GITHUB_REPOSITORY.git" \
+            --repack "$CLEAN_TARBALL"
+          pnpm exec tsx scripts/release.ts verify-tarball \
+            "$CLEAN_TARBALL" \
+            "$V" \
+            "https://github.com/$GITHUB_REPOSITORY.git"
 
           cd "$CONSUMER_DIR"
           npm init -y >/dev/null
-          npm install --ignore-scripts --no-audit --no-fund "$TARBALL_PATH"
+          npm install --ignore-scripts --no-audit --no-fund "$CLEAN_TARBALL"
           node --input-type=module -e \
             "await import('@bnbagent/sdk'); const { getBuiltWithValue } = await import('@bnbagent/sdk/erc8004'); const expected = 'https://github.com/bnb-chain/bnbagent-sdk#v' + process.env.V; if (getBuiltWithValue() !== expected) throw new Error('unexpected built_with version')"
           node -e \
             "require('@bnbagent/sdk'); require('@bnbagent/sdk/erc8004')"
+          echo "tarball=$CLEAN_TARBALL" >> "$GITHUB_OUTPUT"
 
       - name: Publish stable package with provenance
-        run: pnpm exec tsx scripts/release.ts publish --tag latest
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        # Step env keys are case-insensitive, so lowercase proxy variables can
+        # only be cleared from the shell.
+        run: >-
+          env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY
+          -u http_proxy -u https_proxy -u all_proxy
+          -u NPM_CONFIG_PROXY -u NPM_CONFIG_HTTPS_PROXY
+          -u npm_config_proxy -u npm_config_https_proxy
+          pnpm exec tsx scripts/release.ts publish --tag latest --tarball "$TARBALL"
 
       - name: Create Git tag and GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           V: ${{ steps.version.outputs.version }}
+          COMMIT_SHA: ${{ steps.commit.outputs.commit_sha }}
         # Tag carries the full npm coordinate so it cannot collide with the
         # Python component's bnbagent-vX.Y.Z line. Both components explicitly
         # mark their newest stable as Latest (most-recent-stable policy).
-        run: >-
-          gh release create "@bnbagent/sdk@v$V"
-          --target "${{ github.event.repository.default_branch }}"
-          --title "@bnbagent/sdk v$V"
-          --notes-file RELEASE_NOTES.md
-          --latest
+        # The tag ref is created first because gh release create ignores
+        # --target when the tag already exists; creating the ref fails if it does.
+        run: |
+          set -euo pipefail
+          RELEASE_SHA="${COMMIT_SHA:-$(git rev-parse HEAD)}"
+          if [[ ! "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Unexpected release commit: $RELEASE_SHA" >&2
+            exit 1
+          fi
+          TAG="@bnbagent/sdk@v$V"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f "ref=refs/tags/$TAG" \
+            -f "sha=$RELEASE_SHA" >/dev/null
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "@bnbagent/sdk v$V" \
+            --notes-file RELEASE_NOTES.md \
+            --latest
 
       - name: Write release summary
         env:
