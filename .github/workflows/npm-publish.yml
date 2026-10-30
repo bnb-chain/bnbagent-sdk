@@ -827,11 +827,12 @@ jobs:
           } >> RELEASE_NOTES.md
 
       - name: Commit version bump through the GitHub API
+        id: commit
         if: steps.version.outputs.commit == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           V: ${{ steps.version.outputs.version }}
-        run: pnpm exec tsx scripts/release.ts commit "$V"
+        run: pnpm exec tsx scripts/release.ts commit "$V" >> "$GITHUB_OUTPUT"
 
       - name: Freeze workspace dependencies for publishing
         run: pnpm exec tsx scripts/release.ts freeze
@@ -900,15 +901,29 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           V: ${{ steps.version.outputs.version }}
+          COMMIT_SHA: ${{ steps.commit.outputs.commit_sha }}
         # Tag carries the full npm coordinate so it cannot collide with the
         # Python component's bnbagent-vX.Y.Z line. Both components explicitly
         # mark their newest stable as Latest (most-recent-stable policy).
-        run: >-
-          gh release create "@bnbagent/sdk@v$V"
-          --target "${{ github.event.repository.default_branch }}"
-          --title "@bnbagent/sdk v$V"
-          --notes-file RELEASE_NOTES.md
-          --latest
+        # The tag ref is created first because gh release create ignores
+        # --target when the tag already exists; creating the ref fails if it does.
+        run: |
+          set -euo pipefail
+          RELEASE_SHA="${COMMIT_SHA:-$(git rev-parse HEAD)}"
+          if [[ ! "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Unexpected release commit: $RELEASE_SHA" >&2
+            exit 1
+          fi
+          TAG="@bnbagent/sdk@v$V"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f "ref=refs/tags/$TAG" \
+            -f "sha=$RELEASE_SHA" >/dev/null
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "@bnbagent/sdk v$V" \
+            --notes-file RELEASE_NOTES.md \
+            --latest
 
       - name: Write release summary
         env:

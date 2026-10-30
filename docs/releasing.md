@@ -80,10 +80,20 @@ resolve a specific package's version; use the PyPI/npm registries for that.
 - **npm published but tag/Release missing**: re-dispatch production with
   `bump: current`; `release.ts` verifies that `dist.integrity` (SHA-512) on
   npm matches the locally verified tarball before skipping the upload and
-  resuming an untagged release commit.
+  resuming an untagged release commit. The comparison uses the re-encoded
+  archive, so it only matches versions published by this workflow after the
+  archive was re-encoded; `@bnbagent/sdk@0.6.1` and earlier were published from
+  the raw `npm pack` output and must be repaired by hand.
+- **Tag created but Release missing**: both lanes create the tag ref through
+  the GitHub API before the Release, and a re-dispatch refuses once the tag
+  exists. Check that the tag points at the released commit, then create the
+  Release by hand with `gh release create <tag> --verify-tag`.
 
 ## Invariants worth keeping
 
+- The tag ref is created with `POST /git/refs` at the released commit, then
+  the Release is attached with `--verify-tag`. `gh release create --target`
+  is ignored when the tag already exists, so it must not create the tag.
 - Release notes are generated and the previous tag is resolved BEFORE the
   new tag is created (an after-the-fact `git describe` would find the new
   tag and produce an empty range).

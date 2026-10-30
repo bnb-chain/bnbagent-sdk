@@ -878,7 +878,10 @@ async function commit(version: string): Promise<void> {
       `createCommitOnBranch: no commit oid: ${JSON.stringify(res.json).slice(0, 300)}`,
     );
 
-  console.log(`verified release commit ${oid.slice(0, 9)} on ${branch}`);
+  if (!/^[0-9a-f]{40}$/.test(oid))
+    throw new Error(`createCommitOnBranch: unexpected commit oid ${oid}`);
+  console.error(`verified release commit ${oid.slice(0, 9)} on ${branch}`);
+  process.stdout.write(`commit_sha=${oid}\n`);
 }
 
 const invokedDirectly =

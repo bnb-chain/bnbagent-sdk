@@ -515,6 +515,33 @@ test("release workflows run no credentialed git commands after checkout", () => 
   expect(pypiWorkflow).toContain('gh release create "$TARGET_TAG"');
 });
 
+test("release tags are created atomically at the released commit before the Release", () => {
+  const pypiWorkflow = readFileSync(
+    new URL("../../.github/workflows/pypi-release.yaml", import.meta.url),
+    "utf8",
+  );
+  for (const source of [productionJob, pypiWorkflow]) {
+    const workflow = source
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("#"))
+      .join("\n");
+    const createRef = workflow.indexOf(
+      'gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs"',
+    );
+    const createRelease = workflow.indexOf("gh release create");
+    expect(createRef).toBeGreaterThan(-1);
+    expect(createRelease).toBeGreaterThan(createRef);
+    expect(workflow.slice(createRelease)).toContain("--verify-tag");
+    expect(workflow).not.toContain("--target");
+  }
+  expect(productionJob).toContain(
+    'RELEASE_SHA="${COMMIT_SHA:-$(git rev-parse HEAD)}"',
+  );
+  expect(productionJob).toContain(
+    'pnpm exec tsx scripts/release.ts commit "$V" >> "$GITHUB_OUTPUT"',
+  );
+});
+
 test("PyPI smoke installs locked runtime deps and imports outside the source tree", () => {
   const pypiWorkflow = readFileSync(
     new URL("../../.github/workflows/pypi-release.yaml", import.meta.url),

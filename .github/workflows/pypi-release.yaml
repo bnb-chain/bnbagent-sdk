@@ -446,17 +446,27 @@ jobs:
           # If using API token, set TEST_PYPI_API_TOKEN secret
 
       - name: Create Git tag and GitHub Release
-        # Through the API: checkout dropped its credentials, so git push would fail.
+        # Through the API: checkout dropped its credentials, so git push would
+        # fail. The tag ref is created first because gh release create ignores
+        # --target when the tag already exists; creating the ref fails if it does.
         if: success() && inputs.release_to_prod
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_TAG: ${{ steps.tags.outputs.target_tag }}
           RELEASE_SHA: ${{ steps.version_commit.outputs.commit_sha }}
           VERSION: ${{ inputs.version }}
-        run: >-
-          gh release create "$TARGET_TAG"
-          --repo "$GITHUB_REPOSITORY"
-          --target "$RELEASE_SHA"
-          --title "bnbagent v$VERSION"
-          --notes-file "$GITHUB_WORKSPACE/RELEASE_NOTES.md"
-          --latest
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Unexpected release commit: $RELEASE_SHA" >&2
+            exit 1
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f "ref=refs/tags/$TARGET_TAG" \
+            -f "sha=$RELEASE_SHA" >/dev/null
+          gh release create "$TARGET_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "bnbagent v$VERSION" \
+            --notes-file "$GITHUB_WORKSPACE/RELEASE_NOTES.md" \
+            --latest
