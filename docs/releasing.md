@@ -25,16 +25,18 @@ subdirectories, where a bare relative pathspec would match nothing.
 ## Lanes
 
 - **npm stable** (`npm-publish.yml`, `release_type: production`): packs and
-  verifies the root tarball, publishes that exact tarball under `--tag latest`
-  with provenance, and creates the Git tag and GitHub Release. Notes come from
+  verifies the root tarball, publishes the re-encoded verified tarball under
+  `--tag latest` with provenance, and creates the Git tag and GitHub Release
+  through the GitHub API. Notes come from
   `typescript/scripts/release.ts changelog`.
 - **npm alpha** (`release_type: alpha`): publishes under the `alpha`
   dist-tag from a commit reachable on a branch of this repository (`origin/*`).
   No Git tag, no GitHub Release.
 - **PyPI production** (`pypi-release.yaml`, `release_to_prod: true`): must be
   dispatched from the default branch; runs tests, verifies the wheel/sdist and
-  vendored ABIs, commits the version bump, publishes to PyPI, tags, and creates
-  the GitHub Release.
+  vendored ABIs, smoke-imports each artifact in a fresh environment with the
+  locked runtime dependencies, commits the version bump, publishes to PyPI, and
+  creates the tag and GitHub Release through the GitHub API.
 - **Test PyPI** (`release_to_prod: false`): runs tests, verifies the built
   artifacts from a repository branch commit, and uploads to Test PyPI — no
   version commit, tag, or Release.
@@ -53,9 +55,12 @@ Trusted Publisher with this repository, workflow `npm-publish.yml`, environment
 `npm-publish`, and `npm publish` allowed.
 
 Before publishing, the workflow strips `publishConfig`, packs with
-`--ignore-scripts`, validates every tar header (`typeflag`, path normalization,
-uniqueness) and `package/package.json` (`name`, `version`, `repository.url`),
-and passes that exact verified `.tgz` to `npm publish`.
+`--ignore-scripts`, validates every tar header (POSIX ustar with an empty
+prefix field, `typeflag`, path normalization, uniqueness) and
+`package/package.json` (`name`, `version`, `repository.url`), then re-encodes
+the verified entries into a clean archive. The smoke install and
+`npm publish` both use that re-encoded archive, never the raw `npm pack`
+output.
 
 ## Latest policy
 

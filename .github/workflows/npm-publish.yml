@@ -88,9 +88,14 @@ jobs:
           persist-credentials: false
 
       - name: Verify source_ref belongs to a repository branch
+        # fetch-depth: 0 already fetched every branch into refs/remotes/origin;
+        # a later git fetch would have no credentials (persist-credentials: false).
         run: |
           set -euo pipefail
-          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+          if [[ -z "$(git for-each-ref --count=1 refs/remotes/origin/)" ]]; then
+            echo "Checkout did not fetch any repository branches" >&2
+            exit 1
+          fi
           SOURCE_SHA="$(git rev-parse --verify HEAD)"
           if [[ -z "$(git branch -r --contains "$SOURCE_SHA" 'origin/*')" ]]; then
             echo "Refusing alpha release: $SOURCE_SHA is not reachable from any branch of $GITHUB_REPOSITORY" >&2
@@ -423,14 +428,18 @@ jobs:
             echo "Unexpected tarball filename: ${TARBALLS[0]}" >&2
             exit 1
           fi
+          CLEAN_DIR="$RUNNER_TEMP/npm-clean"
+          CLEAN_TARBALL="$CLEAN_DIR/bnbagent-sdk-$ALPHA_VERSION.tgz"
+          mkdir -p "$CLEAN_DIR"
           pnpm exec tsx scripts/release.ts verify-tarball \
             "$TARBALL_PATH" \
             "$ALPHA_VERSION" \
-            "https://github.com/$GITHUB_REPOSITORY.git"
+            "https://github.com/$GITHUB_REPOSITORY.git" \
+            --repack "$CLEAN_TARBALL"
 
           cd "$CONSUMER_DIR"
           npm init -y >/dev/null
-          npm install --ignore-scripts --no-audit --no-fund "$TARBALL_PATH"
+          npm install --ignore-scripts --no-audit --no-fund "$CLEAN_TARBALL"
           node --input-type=module -e \
             "await import('@bnbagent/sdk'); const { getBuiltWithValue } = await import('@bnbagent/sdk/erc8004'); const expected = 'https://github.com/bnb-chain/bnbagent-sdk#v' + process.env.ALPHA_VERSION; if (getBuiltWithValue() !== expected) throw new Error('unexpected built_with version')"
           node -e \
@@ -440,7 +449,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bnbagent-sdk-${{ needs.resolve.outputs.alpha_version }}
-          path: ${{ runner.temp }}/npm-pack/*.tgz
+          path: ${{ runner.temp }}/npm-clean/*.tgz
           if-no-files-found: error
           retention-days: 7
 
@@ -565,9 +574,13 @@ jobs:
             if (tf !== "0" && tf !== "\0" && tf !== "5") {
               throw new Error(`Disallowed tar typeflag: ${JSON.stringify(tf)}`);
             }
-            const name = readAscii(hdr.subarray(0, 100));
-            const prefix = readAscii(hdr.subarray(345, 500));
-            const rawPath = prefix ? `${prefix}/${name}` : name;
+            if (hdr.subarray(257, 265).toString("latin1") !== "ustar\u000000") {
+              throw new Error("Tar entry header is not POSIX ustar");
+            }
+            if (!isZero(hdr.subarray(345, 500))) {
+              throw new Error("Tar entry uses the ustar prefix field");
+            }
+            const rawPath = readAscii(hdr.subarray(0, 100));
             if (!rawPath || rawPath.startsWith("/") || rawPath.split("/").some((s) => s === ".." || s === ".")) {
               throw new Error(`Unsafe tar path: ${rawPath}`);
             }
@@ -849,19 +862,27 @@ jobs:
             echo "Unexpected tarball filename: ${TARBALLS[0]}" >&2
             exit 1
           fi
+          # Publish the archive re-encoded from the verified entries, never the
+          # raw npm pack output.
+          CLEAN_TARBALL="$RUNNER_TEMP/bnbagent-sdk-$V.clean.tgz"
           pnpm exec tsx scripts/release.ts verify-tarball \
             "$TARBALL_PATH" \
+            "$V" \
+            "https://github.com/$GITHUB_REPOSITORY.git" \
+            --repack "$CLEAN_TARBALL"
+          pnpm exec tsx scripts/release.ts verify-tarball \
+            "$CLEAN_TARBALL" \
             "$V" \
             "https://github.com/$GITHUB_REPOSITORY.git"
 
           cd "$CONSUMER_DIR"
           npm init -y >/dev/null
-          npm install --ignore-scripts --no-audit --no-fund "$TARBALL_PATH"
+          npm install --ignore-scripts --no-audit --no-fund "$CLEAN_TARBALL"
           node --input-type=module -e \
             "await import('@bnbagent/sdk'); const { getBuiltWithValue } = await import('@bnbagent/sdk/erc8004'); const expected = 'https://github.com/bnb-chain/bnbagent-sdk#v' + process.env.V; if (getBuiltWithValue() !== expected) throw new Error('unexpected built_with version')"
           node -e \
             "require('@bnbagent/sdk'); require('@bnbagent/sdk/erc8004')"
-          echo "tarball=$TARBALL_PATH" >> "$GITHUB_OUTPUT"
+          echo "tarball=$CLEAN_TARBALL" >> "$GITHUB_OUTPUT"
 
       - name: Publish stable package with provenance
         env:

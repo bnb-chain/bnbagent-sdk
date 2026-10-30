@@ -26,10 +26,10 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  type Stats,
   existsSync,
   lstatSync,
   readFileSync,
-  type Stats,
   writeFileSync,
 } from "node:fs";
 import * as posix from "node:path/posix";
@@ -297,6 +297,8 @@ function isZeroBlock(block: Buffer): boolean {
   return true;
 }
 
+const USTAR_MAGIC = Buffer.from("ustar\u000000", "latin1");
+
 function encodeUstarHeader(name: string, mode: number, size: number): Buffer {
   const nameBytes = Buffer.from(name, "utf8");
   if (nameBytes.length === 0 || nameBytes.length > 100) {
@@ -342,6 +344,8 @@ export interface VerifiedTarballResult {
  *   directory (`"5"`). Non-standard types (`"Z"`), links (`"1"`/`"2"`), and
  *   PAX headers (`"x"`/`"g"`) are rejected so GNU tar and node-tar cannot
  *   disagree on which entry is `package/package.json`.
+ * - Every header must be POSIX ustar with an empty prefix field, so the path
+ *   read here is the path node-tar reads.
  * - Every path must normalize under `package/` with no `..`, leading `/`, or
  *   duplicate normalized names.
  * - `package/package.json` must appear once, match name/version/repository.url,
@@ -398,9 +402,16 @@ export function verifyTarball(
       );
     }
 
-    const namePart = readNullTerminatedAscii(header.subarray(0, 100));
-    const prefixPart = readNullTerminatedAscii(header.subarray(345, 500));
-    const rawPath = prefixPart ? `${prefixPart}/${namePart}` : namePart;
+    // node-tar only honours the prefix field on POSIX ustar headers, so any
+    // other format, or a non-empty prefix, lets the two parsers resolve
+    // different paths for the same entry. `npm pack` writes neither.
+    if (!header.subarray(257, 265).equals(USTAR_MAGIC)) {
+      throw new Error("Tar entry header is not POSIX ustar");
+    }
+    if (!isZeroBlock(header.subarray(345, 500))) {
+      throw new Error("Tar entry uses the ustar prefix field");
+    }
+    const rawPath = readNullTerminatedAscii(header.subarray(0, 100));
     if (!rawPath || rawPath.startsWith("/") || rawPath.includes("\0")) {
       throw new Error(`Invalid tar entry path: ${JSON.stringify(rawPath)}`);
     }

@@ -35,18 +35,35 @@ const productionJob = publishWorkflow.slice(
   publishWorkflow.indexOf("\n  production:"),
 );
 
-function buildTarEntry(name: string, content: string, typeflag = "0"): Buffer {
+interface TestTarEntry {
+  name: string;
+  content: string;
+  typeflag?: string;
+  prefix?: string;
+  magic?: "ustar" | "none";
+}
+
+function buildTarEntry({
+  name,
+  content,
+  typeflag = "0",
+  prefix,
+  magic = "ustar",
+}: TestTarEntry): Buffer {
   const data = Buffer.from(content, "utf8");
   const header = Buffer.alloc(512, 0);
   header.write(name, 0, "ascii");
+  if (prefix) header.write(prefix, 345, "ascii");
   header.write("0000644\0", 100, "ascii");
   header.write("0000000\0", 108, "ascii");
   header.write("0000000\0", 116, "ascii");
   header.write(`${data.length.toString(8).padStart(11, "0")}\0`, 124, "ascii");
   header.write("00000000000\0", 136, "ascii");
   header.write(typeflag, 156, "ascii");
-  header.write("ustar\0", 257, "ascii");
-  header.write("00", 263, "ascii");
+  if (magic === "ustar") {
+    header.write("ustar\0", 257, "ascii");
+    header.write("00", 263, "ascii");
+  }
   header.fill(0x20, 148, 156);
   let sum = 0;
   for (const byte of header) sum += byte;
@@ -55,12 +72,8 @@ function buildTarEntry(name: string, content: string, typeflag = "0"): Buffer {
   return Buffer.concat([header, data, pad]);
 }
 
-function buildTestTgz(
-  entries: Array<{ name: string; content: string; typeflag?: string }>,
-): Buffer {
-  const chunks = entries.map((e) =>
-    buildTarEntry(e.name, e.content, e.typeflag ?? "0"),
-  );
+function buildTestTgz(entries: TestTarEntry[]): Buffer {
+  const chunks = entries.map(buildTarEntry);
   chunks.push(Buffer.alloc(1024, 0));
   return gzipSync(Buffer.concat(chunks));
 }
@@ -404,6 +417,116 @@ test("verifyTarball rejects non-standard typeflags, duplicate manifests, and pub
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("verifyTarball rejects headers whose path node-tar would resolve differently", () => {
+  const dir = mkdtempSync(join(tmpdir(), "release-tar-"));
+  const repoUrl = "https://github.com/bnb-chain/bnbagent-sdk.git";
+  const manifest = (version: string, extra: object = {}) =>
+    JSON.stringify({
+      name: "@bnbagent/sdk",
+      version,
+      repository: { url: repoUrl },
+      ...extra,
+    });
+  try {
+    // node-tar ignores the prefix on a non-ustar header, so it reads the
+    // second entry as package/package.json while a prefix-joining parser
+    // reads the first one.
+    const v7Path = join(dir, "v7-prefix.tgz");
+    writeFileSync(
+      v7Path,
+      buildTestTgz([
+        {
+          name: "package.json",
+          prefix: "package",
+          magic: "none",
+          content: manifest("0.6.1"),
+        },
+        {
+          name: "package/package.json",
+          prefix: "package/x",
+          magic: "none",
+          content: manifest("0.6.1-alpha.999", {
+            publishConfig: { "https-proxy": "http://127.0.0.1:8080/" },
+          }),
+        },
+      ]),
+    );
+    expect(() =>
+      verifyTarball(v7Path, {
+        expectedVersion: "0.6.1",
+        expectedRepositoryUrl: repoUrl,
+      }),
+    ).toThrow("Tar entry header is not POSIX ustar");
+
+    const prefixPath = join(dir, "ustar-prefix.tgz");
+    writeFileSync(
+      prefixPath,
+      buildTestTgz([
+        { name: "package.json", prefix: "package", content: manifest("0.6.1") },
+      ]),
+    );
+    expect(() =>
+      verifyTarball(prefixPath, {
+        expectedVersion: "0.6.1",
+        expectedRepositoryUrl: repoUrl,
+      }),
+    ).toThrow("Tar entry uses the ustar prefix field");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("npm lanes publish the re-encoded archive, not raw npm pack output", () => {
+  expect(productionJob).toContain('--repack "$CLEAN_TARBALL"');
+  expect(productionJob).toContain(
+    'npm install --ignore-scripts --no-audit --no-fund "$CLEAN_TARBALL"',
+  );
+  expect(productionJob).toContain('echo "tarball=$CLEAN_TARBALL"');
+
+  const packageJob = publishWorkflow.slice(
+    publishWorkflow.indexOf("\n  package:"),
+    publishWorkflow.indexOf("\n  alpha-publish:"),
+  );
+  expect(packageJob).toContain('--repack "$CLEAN_TARBALL"');
+  expect(packageJob).toContain("path: ${{ runner.temp }}/npm-clean/*.tgz");
+
+  const alphaPublishJob = publishWorkflow.slice(
+    publishWorkflow.indexOf("\n  alpha-publish:"),
+    publishWorkflow.indexOf("\n  production:"),
+  );
+  expect(alphaPublishJob).toContain("Tar entry header is not POSIX ustar");
+  expect(alphaPublishJob).toContain("Tar entry uses the ustar prefix field");
+});
+
+test("release workflows run no credentialed git commands after checkout", () => {
+  const pypiWorkflow = readFileSync(
+    new URL("../../.github/workflows/pypi-release.yaml", import.meta.url),
+    "utf8",
+  );
+  for (const workflow of [publishWorkflow, pypiWorkflow]) {
+    const commands = workflow
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("#"))
+      .join("\n");
+    expect(commands).not.toMatch(/\bgit (fetch|push|pull|ls-remote)\b/);
+  }
+  expect(pypiWorkflow).toContain('gh release create "$TARGET_TAG"');
+});
+
+test("PyPI smoke installs locked runtime deps and imports outside the source tree", () => {
+  const pypiWorkflow = readFileSync(
+    new URL("../../.github/workflows/pypi-release.yaml", import.meta.url),
+    "utf8",
+  );
+  expect(pypiWorkflow).toContain(
+    "uv export --frozen --no-dev --no-emit-project",
+  );
+  expect(pypiWorkflow).toContain("--require-hashes");
+  expect(pypiWorkflow).toContain('cd "$SMOKE_DIR"');
+  expect(pypiWorkflow).toContain('"$SMOKE_VENV/bin/python" -I -c');
+  expect(pypiWorkflow).toContain('"$PWD/dist/bnbagent-${VERSION}.tar.gz"');
 });
 
 test("publishOne refuses to skip an existing version when registry integrity mismatches (SRC-2391)", () => {

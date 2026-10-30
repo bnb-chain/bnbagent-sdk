@@ -61,10 +61,15 @@ jobs:
           persist-credentials: false
 
       - name: Verify commit belongs to a repository branch
+        # fetch-depth: 0 already fetched every branch into refs/remotes/origin;
+        # a later git fetch would have no credentials (persist-credentials: false).
         working-directory: .
         run: |
           set -euo pipefail
-          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+          if [[ -z "$(git for-each-ref --count=1 refs/remotes/origin/)" ]]; then
+            echo "Checkout did not fetch any repository branches" >&2
+            exit 1
+          fi
           HEAD_SHA="$(git rev-parse --verify HEAD)"
           if [[ -z "$(git branch -r --contains "$HEAD_SHA" 'origin/*')" ]]; then
             echo "Refusing release: $HEAD_SHA is not reachable from any branch of $GITHUB_REPOSITORY" >&2
@@ -276,10 +281,35 @@ jobs:
                   )
           PYTHON
 
-          SMOKE_VENV="$RUNNER_TEMP/smoke-venv"
-          uv venv "$SMOKE_VENV"
-          uv pip install --python "$SMOKE_VENV/bin/python" --no-deps "dist/bnbagent-${VERSION}-py3-none-any.whl"
-          "$SMOKE_VENV/bin/python" -c 'import os, bnbagent; assert bnbagent.__version__ == os.environ["VERSION"], bnbagent.__version__'
+          # Runtime deps come from the lockfile; the artifact itself is installed
+          # without resolution. Import from outside python/ in isolated mode so
+          # the source tree cannot shadow the installed package.
+          SMOKE_DIR="$(mktemp -d)"
+          uv export --frozen --no-dev --no-emit-project --format requirements-txt \
+            -o "$SMOKE_DIR/requirements.txt" >/dev/null
+          for ARTIFACT in \
+            "$PWD/dist/bnbagent-${VERSION}-py3-none-any.whl" \
+            "$PWD/dist/bnbagent-${VERSION}.tar.gz"; do
+            SMOKE_VENV="$(mktemp -d)/venv"
+            uv venv "$SMOKE_VENV"
+            uv pip install --python "$SMOKE_VENV/bin/python" --require-hashes \
+              -r "$SMOKE_DIR/requirements.txt"
+            uv pip install --python "$SMOKE_VENV/bin/python" --no-deps "$ARTIFACT"
+            (
+              cd "$SMOKE_DIR"
+              SMOKE_VENV="$SMOKE_VENV" "$SMOKE_VENV/bin/python" -I -c '
+          import os
+          from pathlib import Path
+
+          import bnbagent
+          import bnbagent.erc8183
+
+          assert bnbagent.__version__ == os.environ["VERSION"], bnbagent.__version__
+          venv = Path(os.environ["SMOKE_VENV"]).resolve()
+          assert venv in Path(bnbagent.__file__).resolve().parents, bnbagent.__file__
+          '
+            )
+          done
 
       - name: Commit version update through the GitHub API
         if: success() && inputs.release_to_prod
@@ -415,28 +445,18 @@ jobs:
           # For Test PyPI, you can use trusted publishing or API token
           # If using API token, set TEST_PYPI_API_TOKEN secret
 
-      - name: Create Git tag
+      - name: Create Git tag and GitHub Release
+        # Through the API: checkout dropped its credentials, so git push would fail.
         if: success() && inputs.release_to_prod
         env:
+          GH_TOKEN: ${{ github.token }}
           TARGET_TAG: ${{ steps.tags.outputs.target_tag }}
           RELEASE_SHA: ${{ steps.version_commit.outputs.commit_sha }}
           VERSION: ${{ inputs.version }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          # The API updates the remote branch, while local HEAD stays at checkout.
-          git fetch --no-tags origin "$RELEASE_SHA"
-          git tag -a "$TARGET_TAG" -m "Release bnbagent v$VERSION" "$RELEASE_SHA"
-          git push origin "$TARGET_TAG"
-
-      - name: Create GitHub Release
-        if: success() && inputs.release_to_prod
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.tags.outputs.target_tag }}
-          name: bnbagent v${{ inputs.version }}
-          body_path: RELEASE_NOTES.md
-          draft: false
-          prerelease: false
-          make_latest: true
+        run: >-
+          gh release create "$TARGET_TAG"
+          --repo "$GITHUB_REPOSITORY"
+          --target "$RELEASE_SHA"
+          --title "bnbagent v$VERSION"
+          --notes-file "$GITHUB_WORKSPACE/RELEASE_NOTES.md"
+          --latest
