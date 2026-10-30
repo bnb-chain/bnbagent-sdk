@@ -169,9 +169,32 @@ test("production release versions the package before building it", () => {
 test("production release verifies built_with from the installable tarball", () => {
   expect(productionJob).toContain("npm pack --ignore-scripts --json");
   expect(productionJob).toContain("getBuiltWithValue()");
-  expect(productionJob).toContain(
-    'publish --tag latest --tarball "${{ steps.pack.outputs.tarball }}"',
-  );
+  expect(productionJob).toContain("TARBALL: ${{ steps.pack.outputs.tarball }}");
+  expect(productionJob).toContain('publish --tag latest --tarball "$TARBALL"');
+});
+
+test("npm publish steps clear proxy settings in both cases", () => {
+  const publishSteps = publishWorkflow
+    .split("\n      - name: ")
+    .filter((step) => /^Publish (under the alpha|stable package)/.test(step));
+
+  expect(publishSteps).toHaveLength(2);
+  for (const step of publishSteps) {
+    for (const name of [
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "all_proxy",
+      "NPM_CONFIG_PROXY",
+      "NPM_CONFIG_HTTPS_PROXY",
+      "npm_config_proxy",
+      "npm_config_https_proxy",
+    ]) {
+      expect(step).toContain(`-u ${name}`);
+    }
+  }
 });
 
 test("publish waits for npm visibility before continuing", () => {
