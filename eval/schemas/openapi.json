@@ -1,0 +1,3795 @@
+{
+  "components": {
+    "schemas": {
+      "AgentStep": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "available_tools": {
+            "default": [],
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "end_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "const": "agent",
+            "default": "agent"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "response": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "start_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "system_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Usage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "user_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "AgentStep",
+        "type": "object"
+      },
+      "AgentSubject": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": {
+            "type": "integer"
+          },
+          "agent_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "chain_id": {
+            "type": "integer"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "type": {
+            "const": "agent",
+            "default": "agent"
+          }
+        },
+        "required": [
+          "chain_id",
+          "registry",
+          "agent_id"
+        ],
+        "title": "AgentSubject",
+        "type": "object"
+      },
+      "Aggregate": {
+        "additionalProperties": false,
+        "properties": {
+          "cases": {
+            "type": "integer"
+          },
+          "error_rate": {
+            "type": "number"
+          },
+          "metrics": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/MetricAggregate"
+            },
+            "type": "array"
+          },
+          "pass_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "score",
+          "pass_rate",
+          "error_rate",
+          "cases"
+        ],
+        "title": "Aggregate",
+        "type": "object"
+      },
+      "AppMetrics": {
+        "additionalProperties": false,
+        "properties": {
+          "cache_read_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "cache_write_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "ttft_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "title": "AppMetrics",
+        "type": "object"
+      },
+      "Artifact": {
+        "additionalProperties": false,
+        "description": "A non-text deliverable referenced by URI and content hash.",
+        "properties": {
+          "hash": {
+            "type": "string"
+          },
+          "media_type": {
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "uri": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "uri",
+          "hash",
+          "media_type"
+        ],
+        "title": "Artifact",
+        "type": "object"
+      },
+      "Attestation": {
+        "additionalProperties": false,
+        "properties": {
+          "digest": {
+            "type": "string"
+          },
+          "domain": {
+            "default": {},
+            "type": "object"
+          },
+          "evaluator": {
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "issued_at": {
+            "type": "integer"
+          },
+          "scheme": {
+            "enum": [
+              "eip712",
+              "eip191"
+            ]
+          },
+          "signature": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scheme",
+          "evaluator",
+          "digest",
+          "signature",
+          "issued_at"
+        ],
+        "title": "Attestation",
+        "type": "object"
+      },
+      "Budget": {
+        "additionalProperties": false,
+        "properties": {
+          "max_judge_calls": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "max_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "title": "Budget",
+        "type": "object"
+      },
+      "CaseResult": {
+        "additionalProperties": false,
+        "properties": {
+          "case_id": {
+            "type": "string"
+          },
+          "metrics": {
+            "items": {
+              "$ref": "#/components/schemas/MetricResult"
+            },
+            "type": "array"
+          },
+          "passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "runs": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/RunResult"
+            },
+            "type": "array"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "case_id",
+          "metrics"
+        ],
+        "title": "CaseResult",
+        "type": "object"
+      },
+      "ContentPart": {
+        "additionalProperties": false,
+        "description": "A piece of multimodal content.",
+        "properties": {
+          "data": {
+            "default": null
+          },
+          "hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "media_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "type": {
+            "enum": [
+              "text",
+              "image",
+              "file",
+              "json"
+            ]
+          },
+          "uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "ContentPart",
+        "type": "object"
+      },
+      "Context": {
+        "additionalProperties": false,
+        "description": "A retrieval context.",
+        "properties": {
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "text": {
+            "type": "string"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "Context",
+        "type": "object"
+      },
+      "Cost": {
+        "additionalProperties": false,
+        "properties": {
+          "judge_calls": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tokens": {
+            "default": 0,
+            "type": "integer"
+          },
+          "usd_estimate": {
+            "default": 0.0,
+            "type": "number"
+          }
+        },
+        "title": "Cost",
+        "type": "object"
+      },
+      "CreditRedeem": {
+        "properties": {
+          "credit_id": {
+            "type": "string"
+          },
+          "request": {
+            "$ref": "#/components/schemas/EvalRequest"
+          }
+        },
+        "required": [
+          "credit_id",
+          "request"
+        ],
+        "type": "object"
+      },
+      "DecodedCall": {
+        "additionalProperties": false,
+        "properties": {
+          "args": {
+            "default": {},
+            "type": "object"
+          },
+          "contract": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "function": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "title": "DecodedCall",
+        "type": "object"
+      },
+      "DelegationStep": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "end_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "from_agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "const": "delegation",
+            "default": "delegation"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "start_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "to_agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Usage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "DelegationStep",
+        "type": "object"
+      },
+      "ErrorBody": {
+        "additionalProperties": true,
+        "properties": {
+          "accepts": {
+            "type": "array"
+          },
+          "credit": {
+            "type": "object"
+          },
+          "error": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "quote": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "ErrorInfo": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "default": "",
+            "type": "string"
+          },
+          "retryable": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "ErrorInfo",
+        "type": "object"
+      },
+      "EvalCase": {
+        "additionalProperties": false,
+        "description": "One item to evaluate; every field but ``id`` is optional (metrics declare their needs).",
+        "properties": {
+          "app_metrics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AppMetrics"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "artifacts": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Artifact"
+            },
+            "type": "array"
+          },
+          "contexts": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Context"
+            },
+            "type": "array"
+          },
+          "conversation": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "type": "array"
+          },
+          "expected": {
+            "default": null
+          },
+          "id": {
+            "type": "string"
+          },
+          "input": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              },
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ContentPart"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "metadata": {
+            "default": {},
+            "type": "object"
+          },
+          "output": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object"
+              },
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ContentPart"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "output_content_type": {
+            "default": "text/plain",
+            "type": "string"
+          },
+          "trajectory": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Session"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "EvalCase",
+        "type": "object"
+      },
+      "EvalEvidenceV1": {
+        "additionalProperties": true,
+        "description": "Evaluation evidence in DeliverableManifest.metadata['eval'] (ERC-8183).",
+        "properties": {
+          "aggregate": {
+            "properties": {
+              "cases": {
+                "type": "integer"
+              },
+              "error_rate": {
+                "type": "number"
+              },
+              "pass_rate": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "score": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "attestation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Attestation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cases": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "report": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "properties": {
+                  "hash": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "uri": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uri",
+                  "hash"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "response_hash": {
+            "type": "string"
+          },
+          "result_hash": {
+            "type": "string"
+          },
+          "schema": {
+            "const": "bnbagent-eval/evidence/v1"
+          },
+          "stage": {
+            "enum": [
+              "dev",
+              "registration",
+              "pre_submit",
+              "review",
+              "vote"
+            ]
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JobSubject"
+              },
+              {
+                "$ref": "#/components/schemas/AgentSubject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "suite_hash": {
+            "type": "string"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/Verdict"
+          },
+          "voter_summary": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema",
+          "suite_hash",
+          "result_hash",
+          "verdict"
+        ],
+        "title": "EvalEvidenceV1",
+        "type": "object"
+      },
+      "EvalRequest": {
+        "additionalProperties": true,
+        "properties": {
+          "benchmark_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "cases": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/EvalCase"
+            },
+            "type": "array"
+          },
+          "dataset_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "options": {
+            "$ref": "#/components/schemas/RunOptions",
+            "default": {
+              "budget": null,
+              "deadline": null,
+              "judge_override": null,
+              "language": null,
+              "max_concurrency": null,
+              "privacy": {
+                "encrypt_to": [],
+                "redact": [],
+                "report_contents": "hashes"
+              },
+              "runs": 1
+            }
+          },
+          "schema_version": {
+            "default": "bnbagent-eval/v1",
+            "type": "string"
+          },
+          "stage": {
+            "default": "dev",
+            "enum": [
+              "dev",
+              "registration",
+              "pre_submit",
+              "review",
+              "vote"
+            ]
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JobSubject"
+              },
+              {
+                "$ref": "#/components/schemas/AgentSubject"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "suite": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Suite"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "suite_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "target": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TargetRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "title": "EvalRequest",
+        "type": "object"
+      },
+      "EvalResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "aggregate": {
+            "$ref": "#/components/schemas/Aggregate"
+          },
+          "attestation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Attestation"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "cost": {
+            "$ref": "#/components/schemas/Cost",
+            "default": {
+              "judge_calls": 0,
+              "tokens": 0,
+              "usd_estimate": 0.0
+            }
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/Provenance"
+          },
+          "response_hash": {
+            "type": "string"
+          },
+          "result_hash": {
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/CaseResult"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "default": "bnbagent-eval/v1",
+            "type": "string"
+          },
+          "stage": {
+            "enum": [
+              "dev",
+              "registration",
+              "pre_submit",
+              "review",
+              "vote"
+            ]
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JobSubject"
+              },
+              {
+                "$ref": "#/components/schemas/AgentSubject"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "suite_hash": {
+            "type": "string"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/Verdict"
+          }
+        },
+        "required": [
+          "stage",
+          "suite_hash",
+          "results",
+          "aggregate",
+          "verdict",
+          "provenance",
+          "result_hash",
+          "response_hash"
+        ],
+        "title": "EvalResponse",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HandoffStep": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "end_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "from_agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "const": "handoff",
+            "default": "handoff"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "start_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "to_agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Usage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "HandoffStep",
+        "type": "object"
+      },
+      "JobCreated": {
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "integer"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "access_token",
+          "status"
+        ],
+        "type": "object"
+      },
+      "JobStatus": {
+        "properties": {
+          "credit": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "type": "integer"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "request_hash": {
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvalResponse"
+              },
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "done",
+              "failed"
+            ]
+          }
+        },
+        "required": [
+          "job_id",
+          "status"
+        ],
+        "type": "object"
+      },
+      "JobSubject": {
+        "additionalProperties": false,
+        "properties": {
+          "chain_id": {
+            "type": "integer"
+          },
+          "commerce": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "integer"
+          },
+          "output_hash": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "type": {
+            "const": "job",
+            "default": "job"
+          }
+        },
+        "required": [
+          "chain_id",
+          "commerce",
+          "job_id",
+          "provider",
+          "output_hash"
+        ],
+        "title": "JobSubject",
+        "type": "object"
+      },
+      "JudgeConfig": {
+        "additionalProperties": false,
+        "description": "Which judge model to use. API keys are never stored here (they come from the env).",
+        "properties": {
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "extra": {
+            "default": {},
+            "type": "object"
+          },
+          "max_tokens": {
+            "default": 2048,
+            "type": "integer"
+          },
+          "model": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "samples": {
+            "default": 1,
+            "type": "integer"
+          },
+          "temperature": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": 0.0
+          }
+        },
+        "required": [
+          "provider",
+          "model"
+        ],
+        "title": "JudgeConfig",
+        "type": "object"
+      },
+      "LlmStep": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "end_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "const": "llm",
+            "default": "llm"
+          },
+          "messages": {
+            "default": [],
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "response": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "start_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "tool_calls": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ToolCall"
+            },
+            "type": "array"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Usage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "LlmStep",
+        "type": "object"
+      },
+      "LockEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "metric_version": {
+            "type": "string"
+          },
+          "prompt_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "metric_version"
+        ],
+        "title": "LockEntry",
+        "type": "object"
+      },
+      "Message": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "default": "",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "system",
+              "user",
+              "assistant",
+              "tool"
+            ]
+          },
+          "tool_call_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "tool_calls": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ToolCall"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "title": "Message",
+        "type": "object"
+      },
+      "MetricAggregate": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "errors": {
+            "type": "integer"
+          },
+          "max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "metric_id": {
+            "type": "string"
+          },
+          "min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "name": {
+            "type": "string"
+          },
+          "pass_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "scored": {
+            "type": "integer"
+          },
+          "skipped": {
+            "type": "integer"
+          },
+          "std": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "value_mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "value_p50": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "value_p95": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "value_p99": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "name",
+          "metric_id",
+          "count",
+          "scored",
+          "errors",
+          "skipped"
+        ],
+        "title": "MetricAggregate",
+        "type": "object"
+      },
+      "MetricCatalogue": {
+        "properties": {
+          "metrics": {
+            "items": {
+              "$ref": "#/components/schemas/MetricSpec"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "metrics"
+        ],
+        "type": "object"
+      },
+      "MetricConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "allow_truncation": {
+            "default": false,
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "params": {
+            "default": {},
+            "type": "object"
+          },
+          "required": {
+            "default": false,
+            "type": "boolean"
+          },
+          "threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "value_max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "value_min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "value_target": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "weight": {
+            "default": 1.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "MetricConfig",
+        "type": "object"
+      },
+      "MetricProvenance": {
+        "additionalProperties": false,
+        "properties": {
+          "judge": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "judge_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "method": {
+            "type": "string"
+          },
+          "metric_version": {
+            "type": "string"
+          },
+          "prompt_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "samples": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "truncated": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "metric_version",
+          "method"
+        ],
+        "title": "MetricProvenance",
+        "type": "object"
+      },
+      "MetricResult": {
+        "additionalProperties": false,
+        "properties": {
+          "details": {
+            "default": {},
+            "type": "object"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorInfo"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "method": {
+            "type": "string"
+          },
+          "metric_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MetricProvenance"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "required": {
+            "default": false,
+            "type": "boolean"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "default": "scored",
+            "enum": [
+              "scored",
+              "skipped",
+              "error",
+              "pending_human"
+            ]
+          },
+          "threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "weight": {
+            "default": 1.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "metric_id",
+          "name",
+          "method",
+          "score"
+        ],
+        "title": "MetricResult",
+        "type": "object"
+      },
+      "MetricSpec": {
+        "properties": {
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "category": {
+            "type": "string"
+          },
+          "default_threshold": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "methods": {
+            "items": {
+              "properties": {
+                "extra": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "inverted": {
+                  "type": "boolean"
+                },
+                "kind": {
+                  "enum": [
+                    "rule",
+                    "judge",
+                    "model",
+                    "vendor"
+                  ]
+                },
+                "name": {
+                  "type": "string"
+                },
+                "optional_inputs": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "raw_range": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "type": "array"
+                },
+                "required_inputs": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "service_allowed": {
+                  "type": "boolean"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "params_schema": {
+            "type": "object"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value_limits": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "category",
+          "methods"
+        ],
+        "type": "object"
+      },
+      "PassRule": {
+        "additionalProperties": false,
+        "properties": {
+          "aggregation": {
+            "default": "weighted_average",
+            "enum": [
+              "weighted_average",
+              "mean",
+              "min",
+              "max"
+            ]
+          },
+          "inconclusive_band": {
+            "default": 0.0,
+            "type": "number"
+          },
+          "max_error_rate": {
+            "default": 0.0,
+            "type": "number"
+          },
+          "min_aggregate": {
+            "default": 0.7,
+            "type": "number"
+          },
+          "min_pass_rate": {
+            "default": 1.0,
+            "type": "number"
+          },
+          "on_inconclusive": {
+            "default": "retry",
+            "enum": [
+              "retry",
+              "decline",
+              "submit"
+            ]
+          }
+        },
+        "title": "PassRule",
+        "type": "object"
+      },
+      "Privacy": {
+        "additionalProperties": false,
+        "properties": {
+          "encrypt_to": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "redact": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "report_contents": {
+            "default": "hashes",
+            "enum": [
+              "hashes",
+              "redacted",
+              "full"
+            ]
+          }
+        },
+        "title": "Privacy",
+        "type": "object"
+      },
+      "Provenance": {
+        "additionalProperties": false,
+        "properties": {
+          "finished_at": {
+            "type": "number"
+          },
+          "judge": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "metric_versions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "type": "object"
+          },
+          "package_version": {
+            "type": "string"
+          },
+          "request_hash": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "number"
+          },
+          "suite_hash": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "package_version",
+          "suite_hash",
+          "request_hash",
+          "started_at",
+          "finished_at"
+        ],
+        "title": "Provenance",
+        "type": "object"
+      },
+      "QuoteResponse": {
+        "properties": {
+          "judge_calls": {
+            "type": "integer"
+          },
+          "payment_required": {
+            "type": "boolean"
+          },
+          "quote": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "request_hash": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_hash",
+          "judge_calls",
+          "payment_required",
+          "quote"
+        ],
+        "type": "object"
+      },
+      "RegistrationMetricsV1": {
+        "additionalProperties": true,
+        "description": "One entry of metrics[] in an ERC-8004 registration file.",
+        "properties": {
+          "agent_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attestation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Attestation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "benchmark": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "cases": {
+            "type": "integer"
+          },
+          "evaluated_at": {
+            "type": "integer"
+          },
+          "evaluator": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "metrics": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object"
+          },
+          "report": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "properties": {
+                  "hash": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "uri": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uri",
+                  "hash"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "result_hash": {
+            "type": "string"
+          },
+          "schema": {
+            "const": "bnbagent-eval/registration-metrics/v1"
+          },
+          "suite_hash": {
+            "type": "string"
+          },
+          "verdict": {
+            "enum": [
+              "pass",
+              "fail",
+              "inconclusive",
+              "pending_human"
+            ]
+          }
+        },
+        "required": [
+          "schema",
+          "suite_hash",
+          "result_hash",
+          "metrics",
+          "verdict"
+        ],
+        "title": "RegistrationMetricsV1",
+        "type": "object"
+      },
+      "RunOptions": {
+        "additionalProperties": false,
+        "properties": {
+          "budget": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Budget"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "deadline": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "judge_override": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JudgeConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "max_concurrency": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "privacy": {
+            "$ref": "#/components/schemas/Privacy",
+            "default": {
+              "encrypt_to": [],
+              "redact": [],
+              "report_contents": "hashes"
+            }
+          },
+          "runs": {
+            "default": 1,
+            "type": "integer"
+          }
+        },
+        "title": "RunOptions",
+        "type": "object"
+      },
+      "RunResult": {
+        "additionalProperties": false,
+        "properties": {
+          "app_metrics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AppMetrics"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "output_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "run_index": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run_index"
+        ],
+        "title": "RunResult",
+        "type": "object"
+      },
+      "Session": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "traces": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Trace"
+            },
+            "type": "array"
+          },
+          "warnings": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "Session",
+        "type": "object"
+      },
+      "Suite": {
+        "additionalProperties": true,
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "judge": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JudgeConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "lock": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/LockEntry"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "metrics": {
+            "items": {
+              "$ref": "#/components/schemas/MetricConfig"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "pass_rule": {
+            "$ref": "#/components/schemas/PassRule",
+            "default": {
+              "aggregation": "weighted_average",
+              "inconclusive_band": 0.0,
+              "max_error_rate": 0.0,
+              "min_aggregate": 0.7,
+              "min_pass_rate": 1.0,
+              "on_inconclusive": "retry"
+            }
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "metrics"
+        ],
+        "title": "Suite",
+        "type": "object"
+      },
+      "TargetRef": {
+        "additionalProperties": false,
+        "properties": {
+          "config": {
+            "default": {},
+            "type": "object"
+          },
+          "kind": {
+            "enum": [
+              "callable",
+              "http",
+              "a2a",
+              "mcp",
+              "erc8004"
+            ]
+          },
+          "simulated_user": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "TargetRef",
+        "type": "object"
+      },
+      "ToolCall": {
+        "additionalProperties": false,
+        "properties": {
+          "arguments": {
+            "default": {},
+            "type": "object"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ToolCall",
+        "type": "object"
+      },
+      "ToolResult": {
+        "additionalProperties": false,
+        "properties": {
+          "call_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "content": {
+            "default": null
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "title": "ToolResult",
+        "type": "object"
+      },
+      "ToolStep": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "call": {
+            "$ref": "#/components/schemas/ToolCall"
+          },
+          "end_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "const": "tool",
+            "default": "tool"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ToolResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "start_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Usage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "id",
+          "call"
+        ],
+        "title": "ToolStep",
+        "type": "object"
+      },
+      "Trace": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "steps": {
+            "default": [],
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/LlmStep"
+                },
+                {
+                  "$ref": "#/components/schemas/ToolStep"
+                },
+                {
+                  "$ref": "#/components/schemas/AgentStep"
+                },
+                {
+                  "$ref": "#/components/schemas/DelegationStep"
+                },
+                {
+                  "$ref": "#/components/schemas/HandoffStep"
+                },
+                {
+                  "$ref": "#/components/schemas/TxStep"
+                }
+              ]
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "Trace",
+        "type": "object"
+      },
+      "TxStep": {
+        "additionalProperties": false,
+        "description": "An on-chain transaction performed (or proposed) by the agent.",
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "block_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "calldata": {
+            "default": "0x",
+            "type": "string"
+          },
+          "chain_id": {
+            "type": "integer"
+          },
+          "decoded": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecodedCall"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "end_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "from_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "gas_used": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "id": {
+            "type": "string"
+          },
+          "intent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "kind": {
+            "const": "tx",
+            "default": "tx"
+          },
+          "logs": {
+            "default": [],
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "start_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "to": {
+            "type": "string"
+          },
+          "tx_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Usage"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "value": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "chain_id",
+          "to"
+        ],
+        "title": "TxStep",
+        "type": "object"
+      },
+      "Usage": {
+        "additionalProperties": false,
+        "properties": {
+          "cache_read_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "cache_write_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "title": "Usage",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "Verdict": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "reasons": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "pass",
+              "fail",
+              "inconclusive",
+              "pending_human"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "Verdict",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Evaluation as a service with x402 payments (bnbagent-eval).",
+    "title": "bnbagent-eval service",
+    "version": "0.1.0.dev0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/.well-known/agent-card.json": {
+      "get": {
+        "operationId": "agent_card__well_known_agent_card_json_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Agent Card"
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health"
+      }
+    },
+    "/v1/credits/redeem": {
+      "post": {
+        "operationId": "redeem_v1_credits_redeem_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreditRedeem"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvalResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Malformed body"
+          },
+          "402": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Payment required (x402 challenge)"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Idempotency conflict / credit already used"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid request or denied by the untrusted-suite policy"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Rate limited"
+          }
+        },
+        "summary": "Redeem"
+      }
+    },
+    "/v1/evaluate": {
+      "post": {
+        "operationId": "evaluate_v1_evaluate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvalResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Malformed body"
+          },
+          "402": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Payment required (x402 challenge)"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Idempotency conflict / credit already used"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid request or denied by the untrusted-suite policy"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Rate limited"
+          }
+        },
+        "summary": "Evaluate"
+      }
+    },
+    "/v1/evaluations": {
+      "post": {
+        "operationId": "evaluations_v1_evaluations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobCreated"
+                }
+              }
+            },
+            "description": "Job accepted"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Malformed body"
+          },
+          "402": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Payment required (x402 challenge)"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Idempotency conflict / credit already used"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid request or denied by the untrusted-suite policy"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Too many running jobs"
+          }
+        },
+        "summary": "Evaluations"
+      }
+    },
+    "/v1/evaluations/{job_id}": {
+      "get": {
+        "operationId": "job_v1_evaluations__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatus"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Job"
+      }
+    },
+    "/v1/metrics": {
+      "get": {
+        "operationId": "metrics_v1_metrics_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricCatalogue"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Metrics"
+      }
+    },
+    "/v1/metrics/{metric_id}": {
+      "get": {
+        "operationId": "metric_v1_metrics__metric_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "metric_id",
+            "required": true,
+            "schema": {
+              "title": "Metric Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricSpec"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Metric"
+      }
+    },
+    "/v1/quote": {
+      "post": {
+        "operationId": "quote_v1_quote_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Malformed body"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Request too large"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Invalid request or denied by the untrusted-suite policy"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Rate limited"
+          }
+        },
+        "summary": "Quote"
+      }
+    }
+  }
+}

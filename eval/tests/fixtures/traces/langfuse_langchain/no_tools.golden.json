@@ -1,0 +1,69 @@
+{
+ "id": "session-0007",
+ "traces": [
+  {
+   "id": "4c1f0c0de0000000000000000000a001",
+   "steps": [
+    {
+     "agent_id": "agent_ed47d30d",
+     "available_tools": [
+      {
+       "description": "Checks status of user package",
+       "name": "check_package_status",
+       "parameters": {
+        "type": "object"
+       }
+      },
+      {
+       "description": "Total cost of user package",
+       "name": "calculate_price",
+       "parameters": {
+        "type": "object"
+       }
+      }
+     ],
+     "end_ms": 1764138921400.0,
+     "error": null,
+     "id": "lc00000000000001",
+     "kind": "agent",
+     "parent_id": null,
+     "response": "I can check a package status and calculate the total cost.",
+     "start_ms": 1764138919040.0,
+     "system_prompt": "You are a helpful package assistant.",
+     "usage": null,
+     "user_prompt": "Which tools can you use?"
+    },
+    {
+     "agent_id": "agent_ed47d30d",
+     "end_ms": 1764138921333.0,
+     "error": null,
+     "id": "lc00000000000003",
+     "kind": "llm",
+     "messages": [
+      {
+       "content": "You are a helpful package assistant.",
+       "role": "system"
+      },
+      {
+       "content": "Which tools can you use?",
+       "role": "user"
+      }
+     ],
+     "model": "example-model-v1",
+     "parent_id": "lc00000000000001",
+     "response": "I can check a package status and calculate the total cost.",
+     "start_ms": 1764138919053.0,
+     "tool_calls": [],
+     "usage": {
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "cost_usd": null,
+      "input_tokens": 410,
+      "output_tokens": 18
+     }
+    }
+   ]
+  }
+ ],
+ "warnings": []
+}

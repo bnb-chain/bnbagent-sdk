@@ -1,0 +1,9 @@
+{
+  "result_hash": "0x27ea89a5a31ed703d2980e92ae34f4820c2503f4c613cd3144d2aeba80861963",
+  "suite_hash": "0xe808f8d3fad1b0b6a7facc33ec68a776d286fa49adf786030473b5393374ab78",
+  "checked_on": [
+    "Python 3.10.20",
+    "Python 3.11.15",
+    "Python 3.12.3"
+  ]
+}

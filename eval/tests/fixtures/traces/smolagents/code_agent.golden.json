@@ -1,0 +1,163 @@
+{
+ "id": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+ "traces": [
+  {
+   "id": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+   "steps": [
+    {
+     "agent_id": "CodeAgent",
+     "available_tools": [
+      {
+       "description": "Provides a final answer to the given problem.",
+       "name": "final_answer",
+       "parameters": {
+        "answer": {
+         "description": "The final answer to the problem",
+         "type": "any"
+        }
+       }
+      },
+      {
+       "description": "A team member that will search the internet.",
+       "name": "search_agent"
+      }
+     ],
+     "end_ms": 1742401936071.462,
+     "error": null,
+     "id": "e000000000000001",
+     "kind": "agent",
+     "parent_id": null,
+     "response": "3",
+     "start_ms": 1742401928571.462,
+     "system_prompt": "You are an expert assistant who can solve any task using code blobs.",
+     "usage": {
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "cost_usd": null,
+      "input_tokens": 720,
+      "output_tokens": 100
+     },
+     "user_prompt": "How many studio albums did the band release before 2000? Answer with a number."
+    },
+    {
+     "agent_id": "CodeAgent",
+     "end_ms": 1742401931075.528,
+     "error": null,
+     "id": "e000000000000002",
+     "kind": "llm",
+     "messages": [
+      {
+       "content": "You are an expert assistant who can solve any task using code blobs.",
+       "role": "system"
+      },
+      {
+       "content": "New task:\nHow many studio albums did the band release before 2000? Answer with a number.",
+       "role": "user"
+      }
+     ],
+     "model": "example-model-v1",
+     "parent_id": "e000000000000001",
+     "response": "Thought: I will count the albums with code.",
+     "start_ms": 1742401928575.528,
+     "tool_calls": [],
+     "usage": {
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "cost_usd": null,
+      "input_tokens": 300,
+      "output_tokens": 60
+     }
+    },
+    {
+     "agent_id": "CodeAgent",
+     "end_ms": 1742401935250.0,
+     "error": null,
+     "id": "e000000000000004",
+     "kind": "llm",
+     "messages": [
+      {
+       "content": "You are an expert assistant who can solve any task using code blobs.",
+       "role": "system"
+      },
+      {
+       "content": "New task:\nHow many studio albums did the band release before 2000? Answer with a number.",
+       "role": "user"
+      },
+      {
+       "content": "Thought: I will count the albums with code.",
+       "role": "assistant"
+      },
+      {
+       "content": "Calling tools:\n[{'id': 'call_1', 'type': 'function', 'function': {'name': 'python_interpreter', 'arguments': 'albums = [1994, 1996, 1999, 2003]\\nprint(sum(1 for y in albums if y < 2000))'}}]",
+       "role": "user"
+      },
+      {
+       "content": "Call id: call_1\nObservation:\nExecution logs:\n3\nLast output from code snippet:\nNone",
+       "role": "user"
+      }
+     ],
+     "model": "example-model-v1",
+     "parent_id": "e000000000000001",
+     "response": "Thought: The count is 3.\nCode:\n```py\nfinal_answer(3)\n```",
+     "start_ms": 1742401932000.0,
+     "tool_calls": [],
+     "usage": {
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "cost_usd": null,
+      "input_tokens": 420,
+      "output_tokens": 40
+     }
+    },
+    {
+     "agent_id": "CodeAgent",
+     "call": {
+      "arguments": {
+       "arguments": "albums = [1994, 1996, 1999, 2003]\nprint(sum(1 for y in albums if y < 2000))",
+       "name": "python_interpreter"
+      },
+      "id": "call_1",
+      "name": "python_interpreter"
+     },
+     "end_ms": 1742401935250.0,
+     "error": null,
+     "id": "tool_call_e000000000000004_0",
+     "kind": "tool",
+     "parent_id": "e000000000000001",
+     "result": {
+      "call_id": "call_1",
+      "content": "\nCall id: call_1\nObservation:\nExecution logs:\n3\nLast output from code snippet:\nNone",
+      "error": null
+     },
+     "start_ms": 1742401932000.0,
+     "usage": null
+    },
+    {
+     "agent_id": "CodeAgent",
+     "call": {
+      "arguments": {
+       "args": [
+        "3"
+       ]
+      },
+      "id": "tool_e000000000000005",
+      "name": "final_answer"
+     },
+     "end_ms": 1742401935300.047,
+     "error": null,
+     "id": "e000000000000005",
+     "kind": "tool",
+     "parent_id": "e000000000000001",
+     "result": {
+      "call_id": "tool_e000000000000005",
+      "content": "",
+      "error": null
+     },
+     "start_ms": 1742401935300.0,
+     "usage": null
+    }
+   ]
+  }
+ ],
+ "warnings": []
+}

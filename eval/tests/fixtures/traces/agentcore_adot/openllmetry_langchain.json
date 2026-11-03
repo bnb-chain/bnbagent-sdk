@@ -1,0 +1,262 @@
+[
+ {
+  "scope": {
+   "name": "opentelemetry.instrumentation.langchain",
+   "version": "0.0.0"
+  },
+  "traceId": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "spanId": "b000000000000001",
+  "parentSpanId": null,
+  "name": "LangGraph.workflow",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971559000000000,
+  "endTimeUnixNano": 1761971568000000000,
+  "attributes": {
+   "session.id": "session-0002",
+   "traceloop.span.kind": "workflow",
+   "traceloop.workflow.name": "LangGraph"
+  },
+  "status": {
+   "code": "UNSET"
+  }
+ },
+ {
+  "scope": {
+   "name": "opentelemetry.instrumentation.langchain",
+   "version": "0.0.0"
+  },
+  "traceId": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "spanId": "b000000000000002",
+  "parentSpanId": "b000000000000001",
+  "name": "agent.task",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971559100000000,
+  "endTimeUnixNano": 1761971562000000000,
+  "attributes": {
+   "session.id": "session-0002",
+   "traceloop.span.kind": "task"
+  },
+  "status": {
+   "code": "UNSET"
+  }
+ },
+ {
+  "scope": {
+   "name": "opentelemetry.instrumentation.langchain",
+   "version": "0.0.0"
+  },
+  "traceId": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "spanId": "b000000000000003",
+  "parentSpanId": "b000000000000002",
+  "name": "ChatBedrock.chat",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971559200000000,
+  "endTimeUnixNano": 1761971561900000000,
+  "attributes": {
+   "session.id": "session-0002",
+   "llm.request.type": "chat",
+   "gen_ai.request.model": "example-model-v1",
+   "gen_ai.usage.prompt_tokens": 120,
+   "gen_ai.usage.completion_tokens": 30,
+   "gen_ai.prompt.0.role": "system",
+   "gen_ai.prompt.1.role": "user",
+   "gen_ai.completion.0.tool_calls.0.name": "calculate_bmi",
+   "gen_ai.completion.0.tool_calls.0.arguments": "{\"weight_kg\": 70, \"height_m\": 1.75}",
+   "gen_ai.completion.0.tool_calls.0.id": "toolu_0001",
+   "llm.request.functions.0.name": "calculate_bmi",
+   "llm.request.functions.0.description": "Calculate the body mass index.",
+   "llm.request.functions.0.parameters": "{\"type\": \"object\", \"properties\": {\"weight_kg\": {\"type\": \"number\"}, \"height_m\": {\"type\": \"number\"}}}"
+  },
+  "status": {
+   "code": "UNSET"
+  }
+ },
+ {
+  "scope": {
+   "name": "opentelemetry.instrumentation.langchain",
+   "version": "0.0.0"
+  },
+  "traceId": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "spanId": "b000000000000004",
+  "parentSpanId": "b000000000000001",
+  "name": "calculate_bmi.tool",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971562100000000,
+  "endTimeUnixNano": 1761971562200000000,
+  "attributes": {
+   "session.id": "session-0002",
+   "traceloop.span.kind": "tool",
+   "traceloop.entity.name": "calculate_bmi"
+  },
+  "status": {
+   "code": "UNSET"
+  }
+ },
+ {
+  "scope": {
+   "name": "opentelemetry.instrumentation.langchain",
+   "version": "0.0.0"
+  },
+  "traceId": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "spanId": "b000000000000005",
+  "parentSpanId": "b000000000000001",
+  "name": "ChatBedrock.chat",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971562300000000,
+  "endTimeUnixNano": 1761971567900000000,
+  "attributes": {
+   "session.id": "session-0002",
+   "llm.request.type": "chat",
+   "gen_ai.request.model": "example-model-v1",
+   "gen_ai.usage.prompt_tokens": 180,
+   "gen_ai.usage.completion_tokens": 20,
+   "gen_ai.prompt.0.role": "system",
+   "gen_ai.prompt.1.role": "user",
+   "gen_ai.prompt.2.role": "assistant",
+   "gen_ai.prompt.3.role": "tool",
+   "gen_ai.prompt.3.tool_call_id": "toolu_0001",
+   "llm.request.functions.0.name": "calculate_bmi",
+   "llm.request.functions.0.description": "Calculate the body mass index.",
+   "llm.request.functions.0.parameters": "{\"type\": \"object\", \"properties\": {\"weight_kg\": {\"type\": \"number\"}, \"height_m\": {\"type\": \"number\"}}}"
+  },
+  "status": {
+   "code": "UNSET"
+  }
+ },
+ {
+  "scope": {
+   "name": "opentelemetry.instrumentation.langchain"
+  },
+  "timeUnixNano": 1761971561900000000,
+  "body": {
+   "input": {
+    "messages": [
+     {
+      "content": "You are a health assistant. Use the tools to answer.",
+      "role": "unknown"
+     },
+     {
+      "content": "Calculate my BMI if I weigh 70 kg and am 1.75 meters tall",
+      "role": "unknown"
+     }
+    ]
+   },
+   "output": {
+    "messages": [
+     {
+      "content": "I'll calculate your BMI.",
+      "role": "unknown"
+     }
+    ]
+   }
+  },
+  "attributes": {
+   "event.name": "opentelemetry.instrumentation.langchain",
+   "session.id": "session-0002"
+  },
+  "traceId": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "spanId": "b000000000000003"
+ },
+ {
+  "scope": {
+   "name": "opentelemetry.instrumentation.langchain"
+  },
+  "timeUnixNano": 1761971562200000000,
+  "body": {
+   "input": {
+    "messages": [
+     {
+      "content": "{\"input_str\": \"{'weight_kg': 70, 'height_m': 1.75}\", \"tags\": [\"seq:step:1\"], \"metadata\": {\"langgraph_step\": 2, \"langgraph_node\": \"tools\"}, \"inputs\": {\"weight_kg\": 70, \"height_m\": 1.75}, \"kwargs\": {\"name\": null}}",
+      "role": "user"
+     }
+    ]
+   },
+   "output": {
+    "messages": [
+     {
+      "content": "{\"output\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"BMI: 22.9 (Normal weight).\", \"type\": \"tool\", \"name\": \"calculate_bmi\", \"tool_call_id\": \"toolu_0001\", \"status\": \"success\"}}, \"kwargs\": {\"name\": \"calculate_bmi\"}}",
+      "role": "assistant"
+     }
+    ]
+   }
+  },
+  "attributes": {
+   "event.name": "opentelemetry.instrumentation.langchain",
+   "session.id": "session-0002"
+  },
+  "traceId": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "spanId": "b000000000000004"
+ },
+ {
+  "scope": {
+   "name": "opentelemetry.instrumentation.langchain"
+  },
+  "timeUnixNano": 1761971567900000000,
+  "body": {
+   "input": {
+    "messages": [
+     {
+      "content": "You are a health assistant. Use the tools to answer.",
+      "role": "unknown"
+     },
+     {
+      "content": "Calculate my BMI if I weigh 70 kg and am 1.75 meters tall",
+      "role": "unknown"
+     },
+     {
+      "content": "I'll calculate your BMI.",
+      "role": "unknown"
+     },
+     {
+      "content": "BMI: 22.9 (Normal weight).",
+      "role": "unknown"
+     }
+    ]
+   },
+   "output": {
+    "messages": [
+     {
+      "content": "Your BMI is 22.9, which is in the normal range.",
+      "role": "unknown"
+     }
+    ]
+   }
+  },
+  "attributes": {
+   "event.name": "opentelemetry.instrumentation.langchain",
+   "session.id": "session-0002"
+  },
+  "traceId": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "spanId": "b000000000000005"
+ },
+ {
+  "scope": {
+   "name": "opentelemetry.instrumentation.langchain"
+  },
+  "timeUnixNano": 1761971568000000000,
+  "body": {
+   "input": {
+    "messages": [
+     {
+      "content": "{\"inputs\": {\"messages\": [[\"user\", \"Calculate my BMI if I weigh 70 kg and am 1.75 meters tall\"]]}, \"tags\": [], \"metadata\": {}}",
+      "role": "user"
+     }
+    ]
+   },
+   "output": {
+    "messages": [
+     {
+      "content": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"Calculate my BMI if I weigh 70 kg and am 1.75 meters tall\", \"type\": \"human\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"Your BMI is 22.9, which is in the normal range.\", \"type\": \"ai\"}}]}, \"kwargs\": {\"name\": \"LangGraph\"}}",
+      "role": "assistant"
+     }
+    ]
+   }
+  },
+  "attributes": {
+   "event.name": "opentelemetry.instrumentation.langchain",
+   "session.id": "session-0002"
+  },
+  "traceId": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "spanId": "b000000000000001"
+ }
+]

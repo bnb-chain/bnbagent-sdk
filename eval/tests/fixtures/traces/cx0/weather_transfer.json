@@ -1,0 +1,62 @@
+{
+ "steps": [
+  {
+   "agent": "83647c70-0b7d-3885-2412-f4f946f00c88_user_agent",
+   "steps": []
+  },
+  {
+   "agent": "7259e7d3-7acc-9a2e-843e-e8f99e6b8afc_weather_agent_claude",
+   "steps": [
+    {
+     "role": "system",
+     "content": "You are a helpful weather assistant powered by Claude Sonnet. Use the 'get_weather' tool for city weather requests. Analyze the tool's dictionary output ('status', 'report'/'error_message'). Clearly present successful reports or polite error messages.\n\nYou are an agent. Your internal name is \"weather_agent_claude\". The description about you is \"Provides weather information (using Claude Sonnet).\". ..."
+    },
+    {
+     "role": "user",
+     "content": "how is the weather in New York?"
+    },
+    {
+     "role": "assistant",
+     "tool_calls": [
+      {
+       "id": "call_6LV3CGmleDK2Uyi8vCKIQvC0",
+       "name": "get_weather",
+       "arguments": {
+        "city": "New York"
+       }
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": "The weather in New York is sunny with a temperature of 25°C."
+    }
+   ]
+  },
+  {
+   "agent": "50785b50-64d7-bfda-d785-b8e1433144fd_assistant_coordinator_agent",
+   "steps": [
+    {
+     "role": "system",
+     "content": "You are an assistant coordinator agent. \n\nYou are an agent. Your internal name is \"assistant_coordinator_agent\". The description about you is \"An agent that coordinates multiple agents to complete complex tasks. \".\n\n\nYou have a list of other agents to transfer to:\n\n\nAgent name: weather_agent_claude\nAgent description: Provides weather information (using Claude Sonnet).\n\n\nAgent name: calculator_agen ..."
+    },
+    {
+     "role": "user",
+     "content": "how is the weather in New York?"
+    },
+    {
+     "role": "assistant",
+     "tool_calls": [
+      {
+       "id": "call_0GJkD1ynj13vvZ8BR6AdMeYQ",
+       "name": "transfer_to_agent",
+       "arguments": {
+        "agent_name": "weather_agent_claude"
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

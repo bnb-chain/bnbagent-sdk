@@ -1,0 +1,362 @@
+{
+ "id": "13cc6db7f2e290b54bab3061a6fc5db0",
+ "timestamp": "2025-11-14T01:00:01.245000Z",
+ "name": "run_agent",
+ "sessionId": "session-0005",
+ "observations": [
+  {
+   "id": "ca8183085bc4c831",
+   "traceId": "13cc6db7f2e290b54bab3061a6fc5db0",
+   "type": "SPAN",
+   "name": "run_agent",
+   "startTime": "2025-11-14T01:00:01.241000Z",
+   "endTime": "2025-11-14T01:00:06.523000Z",
+   "model": null,
+   "input": null,
+   "output": null,
+   "parentObservationId": null,
+   "metadata": {},
+   "usageDetails": {},
+   "level": "DEFAULT",
+   "statusMessage": null,
+   "calculatedTotalCost": 0.0
+  },
+  {
+   "id": "28b7038083b46985",
+   "traceId": "13cc6db7f2e290b54bab3061a6fc5db0",
+   "type": "GENERATION",
+   "name": "invoke_agent Strands Agents",
+   "startTime": "2025-11-14T01:00:01.242000Z",
+   "endTime": "2025-11-14T01:00:06.495000Z",
+   "model": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+   "input": [
+    {
+     "role": "user",
+     "content": "[{\"text\": \"What is the status of my package\"}]"
+    }
+   ],
+   "output": {
+    "message": "Your package is ready for pickup and the total cost is $100. You can come collect it whenever convenient for you!\n",
+    "finish_reason": "end_turn"
+   },
+   "parentObservationId": "ca8183085bc4c831",
+   "metadata": {
+    "attributes": {
+     "session.id": "session-0005",
+     "gen_ai.system": "strands-agents",
+     "gen_ai.agent.name": "Strands Agents",
+     "gen_ai.operation.name": "invoke_agent",
+     "gen_ai.request.model": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+     "gen_ai.agent.tools": "[\"check_package_status\", \"calculate_price\"]",
+     "system_prompt": "You are a helpful assistant, user will ask you about their package. You should first check it's status. If status is ready for pickup you should check cost. The name of the user is Bob",
+     "gen_ai.usage.prompt_tokens": "1709",
+     "gen_ai.usage.completion_tokens": "164",
+     "gen_ai.usage.input_tokens": "1709",
+     "gen_ai.usage.output_tokens": "164",
+     "gen_ai.usage.total_tokens": "1873",
+     "gen_ai.usage.cache_read_input_tokens": "{\"intValue\":0}",
+     "gen_ai.usage.cache_write_input_tokens": "{\"intValue\":0}"
+    }
+   },
+   "usageDetails": {
+    "input": 1709,
+    "output": 164,
+    "total": 1873
+   },
+   "level": "DEFAULT",
+   "statusMessage": null,
+   "calculatedTotalCost": 0.0
+  },
+  {
+   "id": "09a3d2c149be6213",
+   "traceId": "13cc6db7f2e290b54bab3061a6fc5db0",
+   "type": "SPAN",
+   "name": "execute_event_loop_cycle",
+   "startTime": "2025-11-14T01:00:04.562000Z",
+   "endTime": "2025-11-14T01:00:06.456000Z",
+   "model": null,
+   "input": null,
+   "output": null,
+   "parentObservationId": "28b7038083b46985",
+   "metadata": {
+    "attributes": {
+     "session.id": "session-0005",
+     "event_loop.cycle_id": "48b3f3e3-8549-4126-909d-b2d9a15b938e",
+     "event_loop.parent_cycle_id": "e46a39a5-f765-4628-9618-acf741d74b77"
+    }
+   },
+   "usageDetails": {},
+   "level": "DEFAULT",
+   "statusMessage": null,
+   "calculatedTotalCost": 0.0
+  },
+  {
+   "id": "3f1a15bd9e8cd207",
+   "traceId": "13cc6db7f2e290b54bab3061a6fc5db0",
+   "type": "GENERATION",
+   "name": "chat",
+   "startTime": "2025-11-14T01:00:04.562000Z",
+   "endTime": "2025-11-14T01:00:06.384000Z",
+   "model": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+   "input": [
+    {
+     "role": "user",
+     "content": "[{\"text\": \"What is the status of my package\"}]"
+    },
+    {
+     "role": "assistant",
+     "content": "[{\"text\": \"I'll check the status of your package for you, Bob.\"}, {\"toolUse\": {\"toolUseId\": \"tooluse_sYup7HMFTFOAopB_4kgTqA\", \"name\": \"check_package_status\", \"input\": {\"user_name\": \"Bob\"}}}]"
+    },
+    {
+     "role": "tool",
+     "content": "[{\"toolResult\": {\"toolUseId\": \"tooluse_sYup7HMFTFOAopB_4kgTqA\", \"status\": \"success\", \"content\": [{\"text\": \"Package is ready for pickup\"}]}}]"
+    },
+    {
+     "role": "assistant",
+     "content": "[{\"text\": \"Great news! Your package is ready for pickup. Since it's ready, let me also check the total cost for you.\"}, {\"toolUse\": {\"toolUseId\": \"tooluse_eyRoAW-ARTq9inBduvuTtg\", \"name\": \"calculate_price\", \"input\": {}}}]"
+    },
+    {
+     "role": "tool",
+     "content": "[{\"toolResult\": {\"toolUseId\": \"tooluse_eyRoAW-ARTq9inBduvuTtg\", \"status\": \"success\", \"content\": [{\"text\": \"Total cost is $100\"}]}}]"
+    }
+   ],
+   "output": {
+    "finish_reason": "end_turn",
+    "message": "[{\"text\": \"Your package is ready for pickup and the total cost is $100. You can come collect it whenever convenient for you!\"}]"
+   },
+   "parentObservationId": "09a3d2c149be6213",
+   "metadata": {
+    "attributes": {
+     "session.id": "session-0005",
+     "gen_ai.system": "strands-agents",
+     "gen_ai.operation.name": "chat",
+     "gen_ai.request.model": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+     "gen_ai.usage.prompt_tokens": "653",
+     "gen_ai.usage.input_tokens": "653",
+     "gen_ai.usage.completion_tokens": "27",
+     "gen_ai.usage.output_tokens": "27",
+     "gen_ai.usage.total_tokens": "680",
+     "gen_ai.usage.cache_read_input_tokens": "{\"intValue\":0}",
+     "gen_ai.usage.cache_write_input_tokens": "{\"intValue\":0}"
+    }
+   },
+   "usageDetails": {
+    "input": 653,
+    "output": 27,
+    "total": 680
+   },
+   "level": "DEFAULT",
+   "statusMessage": null,
+   "calculatedTotalCost": 0.0
+  },
+  {
+   "id": "5bd8962273e7ddba",
+   "traceId": "13cc6db7f2e290b54bab3061a6fc5db0",
+   "type": "SPAN",
+   "name": "execute_event_loop_cycle",
+   "startTime": "2025-11-14T01:00:03.135000Z",
+   "endTime": "2025-11-14T01:00:04.533000Z",
+   "model": null,
+   "input": null,
+   "output": null,
+   "parentObservationId": "28b7038083b46985",
+   "metadata": {
+    "attributes": {
+     "session.id": "session-0005",
+     "event_loop.cycle_id": "e46a39a5-f765-4628-9618-acf741d74b77",
+     "event_loop.parent_cycle_id": "b7e8bff4-37b4-41d2-b939-9547f56ccb24"
+    }
+   },
+   "usageDetails": {},
+   "level": "DEFAULT",
+   "statusMessage": null,
+   "calculatedTotalCost": 0.0
+  },
+  {
+   "id": "364c5b004ed7f062",
+   "traceId": "13cc6db7f2e290b54bab3061a6fc5db0",
+   "type": "SPAN",
+   "name": "execute_tool calculate_price",
+   "startTime": "2025-11-14T01:00:04.479000Z",
+   "endTime": "2025-11-14T01:00:04.480000Z",
+   "model": null,
+   "input": [
+    {
+     "role": "tool",
+     "content": "{}",
+     "id": "tooluse_eyRoAW-ARTq9inBduvuTtg"
+    }
+   ],
+   "output": {
+    "message": "[{\"text\": \"Total cost is $100\"}]",
+    "id": "tooluse_eyRoAW-ARTq9inBduvuTtg"
+   },
+   "parentObservationId": "5bd8962273e7ddba",
+   "metadata": {
+    "attributes": {
+     "session.id": "session-0005",
+     "gen_ai.operation.name": "execute_tool",
+     "gen_ai.system": "strands-agents",
+     "gen_ai.tool.name": "calculate_price",
+     "gen_ai.tool.call.id": "tooluse_eyRoAW-ARTq9inBduvuTtg",
+     "tool.status": "success"
+    }
+   },
+   "usageDetails": {},
+   "level": "DEFAULT",
+   "statusMessage": null,
+   "calculatedTotalCost": 0.0
+  },
+  {
+   "id": "290b5c80c9aed3f3",
+   "traceId": "13cc6db7f2e290b54bab3061a6fc5db0",
+   "type": "GENERATION",
+   "name": "chat",
+   "startTime": "2025-11-14T01:00:03.135000Z",
+   "endTime": "2025-11-14T01:00:04.410000Z",
+   "model": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+   "input": [
+    {
+     "role": "user",
+     "content": "[{\"text\": \"What is the status of my package\"}]"
+    },
+    {
+     "role": "assistant",
+     "content": "[{\"text\": \"I'll check the status of your package for you, Bob.\"}, {\"toolUse\": {\"toolUseId\": \"tooluse_sYup7HMFTFOAopB_4kgTqA\", \"name\": \"check_package_status\", \"input\": {\"user_name\": \"Bob\"}}}]"
+    },
+    {
+     "role": "tool",
+     "content": "[{\"toolResult\": {\"toolUseId\": \"tooluse_sYup7HMFTFOAopB_4kgTqA\", \"status\": \"success\", \"content\": [{\"text\": \"Package is ready for pickup\"}]}}]"
+    }
+   ],
+   "output": {
+    "finish_reason": "tool_use",
+    "message": "[{\"text\": \"Great news! Your package is ready for pickup. Since it's ready, let me also check the total cost for you.\"}, {\"toolUse\": {\"toolUseId\": \"tooluse_eyRoAW-ARTq9inBduvuTtg\", \"name\": \"calculate_price\", \"input\": {}}}]"
+   },
+   "parentObservationId": "5bd8962273e7ddba",
+   "metadata": {
+    "attributes": {
+     "session.id": "session-0005",
+     "gen_ai.system": "strands-agents",
+     "gen_ai.operation.name": "chat",
+     "gen_ai.request.model": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+     "gen_ai.usage.prompt_tokens": "574",
+     "gen_ai.usage.input_tokens": "574",
+     "gen_ai.usage.completion_tokens": "62",
+     "gen_ai.usage.output_tokens": "62",
+     "gen_ai.usage.total_tokens": "636",
+     "gen_ai.usage.cache_read_input_tokens": "{\"intValue\":0}",
+     "gen_ai.usage.cache_write_input_tokens": "{\"intValue\":0}"
+    }
+   },
+   "usageDetails": {
+    "input": 574,
+    "output": 62,
+    "total": 636
+   },
+   "level": "DEFAULT",
+   "statusMessage": null,
+   "calculatedTotalCost": 0.0
+  },
+  {
+   "id": "9596bbd4668349ad",
+   "traceId": "13cc6db7f2e290b54bab3061a6fc5db0",
+   "type": "SPAN",
+   "name": "execute_event_loop_cycle",
+   "startTime": "2025-11-14T01:00:01.245000Z",
+   "endTime": "2025-11-14T01:00:03.086000Z",
+   "model": null,
+   "input": null,
+   "output": null,
+   "parentObservationId": "28b7038083b46985",
+   "metadata": {
+    "attributes": {
+     "session.id": "session-0005",
+     "event_loop.cycle_id": "b7e8bff4-37b4-41d2-b939-9547f56ccb24"
+    }
+   },
+   "usageDetails": {},
+   "level": "DEFAULT",
+   "statusMessage": null,
+   "calculatedTotalCost": 0.0
+  },
+  {
+   "id": "bcad6196d9821f76",
+   "traceId": "13cc6db7f2e290b54bab3061a6fc5db0",
+   "type": "SPAN",
+   "name": "execute_tool check_package_status",
+   "startTime": "2025-11-14T01:00:03.022000Z",
+   "endTime": "2025-11-14T01:00:03.023000Z",
+   "model": null,
+   "input": [
+    {
+     "role": "tool",
+     "content": "{\"user_name\": \"Bob\"}",
+     "id": "tooluse_sYup7HMFTFOAopB_4kgTqA"
+    }
+   ],
+   "output": {
+    "message": "[{\"text\": \"Package is ready for pickup\"}]",
+    "id": "tooluse_sYup7HMFTFOAopB_4kgTqA"
+   },
+   "parentObservationId": "9596bbd4668349ad",
+   "metadata": {
+    "attributes": {
+     "session.id": "session-0005",
+     "gen_ai.operation.name": "execute_tool",
+     "gen_ai.system": "strands-agents",
+     "gen_ai.tool.name": "check_package_status",
+     "gen_ai.tool.call.id": "tooluse_sYup7HMFTFOAopB_4kgTqA",
+     "tool.status": "success"
+    }
+   },
+   "usageDetails": {},
+   "level": "DEFAULT",
+   "statusMessage": null,
+   "calculatedTotalCost": 0.0
+  },
+  {
+   "id": "156c1779bdf680d1",
+   "traceId": "13cc6db7f2e290b54bab3061a6fc5db0",
+   "type": "GENERATION",
+   "name": "chat",
+   "startTime": "2025-11-14T01:00:01.245000Z",
+   "endTime": "2025-11-14T01:00:02.922000Z",
+   "model": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+   "input": [
+    {
+     "role": "user",
+     "content": "[{\"text\": \"What is the status of my package\"}]"
+    }
+   ],
+   "output": {
+    "finish_reason": "tool_use",
+    "message": "[{\"text\": \"I'll check the status of your package for you, Bob.\"}, {\"toolUse\": {\"toolUseId\": \"tooluse_sYup7HMFTFOAopB_4kgTqA\", \"name\": \"check_package_status\", \"input\": {\"user_name\": \"Bob\"}}}]"
+   },
+   "parentObservationId": "9596bbd4668349ad",
+   "metadata": {
+    "attributes": {
+     "session.id": "session-0005",
+     "gen_ai.system": "strands-agents",
+     "gen_ai.operation.name": "chat",
+     "gen_ai.request.model": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+     "gen_ai.usage.prompt_tokens": "482",
+     "gen_ai.usage.input_tokens": "482",
+     "gen_ai.usage.completion_tokens": "75",
+     "gen_ai.usage.output_tokens": "75",
+     "gen_ai.usage.total_tokens": "557",
+     "gen_ai.usage.cache_read_input_tokens": "{\"intValue\":0}",
+     "gen_ai.usage.cache_write_input_tokens": "{\"intValue\":0}"
+    }
+   },
+   "usageDetails": {
+    "input": 482,
+    "output": 75,
+    "total": 557
+   },
+   "level": "DEFAULT",
+   "statusMessage": null,
+   "calculatedTotalCost": 0.0
+  }
+ ]
+}

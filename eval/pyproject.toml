@@ -1,0 +1,181 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bnbagent-eval"
+dynamic = ["version"]
+description = "Agent evaluation for BNB Chain agents: one evaluation call, a unified metric catalogue, chain workflows via ports."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+keywords = ["ai", "agents", "evaluation", "llm-as-judge", "bnb-chain", "erc-8004", "erc-8183", "x402"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "httpx>=0.27",
+    "pyyaml>=6",
+    "eth-hash[pycryptodome]>=0.5",
+]
+
+[project.optional-dependencies]
+evm = ["eth-account>=0.10", "eth-abi>=4"]
+bnbagent = ["bnbagent>=0.5.1,<0.7", "bnbagent-eval[evm]"]
+openai = []  # OpenAI-compatible judges use httpx (core); kept for symmetry
+anthropic = []  # likewise
+bedrock = ["boto3>=1.34"]
+format = ["jsonschema>=4.18", "lxml>=5", "regex>=2024.4"]
+semantic = ["transformers>=4.30", "torch>=2.0"]  # BERTScore is ours; these load the encoder
+embeddings = ["gensim>=4.3"]
+server = ["fastapi>=0.110", "uvicorn>=0.29", "regex>=2024.4", "lxml>=5"]
+crypto = ["pynacl>=1.5"]
+sandbox = []  # code.* uses subprocess (+ docker / podman if configured)
+toxicity = ["detoxify>=0.5"]
+fluency = ["language-tool-python>=2.7"]
+ragas = [
+    "ragas>=0.3.4",
+    "langchain-aws>=0.2",
+    "langchain-openai>=0.2",
+    "langchain-community<0.4",
+]
+deepeval = ["deepeval>=3.7", "mcp>=1.9,<2"]
+# fmeval pins numpy<2 and datasets 2.x but not pyarrow: pyarrow>=21 needs numpy 2 and drops
+# PyExtensionType, which that datasets uses, so `import fmeval.eval` fails without the cap.
+fmeval = ["fmeval>=1.0", "pyarrow<21"]
+agentcore = ["boto3>=1.42.1"]  # the bedrock-agentcore evaluate API
+redteam = ["pyrit>=0.9"]
+exporters = [
+    "opentelemetry-sdk>=1.20",
+    "opentelemetry-exporter-otlp>=1.20",
+    "prometheus-client>=0.19",
+    "mlflow>=2.10",
+]
+all = ["bnbagent-eval[bnbagent,bedrock,format,server,crypto]"]
+# Everything commonly used without BNB: no bnbagent SDK, no web3 (docs/STANDALONE.md).
+standalone = ["bnbagent-eval[evm,bedrock,format,server,crypto]"]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5",
+    "hypothesis>=6",
+    "ruff>=0.5",
+    "import-linter>=2.0",
+    # parity tests only: our ROUGE / stemmer / tokenizer vs the reference libraries
+    "rouge-score>=0.1.2",
+    "nltk>=3.8",
+]
+
+[project.scripts]
+bnbagent-eval = "bnbagent_eval.cli:main"
+
+[tool.hatch.version]
+path = "bnbagent_eval/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["bnbagent_eval"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "bnbagent_eval/",
+    "tests/",
+    # read by the test suite: doc snippets and links, generated-file checks, the guide map
+    "docs/",
+    "benchmarks/",
+    "examples/",
+    "schemas/",
+    "scripts/",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "CHANGELOG.md",
+    "pyproject.toml",
+]
+
+# Development only: the bnbagent adapter can be tested against the pinned SDK submodule.
+# The package references no repo paths, so eval/ can move to its own repository unchanged.
+[tool.uv.sources]
+bnbagent = { path = "../python", editable = true }
+
+[tool.ruff]
+target-version = "py310"
+line-length = 99
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"bnbagent_eval/judges/prompts/**" = ["E501"]  # prompt text is kept verbatim
+"docs/design/tools/**" = ["E501"]  # diagram labels
+
+[tool.ruff.lint.isort]
+known-first-party = ["bnbagent_eval"]
+
+[tool.ruff.format]
+quote-style = "double"
+exclude = ["*.md"]  # doc snippets are hand-aligned; tests/unit/test_docs_snippets.py runs them
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-v --tb=short --strict-markers -m 'not vendor and not live_judge and not testnet and not calibration'"
+markers = [
+    "parity: compares results with recorded reference implementations",
+    "integration: loopback-only integration tests",
+    "vendor: needs vendor extras (ragas, deepeval, fmeval, pyrit, agentcore)",
+    "live_judge: calls a real judge API (opt-in)",
+    "testnet: uses BSC testnet (opt-in)",
+    "calibration: judge calibration against human labels (opt-in)",
+]
+
+# Import-boundary contracts (design 01 §4, 04 §6.14). Run with `lint-imports`.
+[tool.importlinter]
+root_package = "bnbagent_eval"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Only integrations.bnbagent may import the bnbagent SDK or web3"
+type = "forbidden"
+source_modules = ["bnbagent_eval"]
+forbidden_modules = ["bnbagent", "web3"]
+# Only the adapter imports the SDK *directly*; the CLI / user code reach it through the adapter.
+allow_indirect_imports = "True"
+unmatched_ignore_imports_alerting = "none"
+ignore_imports = [
+    "bnbagent_eval.integrations.bnbagent.** -> bnbagent",
+    "bnbagent_eval.integrations.bnbagent.** -> web3",
+]
+
+[[tool.importlinter.contracts]]
+# Design 04 §6.14: chain/ and server/ see adapters only through ports.py.
+name = "chain, server and engine use ports, never an adapter"
+type = "forbidden"
+source_modules = ["bnbagent_eval.chain", "bnbagent_eval.server", "bnbagent_eval.engine"]
+forbidden_modules = ["bnbagent_eval.integrations"]
+
+[[tool.importlinter.contracts]]
+name = "Layers import downward only"
+type = "layers"
+layers = [
+    "bnbagent_eval.cli",
+    "bnbagent_eval.server",
+    "bnbagent_eval.client",
+    "bnbagent_eval.chain",
+    "bnbagent_eval.authoring",
+    "bnbagent_eval.generation",
+    "bnbagent_eval.engine",
+    "bnbagent_eval.reporting | bnbagent_eval.metrics | bnbagent_eval.privacy",
+    "bnbagent_eval.analysis",
+    "bnbagent_eval.judges | bnbagent_eval.adapters | bnbagent_eval.ports",
+    "bnbagent_eval.config",
+    "bnbagent_eval.types",
+    "bnbagent_eval.net",
+    "bnbagent_eval.hashing | bnbagent_eval._optional | bnbagent_eval._jsonschema | bnbagent_eval.logging_utils | bnbagent_eval._version",
+    "bnbagent_eval.exceptions",
+]

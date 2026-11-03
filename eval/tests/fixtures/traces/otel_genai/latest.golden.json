@@ -1,0 +1,164 @@
+{
+ "id": "session-0004",
+ "traces": [
+  {
+   "id": "a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4a4",
+   "steps": [
+    {
+     "agent_id": "Strands Agents",
+     "available_tools": [
+      {
+       "description": "Checks status of user package",
+       "name": "check_package_status",
+       "parameters": {
+        "properties": {
+         "user_name": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       }
+      },
+      {
+       "description": "Total cost of user package",
+       "name": "calculate_price",
+       "parameters": {
+        "properties": {},
+        "type": "object"
+       }
+      }
+     ],
+     "end_ms": 1763082007000.0,
+     "error": null,
+     "id": "a000000000000001",
+     "kind": "agent",
+     "parent_id": null,
+     "response": "Your package is ready for pickup.",
+     "start_ms": 1763082001000.0,
+     "system_prompt": "You are a helpful assistant. Check the package status first, then the cost.",
+     "usage": null,
+     "user_prompt": "What is the status of my package?"
+    },
+    {
+     "agent_id": "Strands Agents",
+     "end_ms": 1763082003000.0,
+     "error": null,
+     "id": "a000000000000002",
+     "kind": "llm",
+     "messages": [
+      {
+       "content": "What is the status of my package?",
+       "role": "user"
+      }
+     ],
+     "model": "example-model-v1",
+     "parent_id": "a000000000000001",
+     "response": "I'll check the status.",
+     "start_ms": 1763082001100.0,
+     "tool_calls": [
+      {
+       "arguments": {
+        "user_name": "Bob"
+       },
+       "id": "tooluse_0003",
+       "name": "check_package_status"
+      }
+     ],
+     "usage": {
+      "cache_read_tokens": 100,
+      "cache_write_tokens": null,
+      "cost_usd": null,
+      "input_tokens": 500,
+      "output_tokens": 40
+     }
+    },
+    {
+     "agent_id": "Strands Agents",
+     "call": {
+      "arguments": {
+       "user_name": "Bob"
+      },
+      "id": "tooluse_0003",
+      "name": "check_package_status"
+     },
+     "end_ms": 1763082004000.0,
+     "error": null,
+     "id": "a000000000000003",
+     "kind": "tool",
+     "parent_id": "a000000000000001",
+     "result": {
+      "call_id": "tooluse_0003",
+      "content": "Package is ready for pickup",
+      "error": null
+     },
+     "start_ms": 1763082003000.0,
+     "usage": null
+    },
+    {
+     "agent_id": "Strands Agents",
+     "call": {
+      "arguments": {},
+      "id": "tooluse_0004",
+      "name": "calculate_price"
+     },
+     "end_ms": 1763082004500.0,
+     "error": "Error: pricing service unavailable",
+     "id": "a000000000000004",
+     "kind": "tool",
+     "parent_id": "a000000000000001",
+     "result": {
+      "call_id": "tooluse_0004",
+      "content": "Error: pricing service unavailable",
+      "error": "Error: pricing service unavailable"
+     },
+     "start_ms": 1763082004000.0,
+     "usage": null
+    },
+    {
+     "agent_id": "Strands Agents",
+     "end_ms": 1763082006900.0,
+     "error": null,
+     "id": "a000000000000005",
+     "kind": "llm",
+     "messages": [
+      {
+       "content": "What is the status of my package?",
+       "role": "user"
+      },
+      {
+       "content": "I'll check the status.",
+       "role": "assistant",
+       "tool_calls": [
+        {
+         "arguments": {
+          "user_name": "Bob"
+         },
+         "id": "tooluse_0003",
+         "name": "check_package_status"
+        }
+       ]
+      },
+      {
+       "content": "Package is ready for pickup",
+       "role": "tool",
+       "tool_call_id": "tooluse_0003"
+      }
+     ],
+     "model": "example-model-v1",
+     "parent_id": "a000000000000001",
+     "response": "Your package is ready for pickup.",
+     "start_ms": 1763082005000.0,
+     "tool_calls": [],
+     "usage": {
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "cost_usd": null,
+      "input_tokens": 700,
+      "output_tokens": 30
+     }
+    }
+   ]
+  }
+ ],
+ "warnings": []
+}

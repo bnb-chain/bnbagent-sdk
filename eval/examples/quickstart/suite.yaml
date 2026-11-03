@@ -1,0 +1,10 @@
+name: quickstart
+version: "1"
+metrics:
+  - id: text.contains            # the answer mentions the expected fact
+    required: true               # if this fails in any case, the evaluation fails
+  - id: text.token_f1            # word overlap with the reference answer
+  - id: ops.latency              # response time; score 0 above 2 s
+    value_max: 2000
+pass_rule:
+  min_aggregate: 0.6             # the mean case score must reach 0.6

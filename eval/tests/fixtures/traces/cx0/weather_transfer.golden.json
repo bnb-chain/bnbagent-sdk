@@ -1,0 +1,83 @@
+{
+ "id": "cx0-session",
+ "traces": [
+  {
+   "id": "cx0-trace",
+   "steps": [
+    {
+     "agent_id": "50785b50-64d7-bfda-d785-b8e1433144fd_assistant_coordinator_agent",
+     "available_tools": [
+      {
+       "name": "transfer_to_agent"
+      }
+     ],
+     "end_ms": null,
+     "error": null,
+     "id": "cx0-1",
+     "kind": "agent",
+     "parent_id": null,
+     "response": null,
+     "start_ms": null,
+     "system_prompt": "You are an assistant coordinator agent. \n\nYou are an agent. Your internal name is \"assistant_coordinator_agent\". The description about you is \"An agent that coordinates multiple agents to complete complex tasks. \".\n\n\nYou have a list of other agents to transfer to:\n\n\nAgent name: weather_agent_claude\nAgent description: Provides weather information (using Claude Sonnet).\n\n\nAgent name: calculator_agen ...",
+     "usage": null,
+     "user_prompt": "how is the weather in New York?"
+    },
+    {
+     "agent_id": "50785b50-64d7-bfda-d785-b8e1433144fd_assistant_coordinator_agent",
+     "call": {
+      "arguments": {
+       "agent_name": "weather_agent_claude"
+      },
+      "id": "call_0GJkD1ynj13vvZ8BR6AdMeYQ",
+      "name": "transfer_to_agent"
+     },
+     "end_ms": null,
+     "error": null,
+     "id": "cx0-2",
+     "kind": "tool",
+     "parent_id": "cx0-1",
+     "result": null,
+     "start_ms": null,
+     "usage": null
+    },
+    {
+     "agent_id": "7259e7d3-7acc-9a2e-843e-e8f99e6b8afc_weather_agent_claude",
+     "available_tools": [
+      {
+       "name": "get_weather"
+      }
+     ],
+     "end_ms": null,
+     "error": null,
+     "id": "cx0-3",
+     "kind": "agent",
+     "parent_id": null,
+     "response": "The weather in New York is sunny with a temperature of 25°C.",
+     "start_ms": null,
+     "system_prompt": "You are a helpful weather assistant powered by Claude Sonnet. Use the 'get_weather' tool for city weather requests. Analyze the tool's dictionary output ('status', 'report'/'error_message'). Clearly present successful reports or polite error messages.\n\nYou are an agent. Your internal name is \"weather_agent_claude\". The description about you is \"Provides weather information (using Claude Sonnet).\". ...",
+     "usage": null,
+     "user_prompt": "how is the weather in New York?"
+    },
+    {
+     "agent_id": "7259e7d3-7acc-9a2e-843e-e8f99e6b8afc_weather_agent_claude",
+     "call": {
+      "arguments": {
+       "city": "New York"
+      },
+      "id": "call_6LV3CGmleDK2Uyi8vCKIQvC0",
+      "name": "get_weather"
+     },
+     "end_ms": null,
+     "error": null,
+     "id": "cx0-4",
+     "kind": "tool",
+     "parent_id": "cx0-3",
+     "result": null,
+     "start_ms": null,
+     "usage": null
+    }
+   ]
+  }
+ ],
+ "warnings": []
+}

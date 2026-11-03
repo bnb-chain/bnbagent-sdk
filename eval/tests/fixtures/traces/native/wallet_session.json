@@ -1,0 +1,82 @@
+{
+ "id": "native-session-1",
+ "traces": [
+  {
+   "id": "t1",
+   "steps": [
+    {
+     "kind": "agent",
+     "id": "a1",
+     "agent_id": "wallet_agent",
+     "user_prompt": "Send 0.1 BNB to the vault.",
+     "response": "Sent.",
+     "available_tools": [
+      {
+       "name": "send_bnb",
+       "description": "Transfer BNB"
+      }
+     ],
+     "start_ms": 0,
+     "end_ms": 3000
+    },
+    {
+     "kind": "llm",
+     "id": "l1",
+     "parent_id": "a1",
+     "model": "example-model-v1",
+     "messages": [
+      {
+       "role": "user",
+       "content": "Send 0.1 BNB to the vault."
+      }
+     ],
+     "tool_calls": [
+      {
+       "name": "send_bnb",
+       "arguments": {
+        "to": "0x0000000000000000000000000000000000000001",
+        "value": "0.1"
+       },
+       "id": "c1"
+      }
+     ],
+     "usage": {
+      "input_tokens": 50,
+      "output_tokens": 12
+     },
+     "start_ms": 10,
+     "end_ms": 900
+    },
+    {
+     "kind": "tool",
+     "id": "tool1",
+     "parent_id": "a1",
+     "call": {
+      "name": "send_bnb",
+      "arguments": {
+       "to": "0x0000000000000000000000000000000000000001",
+       "value": "0.1"
+      },
+      "id": "c1"
+     },
+     "result": {
+      "content": "ok",
+      "call_id": "c1"
+     },
+     "start_ms": 1000,
+     "end_ms": 2500
+    },
+    {
+     "kind": "tx",
+     "id": "tx1",
+     "parent_id": "tool1",
+     "chain_id": 97,
+     "to": "0x0000000000000000000000000000000000000001",
+     "value": 100000000000000000,
+     "status": 1
+    }
+   ]
+  }
+ ],
+ "warnings": []
+}

@@ -1,0 +1,213 @@
+{
+ "stage": "dev",
+ "suite_hash": "0x698c9373f93c9de469792de7fe3c59846544218a1d638fdf26bd616d73a28551",
+ "results": [
+  {
+   "case_id": "1",
+   "metrics": [
+    {
+     "metric_id": "text.exact_match",
+     "name": "text.exact_match",
+     "method": "rule",
+     "score": 0.0,
+     "value": null,
+     "unit": null,
+     "passed": false,
+     "threshold": 1.0,
+     "required": false,
+     "weight": 1.0,
+     "reason": null,
+     "details": {},
+     "error": null,
+     "status": "scored",
+     "provenance": {
+      "metric_version": "1",
+      "method": "rule",
+      "prompt_hash": null,
+      "judge": null,
+      "samples": null,
+      "judge_source": null,
+      "truncated": false
+     }
+    },
+    {
+     "metric_id": "text.token_f1",
+     "name": "text.token_f1",
+     "method": "rule",
+     "score": 0.5,
+     "value": null,
+     "unit": null,
+     "passed": true,
+     "threshold": 0.5,
+     "required": false,
+     "weight": 1.0,
+     "reason": null,
+     "details": {
+      "precision": 0.3333333333333333,
+      "recall": 1.0
+     },
+     "error": null,
+     "status": "scored",
+     "provenance": {
+      "metric_version": "1",
+      "method": "rule",
+      "prompt_hash": null,
+      "judge": null,
+      "samples": null,
+      "judge_source": null,
+      "truncated": false
+     }
+    }
+   ],
+   "score": 0.25,
+   "passed": false,
+   "runs": []
+  },
+  {
+   "case_id": "2",
+   "metrics": [
+    {
+     "metric_id": "text.exact_match",
+     "name": "text.exact_match",
+     "method": "rule",
+     "score": null,
+     "value": null,
+     "unit": null,
+     "passed": null,
+     "threshold": 1.0,
+     "required": false,
+     "weight": 1.0,
+     "reason": null,
+     "details": {},
+     "error": {
+      "code": "missing_input",
+      "message": "missing required input(s): expected",
+      "retryable": false
+     },
+     "status": "skipped",
+     "provenance": {
+      "metric_version": "1",
+      "method": "rule",
+      "prompt_hash": null,
+      "judge": null,
+      "samples": null,
+      "judge_source": null,
+      "truncated": false
+     }
+    },
+    {
+     "metric_id": "text.token_f1",
+     "name": "text.token_f1",
+     "method": "rule",
+     "score": null,
+     "value": null,
+     "unit": null,
+     "passed": null,
+     "threshold": 0.5,
+     "required": false,
+     "weight": 1.0,
+     "reason": null,
+     "details": {},
+     "error": {
+      "code": "missing_input",
+      "message": "missing required input(s): expected",
+      "retryable": false
+     },
+     "status": "skipped",
+     "provenance": {
+      "metric_version": "1",
+      "method": "rule",
+      "prompt_hash": null,
+      "judge": null,
+      "samples": null,
+      "judge_source": null,
+      "truncated": false
+     }
+    }
+   ],
+   "score": null,
+   "passed": null,
+   "runs": []
+  }
+ ],
+ "aggregate": {
+  "score": 0.25,
+  "pass_rate": 0.0,
+  "error_rate": 0.5,
+  "cases": 2,
+  "metrics": [
+   {
+    "name": "text.exact_match",
+    "metric_id": "text.exact_match",
+    "count": 2,
+    "scored": 1,
+    "errors": 0,
+    "skipped": 1,
+    "mean": 0.0,
+    "std": 0.0,
+    "min": 0.0,
+    "max": 0.0,
+    "pass_rate": 0.0,
+    "value_mean": null,
+    "value_p50": null,
+    "value_p95": null,
+    "value_p99": null,
+    "unit": null
+   },
+   {
+    "name": "text.token_f1",
+    "metric_id": "text.token_f1",
+    "count": 2,
+    "scored": 1,
+    "errors": 0,
+    "skipped": 1,
+    "mean": 0.5,
+    "std": 0.0,
+    "min": 0.5,
+    "max": 0.5,
+    "pass_rate": 1.0,
+    "value_mean": null,
+    "value_p50": null,
+    "value_p95": null,
+    "value_p99": null,
+    "unit": null
+   }
+  ]
+ },
+ "verdict": {
+  "status": "inconclusive",
+  "action": null,
+  "reasons": [
+   "error rate 0.500 > max 0.000"
+  ]
+ },
+ "provenance": {
+  "package_version": "0.1.0.dev0",
+  "suite_hash": "0x698c9373f93c9de469792de7fe3c59846544218a1d638fdf26bd616d73a28551",
+  "request_hash": "0x8148bbecb1f1744745b5037eb992e18ffd240b166ae01251d250d2bcffc3ccb5",
+  "started_at": 1793584808.2783923,
+  "finished_at": 1793584808.4042516,
+  "metric_versions": {
+   "text.exact_match": "1",
+   "text.token_f1": "1"
+  },
+  "judge": null
+ },
+ "result_hash": "0x2c99b1fa127805b63d6c891881e96f8a4b78c203be90f9dfde9732c7b40bf5cb",
+ "response_hash": "0x6e2a183398b049ef6b334ed2c6d27652c71e7814d8143d2b1a8aa2b02b744d24",
+ "subject": {
+  "chain_id": 97,
+  "commerce": "0x1",
+  "job_id": 7,
+  "provider": "0x2",
+  "output_hash": "0x3",
+  "type": "job"
+ },
+ "cost": {
+  "judge_calls": 0,
+  "tokens": 0,
+  "usd_estimate": 0.0
+ },
+ "attestation": null,
+ "schema_version": "bnbagent-eval/v1"
+}

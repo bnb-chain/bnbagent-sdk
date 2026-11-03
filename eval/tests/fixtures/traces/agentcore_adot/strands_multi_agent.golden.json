@@ -1,0 +1,249 @@
+{
+ "id": "session-0001",
+ "traces": [
+  {
+   "id": "69058d674ca285967fcd15e71d7ef1d7",
+   "steps": [
+    {
+     "agent_id": "Strands Agents_6b96d411",
+     "available_tools": [
+      {
+       "name": "flight_booking_assistant"
+      },
+      {
+       "name": "hotel_booking_assistant"
+      }
+     ],
+     "end_ms": 1761971570733.005,
+     "error": null,
+     "id": "b2d0841363cae6f6",
+     "kind": "agent",
+     "parent_id": null,
+     "response": "Great! I can help you with both your flight and hotel for Paris. To get you the best options, I need a bit more information:\n\n**For your flight:**\n- What city will you be departing from?\n- What are your travel dates?\n\n**For your hotel:**\n- What are your check-in and check-out dates?\n- How many guests will be staying?\n\nOnce I have these details, I can provide you with specific flight options and hotel recommendations for your Paris trip!\n",
+     "start_ms": 1761971559943.871,
+     "system_prompt": "You are a comprehensive travel planning assistant that coordinates between specialized tools:\n- For flight-related queries (bookings, schedules, airlines, route ...",
+     "usage": {
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "cost_usd": null,
+      "input_tokens": 1783,
+      "output_tokens": 243
+     },
+     "user_prompt": "I need to book a flight to Paris and find a hotel"
+    },
+    {
+     "agent_id": "Strands Agents_6b96d411",
+     "end_ms": 1761971563474.885,
+     "error": null,
+     "id": "d151ff144ab986b9",
+     "kind": "llm",
+     "messages": [
+      {
+       "content": "I need to book a flight to Paris and find a hotel",
+       "role": "user"
+      }
+     ],
+     "model": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
+     "parent_id": "b2d0841363cae6f6",
+     "response": "I'll help you with both your flight to Paris and hotel booking. Let me get information from both our flight and hotel specialists.",
+     "start_ms": 1761971559944.526,
+     "tool_calls": [
+      {
+       "arguments": {
+        "query": "I need to book a flight to Paris"
+       },
+       "id": "tooluse_W_at7iOtQdelVqsmMQ9NRA",
+       "name": "flight_booking_assistant"
+      },
+      {
+       "arguments": {
+        "query": "I need to find a hotel in Paris"
+       },
+       "id": "tooluse_BIKC4_8YQvSRKJUqRCWMqg",
+       "name": "hotel_booking_assistant"
+      }
+     ],
+     "usage": {
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "cost_usd": null,
+      "input_tokens": 747,
+      "output_tokens": 134
+     }
+    },
+    {
+     "agent_id": "Strands Agents_6b96d411",
+     "call": {
+      "arguments": {
+       "query": "I need to book a flight to Paris"
+      },
+      "id": "tooluse_W_at7iOtQdelVqsmMQ9NRA",
+      "name": "flight_booking_assistant"
+     },
+     "end_ms": 1761971566749.843,
+     "error": null,
+     "id": "39fd62dfabbeaa4f",
+     "kind": "tool",
+     "parent_id": "b2d0841363cae6f6",
+     "result": {
+      "call_id": "tooluse_W_at7iOtQdelVqsmMQ9NRA",
+      "content": "I'd be happy to help you book a flight to Paris! \n\nTo find the best options for you, I need a couple of details:\n1. Which city will you be departing from?\n2. What dates are you looking to travel?\n",
+      "error": null
+     },
+     "start_ms": 1761971563580.967,
+     "usage": null
+    },
+    {
+     "agent_id": "Strands Agents_6b96d411",
+     "call": {
+      "arguments": {
+       "query": "I need to find a hotel in Paris"
+      },
+      "id": "tooluse_BIKC4_8YQvSRKJUqRCWMqg",
+      "name": "hotel_booking_assistant"
+     },
+     "end_ms": 1761971566196.684,
+     "error": null,
+     "id": "6d76c599c3f2633a",
+     "kind": "tool",
+     "parent_id": "b2d0841363cae6f6",
+     "result": {
+      "call_id": "tooluse_BIKC4_8YQvSRKJUqRCWMqg",
+      "content": "I'd be happy to help you find a hotel in Paris! \n\nWhat dates are you looking to stay, and how many guests will be in your party?\n",
+      "error": null
+     },
+     "start_ms": 1761971563581.399,
+     "usage": null
+    },
+    {
+     "agent_id": "Strands Agents_ec002309",
+     "available_tools": [],
+     "end_ms": 1761971566714.426,
+     "error": null,
+     "id": "9e163066f56b24ee",
+     "kind": "agent",
+     "parent_id": "39fd62dfabbeaa4f",
+     "response": "I'd be happy to help you book a flight to Paris! \n\nTo find the best options for you, I need a couple of details:\n1. Which city will you be departing from?\n2. What dates are you looking to travel?\n",
+     "start_ms": 1761971563582.399,
+     "system_prompt": "You are a flight booking assistant. Help customers find flights, make reservations, and answer questions about airlines, routes, and travel policies. \nProvide c ...",
+     "usage": {
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "cost_usd": null,
+      "input_tokens": 87,
+      "output_tokens": 56
+     },
+     "user_prompt": "I need to book a flight to Paris"
+    },
+    {
+     "agent_id": "Strands Agents_ec002309",
+     "end_ms": 1761971566636.234,
+     "error": null,
+     "id": "a17c85c4fcdf9bbe",
+     "kind": "llm",
+     "messages": [
+      {
+       "content": "I need to book a flight to Paris",
+       "role": "user"
+      }
+     ],
+     "model": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
+     "parent_id": "9e163066f56b24ee",
+     "response": "I'd be happy to help you book a flight to Paris! \n\nTo find the best options for you, I need a couple of details:\n1. Which city will you be departing from?\n2. What dates are you looking to travel?",
+     "start_ms": 1761971563582.931,
+     "tool_calls": [],
+     "usage": {
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "cost_usd": null,
+      "input_tokens": 87,
+      "output_tokens": 56
+     }
+    },
+    {
+     "agent_id": "Strands Agents_e41e6dd4",
+     "available_tools": [],
+     "end_ms": 1761971566161.346,
+     "error": null,
+     "id": "5216ca995eff8ee2",
+     "kind": "agent",
+     "parent_id": "6d76c599c3f2633a",
+     "response": "I'd be happy to help you find a hotel in Paris! \n\nWhat dates are you looking to stay, and how many guests will be in your party?\n",
+     "start_ms": 1761971563586.261,
+     "system_prompt": "You are a hotel booking assistant. Help customers find hotels, make reservations, and answer questions about accommodations and amenities. \nProvide clear inform ...",
+     "usage": {
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "cost_usd": null,
+      "input_tokens": 81,
+      "output_tokens": 36
+     },
+     "user_prompt": "I need to find a hotel in Paris"
+    },
+    {
+     "agent_id": "Strands Agents_e41e6dd4",
+     "end_ms": 1761971566059.042,
+     "error": null,
+     "id": "d3b38b968499b805",
+     "kind": "llm",
+     "messages": [
+      {
+       "content": "I need to find a hotel in Paris",
+       "role": "user"
+      }
+     ],
+     "model": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
+     "parent_id": "5216ca995eff8ee2",
+     "response": "I'd be happy to help you find a hotel in Paris! \n\nWhat dates are you looking to stay, and how many guests will be in your party?",
+     "start_ms": 1761971563586.592,
+     "tool_calls": [],
+     "usage": {
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "cost_usd": null,
+      "input_tokens": 81,
+      "output_tokens": 36
+     }
+    },
+    {
+     "agent_id": "Strands Agents_6b96d411",
+     "end_ms": 1761971570661.743,
+     "error": null,
+     "id": "38c0ffc25c53a341",
+     "kind": "llm",
+     "messages": [
+      {
+       "content": "I need to book a flight to Paris and find a hotel",
+       "role": "user"
+      },
+      {
+       "content": "I'd be happy to help you find a hotel in Paris! \n\nWhat dates are you looking to stay, and how many guests will be in your party?\n",
+       "role": "tool",
+       "tool_call_id": "tooluse_BIKC4_8YQvSRKJUqRCWMqg"
+      },
+      {
+       "content": "I'd be happy to help you book a flight to Paris! \n\nTo find the best options for you, I need a couple of details:\n1. Which city will you be departing from?\n2. What dates are you looking to travel?\n",
+       "role": "tool",
+       "tool_call_id": "tooluse_W_at7iOtQdelVqsmMQ9NRA"
+      }
+     ],
+     "model": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
+     "parent_id": "b2d0841363cae6f6",
+     "response": "Great! I can help you with both your flight and hotel for Paris. To get you the best options, I need a bit more information:\n\n**For your flight:**\n- What city will you be departing from?\n- What are your travel dates?\n\n**For your hotel:**\n- What are your check-in and check-out dates?\n- How many guests will be staying?\n\nOnce I have these details, I can provide you with specific flight options and hotel recommendations for your Paris trip!",
+     "start_ms": 1761971566834.883,
+     "tool_calls": [],
+     "usage": {
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "cost_usd": null,
+      "input_tokens": 1036,
+      "output_tokens": 109
+     }
+    }
+   ]
+  }
+ ],
+ "warnings": [
+  "orphan span 'b2d0841363cae6f6': parent '7a5a4fef4ca5b7a7' not found"
+ ]
+}

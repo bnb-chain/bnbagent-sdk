@@ -1,0 +1,230 @@
+[
+ {
+  "name": "invoke_agent Strands Agents",
+  "context": {
+   "trace_id": "0xe3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3",
+   "span_id": "0xf000000000000001",
+   "trace_state": "[]"
+  },
+  "kind": "SpanKind.INTERNAL",
+  "parent_id": null,
+  "start_time": "2025-11-14T01:00:01.000000Z",
+  "end_time": "2025-11-14T01:00:06.000000Z",
+  "status": {
+   "status_code": "OK"
+  },
+  "attributes": {
+   "gen_ai.operation.name": "invoke_agent",
+   "gen_ai.system": "strands-agents",
+   "gen_ai.agent.name": "Strands Agents",
+   "gen_ai.agent.tools": "[\"check_package_status\", \"calculate_price\"]",
+   "gen_ai.request.model": "example-model-v1",
+   "session.id": "session-0003",
+   "gen_ai.usage.input_tokens": 1200,
+   "gen_ai.usage.output_tokens": 90
+  },
+  "events": [
+   {
+    "name": "gen_ai.user.message",
+    "timestamp": "2025-11-14T01:00:01.000000Z",
+    "attributes": {
+     "content": "[{\"text\": \"What is the status of my package?\"}]"
+    }
+   },
+   {
+    "name": "gen_ai.choice",
+    "timestamp": "2025-11-14T01:00:01.000000Z",
+    "attributes": {
+     "message": "Your package is ready for pickup and costs $100.",
+     "finish_reason": "end_turn"
+    }
+   }
+  ],
+  "links": [],
+  "resource": {
+   "attributes": {
+    "service.name": "strands-agents"
+   },
+   "schema_url": ""
+  }
+ },
+ {
+  "name": "execute_event_loop_cycle",
+  "context": {
+   "trace_id": "0xe3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3",
+   "span_id": "0xf000000000000002",
+   "trace_state": "[]"
+  },
+  "kind": "SpanKind.INTERNAL",
+  "parent_id": "0xf000000000000001",
+  "start_time": "2025-11-14T01:00:01.100000Z",
+  "end_time": "2025-11-14T01:00:03.000000Z",
+  "status": {
+   "status_code": "OK"
+  },
+  "attributes": {
+   "event_loop.cycle_id": "cycle-1"
+  },
+  "events": [],
+  "links": [],
+  "resource": {
+   "attributes": {
+    "service.name": "strands-agents"
+   },
+   "schema_url": ""
+  }
+ },
+ {
+  "name": "chat",
+  "context": {
+   "trace_id": "0xe3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3",
+   "span_id": "0xf000000000000003",
+   "trace_state": "[]"
+  },
+  "kind": "SpanKind.INTERNAL",
+  "parent_id": "0xf000000000000002",
+  "start_time": "2025-11-14T01:00:01.200000Z",
+  "end_time": "2025-11-14T01:00:02.500000Z",
+  "status": {
+   "status_code": "OK"
+  },
+  "attributes": {
+   "gen_ai.operation.name": "chat",
+   "gen_ai.system": "strands-agents",
+   "gen_ai.request.model": "example-model-v1",
+   "gen_ai.usage.input_tokens": 500,
+   "gen_ai.usage.output_tokens": 40
+  },
+  "events": [
+   {
+    "name": "gen_ai.user.message",
+    "timestamp": "2025-11-14T01:00:01.200000Z",
+    "attributes": {
+     "content": "[{\"text\": \"What is the status of my package?\"}]"
+    }
+   },
+   {
+    "name": "gen_ai.choice",
+    "timestamp": "2025-11-14T01:00:01.200000Z",
+    "attributes": {
+     "message": "[{\"text\": \"I'll check the status.\"}, {\"toolUse\": {\"toolUseId\": \"tooluse_0003\", \"name\": \"check_package_status\", \"input\": {\"user_name\": \"Bob\"}}}]",
+     "finish_reason": "tool_use"
+    }
+   }
+  ],
+  "links": [],
+  "resource": {
+   "attributes": {
+    "service.name": "strands-agents"
+   },
+   "schema_url": ""
+  }
+ },
+ {
+  "name": "execute_tool check_package_status",
+  "context": {
+   "trace_id": "0xe3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3",
+   "span_id": "0xf000000000000004",
+   "trace_state": "[]"
+  },
+  "kind": "SpanKind.INTERNAL",
+  "parent_id": "0xf000000000000002",
+  "start_time": "2025-11-14T01:00:02.600000Z",
+  "end_time": "2025-11-14T01:00:02.700000Z",
+  "status": {
+   "status_code": "OK"
+  },
+  "attributes": {
+   "gen_ai.operation.name": "execute_tool",
+   "gen_ai.tool.name": "check_package_status",
+   "gen_ai.tool.call.id": "tooluse_0003",
+   "gen_ai.tool.status": "success"
+  },
+  "events": [
+   {
+    "name": "gen_ai.tool.message",
+    "timestamp": "2025-11-14T01:00:02.600000Z",
+    "attributes": {
+     "role": "tool",
+     "content": "{\"user_name\": \"Bob\"}",
+     "id": "tooluse_0003"
+    }
+   },
+   {
+    "name": "gen_ai.choice",
+    "timestamp": "2025-11-14T01:00:02.600000Z",
+    "attributes": {
+     "message": "[{\"text\": \"Package is ready for pickup\"}]",
+     "id": "tooluse_0003"
+    }
+   }
+  ],
+  "links": [],
+  "resource": {
+   "attributes": {
+    "service.name": "strands-agents"
+   },
+   "schema_url": ""
+  }
+ },
+ {
+  "name": "chat",
+  "context": {
+   "trace_id": "0xe3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3",
+   "span_id": "0xf000000000000005",
+   "trace_state": "[]"
+  },
+  "kind": "SpanKind.INTERNAL",
+  "parent_id": "0xf000000000000001",
+  "start_time": "2025-11-14T01:00:03.100000Z",
+  "end_time": "2025-11-14T01:00:05.900000Z",
+  "status": {
+   "status_code": "OK"
+  },
+  "attributes": {
+   "gen_ai.operation.name": "chat",
+   "gen_ai.system": "strands-agents",
+   "gen_ai.request.model": "example-model-v1",
+   "gen_ai.usage.input_tokens": 700,
+   "gen_ai.usage.output_tokens": 50
+  },
+  "events": [
+   {
+    "name": "gen_ai.user.message",
+    "timestamp": "2025-11-14T01:00:03.100000Z",
+    "attributes": {
+     "content": "[{\"text\": \"What is the status of my package?\"}]"
+    }
+   },
+   {
+    "name": "gen_ai.assistant.message",
+    "timestamp": "2025-11-14T01:00:03.100000Z",
+    "attributes": {
+     "content": "[{\"text\": \"I'll check the status.\"}, {\"toolUse\": {\"toolUseId\": \"tooluse_0003\", \"name\": \"check_package_status\", \"input\": {\"user_name\": \"Bob\"}}}]"
+    }
+   },
+   {
+    "name": "gen_ai.tool.message",
+    "timestamp": "2025-11-14T01:00:03.100000Z",
+    "attributes": {
+     "content": "[{\"toolResult\": {\"toolUseId\": \"tooluse_0003\", \"status\": \"success\", \"content\": [{\"text\": \"Package is ready for pickup\"}]}}]"
+    }
+   },
+   {
+    "name": "gen_ai.choice",
+    "timestamp": "2025-11-14T01:00:03.100000Z",
+    "attributes": {
+     "message": "[{\"text\": \"Your package is ready for pickup and costs $100.\"}]",
+     "finish_reason": "end_turn"
+    }
+   }
+  ],
+  "links": [],
+  "resource": {
+   "attributes": {
+    "service.name": "strands-agents"
+   },
+   "schema_url": ""
+  }
+ }
+]

@@ -1,0 +1,280 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1640" height="1130" viewBox="0 0 1640 1130">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#455a64"/></marker></defs>
+<rect x="0" y="0" width="1640" height="1130" rx="0" fill="#ffffff" stroke="#ffffff" stroke-width="1.5"/>
+<text x="820.0" y="34" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="bold" fill="#212121" text-anchor="middle">bnbagent-eval: Overall System Architecture</text>
+<text x="820.0" y="56" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="normal" fill="#546e7a" text-anchor="middle">One evaluation call, one result model, three on-chain uses (S1 ERC-8004 metrics · S2 ERC-8183 jobs · S3 eval-as-a-service)</text>
+<text x="120" y="98" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="bold" fill="#37474f" text-anchor="middle">Callers</text>
+<rect x="20" y="110" width="200" height="62" rx="31" fill="#fafafa" stroke="#607d8b" stroke-width="1.5"/>
+<text x="120" y="136" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#37474f" text-anchor="middle">Agent developer</text>
+<text x="120" y="154" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#546e7a" text-anchor="middle">S1 · benchmark &amp; publish</text>
+<line x1="220" y1="141" x2="236" y2="141" stroke="#455a64" stroke-width="1.6"/>
+<rect x="20" y="188" width="200" height="62" rx="31" fill="#fafafa" stroke="#607d8b" stroke-width="1.5"/>
+<text x="120" y="214" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#37474f" text-anchor="middle">Provider agent</text>
+<text x="120" y="232" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#546e7a" text-anchor="middle">S2 · self-check before submit</text>
+<line x1="220" y1="219" x2="236" y2="219" stroke="#455a64" stroke-width="1.6"/>
+<rect x="20" y="266" width="200" height="62" rx="31" fill="#fafafa" stroke="#607d8b" stroke-width="1.5"/>
+<text x="120" y="292" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#37474f" text-anchor="middle">Client agent</text>
+<text x="120" y="310" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#546e7a" text-anchor="middle">S2 · review → dispute / no_action</text>
+<line x1="220" y1="297" x2="236" y2="297" stroke="#455a64" stroke-width="1.6"/>
+<rect x="20" y="344" width="200" height="62" rx="31" fill="#fafafa" stroke="#607d8b" stroke-width="1.5"/>
+<text x="120" y="370" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#37474f" text-anchor="middle">Voter</text>
+<text x="120" y="388" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#546e7a" text-anchor="middle">S2 · vote_reject / abstain</text>
+<line x1="220" y1="375" x2="236" y2="375" stroke="#455a64" stroke-width="1.6"/>
+<rect x="20" y="422" width="200" height="62" rx="31" fill="#fafafa" stroke="#607d8b" stroke-width="1.5"/>
+<text x="120" y="448" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#37474f" text-anchor="middle">Any agent / app</text>
+<text x="120" y="466" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#546e7a" text-anchor="middle">S3 · HTTP API, pays via x402</text>
+<line x1="220" y1="453" x2="236" y2="453" stroke="#455a64" stroke-width="1.6"/>
+<line x1="236" y1="141" x2="236" y2="453" stroke="#455a64" stroke-width="1.6"/>
+<line x1="236" y1="172" x2="288" y2="172" stroke="#455a64" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="250" y="82" width="960" height="842" rx="12" fill="#ffffff" stroke="#0d47a1" stroke-width="2" stroke-dasharray="8 5"/>
+<text x="262" y="100" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" font-weight="bold" fill="#0d47a1" text-anchor="start">bnbagent-sdk/eval/  ·  package bnbagent_eval  ·  no BNB code inside: chain reached only via ports + adapters</text>
+<rect x="270" y="110" width="920" height="112" rx="8" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.5"/>
+<text x="282" y="128" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="bold" fill="#1565c0" text-anchor="start">L5 · Delivery surfaces</text>
+<rect x="290" y="136" width="280" height="74" rx="6" fill="#ffffff" stroke="#1565c0" stroke-width="1.5"/>
+<text x="430.0" y="155" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#1565c0" text-anchor="middle">Python API</text>
+<text x="430.0" y="172" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">EvalClient: local | remote backend</text>
+<text x="430.0" y="186" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">evaluate() · evaluate_sync() · compare()</text>
+<rect x="590" y="136" width="260" height="74" rx="6" fill="#ffffff" stroke="#1565c0" stroke-width="1.5"/>
+<text x="720.0" y="155" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#1565c0" text-anchor="middle">CLI</text>
+<text x="720.0" y="172" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">run | make | lint | metrics | calibrate</text>
+<text x="720.0" y="186" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">publish | review | watch | serve | schemas</text>
+<rect x="870" y="136" width="300" height="74" rx="6" fill="#ffffff" stroke="#1565c0" stroke-width="1.5"/>
+<text x="1020.0" y="155" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#1565c0" text-anchor="middle">HTTP service  [server]</text>
+<text x="1020.0" y="172" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">UntrustedSuitePolicy · quotes · jobs</text>
+<text x="1020.0" y="186" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">X402Gate: eip3009 | permit2-exact</text>
+<rect x="270" y="232" width="920" height="44" rx="8" fill="#0d47a1" stroke="#0d47a1" stroke-width="1.5"/>
+<text x="730.0" y="252" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13.5" font-weight="bold" fill="#ffffff" text-anchor="middle">EvalClient.evaluate(EvalRequest{stage, suite, cases | target, subject, options})  →  EvalResponse</text>
+<text x="730.0" y="268" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#bbdefb" text-anchor="middle">verdict pass|fail|inconclusive|pending_human · result_hash (deterministic) · response_hash · attestation (EIP-712, signed in L4/L5)</text>
+<rect x="270" y="288" width="920" height="122" rx="8" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.5"/>
+<text x="282" y="306" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="bold" fill="#2e7d32" text-anchor="start">L4 · Chain workflows  (bnbagent_eval.chain · pure logic over ports.py)</text>
+<rect x="290" y="314" width="208" height="84" rx="6" fill="#ffffff" stroke="#2e7d32" stroke-width="1.5"/>
+<text x="394.0" y="333" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#2e7d32" text-anchor="middle">MetricsPublisher</text>
+<text x="394.0" y="350" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">ERC-8004: metrics[] keyed by</text>
+<text x="394.0" y="364" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">suite_hash, re-hosted in place</text>
+<text x="394.0" y="378" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">(set_agent_uri after register)</text>
+<rect x="514" y="314" width="208" height="84" rx="6" fill="#ffffff" stroke="#2e7d32" stroke-width="1.5"/>
+<text x="618.0" y="333" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#2e7d32" text-anchor="middle">EvalGate</text>
+<text x="618.0" y="350" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">on_funded wrapper, bg task +</text>
+<text x="618.0" y="364" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">state store, deadline margin</text>
+<text x="618.0" y="378" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">submit_result(metadata.eval)</text>
+<rect x="738" y="314" width="208" height="84" rx="6" fill="#ffffff" stroke="#2e7d32" stroke-width="1.5"/>
+<text x="842.0" y="333" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#2e7d32" text-anchor="middle">Advisors</text>
+<text x="842.0" y="350" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">DisputeAdvisor → dispute|no_action</text>
+<text x="842.0" y="364" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">VoterAssistant → vote_reject|</text>
+<text x="842.0" y="378" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">abstain; negotiated suite</text>
+<rect x="962" y="314" width="208" height="84" rx="6" fill="#ffffff" stroke="#2e7d32" stroke-width="1.5"/>
+<text x="1066.0" y="333" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#2e7d32" text-anchor="middle">Evidence · Attest · Tx</text>
+<text x="1066.0" y="350" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">EvalEvidenceV1 bound to job +</text>
+<text x="1066.0" y="364" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">output_hash · EIP-712 sign/verify</text>
+<text x="1066.0" y="378" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">TxStep enrich at pinned block</text>
+<rect x="270" y="420" width="920" height="112" rx="8" fill="#fff3e0" stroke="#ef6c00" stroke-width="1.5"/>
+<text x="282" y="438" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="bold" fill="#ef6c00" text-anchor="start">L3 · Orchestration  (bnbagent_eval.authoring → generation → engine)</text>
+<rect x="290" y="446" width="138" height="76" rx="6" fill="#ffffff" stroke="#ef6c00" stroke-width="1.5"/>
+<text x="359.0" y="465" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#ef6c00" text-anchor="middle">Authoring</text>
+<text x="359.0" y="482" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#37474f" text-anchor="middle">eval maker</text>
+<text x="359.0" y="496" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#37474f" text-anchor="middle">recommend</text>
+<text x="359.0" y="510" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#37474f" text-anchor="middle">suite lint + lock</text>
+<rect x="438" y="446" width="138" height="76" rx="6" fill="#ffffff" stroke="#ef6c00" stroke-width="1.5"/>
+<text x="507.0" y="465" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#ef6c00" text-anchor="middle">Generation</text>
+<text x="507.0" y="482" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#37474f" text-anchor="middle">RAG / agentic cases</text>
+<text x="507.0" y="496" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#37474f" text-anchor="middle">simulated users</text>
+<text x="507.0" y="510" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#37474f" text-anchor="middle">red-team · errors</text>
+<rect x="586" y="446" width="138" height="76" rx="6" fill="#ffffff" stroke="#ef6c00" stroke-width="1.5"/>
+<text x="655.0" y="465" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#ef6c00" text-anchor="middle">Resolve</text>
+<text x="655.0" y="482" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#37474f" text-anchor="middle">suite + lock</text>
+<text x="655.0" y="496" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#37474f" text-anchor="middle">suite_hash · benchmark</text>
+<text x="655.0" y="510" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#37474f" text-anchor="middle">dataset URI + hash</text>
+<rect x="734" y="446" width="138" height="76" rx="6" fill="#ffffff" stroke="#ef6c00" stroke-width="1.5"/>
+<text x="803.0" y="465" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#ef6c00" text-anchor="middle">Runner</text>
+<text x="803.0" y="482" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#37474f" text-anchor="middle">concurrency · budget</text>
+<text x="803.0" y="496" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#37474f" text-anchor="middle">deadline · truncation</text>
+<text x="803.0" y="510" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#37474f" text-anchor="middle">cancellation</text>
+<rect x="882" y="446" width="138" height="76" rx="6" fill="#ffffff" stroke="#ef6c00" stroke-width="1.5"/>
+<text x="951.0" y="465" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#ef6c00" text-anchor="middle">Targets</text>
+<text x="951.0" y="482" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#37474f" text-anchor="middle">callable · HTTP stream</text>
+<text x="951.0" y="496" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#37474f" text-anchor="middle">A2A · MCP · ERC-8004</text>
+<text x="951.0" y="510" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#37474f" text-anchor="middle">simulated user</text>
+<rect x="1030" y="446" width="138" height="76" rx="6" fill="#ffffff" stroke="#ef6c00" stroke-width="1.5"/>
+<text x="1099.0" y="465" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#ef6c00" text-anchor="middle">Verdict</text>
+<text x="1099.0" y="482" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#37474f" text-anchor="middle">modes · Welford · p95</text>
+<text x="1099.0" y="496" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#37474f" text-anchor="middle">precedence · actions</text>
+<text x="1099.0" y="510" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#37474f" text-anchor="middle">compare runs</text>
+<rect x="270" y="542" width="920" height="186" rx="8" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="1.5"/>
+<text x="282" y="560" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="bold" fill="#6a1b9a" text-anchor="start">L2 · Capabilities</text>
+<rect x="290" y="566" width="600" height="150" rx="6" fill="#ffffff" stroke="#6a1b9a" stroke-width="1.5"/>
+<text x="590" y="585" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" font-weight="bold" fill="#6a1b9a" text-anchor="middle">Metric catalogue · 99 canonical IDs · per-method spec (native | rule | model | vendor)</text>
+<rect x="302" y="598" width="89" height="46" rx="5" fill="#faf5fc" stroke="#ab47bc" stroke-width="1"/>
+<text x="346.5" y="617" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="bold" fill="#4a148c" text-anchor="middle">text.*</text>
+<text x="346.5" y="633" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#6a1b9a" text-anchor="middle">13 metrics</text>
+<rect x="399" y="598" width="89" height="46" rx="5" fill="#faf5fc" stroke="#ab47bc" stroke-width="1"/>
+<text x="443.5" y="617" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="bold" fill="#4a148c" text-anchor="middle">format.*</text>
+<text x="443.5" y="633" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#6a1b9a" text-anchor="middle">6 metrics</text>
+<rect x="496" y="598" width="89" height="46" rx="5" fill="#faf5fc" stroke="#ab47bc" stroke-width="1"/>
+<text x="540.5" y="617" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="bold" fill="#4a148c" text-anchor="middle">ops.*</text>
+<text x="540.5" y="633" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#6a1b9a" text-anchor="middle">5 metrics</text>
+<rect x="593" y="598" width="89" height="46" rx="5" fill="#faf5fc" stroke="#ab47bc" stroke-width="1"/>
+<text x="637.5" y="617" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="bold" fill="#4a148c" text-anchor="middle">quality.*</text>
+<text x="637.5" y="633" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#6a1b9a" text-anchor="middle">13 metrics</text>
+<rect x="690" y="598" width="89" height="46" rx="5" fill="#faf5fc" stroke="#ab47bc" stroke-width="1"/>
+<text x="734.5" y="617" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="bold" fill="#4a148c" text-anchor="middle">safety.*</text>
+<text x="734.5" y="633" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#6a1b9a" text-anchor="middle">9 metrics</text>
+<rect x="787" y="598" width="89" height="46" rx="5" fill="#faf5fc" stroke="#ab47bc" stroke-width="1"/>
+<text x="831.5" y="617" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="bold" fill="#4a148c" text-anchor="middle">rag.*</text>
+<text x="831.5" y="633" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#6a1b9a" text-anchor="middle">7 metrics</text>
+<rect x="302" y="654" width="89" height="46" rx="5" fill="#faf5fc" stroke="#ab47bc" stroke-width="1"/>
+<text x="346.5" y="673" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="bold" fill="#4a148c" text-anchor="middle">conversation.*</text>
+<text x="346.5" y="689" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#6a1b9a" text-anchor="middle">12 metrics</text>
+<rect x="399" y="654" width="89" height="46" rx="5" fill="#faf5fc" stroke="#ab47bc" stroke-width="1"/>
+<text x="443.5" y="673" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="bold" fill="#4a148c" text-anchor="middle">agent.*</text>
+<text x="443.5" y="689" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#6a1b9a" text-anchor="middle">18 metrics</text>
+<rect x="496" y="654" width="89" height="46" rx="5" fill="#faf5fc" stroke="#ab47bc" stroke-width="1"/>
+<text x="540.5" y="673" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="bold" fill="#4a148c" text-anchor="middle">onchain.*</text>
+<text x="540.5" y="689" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#6a1b9a" text-anchor="middle">6 metrics</text>
+<rect x="593" y="654" width="89" height="46" rx="5" fill="#faf5fc" stroke="#ab47bc" stroke-width="1"/>
+<text x="637.5" y="673" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="bold" fill="#4a148c" text-anchor="middle">code.*</text>
+<text x="637.5" y="689" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#6a1b9a" text-anchor="middle">2 metrics</text>
+<rect x="690" y="654" width="89" height="46" rx="5" fill="#faf5fc" stroke="#ab47bc" stroke-width="1"/>
+<text x="734.5" y="673" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="bold" fill="#4a148c" text-anchor="middle">redteam.*</text>
+<text x="734.5" y="689" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#6a1b9a" text-anchor="middle">3 metrics</text>
+<rect x="787" y="654" width="89" height="46" rx="5" fill="#faf5fc" stroke="#ab47bc" stroke-width="1"/>
+<text x="831.5" y="673" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="bold" fill="#4a148c" text-anchor="middle">custom.*</text>
+<text x="831.5" y="689" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#6a1b9a" text-anchor="middle">5 metrics</text>
+<rect x="902" y="566" width="268" height="44" rx="6" fill="#ffffff" stroke="#6a1b9a" stroke-width="1.5"/>
+<text x="1036" y="584" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" font-weight="bold" fill="#6a1b9a" text-anchor="middle">Reporting</text>
+<text x="1036" y="600" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#37474f" text-anchor="middle">JSON · Markdown · console · CSV · exporters</text>
+<rect x="902" y="617" width="268" height="44" rx="6" fill="#ffffff" stroke="#6a1b9a" stroke-width="1.5"/>
+<text x="1036" y="635" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" font-weight="bold" fill="#6a1b9a" text-anchor="middle">Privacy</text>
+<text x="1036" y="651" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#37474f" text-anchor="middle">report contents · redaction · encryption</text>
+<rect x="902" y="668" width="268" height="44" rx="6" fill="#ffffff" stroke="#6a1b9a" stroke-width="1.5"/>
+<text x="1036" y="686" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" font-weight="bold" fill="#6a1b9a" text-anchor="middle">Analysis</text>
+<text x="1036" y="702" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#37474f" text-anchor="middle">insights · diagnosis · confidence · calibration</text>
+<rect x="270" y="738" width="920" height="176" rx="8" fill="#eceff1" stroke="#455a64" stroke-width="1.5"/>
+<text x="282" y="756" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" font-weight="bold" fill="#455a64" text-anchor="start">L1 · Foundations</text>
+<rect x="290" y="764" width="166" height="140" rx="6" fill="#ffffff" stroke="#455a64" stroke-width="1.5"/>
+<text x="373.0" y="783" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#455a64" text-anchor="middle">Types</text>
+<text x="373.0" y="800" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">EvalCase · Artifact · Message</text>
+<text x="373.0" y="814" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">Session→Trace→Step, TxStep</text>
+<text x="373.0" y="828" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">Suite · MetricResult</text>
+<text x="373.0" y="842" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">EvalRequest · EvalResponse</text>
+<text x="373.0" y="856" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">TargetRef · JudgeConfig</text>
+<rect x="468" y="764" width="166" height="140" rx="6" fill="#ffffff" stroke="#455a64" stroke-width="1.5"/>
+<text x="551.0" y="783" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#455a64" text-anchor="middle">Ports</text>
+<text x="551.0" y="800" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">Registry · Commerce</text>
+<text x="551.0" y="814" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">Policy · Storage</text>
+<text x="551.0" y="828" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">Signer · ChainReader</text>
+<text x="551.0" y="842" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">Settlement · Payer</text>
+<text x="551.0" y="856" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">AssetCatalog · value types</text>
+<rect x="646" y="764" width="166" height="140" rx="6" fill="#ffffff" stroke="#455a64" stroke-width="1.5"/>
+<text x="729.0" y="783" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#455a64" text-anchor="middle">Judge layer</text>
+<text x="729.0" y="800" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">JudgeModel protocol</text>
+<text x="729.0" y="814" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">bedrock · openai-compat ·</text>
+<text x="729.0" y="828" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">anthropic · fake</text>
+<text x="729.0" y="842" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">versioned prompts · det. fence</text>
+<text x="729.0" y="856" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">structured parse · cache</text>
+<rect x="824" y="764" width="166" height="140" rx="6" fill="#ffffff" stroke="#455a64" stroke-width="1.5"/>
+<text x="907.0" y="783" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#455a64" text-anchor="middle">Trace adapters</text>
+<text x="907.0" y="800" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">OTel GenAI · AgentCore</text>
+<text x="907.0" y="814" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">Langfuse · LangSmith</text>
+<text x="907.0" y="828" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">Strands · SmolAgents</text>
+<text x="907.0" y="842" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">TauBench · CX0 · EB</text>
+<text x="907.0" y="856" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">auto-detect</text>
+<rect x="1002" y="764" width="166" height="140" rx="6" fill="#ffffff" stroke="#455a64" stroke-width="1.5"/>
+<text x="1085.0" y="783" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#455a64" text-anchor="middle">Core utils</text>
+<text x="1085.0" y="800" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">canonical JSON + eth-hash</text>
+<text x="1085.0" y="814" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">EvalConfig (EVAL_*)</text>
+<text x="1085.0" y="828" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">EvalError hierarchy</text>
+<text x="1085.0" y="842" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">extra loader · net guard</text>
+<text x="1085.0" y="856" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">log redaction</text>
+<rect x="1240" y="110" width="360" height="62" rx="10" fill="#e0f2f1" stroke="#00796b" stroke-width="2"/>
+<text x="1420.0" y="130" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" font-weight="bold" fill="#00695c" text-anchor="middle">Edge · integrations (implement the ports)</text>
+<text x="1420.0" y="147" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">bnbagent adapter [bnbagent] · only module importing the SDK</text>
+<text x="1420.0" y="162" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="normal" fill="#37474f" text-anchor="middle">jsonrpc adapter (read-only) · or your own adapter</text>
+<line x1="1330" y1="172" x2="1330" y2="188" stroke="#455a64" stroke-width="1.6" marker-end="url(#arr)"/>
+<rect x="1240" y="190" width="360" height="230" rx="10" fill="#fffdf3" stroke="#d4a20a" stroke-width="2"/>
+<text x="1420.0" y="210" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#8d6e00" text-anchor="middle">bnbagent SDK (unchanged)</text>
+<rect x="1254" y="220" width="78" height="22" rx="4" fill="#fff3c4" stroke="#d4a20a" stroke-width="1"/>
+<text x="1293" y="235" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="bold" fill="#8d6e00" text-anchor="middle">erc8004</text>
+<text x="1342" y="235" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="start">ERC8004Agent · AgentURIGenerator</text>
+<rect x="1254" y="249" width="78" height="22" rx="4" fill="#fff3c4" stroke="#d4a20a" stroke-width="1"/>
+<text x="1293" y="264" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="bold" fill="#8d6e00" text-anchor="middle">erc8183</text>
+<text x="1342" y="264" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="start">ERC8183Client · JobOps · funded_job_watcher</text>
+<text x="1342" y="293" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="start">DeliverableManifest · PolicyClient · negotiation</text>
+<rect x="1254" y="307" width="78" height="22" rx="4" fill="#fff3c4" stroke="#d4a20a" stroke-width="1"/>
+<text x="1293" y="322" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="bold" fill="#8d6e00" text-anchor="middle">x402</text>
+<text x="1342" y="322" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="start">X402Payer (client) · networks assets</text>
+<rect x="1254" y="336" width="78" height="22" rx="4" fill="#fff3c4" stroke="#d4a20a" stroke-width="1"/>
+<text x="1293" y="351" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="bold" fill="#8d6e00" text-anchor="middle">wallets</text>
+<text x="1342" y="351" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="start">WalletProvider (EIP-191 / EIP-712 signing)</text>
+<rect x="1254" y="365" width="78" height="22" rx="4" fill="#fff3c4" stroke="#d4a20a" stroke-width="1"/>
+<text x="1293" y="380" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="bold" fill="#8d6e00" text-anchor="middle">storage</text>
+<text x="1342" y="380" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="start">StorageProvider: IPFS / local</text>
+<rect x="1254" y="394" width="78" height="22" rx="4" fill="#fff3c4" stroke="#d4a20a" stroke-width="1"/>
+<text x="1293" y="409" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="bold" fill="#8d6e00" text-anchor="middle">networks</text>
+<text x="1342" y="409" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="start">chain config · RPC · contract addresses</text>
+<path d="M 1190 350 L 1224 350 L 1224 152 L 1238 152" fill="none" stroke="#455a64" stroke-width="1.6" marker-end="url(#arr)"/>
+<line x1="1190" y1="152" x2="1238" y2="152" stroke="#455a64" stroke-width="1.6" marker-end="url(#arr)"/>
+<text x="1226" y="145" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#455a64" text-anchor="middle">ports</text>
+<rect x="1240" y="436" width="360" height="488" rx="10" fill="#ffffff" stroke="#9e9e9e" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="1420.0" y="456" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#424242" text-anchor="middle">External services (all optional)</text>
+<text x="1420.0" y="471" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#757575" text-anchor="middle" font-style="italic">called by judges, vendors, targets and adapters; traces are read as files</text>
+<rect x="1256" y="482" width="328" height="74" rx="6" fill="#fafafa" stroke="#9e9e9e" stroke-width="1.5"/>
+<text x="1420.0" y="501" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#424242" text-anchor="middle">Judge LLMs</text>
+<text x="1420.0" y="518" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">Amazon Bedrock · OpenAI-compatible</text>
+<text x="1420.0" y="532" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">(vLLM, Ollama, ...) · Anthropic</text>
+<rect x="1256" y="569" width="328" height="74" rx="6" fill="#fafafa" stroke="#9e9e9e" stroke-width="1.5"/>
+<text x="1420.0" y="588" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#424242" text-anchor="middle">Trace exports</text>
+<text x="1420.0" y="605" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">OTel · ADOT · Langfuse · LangSmith</text>
+<text x="1420.0" y="619" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">smolagents · Tau-Bench (JSON / JSONL)</text>
+<rect x="1256" y="656" width="328" height="74" rx="6" fill="#fafafa" stroke="#9e9e9e" stroke-width="1.5"/>
+<text x="1420.0" y="675" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#424242" text-anchor="middle">Vendor frameworks [extras]</text>
+<text x="1420.0" y="692" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">RAGAS · DeepEval · FMEval · PyRIT</text>
+<text x="1420.0" y="706" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">Bedrock AgentCore Evaluations</text>
+<rect x="1256" y="743" width="328" height="74" rx="6" fill="#fafafa" stroke="#9e9e9e" stroke-width="1.5"/>
+<text x="1420.0" y="762" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#424242" text-anchor="middle">Off-chain storage</text>
+<text x="1420.0" y="779" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">IPFS · HTTPS · local</text>
+<text x="1420.0" y="793" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">reports (hash-only / encrypted), suites</text>
+<rect x="1256" y="830" width="328" height="74" rx="6" fill="#fafafa" stroke="#9e9e9e" stroke-width="1.5"/>
+<text x="1420.0" y="849" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#424242" text-anchor="middle">Agents under test · RPC</text>
+<text x="1420.0" y="866" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">HTTP / A2A / MCP endpoints</text>
+<text x="1420.0" y="880" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">EVM JSON-RPC (BSC) · x402 facilitator</text>
+<path d="M 1190 800 L 1222 800 L 1222 605 L 1254 605" fill="none" stroke="#455a64" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#arr)"/>
+<text x="1220" y="700" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" fill="#455a64" text-anchor="middle" transform="rotate(-90 1220 700)">calls out</text>
+<rect x="250" y="948" width="1350" height="160" rx="12" fill="#fffbea" stroke="#f0b90b" stroke-width="2.5"/>
+<text x="266" y="970" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" font-weight="bold" fill="#8d6e00" text-anchor="start">BNB Chain (BSC mainnet / testnet)</text>
+<rect x="270" y="982" width="430" height="112" rx="6" fill="#ffffff" stroke="#c79100" stroke-width="1.5"/>
+<text x="485.0" y="1001" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#c79100" text-anchor="middle">ERC-8004 Identity Registry</text>
+<text x="485.0" y="1018" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">agentURI file: metrics[] per suite_hash</text>
+<text x="485.0" y="1032" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">(agent_version, expires_at, attestation)</text>
+<text x="485.0" y="1046" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">eval services discoverable as AgentEndpoint 'eval'</text>
+<rect x="720" y="982" width="470" height="112" rx="6" fill="#ffffff" stroke="#c79100" stroke-width="1.5"/>
+<text x="955.0" y="1001" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#c79100" text-anchor="middle">ERC-8183 AgenticCommerce · EvaluatorRouter · OptimisticPolicy</text>
+<text x="955.0" y="1018" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">suite pinned in success_criteria (eval_suite:uri#hash)</text>
+<text x="955.0" y="1032" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">deliverable = keccak(manifest) · metadata.eval = evidence</text>
+<text x="955.0" y="1046" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">dispute (client) · voteReject (voters) · settle(evidence)</text>
+<rect x="1210" y="982" width="370" height="112" rx="6" fill="#ffffff" stroke="#c79100" stroke-width="1.5"/>
+<text x="1395.0" y="1001" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#c79100" text-anchor="middle">x402 payment tokens</text>
+<text x="1395.0" y="1018" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">EIP-3009 (U, USD1) · permit2-exact (USDT, USDC)</text>
+<text x="1395.0" y="1032" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">quote bound to request_hash</text>
+<text x="1395.0" y="1046" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="middle">pays per evaluation request (S3)</text>
+<path d="M 1600 300 L 1622 300 L 1622 1038 L 1602 1038" fill="none" stroke="#455a64" stroke-width="1.6" marker-end="url(#arr)"/>
+<text x="1628" y="660" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" font-weight="bold" fill="#455a64" text-anchor="start">tx</text>
+<rect x="20" y="560" width="200" height="276" rx="8" fill="#fafafa" stroke="#b0bec5" stroke-width="1.5"/>
+<text x="120" y="582" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12.5" font-weight="bold" fill="#37474f" text-anchor="middle">Legend</text>
+<rect x="34" y="596" width="22" height="16" rx="3" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.2"/>
+<text x="64" y="608" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="start">L5 delivery</text>
+<rect x="34" y="622" width="22" height="16" rx="3" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.2"/>
+<text x="64" y="634" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="start">L4 chain workflows (ports)</text>
+<rect x="34" y="648" width="22" height="16" rx="3" fill="#fff3e0" stroke="#ef6c00" stroke-width="1.2"/>
+<text x="64" y="660" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="start">L3 orchestration</text>
+<rect x="34" y="674" width="22" height="16" rx="3" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="1.2"/>
+<text x="64" y="686" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="start">L2 capabilities</text>
+<rect x="34" y="700" width="22" height="16" rx="3" fill="#eceff1" stroke="#455a64" stroke-width="1.2"/>
+<text x="64" y="712" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="start">L1 foundations</text>
+<rect x="34" y="726" width="22" height="16" rx="3" fill="#fffdf3" stroke="#d4a20a" stroke-width="1.2"/>
+<text x="64" y="738" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="start">existing bnbagent SDK</text>
+<rect x="34" y="752" width="22" height="16" rx="3" fill="#e0f2f1" stroke="#00796b" stroke-width="1.2"/>
+<text x="64" y="764" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="start">integrations (adapters)</text>
+<rect x="34" y="778" width="22" height="16" rx="3" fill="#ffffff" stroke="#9e9e9e" stroke-width="1.2" stroke-dasharray="4 2"/>
+<text x="64" y="790" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10.5" font-weight="normal" fill="#37474f" text-anchor="start">optional / extra</text>
+<text x="120" y="820" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="9.5" font-weight="normal" fill="#546e7a" text-anchor="middle" font-style="italic">Imports flow downward only</text>
+</svg>

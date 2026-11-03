@@ -1,0 +1,19 @@
+bnbagent-eval
+Copyright 2026 The bnbagent-eval authors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This package re-implements and reorganizes evaluation capabilities from:
+
+- Gen AI Evaluation Toolkit on AWS (ETK), Apache License 2.0.
+  Its NOTICE: Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+- AgentSight (agent-lens), Copyright Amazon.com, Inc. or its affiliates;
+  contributed by its authors and released here under the Apache License 2.0.
+- STED (amazon-science/sted, semantic tree edit distance consistency scoring),
+  Apache License 2.0. Its NOTICE: Copyright Amazon.com, Inc. or its affiliates.
+  All Rights Reserved.
+- Ideas from Google ADK evaluation (tool-trajectory matching, rubric evaluation),
+  Apache License 2.0, Copyright Google LLC.
+
+Algorithms such as exact match, token F1, ROUGE, BLEU and METEOR are implemented
+from their published definitions.

@@ -1,0 +1,904 @@
+{
+  "$defs": {
+    "AgentSubject": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "type": "integer"
+        },
+        "agent_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "chain_id": {
+          "type": "integer"
+        },
+        "registry": {
+          "type": "string"
+        },
+        "type": {
+          "const": "agent",
+          "default": "agent"
+        }
+      },
+      "required": [
+        "chain_id",
+        "registry",
+        "agent_id"
+      ],
+      "title": "AgentSubject",
+      "type": "object"
+    },
+    "Aggregate": {
+      "additionalProperties": false,
+      "properties": {
+        "cases": {
+          "type": "integer"
+        },
+        "error_rate": {
+          "type": "number"
+        },
+        "metrics": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/MetricAggregate"
+          },
+          "type": "array"
+        },
+        "pass_rate": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "score": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "score",
+        "pass_rate",
+        "error_rate",
+        "cases"
+      ],
+      "title": "Aggregate",
+      "type": "object"
+    },
+    "AppMetrics": {
+      "additionalProperties": false,
+      "properties": {
+        "cache_read_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cache_write_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cost_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "input_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "latency_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "output_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "ttft_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "AppMetrics",
+      "type": "object"
+    },
+    "Attestation": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "type": "string"
+        },
+        "domain": {
+          "default": {},
+          "type": "object"
+        },
+        "evaluator": {
+          "type": "string"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "issued_at": {
+          "type": "integer"
+        },
+        "scheme": {
+          "enum": [
+            "eip712",
+            "eip191"
+          ]
+        },
+        "signature": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scheme",
+        "evaluator",
+        "digest",
+        "signature",
+        "issued_at"
+      ],
+      "title": "Attestation",
+      "type": "object"
+    },
+    "CaseResult": {
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "type": "string"
+        },
+        "metrics": {
+          "items": {
+            "$ref": "#/$defs/MetricResult"
+          },
+          "type": "array"
+        },
+        "passed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "runs": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RunResult"
+          },
+          "type": "array"
+        },
+        "score": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "case_id",
+        "metrics"
+      ],
+      "title": "CaseResult",
+      "type": "object"
+    },
+    "Cost": {
+      "additionalProperties": false,
+      "properties": {
+        "judge_calls": {
+          "default": 0,
+          "type": "integer"
+        },
+        "tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "usd_estimate": {
+          "default": 0.0,
+          "type": "number"
+        }
+      },
+      "title": "Cost",
+      "type": "object"
+    },
+    "ErrorInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "default": "",
+          "type": "string"
+        },
+        "retryable": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code"
+      ],
+      "title": "ErrorInfo",
+      "type": "object"
+    },
+    "JobSubject": {
+      "additionalProperties": false,
+      "properties": {
+        "chain_id": {
+          "type": "integer"
+        },
+        "commerce": {
+          "type": "string"
+        },
+        "job_id": {
+          "type": "integer"
+        },
+        "output_hash": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "type": {
+          "const": "job",
+          "default": "job"
+        }
+      },
+      "required": [
+        "chain_id",
+        "commerce",
+        "job_id",
+        "provider",
+        "output_hash"
+      ],
+      "title": "JobSubject",
+      "type": "object"
+    },
+    "MetricAggregate": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "type": "integer"
+        },
+        "errors": {
+          "type": "integer"
+        },
+        "max": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "mean": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "metric_id": {
+          "type": "string"
+        },
+        "min": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "type": "string"
+        },
+        "pass_rate": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "scored": {
+          "type": "integer"
+        },
+        "skipped": {
+          "type": "integer"
+        },
+        "std": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "value_mean": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "value_p50": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "value_p95": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "value_p99": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name",
+        "metric_id",
+        "count",
+        "scored",
+        "errors",
+        "skipped"
+      ],
+      "title": "MetricAggregate",
+      "type": "object"
+    },
+    "MetricProvenance": {
+      "additionalProperties": false,
+      "properties": {
+        "judge": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "judge_source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "method": {
+          "type": "string"
+        },
+        "metric_version": {
+          "type": "string"
+        },
+        "prompt_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "samples": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "truncated": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "metric_version",
+        "method"
+      ],
+      "title": "MetricProvenance",
+      "type": "object"
+    },
+    "MetricResult": {
+      "additionalProperties": false,
+      "properties": {
+        "details": {
+          "default": {},
+          "type": "object"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "method": {
+          "type": "string"
+        },
+        "metric_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "passed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provenance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MetricProvenance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        },
+        "score": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "default": "scored",
+          "enum": [
+            "scored",
+            "skipped",
+            "error",
+            "pending_human"
+          ]
+        },
+        "threshold": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "weight": {
+          "default": 1.0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "metric_id",
+        "name",
+        "method",
+        "score"
+      ],
+      "title": "MetricResult",
+      "type": "object"
+    },
+    "Provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "finished_at": {
+          "type": "number"
+        },
+        "judge": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "metric_versions": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "package_version": {
+          "type": "string"
+        },
+        "request_hash": {
+          "type": "string"
+        },
+        "started_at": {
+          "type": "number"
+        },
+        "suite_hash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "package_version",
+        "suite_hash",
+        "request_hash",
+        "started_at",
+        "finished_at"
+      ],
+      "title": "Provenance",
+      "type": "object"
+    },
+    "RunResult": {
+      "additionalProperties": false,
+      "properties": {
+        "app_metrics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AppMetrics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "output_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "run_index": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "run_index"
+      ],
+      "title": "RunResult",
+      "type": "object"
+    },
+    "Verdict": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reasons": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "pass",
+            "fail",
+            "inconclusive",
+            "pending_human"
+          ]
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "Verdict",
+      "type": "object"
+    }
+  },
+  "$id": "urn:bnbagent-eval:schema:v1:EvalResponse",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "aggregate": {
+      "$ref": "#/$defs/Aggregate"
+    },
+    "attestation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Attestation"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "cost": {
+      "$ref": "#/$defs/Cost",
+      "default": {
+        "judge_calls": 0,
+        "tokens": 0,
+        "usd_estimate": 0.0
+      }
+    },
+    "provenance": {
+      "$ref": "#/$defs/Provenance"
+    },
+    "response_hash": {
+      "type": "string"
+    },
+    "result_hash": {
+      "type": "string"
+    },
+    "results": {
+      "items": {
+        "$ref": "#/$defs/CaseResult"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "default": "bnbagent-eval/v1",
+      "type": "string"
+    },
+    "stage": {
+      "enum": [
+        "dev",
+        "registration",
+        "pre_submit",
+        "review",
+        "vote"
+      ]
+    },
+    "subject": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JobSubject"
+        },
+        {
+          "$ref": "#/$defs/AgentSubject"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "suite_hash": {
+      "type": "string"
+    },
+    "verdict": {
+      "$ref": "#/$defs/Verdict"
+    }
+  },
+  "required": [
+    "stage",
+    "suite_hash",
+    "results",
+    "aggregate",
+    "verdict",
+    "provenance",
+    "result_hash",
+    "response_hash"
+  ],
+  "title": "EvalResponse",
+  "type": "object"
+}

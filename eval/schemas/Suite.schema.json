@@ -1,0 +1,297 @@
+{
+  "$defs": {
+    "JudgeConfig": {
+      "additionalProperties": false,
+      "description": "Which judge model to use. API keys are never stored here (they come from the env).",
+      "properties": {
+        "base_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "extra": {
+          "default": {},
+          "type": "object"
+        },
+        "max_tokens": {
+          "default": 2048,
+          "type": "integer"
+        },
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "region": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "samples": {
+          "default": 1,
+          "type": "integer"
+        },
+        "temperature": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": 0.0
+        }
+      },
+      "required": [
+        "provider",
+        "model"
+      ],
+      "title": "JudgeConfig",
+      "type": "object"
+    },
+    "LockEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "metric_version": {
+          "type": "string"
+        },
+        "prompt_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "metric_version"
+      ],
+      "title": "LockEntry",
+      "type": "object"
+    },
+    "MetricConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_truncation": {
+          "default": false,
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "method": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "params": {
+          "default": {},
+          "type": "object"
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        },
+        "threshold": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "value_max": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "value_min": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "value_target": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "weight": {
+          "default": 1.0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "MetricConfig",
+      "type": "object"
+    },
+    "PassRule": {
+      "additionalProperties": false,
+      "properties": {
+        "aggregation": {
+          "default": "weighted_average",
+          "enum": [
+            "weighted_average",
+            "mean",
+            "min",
+            "max"
+          ]
+        },
+        "inconclusive_band": {
+          "default": 0.0,
+          "type": "number"
+        },
+        "max_error_rate": {
+          "default": 0.0,
+          "type": "number"
+        },
+        "min_aggregate": {
+          "default": 0.7,
+          "type": "number"
+        },
+        "min_pass_rate": {
+          "default": 1.0,
+          "type": "number"
+        },
+        "on_inconclusive": {
+          "default": "retry",
+          "enum": [
+            "retry",
+            "decline",
+            "submit"
+          ]
+        }
+      },
+      "title": "PassRule",
+      "type": "object"
+    }
+  },
+  "$id": "urn:bnbagent-eval:schema:v1:Suite",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "description": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "judge": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JudgeConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "lock": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/LockEntry"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "metrics": {
+      "items": {
+        "$ref": "#/$defs/MetricConfig"
+      },
+      "type": "array"
+    },
+    "name": {
+      "type": "string"
+    },
+    "pass_rule": {
+      "$ref": "#/$defs/PassRule",
+      "default": {
+        "aggregation": "weighted_average",
+        "inconclusive_band": 0.0,
+        "max_error_rate": 0.0,
+        "min_aggregate": 0.7,
+        "min_pass_rate": 1.0,
+        "on_inconclusive": "retry"
+      }
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "version",
+    "metrics"
+  ],
+  "title": "Suite",
+  "type": "object"
+}
