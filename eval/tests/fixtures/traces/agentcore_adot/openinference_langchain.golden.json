@@ -1,0 +1,144 @@
+{
+ "id": "session-0002",
+ "traces": [
+  {
+   "id": "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2",
+   "steps": [
+    {
+     "agent_id": "LangGraph_318b5a1b",
+     "available_tools": [
+      {
+       "description": "Checks status of user package",
+       "name": "check_package_status",
+       "parameters": {
+        "properties": {
+         "user_name": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       }
+      }
+     ],
+     "end_ms": 1761971565000.0,
+     "error": null,
+     "id": "d000000000000001",
+     "kind": "agent",
+     "parent_id": null,
+     "response": "Your package is ready for pickup.",
+     "start_ms": 1761971559000.0,
+     "system_prompt": "You are a package assistant. Check the status before quoting a price.",
+     "usage": null,
+     "user_prompt": "What is the status of my package?"
+    },
+    {
+     "agent_id": "LangGraph_318b5a1b",
+     "end_ms": 1761971560900.0,
+     "error": null,
+     "id": "d000000000000003",
+     "kind": "llm",
+     "messages": [
+      {
+       "content": "You are a package assistant. Check the status before quoting a price.",
+       "role": "system"
+      },
+      {
+       "content": "What is the status of my package?",
+       "role": "user"
+      }
+     ],
+     "model": "example-model-v1",
+     "parent_id": "d000000000000001",
+     "response": "Let me check that for you.",
+     "start_ms": 1761971559020.0,
+     "tool_calls": [
+      {
+       "arguments": {
+        "user_name": "Bob"
+       },
+       "id": "toolu_0002",
+       "name": "check_package_status"
+      }
+     ],
+     "usage": {
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "cost_usd": null,
+      "input_tokens": 210,
+      "output_tokens": 40
+     }
+    },
+    {
+     "agent_id": "LangGraph_318b5a1b",
+     "call": {
+      "arguments": {
+       "user_name": "Bob"
+      },
+      "id": "toolu_0002",
+      "name": "check_package_status"
+     },
+     "end_ms": 1761971561200.0,
+     "error": null,
+     "id": "d000000000000004",
+     "kind": "tool",
+     "parent_id": "d000000000000001",
+     "result": {
+      "call_id": "toolu_0002",
+      "content": "Package is ready for pickup",
+      "error": null
+     },
+     "start_ms": 1761971561100.0,
+     "usage": null
+    },
+    {
+     "agent_id": "LangGraph_318b5a1b",
+     "end_ms": 1761971564800.0,
+     "error": null,
+     "id": "d000000000000006",
+     "kind": "llm",
+     "messages": [
+      {
+       "content": "You are a package assistant. Check the status before quoting a price.",
+       "role": "system"
+      },
+      {
+       "content": "What is the status of my package?",
+       "role": "user"
+      },
+      {
+       "content": "Let me check that for you.",
+       "role": "assistant",
+       "tool_calls": [
+        {
+         "arguments": {
+          "user_name": "Bob"
+         },
+         "id": "toolu_0002",
+         "name": "check_package_status"
+        }
+       ]
+      },
+      {
+       "content": "Package is ready for pickup",
+       "role": "tool",
+       "tool_call_id": "toolu_0002"
+      }
+     ],
+     "model": "example-model-v1",
+     "parent_id": "d000000000000001",
+     "response": "Your package is ready for pickup.",
+     "start_ms": 1761971561310.0,
+     "tool_calls": [],
+     "usage": {
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "cost_usd": null,
+      "input_tokens": 260,
+      "output_tokens": 12
+     }
+    }
+   ]
+  }
+ ],
+ "warnings": []
+}

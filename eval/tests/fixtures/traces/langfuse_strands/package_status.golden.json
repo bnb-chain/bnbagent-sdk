@@ -1,0 +1,221 @@
+{
+ "id": "session-0005",
+ "traces": [
+  {
+   "id": "13cc6db7f2e290b54bab3061a6fc5db0",
+   "steps": [
+    {
+     "agent_id": "Strands Agents_dfc9845e",
+     "available_tools": [
+      {
+       "name": "check_package_status"
+      },
+      {
+       "name": "calculate_price"
+      }
+     ],
+     "end_ms": 1763082006495.0,
+     "error": null,
+     "id": "28b7038083b46985",
+     "kind": "agent",
+     "parent_id": null,
+     "response": "Your package is ready for pickup and the total cost is $100. You can come collect it whenever convenient for you!\n",
+     "start_ms": 1763082001242.0,
+     "system_prompt": "You are a helpful assistant, user will ask you about their package. You should first check it's status. If status is ready for pickup you should check cost. The name of the user is Bob",
+     "usage": {
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "cost_usd": null,
+      "input_tokens": 1709,
+      "output_tokens": 164
+     },
+     "user_prompt": "What is the status of my package"
+    },
+    {
+     "agent_id": "Strands Agents_dfc9845e",
+     "end_ms": 1763082002922.0,
+     "error": null,
+     "id": "156c1779bdf680d1",
+     "kind": "llm",
+     "messages": [
+      {
+       "content": "What is the status of my package",
+       "role": "user"
+      }
+     ],
+     "model": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+     "parent_id": "28b7038083b46985",
+     "response": "I'll check the status of your package for you, Bob.",
+     "start_ms": 1763082001245.0,
+     "tool_calls": [
+      {
+       "arguments": {
+        "user_name": "Bob"
+       },
+       "id": "tooluse_sYup7HMFTFOAopB_4kgTqA",
+       "name": "check_package_status"
+      }
+     ],
+     "usage": {
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "cost_usd": null,
+      "input_tokens": 482,
+      "output_tokens": 75
+     }
+    },
+    {
+     "agent_id": "Strands Agents_dfc9845e",
+     "call": {
+      "arguments": {
+       "user_name": "Bob"
+      },
+      "id": "tooluse_sYup7HMFTFOAopB_4kgTqA",
+      "name": "check_package_status"
+     },
+     "end_ms": 1763082003023.0,
+     "error": null,
+     "id": "bcad6196d9821f76",
+     "kind": "tool",
+     "parent_id": "28b7038083b46985",
+     "result": {
+      "call_id": "tooluse_sYup7HMFTFOAopB_4kgTqA",
+      "content": "Package is ready for pickup",
+      "error": null
+     },
+     "start_ms": 1763082003022.0,
+     "usage": null
+    },
+    {
+     "agent_id": "Strands Agents_dfc9845e",
+     "end_ms": 1763082004410.0,
+     "error": null,
+     "id": "290b5c80c9aed3f3",
+     "kind": "llm",
+     "messages": [
+      {
+       "content": "What is the status of my package",
+       "role": "user"
+      },
+      {
+       "content": "I'll check the status of your package for you, Bob.",
+       "role": "assistant",
+       "tool_calls": [
+        {
+         "arguments": {
+          "user_name": "Bob"
+         },
+         "id": "tooluse_sYup7HMFTFOAopB_4kgTqA",
+         "name": "check_package_status"
+        }
+       ]
+      },
+      {
+       "content": "Package is ready for pickup",
+       "role": "tool",
+       "tool_call_id": "tooluse_sYup7HMFTFOAopB_4kgTqA"
+      }
+     ],
+     "model": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+     "parent_id": "28b7038083b46985",
+     "response": "Great news! Your package is ready for pickup. Since it's ready, let me also check the total cost for you.",
+     "start_ms": 1763082003135.0,
+     "tool_calls": [
+      {
+       "arguments": {},
+       "id": "tooluse_eyRoAW-ARTq9inBduvuTtg",
+       "name": "calculate_price"
+      }
+     ],
+     "usage": {
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "cost_usd": null,
+      "input_tokens": 574,
+      "output_tokens": 62
+     }
+    },
+    {
+     "agent_id": "Strands Agents_dfc9845e",
+     "call": {
+      "arguments": {},
+      "id": "tooluse_eyRoAW-ARTq9inBduvuTtg",
+      "name": "calculate_price"
+     },
+     "end_ms": 1763082004480.0,
+     "error": null,
+     "id": "364c5b004ed7f062",
+     "kind": "tool",
+     "parent_id": "28b7038083b46985",
+     "result": {
+      "call_id": "tooluse_eyRoAW-ARTq9inBduvuTtg",
+      "content": "Total cost is $100",
+      "error": null
+     },
+     "start_ms": 1763082004479.0,
+     "usage": null
+    },
+    {
+     "agent_id": "Strands Agents_dfc9845e",
+     "end_ms": 1763082006384.0,
+     "error": null,
+     "id": "3f1a15bd9e8cd207",
+     "kind": "llm",
+     "messages": [
+      {
+       "content": "What is the status of my package",
+       "role": "user"
+      },
+      {
+       "content": "I'll check the status of your package for you, Bob.",
+       "role": "assistant",
+       "tool_calls": [
+        {
+         "arguments": {
+          "user_name": "Bob"
+         },
+         "id": "tooluse_sYup7HMFTFOAopB_4kgTqA",
+         "name": "check_package_status"
+        }
+       ]
+      },
+      {
+       "content": "Package is ready for pickup",
+       "role": "tool",
+       "tool_call_id": "tooluse_sYup7HMFTFOAopB_4kgTqA"
+      },
+      {
+       "content": "Great news! Your package is ready for pickup. Since it's ready, let me also check the total cost for you.",
+       "role": "assistant",
+       "tool_calls": [
+        {
+         "arguments": {},
+         "id": "tooluse_eyRoAW-ARTq9inBduvuTtg",
+         "name": "calculate_price"
+        }
+       ]
+      },
+      {
+       "content": "Total cost is $100",
+       "role": "tool",
+       "tool_call_id": "tooluse_eyRoAW-ARTq9inBduvuTtg"
+      }
+     ],
+     "model": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+     "parent_id": "28b7038083b46985",
+     "response": "Your package is ready for pickup and the total cost is $100. You can come collect it whenever convenient for you!",
+     "start_ms": 1763082004562.0,
+     "tool_calls": [],
+     "usage": {
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "cost_usd": null,
+      "input_tokens": 653,
+      "output_tokens": 27
+     }
+    }
+   ]
+  }
+ ],
+ "warnings": []
+}

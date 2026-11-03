@@ -1,0 +1,2022 @@
+{
+  "$defs": {
+    "AgentStep": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "available_tools": {
+          "default": [],
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "end_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "agent",
+          "default": "agent"
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "response": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "start_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "system_prompt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "user_prompt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "AgentStep",
+      "type": "object"
+    },
+    "AgentSubject": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "type": "integer"
+        },
+        "agent_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "chain_id": {
+          "type": "integer"
+        },
+        "registry": {
+          "type": "string"
+        },
+        "type": {
+          "const": "agent",
+          "default": "agent"
+        }
+      },
+      "required": [
+        "chain_id",
+        "registry",
+        "agent_id"
+      ],
+      "title": "AgentSubject",
+      "type": "object"
+    },
+    "AppMetrics": {
+      "additionalProperties": false,
+      "properties": {
+        "cache_read_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cache_write_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cost_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "input_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "latency_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "output_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "ttft_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "AppMetrics",
+      "type": "object"
+    },
+    "Artifact": {
+      "additionalProperties": false,
+      "description": "A non-text deliverable referenced by URI and content hash.",
+      "properties": {
+        "hash": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "size": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "uri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "hash",
+        "media_type"
+      ],
+      "title": "Artifact",
+      "type": "object"
+    },
+    "Budget": {
+      "additionalProperties": false,
+      "properties": {
+        "max_judge_calls": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "max_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "max_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "Budget",
+      "type": "object"
+    },
+    "ContentPart": {
+      "additionalProperties": false,
+      "description": "A piece of multimodal content.",
+      "properties": {
+        "data": {
+          "default": null
+        },
+        "hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "media_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "enum": [
+            "text",
+            "image",
+            "file",
+            "json"
+          ]
+        },
+        "uri": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "ContentPart",
+      "type": "object"
+    },
+    "Context": {
+      "additionalProperties": false,
+      "description": "A retrieval context.",
+      "properties": {
+        "source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "text": {
+          "type": "string"
+        },
+        "timestamp": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "Context",
+      "type": "object"
+    },
+    "DecodedCall": {
+      "additionalProperties": false,
+      "properties": {
+        "args": {
+          "default": {},
+          "type": "object"
+        },
+        "contract": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "function": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "DecodedCall",
+      "type": "object"
+    },
+    "DelegationStep": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "end_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "from_agent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "delegation",
+          "default": "delegation"
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "start_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "to_agent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "DelegationStep",
+      "type": "object"
+    },
+    "EvalCase": {
+      "additionalProperties": false,
+      "description": "One item to evaluate; every field but ``id`` is optional (metrics declare their needs).",
+      "properties": {
+        "app_metrics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AppMetrics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "artifacts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Artifact"
+          },
+          "type": "array"
+        },
+        "contexts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Context"
+          },
+          "type": "array"
+        },
+        "conversation": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Message"
+          },
+          "type": "array"
+        },
+        "expected": {
+          "default": null
+        },
+        "id": {
+          "type": "string"
+        },
+        "input": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "object"
+            },
+            {
+              "items": {
+                "$ref": "#/$defs/ContentPart"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "language": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "metadata": {
+          "default": {},
+          "type": "object"
+        },
+        "output": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "object"
+            },
+            {
+              "items": {
+                "$ref": "#/$defs/ContentPart"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "output_content_type": {
+          "default": "text/plain",
+          "type": "string"
+        },
+        "trajectory": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Session"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "EvalCase",
+      "type": "object"
+    },
+    "HandoffStep": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "end_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "from_agent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "handoff",
+          "default": "handoff"
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "start_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "to_agent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "HandoffStep",
+      "type": "object"
+    },
+    "JobSubject": {
+      "additionalProperties": false,
+      "properties": {
+        "chain_id": {
+          "type": "integer"
+        },
+        "commerce": {
+          "type": "string"
+        },
+        "job_id": {
+          "type": "integer"
+        },
+        "output_hash": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "type": {
+          "const": "job",
+          "default": "job"
+        }
+      },
+      "required": [
+        "chain_id",
+        "commerce",
+        "job_id",
+        "provider",
+        "output_hash"
+      ],
+      "title": "JobSubject",
+      "type": "object"
+    },
+    "JudgeConfig": {
+      "additionalProperties": false,
+      "description": "Which judge model to use. API keys are never stored here (they come from the env).",
+      "properties": {
+        "base_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "extra": {
+          "default": {},
+          "type": "object"
+        },
+        "max_tokens": {
+          "default": 2048,
+          "type": "integer"
+        },
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "region": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "samples": {
+          "default": 1,
+          "type": "integer"
+        },
+        "temperature": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": 0.0
+        }
+      },
+      "required": [
+        "provider",
+        "model"
+      ],
+      "title": "JudgeConfig",
+      "type": "object"
+    },
+    "LlmStep": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "end_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "llm",
+          "default": "llm"
+        },
+        "messages": {
+          "default": [],
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "response": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "start_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tool_calls": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ToolCall"
+          },
+          "type": "array"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "LlmStep",
+      "type": "object"
+    },
+    "LockEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "metric_version": {
+          "type": "string"
+        },
+        "prompt_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "metric_version"
+      ],
+      "title": "LockEntry",
+      "type": "object"
+    },
+    "Message": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "default": "",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "system",
+            "user",
+            "assistant",
+            "tool"
+          ]
+        },
+        "tool_call_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tool_calls": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ToolCall"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "role"
+      ],
+      "title": "Message",
+      "type": "object"
+    },
+    "MetricConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_truncation": {
+          "default": false,
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "method": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "params": {
+          "default": {},
+          "type": "object"
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        },
+        "threshold": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "value_max": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "value_min": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "value_target": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "weight": {
+          "default": 1.0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "MetricConfig",
+      "type": "object"
+    },
+    "PassRule": {
+      "additionalProperties": false,
+      "properties": {
+        "aggregation": {
+          "default": "weighted_average",
+          "enum": [
+            "weighted_average",
+            "mean",
+            "min",
+            "max"
+          ]
+        },
+        "inconclusive_band": {
+          "default": 0.0,
+          "type": "number"
+        },
+        "max_error_rate": {
+          "default": 0.0,
+          "type": "number"
+        },
+        "min_aggregate": {
+          "default": 0.7,
+          "type": "number"
+        },
+        "min_pass_rate": {
+          "default": 1.0,
+          "type": "number"
+        },
+        "on_inconclusive": {
+          "default": "retry",
+          "enum": [
+            "retry",
+            "decline",
+            "submit"
+          ]
+        }
+      },
+      "title": "PassRule",
+      "type": "object"
+    },
+    "Privacy": {
+      "additionalProperties": false,
+      "properties": {
+        "encrypt_to": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "redact": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "report_contents": {
+          "default": "hashes",
+          "enum": [
+            "hashes",
+            "redacted",
+            "full"
+          ]
+        }
+      },
+      "title": "Privacy",
+      "type": "object"
+    },
+    "RunOptions": {
+      "additionalProperties": false,
+      "properties": {
+        "budget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Budget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "deadline": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "judge_override": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JudgeConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "language": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "max_concurrency": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "privacy": {
+          "$ref": "#/$defs/Privacy",
+          "default": {
+            "encrypt_to": [],
+            "redact": [],
+            "report_contents": "hashes"
+          }
+        },
+        "runs": {
+          "default": 1,
+          "type": "integer"
+        }
+      },
+      "title": "RunOptions",
+      "type": "object"
+    },
+    "Session": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "traces": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Trace"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "Session",
+      "type": "object"
+    },
+    "Suite": {
+      "additionalProperties": true,
+      "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "judge": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JudgeConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "lock": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/LockEntry"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "metrics": {
+          "items": {
+            "$ref": "#/$defs/MetricConfig"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "pass_rule": {
+          "$ref": "#/$defs/PassRule",
+          "default": {
+            "aggregation": "weighted_average",
+            "inconclusive_band": 0.0,
+            "max_error_rate": 0.0,
+            "min_aggregate": 0.7,
+            "min_pass_rate": 1.0,
+            "on_inconclusive": "retry"
+          }
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "metrics"
+      ],
+      "title": "Suite",
+      "type": "object"
+    },
+    "TargetRef": {
+      "additionalProperties": false,
+      "properties": {
+        "config": {
+          "default": {},
+          "type": "object"
+        },
+        "kind": {
+          "enum": [
+            "callable",
+            "http",
+            "a2a",
+            "mcp",
+            "erc8004"
+          ]
+        },
+        "simulated_user": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "uri": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "TargetRef",
+      "type": "object"
+    },
+    "ToolCall": {
+      "additionalProperties": false,
+      "properties": {
+        "arguments": {
+          "default": {},
+          "type": "object"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "ToolCall",
+      "type": "object"
+    },
+    "ToolResult": {
+      "additionalProperties": false,
+      "properties": {
+        "call_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "content": {
+          "default": null
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "ToolResult",
+      "type": "object"
+    },
+    "ToolStep": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "call": {
+          "$ref": "#/$defs/ToolCall"
+        },
+        "end_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "tool",
+          "default": "tool"
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolResult"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "start_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "call"
+      ],
+      "title": "ToolStep",
+      "type": "object"
+    },
+    "Trace": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "steps": {
+          "default": [],
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LlmStep"
+              },
+              {
+                "$ref": "#/$defs/ToolStep"
+              },
+              {
+                "$ref": "#/$defs/AgentStep"
+              },
+              {
+                "$ref": "#/$defs/DelegationStep"
+              },
+              {
+                "$ref": "#/$defs/HandoffStep"
+              },
+              {
+                "$ref": "#/$defs/TxStep"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "Trace",
+      "type": "object"
+    },
+    "TxStep": {
+      "additionalProperties": false,
+      "description": "An on-chain transaction performed (or proposed) by the agent.",
+      "properties": {
+        "agent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "block_number": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "calldata": {
+          "default": "0x",
+          "type": "string"
+        },
+        "chain_id": {
+          "type": "integer"
+        },
+        "decoded": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DecodedCall"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "end_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "from_address": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "gas_used": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "type": "string"
+        },
+        "intent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "kind": {
+          "const": "tx",
+          "default": "tx"
+        },
+        "logs": {
+          "default": [],
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "parent_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "start_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "status": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "to": {
+          "type": "string"
+        },
+        "tx_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "value": {
+          "default": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "chain_id",
+        "to"
+      ],
+      "title": "TxStep",
+      "type": "object"
+    },
+    "Usage": {
+      "additionalProperties": false,
+      "properties": {
+        "cache_read_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cache_write_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cost_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "input_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "output_tokens": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "Usage",
+      "type": "object"
+    }
+  },
+  "$id": "urn:bnbagent-eval:schema:v1:EvalRequest",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "benchmark_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "cases": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EvalCase"
+      },
+      "type": "array"
+    },
+    "dataset_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "options": {
+      "$ref": "#/$defs/RunOptions",
+      "default": {
+        "budget": null,
+        "deadline": null,
+        "judge_override": null,
+        "language": null,
+        "max_concurrency": null,
+        "privacy": {
+          "encrypt_to": [],
+          "redact": [],
+          "report_contents": "hashes"
+        },
+        "runs": 1
+      }
+    },
+    "schema_version": {
+      "default": "bnbagent-eval/v1",
+      "type": "string"
+    },
+    "stage": {
+      "default": "dev",
+      "enum": [
+        "dev",
+        "registration",
+        "pre_submit",
+        "review",
+        "vote"
+      ]
+    },
+    "subject": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JobSubject"
+        },
+        {
+          "$ref": "#/$defs/AgentSubject"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "suite": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Suite"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "suite_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "target": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TargetRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "title": "EvalRequest",
+  "type": "object"
+}

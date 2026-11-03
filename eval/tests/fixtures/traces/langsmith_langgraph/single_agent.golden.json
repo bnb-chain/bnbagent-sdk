@@ -1,0 +1,244 @@
+{
+ "id": "00000000-0000-4000-8000-000000000001",
+ "traces": [
+  {
+   "id": "443af897-8a98-45fa-957e-da78dde5e357",
+   "steps": [
+    {
+     "agent_id": "LangGraph_dfc9845e",
+     "available_tools": [
+      {
+       "description": "Checks status of user package",
+       "name": "check_package_status",
+       "parameters": {
+        "properties": {
+         "user_name": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "user_name"
+        ],
+        "type": "object"
+       }
+      },
+      {
+       "description": "Total cost of user package",
+       "name": "calculate_price",
+       "parameters": {
+        "properties": {},
+        "type": "object"
+       }
+      }
+     ],
+     "end_ms": 1764222522671.419,
+     "error": null,
+     "id": "443af897-8a98-45fa-957e-da78dde5e357",
+     "kind": "agent",
+     "parent_id": null,
+     "response": "To summarize:\n- Your package is ready for pickup\n- The total cost is $100\n\nIs there anything else you would like to know about your package?",
+     "start_ms": 1764222516144.852,
+     "system_prompt": "You are a helpful assistant, user will ask you about their package. You should first check it's status. If status is ready for pickup you should check cost. The name of the user is Bob",
+     "usage": null,
+     "user_prompt": "What is the status of my package?"
+    },
+    {
+     "agent_id": "LangGraph_dfc9845e",
+     "end_ms": 1764222518969.957,
+     "error": null,
+     "id": "73b63db4-a578-4203-bebe-0415e8f79149",
+     "kind": "llm",
+     "messages": [
+      {
+       "content": "You are a helpful assistant, user will ask you about their package. You should first check it's status. If status is ready for pickup you should check cost. The name of the user is Bob",
+       "role": "system"
+      },
+      {
+       "content": "What is the status of my package?",
+       "role": "user"
+      }
+     ],
+     "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+     "parent_id": "443af897-8a98-45fa-957e-da78dde5e357",
+     "response": "I'll help you check the status of your package. Since I know your name is Bob, I can check this right away.",
+     "start_ms": 1764222516310.83,
+     "tool_calls": [
+      {
+       "arguments": {
+        "user_name": "Bob"
+       },
+       "id": "toolu_bdrk_011oma5ruJ3b7zaNqQsjQ5Cy",
+       "name": "check_package_status"
+      }
+     ],
+     "usage": {
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "cost_usd": 0.00273,
+      "input_tokens": 470,
+      "output_tokens": 88
+     }
+    },
+    {
+     "agent_id": "LangGraph_dfc9845e",
+     "call": {
+      "arguments": {
+       "user_name": "Bob"
+      },
+      "id": "toolu_bdrk_011oma5ruJ3b7zaNqQsjQ5Cy",
+      "name": "check_package_status"
+     },
+     "end_ms": 1764222518976.513,
+     "error": null,
+     "id": "bd7e656a-5059-4629-bc96-954365479acc",
+     "kind": "tool",
+     "parent_id": "443af897-8a98-45fa-957e-da78dde5e357",
+     "result": {
+      "call_id": "toolu_bdrk_011oma5ruJ3b7zaNqQsjQ5Cy",
+      "content": "Package is ready for pickup",
+      "error": null
+     },
+     "start_ms": 1764222518975.3,
+     "usage": null
+    },
+    {
+     "agent_id": "LangGraph_dfc9845e",
+     "end_ms": 1764222520918.452,
+     "error": null,
+     "id": "dd4521f0-6e5f-4eea-a969-e9b0bbd5c381",
+     "kind": "llm",
+     "messages": [
+      {
+       "content": "You are a helpful assistant, user will ask you about their package. You should first check it's status. If status is ready for pickup you should check cost. The name of the user is Bob",
+       "role": "system"
+      },
+      {
+       "content": "What is the status of my package?",
+       "role": "user"
+      },
+      {
+       "content": "I'll help you check the status of your package. Since I know your name is Bob, I can check this right away.",
+       "role": "assistant",
+       "tool_calls": [
+        {
+         "arguments": {
+          "user_name": "Bob"
+         },
+         "id": "toolu_bdrk_011oma5ruJ3b7zaNqQsjQ5Cy",
+         "name": "check_package_status"
+        }
+       ]
+      },
+      {
+       "content": "Package is ready for pickup",
+       "role": "tool",
+       "tool_call_id": "toolu_bdrk_011oma5ruJ3b7zaNqQsjQ5Cy"
+      }
+     ],
+     "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+     "parent_id": "443af897-8a98-45fa-957e-da78dde5e357",
+     "response": "Good news! Your package is ready for pickup. Since the package is ready, let me also check the total cost for you.",
+     "start_ms": 1764222518984.603,
+     "tool_calls": [
+      {
+       "arguments": {},
+       "id": "toolu_bdrk_011b695ajE9AZsSLGEZ9xD7U",
+       "name": "calculate_price"
+      }
+     ],
+     "usage": {
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "cost_usd": 0.002682,
+      "input_tokens": 574,
+      "output_tokens": 64
+     }
+    },
+    {
+     "agent_id": "LangGraph_dfc9845e",
+     "call": {
+      "arguments": {},
+      "id": "toolu_bdrk_011b695ajE9AZsSLGEZ9xD7U",
+      "name": "calculate_price"
+     },
+     "end_ms": 1764222520923.117,
+     "error": null,
+     "id": "ad2d8a0a-6c01-4a00-9259-5499feff99d8",
+     "kind": "tool",
+     "parent_id": "443af897-8a98-45fa-957e-da78dde5e357",
+     "result": {
+      "call_id": "toolu_bdrk_011b695ajE9AZsSLGEZ9xD7U",
+      "content": "Total cost is $100",
+      "error": null
+     },
+     "start_ms": 1764222520921.665,
+     "usage": null
+    },
+    {
+     "agent_id": "LangGraph_dfc9845e",
+     "end_ms": 1764222522670.036,
+     "error": null,
+     "id": "32a4dc1d-ba63-42ab-bb23-f098a046f4dd",
+     "kind": "llm",
+     "messages": [
+      {
+       "content": "You are a helpful assistant, user will ask you about their package. You should first check it's status. If status is ready for pickup you should check cost. The name of the user is Bob",
+       "role": "system"
+      },
+      {
+       "content": "What is the status of my package?",
+       "role": "user"
+      },
+      {
+       "content": "I'll help you check the status of your package. Since I know your name is Bob, I can check this right away.",
+       "role": "assistant",
+       "tool_calls": [
+        {
+         "arguments": {
+          "user_name": "Bob"
+         },
+         "id": "toolu_bdrk_011oma5ruJ3b7zaNqQsjQ5Cy",
+         "name": "check_package_status"
+        }
+       ]
+      },
+      {
+       "content": "Package is ready for pickup",
+       "role": "tool",
+       "tool_call_id": "toolu_bdrk_011oma5ruJ3b7zaNqQsjQ5Cy"
+      },
+      {
+       "content": "Good news! Your package is ready for pickup. Since the package is ready, let me also check the total cost for you.",
+       "role": "assistant",
+       "tool_calls": [
+        {
+         "arguments": {},
+         "id": "toolu_bdrk_011b695ajE9AZsSLGEZ9xD7U",
+         "name": "calculate_price"
+        }
+       ]
+      },
+      {
+       "content": "Total cost is $100",
+       "role": "tool",
+       "tool_call_id": "toolu_bdrk_011b695ajE9AZsSLGEZ9xD7U"
+      }
+     ],
+     "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+     "parent_id": "443af897-8a98-45fa-957e-da78dde5e357",
+     "response": "To summarize:\n- Your package is ready for pickup\n- The total cost is $100\n\nIs there anything else you would like to know about your package?",
+     "start_ms": 1764222520929.556,
+     "tool_calls": [],
+     "usage": {
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "cost_usd": 0.002532,
+      "input_tokens": 654,
+      "output_tokens": 38
+     }
+    }
+   ]
+  }
+ ],
+ "warnings": []
+}

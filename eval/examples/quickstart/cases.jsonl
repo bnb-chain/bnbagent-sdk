@@ -1,0 +1,3 @@
+{"id": "fees", "input": "What are BNB Smart Chain gas fees paid in?", "output": "Gas fees on BNB Smart Chain are paid in BNB.", "expected": "BNB", "app_metrics": {"latency_ms": 820}}
+{"id": "blocks", "input": "How often are blocks produced?", "output": "Roughly every 3 seconds.", "expected": "3 seconds", "app_metrics": {"latency_ms": 640}}
+{"id": "approve", "input": "What does approve do?", "output": "It sends your tokens to the spender.", "expected": "allowance", "app_metrics": {"latency_ms": 1900}}

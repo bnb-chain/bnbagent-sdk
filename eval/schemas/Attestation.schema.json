@@ -1,0 +1,50 @@
+{
+  "$defs": {},
+  "$id": "urn:bnbagent-eval:schema:v1:Attestation",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "digest": {
+      "type": "string"
+    },
+    "domain": {
+      "default": {},
+      "type": "object"
+    },
+    "evaluator": {
+      "type": "string"
+    },
+    "expires_at": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "issued_at": {
+      "type": "integer"
+    },
+    "scheme": {
+      "enum": [
+        "eip712",
+        "eip191"
+      ]
+    },
+    "signature": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "scheme",
+    "evaluator",
+    "digest",
+    "signature",
+    "issued_at"
+  ],
+  "title": "Attestation",
+  "type": "object"
+}

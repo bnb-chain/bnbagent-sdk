@@ -1,0 +1,690 @@
+[
+ {
+  "scope": {
+   "name": "opentelemetry.instrumentation.botocore.bedrock-runtime",
+   "version": "0.54b1"
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "1587d1d6c8360b6f",
+  "parentSpanId": "d151ff144ab986b9",
+  "name": "chat apac.anthropic.claude-sonnet-4-20250514-v1:0",
+  "kind": "CLIENT",
+  "startTimeUnixNano": 1761971559946579971,
+  "endTimeUnixNano": 1761971563474417168,
+  "attributes": {
+   "gen_ai.request.model": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
+   "gen_ai.system": "aws.bedrock",
+   "gen_ai.usage.output_tokens": 134,
+   "gen_ai.operation.name": "chat",
+   "gen_ai.usage.input_tokens": 747,
+   "session.id": "session-0001"
+  },
+  "status": {
+   "code": "UNSET"
+  }
+ },
+ {
+  "scope": {
+   "name": "strands.telemetry.tracer",
+   "version": ""
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "d151ff144ab986b9",
+  "parentSpanId": "d5fef80efa0e085c",
+  "name": "chat",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971559944525472,
+  "endTimeUnixNano": 1761971563474885098,
+  "attributes": {
+   "gen_ai.usage.output_tokens": 134,
+   "gen_ai.operation.name": "chat",
+   "gen_ai.usage.input_tokens": 747,
+   "gen_ai.request.model": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
+   "session.id": "session-0001",
+   "gen_ai.system": "strands-agents"
+  },
+  "status": {
+   "code": "OK"
+  }
+ },
+ {
+  "scope": {
+   "name": "strands.telemetry.tracer",
+   "version": ""
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "d3b38b968499b805",
+  "parentSpanId": "08989a21966075be",
+  "name": "chat",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971563586591510,
+  "endTimeUnixNano": 1761971566059041820,
+  "attributes": {
+   "gen_ai.usage.output_tokens": 36,
+   "gen_ai.operation.name": "chat",
+   "gen_ai.usage.input_tokens": 81,
+   "gen_ai.request.model": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
+   "session.id": "session-0001",
+   "gen_ai.system": "strands-agents"
+  },
+  "status": {
+   "code": "OK"
+  }
+ },
+ {
+  "scope": {
+   "name": "strands.telemetry.tracer",
+   "version": ""
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "08989a21966075be",
+  "parentSpanId": "5216ca995eff8ee2",
+  "name": "execute_event_loop_cycle",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971563586502287,
+  "endTimeUnixNano": 1761971566125137278,
+  "attributes": {
+   "session.id": "session-0001"
+  },
+  "status": {
+   "code": "OK"
+  }
+ },
+ {
+  "scope": {
+   "name": "strands.telemetry.tracer",
+   "version": ""
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "5216ca995eff8ee2",
+  "parentSpanId": "6d76c599c3f2633a",
+  "name": "invoke_agent Strands Agents",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971563586261262,
+  "endTimeUnixNano": 1761971566161346345,
+  "attributes": {
+   "gen_ai.usage.output_tokens": 36,
+   "gen_ai.usage.cache_write_input_tokens": 0,
+   "gen_ai.agent.name": "Strands Agents",
+   "gen_ai.operation.name": "invoke_agent",
+   "gen_ai.usage.input_tokens": 81,
+   "gen_ai.request.model": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
+   "gen_ai.usage.cache_read_input_tokens": 0,
+   "session.id": "session-0001",
+   "gen_ai.system": "strands-agents"
+  },
+  "status": {
+   "code": "OK"
+  }
+ },
+ {
+  "scope": {
+   "name": "strands.telemetry.tracer",
+   "version": ""
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "6d76c599c3f2633a",
+  "parentSpanId": "d5fef80efa0e085c",
+  "name": "execute_tool hotel_booking_assistant",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971563581399182,
+  "endTimeUnixNano": 1761971566196684405,
+  "attributes": {
+   "gen_ai.tool.status": "success",
+   "gen_ai.tool.call.id": "tooluse_BIKC4_8YQvSRKJUqRCWMqg",
+   "gen_ai.operation.name": "execute_tool",
+   "gen_ai.tool.name": "hotel_booking_assistant",
+   "session.id": "session-0001",
+   "gen_ai.system": "strands-agents"
+  },
+  "status": {
+   "code": "OK"
+  }
+ },
+ {
+  "scope": {
+   "name": "strands.telemetry.tracer",
+   "version": ""
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "a17c85c4fcdf9bbe",
+  "parentSpanId": "1b6bff0ca926d128",
+  "name": "chat",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971563582931071,
+  "endTimeUnixNano": 1761971566636234558,
+  "attributes": {
+   "gen_ai.usage.output_tokens": 56,
+   "gen_ai.operation.name": "chat",
+   "gen_ai.usage.input_tokens": 87,
+   "gen_ai.request.model": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
+   "session.id": "session-0001",
+   "gen_ai.system": "strands-agents"
+  },
+  "status": {
+   "code": "OK"
+  }
+ },
+ {
+  "scope": {
+   "name": "strands.telemetry.tracer",
+   "version": ""
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "1b6bff0ca926d128",
+  "parentSpanId": "9e163066f56b24ee",
+  "name": "execute_event_loop_cycle",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971563582658595,
+  "endTimeUnixNano": 1761971566675745754,
+  "attributes": {
+   "session.id": "session-0001"
+  },
+  "status": {
+   "code": "OK"
+  }
+ },
+ {
+  "scope": {
+   "name": "strands.telemetry.tracer",
+   "version": ""
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "9e163066f56b24ee",
+  "parentSpanId": "39fd62dfabbeaa4f",
+  "name": "invoke_agent Strands Agents",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971563582398689,
+  "endTimeUnixNano": 1761971566714426385,
+  "attributes": {
+   "gen_ai.usage.output_tokens": 56,
+   "gen_ai.usage.cache_write_input_tokens": 0,
+   "gen_ai.agent.name": "Strands Agents",
+   "gen_ai.operation.name": "invoke_agent",
+   "gen_ai.usage.input_tokens": 87,
+   "gen_ai.request.model": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
+   "gen_ai.usage.cache_read_input_tokens": 0,
+   "session.id": "session-0001",
+   "gen_ai.system": "strands-agents"
+  },
+  "status": {
+   "code": "OK"
+  }
+ },
+ {
+  "scope": {
+   "name": "strands.telemetry.tracer",
+   "version": ""
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "39fd62dfabbeaa4f",
+  "parentSpanId": "d5fef80efa0e085c",
+  "name": "execute_tool flight_booking_assistant",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971563580966542,
+  "endTimeUnixNano": 1761971566749842492,
+  "attributes": {
+   "gen_ai.tool.status": "success",
+   "gen_ai.tool.call.id": "tooluse_W_at7iOtQdelVqsmMQ9NRA",
+   "gen_ai.operation.name": "execute_tool",
+   "gen_ai.tool.name": "flight_booking_assistant",
+   "session.id": "session-0001",
+   "gen_ai.system": "strands-agents"
+  },
+  "status": {
+   "code": "OK"
+  }
+ },
+ {
+  "scope": {
+   "name": "strands.telemetry.tracer",
+   "version": ""
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "d5fef80efa0e085c",
+  "parentSpanId": "b2d0841363cae6f6",
+  "name": "execute_event_loop_cycle",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971559944415368,
+  "endTimeUnixNano": 1761971566800471661,
+  "attributes": {
+   "session.id": "session-0001"
+  },
+  "status": {
+   "code": "OK"
+  }
+ },
+ {
+  "scope": {
+   "name": "strands.telemetry.tracer",
+   "version": ""
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "38c0ffc25c53a341",
+  "parentSpanId": "16899bcb79d60987",
+  "name": "chat",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971566834882927,
+  "endTimeUnixNano": 1761971570661743237,
+  "attributes": {
+   "gen_ai.usage.output_tokens": 109,
+   "gen_ai.operation.name": "chat",
+   "gen_ai.usage.input_tokens": 1036,
+   "gen_ai.request.model": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
+   "session.id": "session-0001",
+   "gen_ai.system": "strands-agents"
+  },
+  "status": {
+   "code": "OK"
+  }
+ },
+ {
+  "scope": {
+   "name": "strands.telemetry.tracer",
+   "version": ""
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "16899bcb79d60987",
+  "parentSpanId": "b2d0841363cae6f6",
+  "name": "execute_event_loop_cycle",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971566834685396,
+  "endTimeUnixNano": 1761971570695894802,
+  "attributes": {
+   "session.id": "session-0001"
+  },
+  "status": {
+   "code": "OK"
+  }
+ },
+ {
+  "scope": {
+   "name": "strands.telemetry.tracer",
+   "version": ""
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "b2d0841363cae6f6",
+  "parentSpanId": "d5dd22ac662a7b61",
+  "name": "invoke_agent Strands Agents",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971559943870957,
+  "endTimeUnixNano": 1761971570733005062,
+  "attributes": {
+   "gen_ai.usage.output_tokens": 243,
+   "gen_ai.usage.cache_write_input_tokens": 0,
+   "gen_ai.agent.name": "Strands Agents",
+   "gen_ai.operation.name": "invoke_agent",
+   "gen_ai.usage.input_tokens": 1783,
+   "gen_ai.request.model": "apac.anthropic.claude-sonnet-4-20250514-v1:0",
+   "gen_ai.usage.cache_read_input_tokens": 0,
+   "gen_ai.agent.tools": "[\"flight_booking_assistant\", \"hotel_booking_assistant\"]",
+   "session.id": "session-0001",
+   "gen_ai.system": "strands-agents"
+  },
+  "status": {
+   "code": "OK"
+  }
+ },
+ {
+  "scope": {
+   "name": "opentelemetry.instrumentation.starlette",
+   "version": "0.54b1"
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "d5dd22ac662a7b61",
+  "parentSpanId": "7a5a4fef4ca5b7a7",
+  "name": "POST /invocations",
+  "kind": "SERVER",
+  "startTimeUnixNano": 1761971559941918531,
+  "endTimeUnixNano": 1761971570762333620,
+  "attributes": {
+   "session.id": "session-0001"
+  },
+  "status": {
+   "code": "UNSET"
+  }
+ },
+ {
+  "scope": {
+   "name": "strands.telemetry.tracer"
+  },
+  "timeUnixNano": 1761971563474885098,
+  "body": {
+   "output": {
+    "messages": [
+     {
+      "content": {
+       "message": "[{\"text\": \"I'll help you with both your flight to Paris and hotel booking. Let me get information from both our flight and hotel specialists.\"}, {\"toolUse\": {\"toolUseId\": \"tooluse_W_at7iOtQdelVqsmMQ9NRA\", \"name\": \"flight_booking_assistant\", \"input\": {\"query\": \"I need to book a flight to Paris\"}}}, {\"toolUse\": {\"toolUseId\": \"tooluse_BIKC4_8YQvSRKJUqRCWMqg\", \"name\": \"hotel_booking_assistant\", \"input\": {\"query\": \"I need to find a hotel in Paris\"}}}]",
+       "finish_reason": "tool_use"
+      },
+      "role": "assistant"
+     }
+    ]
+   },
+   "input": {
+    "messages": [
+     {
+      "content": {
+       "content": "[{\"text\": \"I need to book a flight to Paris and find a hotel\"}]"
+      },
+      "role": "user"
+     }
+    ]
+   }
+  },
+  "attributes": {
+   "event.name": "strands.telemetry.tracer",
+   "session.id": "session-0001"
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "d151ff144ab986b9"
+ },
+ {
+  "scope": {
+   "name": "strands.telemetry.tracer"
+  },
+  "timeUnixNano": 1761971566059041820,
+  "body": {
+   "output": {
+    "messages": [
+     {
+      "content": {
+       "message": "[{\"text\": \"I'd be happy to help you find a hotel in Paris! \\n\\nWhat dates are you looking to stay, and how many guests will be in your party?\"}]",
+       "finish_reason": "end_turn"
+      },
+      "role": "assistant"
+     }
+    ]
+   },
+   "input": {
+    "messages": [
+     {
+      "content": {
+       "content": "[{\"text\": \"I need to find a hotel in Paris\"}]"
+      },
+      "role": "user"
+     }
+    ]
+   }
+  },
+  "attributes": {
+   "event.name": "strands.telemetry.tracer",
+   "session.id": "session-0001"
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "d3b38b968499b805"
+ },
+ {
+  "scope": {
+   "name": "strands.telemetry.tracer"
+  },
+  "timeUnixNano": 1761971566161346345,
+  "body": {
+   "output": {
+    "messages": [
+     {
+      "content": {
+       "message": "I'd be happy to help you find a hotel in Paris! \n\nWhat dates are you looking to stay, and how many guests will be in your party?\n",
+       "finish_reason": "end_turn"
+      },
+      "role": "assistant"
+     }
+    ]
+   },
+   "input": {
+    "messages": [
+     {
+      "content": "You are a hotel booking assistant. Help customers find hotels, make reservations, and answer questions about accommodations and amenities. \nProvide clear inform ...",
+      "role": "system"
+     },
+     {
+      "content": {
+       "content": "[{\"text\": \"I need to find a hotel in Paris\"}]"
+      },
+      "role": "user"
+     }
+    ]
+   }
+  },
+  "attributes": {
+   "event.name": "strands.telemetry.tracer",
+   "session.id": "session-0001"
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "5216ca995eff8ee2"
+ },
+ {
+  "scope": {
+   "name": "strands.telemetry.tracer"
+  },
+  "timeUnixNano": 1761971566196684405,
+  "body": {
+   "output": {
+    "messages": [
+     {
+      "content": {
+       "message": "[{\"text\": \"I'd be happy to help you find a hotel in Paris! \\n\\nWhat dates are you looking to stay, and how many guests will be in your party?\\n\"}]",
+       "id": "tooluse_BIKC4_8YQvSRKJUqRCWMqg"
+      },
+      "role": "assistant"
+     }
+    ]
+   },
+   "input": {
+    "messages": [
+     {
+      "content": {
+       "content": "{\"query\": \"I need to find a hotel in Paris\"}",
+       "role": "tool",
+       "id": "tooluse_BIKC4_8YQvSRKJUqRCWMqg"
+      },
+      "role": "tool"
+     }
+    ]
+   }
+  },
+  "attributes": {
+   "event.name": "strands.telemetry.tracer",
+   "session.id": "session-0001"
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "6d76c599c3f2633a"
+ },
+ {
+  "scope": {
+   "name": "strands.telemetry.tracer"
+  },
+  "timeUnixNano": 1761971566636234558,
+  "body": {
+   "output": {
+    "messages": [
+     {
+      "content": {
+       "message": "[{\"text\": \"I'd be happy to help you book a flight to Paris! \\n\\nTo find the best options for you, I need a couple of details:\\n1. Which city will you be departing from?\\n2. What dates are you looking to travel?\"}]",
+       "finish_reason": "end_turn"
+      },
+      "role": "assistant"
+     }
+    ]
+   },
+   "input": {
+    "messages": [
+     {
+      "content": {
+       "content": "[{\"text\": \"I need to book a flight to Paris\"}]"
+      },
+      "role": "user"
+     }
+    ]
+   }
+  },
+  "attributes": {
+   "event.name": "strands.telemetry.tracer",
+   "session.id": "session-0001"
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "a17c85c4fcdf9bbe"
+ },
+ {
+  "scope": {
+   "name": "strands.telemetry.tracer"
+  },
+  "timeUnixNano": 1761971566714426385,
+  "body": {
+   "output": {
+    "messages": [
+     {
+      "content": {
+       "message": "I'd be happy to help you book a flight to Paris! \n\nTo find the best options for you, I need a couple of details:\n1. Which city will you be departing from?\n2. What dates are you looking to travel?\n",
+       "finish_reason": "end_turn"
+      },
+      "role": "assistant"
+     }
+    ]
+   },
+   "input": {
+    "messages": [
+     {
+      "content": "You are a flight booking assistant. Help customers find flights, make reservations, and answer questions about airlines, routes, and travel policies. \nProvide c ...",
+      "role": "system"
+     },
+     {
+      "content": {
+       "content": "[{\"text\": \"I need to book a flight to Paris\"}]"
+      },
+      "role": "user"
+     }
+    ]
+   }
+  },
+  "attributes": {
+   "event.name": "strands.telemetry.tracer",
+   "session.id": "session-0001"
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "9e163066f56b24ee"
+ },
+ {
+  "scope": {
+   "name": "strands.telemetry.tracer"
+  },
+  "timeUnixNano": 1761971566749842492,
+  "body": {
+   "output": {
+    "messages": [
+     {
+      "content": {
+       "message": "[{\"text\": \"I'd be happy to help you book a flight to Paris! \\n\\nTo find the best options for you, I need a couple of details:\\n1. Which city will you be departing from?\\n2. What dates are you looking to travel?\\n\"}]",
+       "id": "tooluse_W_at7iOtQdelVqsmMQ9NRA"
+      },
+      "role": "assistant"
+     }
+    ]
+   },
+   "input": {
+    "messages": [
+     {
+      "content": {
+       "content": "{\"query\": \"I need to book a flight to Paris\"}",
+       "role": "tool",
+       "id": "tooluse_W_at7iOtQdelVqsmMQ9NRA"
+      },
+      "role": "tool"
+     }
+    ]
+   }
+  },
+  "attributes": {
+   "event.name": "strands.telemetry.tracer",
+   "session.id": "session-0001"
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "39fd62dfabbeaa4f"
+ },
+ {
+  "scope": {
+   "name": "strands.telemetry.tracer"
+  },
+  "timeUnixNano": 1761971570661743237,
+  "body": {
+   "output": {
+    "messages": [
+     {
+      "content": {
+       "content": "[{\"text\": \"I'll help you with both your flight to Paris and hotel booking. Let me get information from both our flight and hotel specialists.\"}, {\"toolUse\": {\"toolUseId\": \"tooluse_W_at7iOtQdelVqsmMQ9NRA\", \"name\": \"flight_booking_assistant\", \"input\": {\"query\": \"I need to book a flight to Paris\"}}}, {\"toolUse\": {\"toolUseId\": \"tooluse_BIKC4_8YQvSRKJUqRCWMqg\", \"name\": \"hotel_booking_assistant\", \"input\": {\"query\": \"I need to find a hotel in Paris\"}}}]"
+      },
+      "role": "assistant"
+     },
+     {
+      "content": {
+       "message": "[{\"text\": \"Great! I can help you with both your flight and hotel for Paris. To get you the best options, I need a bit more information:\\n\\n**For your flight:**\\n- What city will you be departing from?\\n- What are your travel dates?\\n\\n**For your hotel:**\\n- What are your check-in and check-out dates?\\n- How many guests will be staying?\\n\\nOnce I have these details, I can provide you with specific flight options and hotel recommendations for your Paris trip!\"}]",
+       "finish_reason": "end_turn"
+      },
+      "role": "assistant"
+     }
+    ]
+   },
+   "input": {
+    "messages": [
+     {
+      "content": {
+       "content": "[{\"text\": \"I need to book a flight to Paris and find a hotel\"}]"
+      },
+      "role": "user"
+     },
+     {
+      "content": {
+       "content": "[{\"toolResult\": {\"toolUseId\": \"tooluse_BIKC4_8YQvSRKJUqRCWMqg\", \"status\": \"success\", \"content\": [{\"text\": \"I'd be happy to help you find a hotel in Paris! \\n\\nWhat dates are you looking to stay, and how many guests will be in your party?\\n\"}]}}, {\"toolResult\": {\"toolUseId\": \"tooluse_W_at7iOtQdelVqsmMQ9NRA\", \"status\": \"success\", \"content\": [{\"text\": \"I'd be happy to help you book a flight to Paris! \\n\\nTo find the best options for you, I need a couple of details:\\n1. Which city will you be departing from?\\n2. What dates are you looking to travel?\\n\"}]}}]"
+      },
+      "role": "tool"
+     }
+    ]
+   }
+  },
+  "attributes": {
+   "event.name": "strands.telemetry.tracer",
+   "session.id": "session-0001"
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "38c0ffc25c53a341"
+ },
+ {
+  "scope": {
+   "name": "strands.telemetry.tracer"
+  },
+  "timeUnixNano": 1761971570733005062,
+  "body": {
+   "output": {
+    "messages": [
+     {
+      "content": {
+       "message": "Great! I can help you with both your flight and hotel for Paris. To get you the best options, I need a bit more information:\n\n**For your flight:**\n- What city will you be departing from?\n- What are your travel dates?\n\n**For your hotel:**\n- What are your check-in and check-out dates?\n- How many guests will be staying?\n\nOnce I have these details, I can provide you with specific flight options and hotel recommendations for your Paris trip!\n",
+       "finish_reason": "end_turn"
+      },
+      "role": "assistant"
+     }
+    ]
+   },
+   "input": {
+    "messages": [
+     {
+      "content": "You are a comprehensive travel planning assistant that coordinates between specialized tools:\n- For flight-related queries (bookings, schedules, airlines, route ...",
+      "role": "system"
+     },
+     {
+      "content": {
+       "content": "[{\"text\": \"I need to book a flight to Paris and find a hotel\"}]"
+      },
+      "role": "user"
+     }
+    ]
+   }
+  },
+  "attributes": {
+   "event.name": "strands.telemetry.tracer",
+   "session.id": "session-0001"
+  },
+  "traceId": "69058d674ca285967fcd15e71d7ef1d7",
+  "spanId": "b2d0841363cae6f6"
+ }
+]

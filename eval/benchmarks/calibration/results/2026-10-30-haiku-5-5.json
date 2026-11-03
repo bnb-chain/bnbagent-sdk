@@ -1,0 +1,170 @@
+{
+  "suite": "calibration",
+  "judge": {
+    "provider": "bedrock",
+    "model": "global.anthropic.claude-haiku-5-5",
+    "temperature": 0.0,
+    "max_tokens": 2048,
+    "samples": 1,
+    "base_url": null,
+    "region": null,
+    "extra": {}
+  },
+  "cases": 16,
+  "min_kappa": 0.6,
+  "passed": false,
+  "failures": [
+    "quality.relevance: kappa 0.4615 < 0.6"
+  ],
+  "judge_errors": {},
+  "metrics": {
+    "rag.faithfulness": {
+      "score_type": "binary",
+      "n_compared": 8,
+      "mae": 0.0,
+      "cohens_kappa": 1.0,
+      "weighted_kappa": null,
+      "mcc": 1.0,
+      "accuracy": 1.0,
+      "spearman": 1.0,
+      "decision_agreement": 1.0,
+      "fail_precision": 1.0,
+      "fail_recall": 1.0,
+      "fail_f1": 1.0,
+      "per_class_mae": {
+        "mae_fail": 0.0,
+        "mae_pass": 0.0
+      },
+      "confusion": {
+        "labels": [
+          "fail",
+          "pass"
+        ],
+        "matrix": [
+          [
+            4,
+            0
+          ],
+          [
+            0,
+            4
+          ]
+        ]
+      },
+      "missing_candidate": 0,
+      "decision_kappa": 1.0,
+      "labels_binary": true,
+      "gate_kappa": 1.0
+    },
+    "quality.relevance": {
+      "score_type": "ordinal",
+      "n_compared": 14,
+      "mae": 0.2321,
+      "cohens_kappa": 0.4262,
+      "weighted_kappa": 0.4967,
+      "mcc": null,
+      "accuracy": 0.6429,
+      "spearman": 0.6702,
+      "decision_agreement": 0.7143,
+      "fail_precision": 0.5,
+      "fail_recall": 1.0,
+      "fail_f1": 0.6667,
+      "per_class_mae": {
+        "mae_fail": 0.0,
+        "mae_pass": 0.325
+      },
+      "confusion": {
+        "labels": [
+          "0.0",
+          "0.5",
+          "0.75",
+          "1.0"
+        ],
+        "matrix": [
+          [
+            4,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            2,
+            2,
+            1,
+            5
+          ]
+        ]
+      },
+      "missing_candidate": 0,
+      "decision_kappa": 0.4615,
+      "labels_binary": true,
+      "gate_kappa": 0.4615
+    },
+    "quality.helpfulness": {
+      "score_type": "ordinal",
+      "n_compared": 14,
+      "mae": 0.1071,
+      "cohens_kappa": 0.3636,
+      "weighted_kappa": 0.5333,
+      "mcc": null,
+      "accuracy": 0.5714,
+      "spearman": 1.0,
+      "decision_agreement": 1.0,
+      "fail_precision": 1.0,
+      "fail_recall": 1.0,
+      "fail_f1": 1.0,
+      "per_class_mae": {
+        "mae_fail": 0.0,
+        "mae_pass": 0.25
+      },
+      "confusion": {
+        "labels": [
+          "0.0",
+          "0.75",
+          "1.0"
+        ],
+        "matrix": [
+          [
+            8,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            6,
+            0
+          ]
+        ]
+      },
+      "missing_candidate": 0,
+      "decision_kappa": 1.0,
+      "labels_binary": true,
+      "gate_kappa": 1.0
+    }
+  },
+  "cost": {
+    "model": "global.anthropic.claude-haiku-5-5",
+    "calls": 44,
+    "input_tokens": 91711,
+    "output_tokens": 11663,
+    "usd": null
+  },
+  "injection": null
+}

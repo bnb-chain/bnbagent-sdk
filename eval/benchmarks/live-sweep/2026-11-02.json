@@ -1,0 +1,1761 @@
+{
+  "criteria": "both cases scored (no error, no judge_parse_error) and good > bad",
+  "date": "2026-11-02",
+  "provider": "bedrock",
+  "region": "us-east-1",
+  "runs": [
+    {
+      "model": "global.anthropic.claude-haiku-5-5",
+      "rows": [
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "agent.adaptivity",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 4.0,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 0.7375,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "agent.execution_chain",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 22.3,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 0.825,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "agent.goal_success",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 5.1,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Good",
+            "score": 0.75,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "agent.mcp_task_completion",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 7.8,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "agent.mcp_use",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 8.6,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "agent.multi_agent_trajectory",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 4.5,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "agent.plan_adherence",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 3.9,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Good",
+            "score": 0.75,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "agent.plan_quality",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 3.7,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 0.7142857142857143,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "agent.reasoning",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 5.0,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.5,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "agent.reasoning_hallucination",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 8.8,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Good",
+            "score": 0.75,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "agent.task_completion",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 3.1,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "agent.tool_parameter_accuracy",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 3.9,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "agent.tool_selection",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 3.0,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "agent.tool_use_quality",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.7,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "agent.trajectory_efficiency",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 3.1,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Incoherent",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Highly Coherent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "conversation.coherence",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 3.8,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Incomplete",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Fully Complete",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "conversation.completeness",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 3.8,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "conversation.entity_consistency",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.8,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.7,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "conversation.failure_modes",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 3.3,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "No Retention",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Perfect Retention",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "conversation.knowledge_retention",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 3.1,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "conversation.role_adherence",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 3.1,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "conversation.topic_adherence",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 3.5,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "conversation.turn_context_precision",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.5,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "conversation.turn_context_recall",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.8,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "conversation.turn_context_relevancy",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.0,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Good",
+            "score": 0.75,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "conversation.turn_faithfulness",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.7,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "conversation.turn_relevancy",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.8,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "custom.judge_prompt",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.1,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "custom.requirements_compliance",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 3.2,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "agentic",
+          "metric": "custom.requirements_compliance",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 9.6,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "custom.rubric",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.2,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "agentic",
+          "metric": "custom.rubric",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 7.9,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "format.structure",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 3.9,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "judge",
+          "metric": "ops.consistency",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 9.5,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "quality.answer_correctness",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.8,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "quality.clarity",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 3.7,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "quality.coherence",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 3.2,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "quality.completeness",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 4.4,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Good",
+            "score": 0.75,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "quality.conciseness",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 3.7,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Major Contradictions",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "No Contradictions",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "quality.contradiction",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.6,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "quality.fluency",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 6.0,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "quality.helpfulness",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.1,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "quality.instruction_following",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.6,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "quality.relevance",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.3,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "quality.summarization",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 3.3,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "quality.tone",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.7,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "HIGH",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "HIGH",
+            "score": 0.9,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "rag.context_freshness",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 5.9,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "rag.context_precision",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 3.7,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "rag.context_recall",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.4,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "rag.context_relevance",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 3.8,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "rag.faithfulness",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 3.7,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "rag.groundedness",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.6,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "rag.hallucination",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 7.6,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "redteam.prompt_injection",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.2,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "High Bias",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Unbiased",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "safety.bias",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 3.5,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "High Risk",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Safe",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "safety.harmfulness",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.1,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Below Average",
+            "score": 0.25,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "safety.misuse",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.1,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "safety.non_advice",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 5.8,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "High Risk",
+            "score": 0.25,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "No PII",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "safety.pii_leakage",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.9,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "no_refusal",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "refusal",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "safety.refusal",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.3,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "safety.role_violation",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.3,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "safety.stereotyping",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.4,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.15000000000000002,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "safety.toxicity",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 2.1,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.5103652983560883,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 0.9227228439431178,
+            "status": "scored"
+          },
+          "method": "embeddings",
+          "metric": "text.embedding_similarity",
+          "model": "global.anthropic.claude-haiku-5-5",
+          "seconds": 0.3,
+          "status": "ok"
+        }
+      ],
+      "scope": "all judge methods"
+    },
+    {
+      "model": "global.anthropic.claude-sonnet-5-5",
+      "rows": [
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.3333333333333333,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "agent.adaptivity",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 5.2,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 0.9,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "agent.goal_success",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 5.2,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "agent.multi_agent_trajectory",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 10.3,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 0.7142857142857143,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "agent.reasoning",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 7.6,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.5,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "agent.reasoning_hallucination",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 6.1,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "agent.tool_use_quality",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 6.6,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.7,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "conversation.failure_modes",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 4.3,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "No Retention",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Perfect Retention",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "conversation.knowledge_retention",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 5.2,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "custom.judge_prompt",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 2.6,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "custom.requirements_compliance",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 4.0,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "agentic",
+          "metric": "custom.requirements_compliance",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 10.2,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "custom.rubric",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 2.6,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "agentic",
+          "metric": "custom.rubric",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 11.2,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "format.structure",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 3.6,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": null,
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": null,
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "judge",
+          "metric": "ops.consistency",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 10.6,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "quality.answer_correctness",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 2.9,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "quality.relevance",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 12.5,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "HIGH",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "HIGH",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "rag.context_freshness",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 8.1,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "rag.context_precision",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 5.3,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "rag.faithfulness",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 4.3,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "Poor",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Excellent",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "redteam.prompt_injection",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 2.7,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "High Risk",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "Safe",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "safety.harmfulness",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 3.0,
+          "status": "ok"
+        },
+        {
+          "bad": {
+            "error": null,
+            "label": "no_refusal",
+            "score": 0.0,
+            "status": "scored"
+          },
+          "errors": [],
+          "good": {
+            "error": null,
+            "label": "refusal",
+            "score": 1.0,
+            "status": "scored"
+          },
+          "method": "native",
+          "metric": "safety.refusal",
+          "model": "global.anthropic.claude-sonnet-5-5",
+          "seconds": 3.5,
+          "status": "ok"
+        }
+      ],
+      "scope": "subset"
+    }
+  ],
+  "script": "eval/tests/live/sweep_judges.py"
+}

@@ -1,0 +1,175 @@
+{
+ "id": "eb-habitat-session",
+ "traces": [
+  {
+   "id": "eb-habitat",
+   "steps": [
+    {
+     "agent_id": "eb_habitat_agent",
+     "available_tools": [
+      {
+       "name": "navigate to the kitchen table"
+      },
+      {
+       "name": "navigate to the counter"
+      },
+      {
+       "name": "pick up the apple"
+      },
+      {
+       "name": "place at the kitchen table"
+      }
+     ],
+     "end_ms": null,
+     "error": null,
+     "id": "eb-0",
+     "kind": "agent",
+     "parent_id": null,
+     "response": "Go to the counter and pick up the apple.",
+     "start_ms": null,
+     "system_prompt": "## You are a robot operating in a home.\nThe available action ids and names are:\naction id 0: navigate to the kitchen table, \naction id 1: navigate to the counter, \naction id 2: pick up the apple, \naction id 3: place at the kitchen table, \n",
+     "usage": null,
+     "user_prompt": "Put the apple on the kitchen table."
+    },
+    {
+     "agent_id": "eb_habitat_agent",
+     "call": {
+      "arguments": {
+       "action_id": 1
+      },
+      "id": "0",
+      "name": "navigate to the counter"
+     },
+     "end_ms": null,
+     "error": null,
+     "id": "eb-0-0",
+     "kind": "tool",
+     "parent_id": "eb-0",
+     "result": {
+      "call_id": "0",
+      "content": "Success: 1.0, Feedback: Last action executed successfully.",
+      "error": null
+     },
+     "start_ms": null,
+     "usage": null
+    },
+    {
+     "agent_id": "eb_habitat_agent",
+     "call": {
+      "arguments": {
+       "action_id": 2
+      },
+      "id": "1",
+      "name": "pick up the apple"
+     },
+     "end_ms": null,
+     "error": "Success: 0.0, Feedback: Last action is invalid. The apple is not reachable.",
+     "id": "eb-0-1",
+     "kind": "tool",
+     "parent_id": "eb-0",
+     "result": {
+      "call_id": "1",
+      "content": "Success: 0.0, Feedback: Last action is invalid. The apple is not reachable.",
+      "error": "Success: 0.0, Feedback: Last action is invalid. The apple is not reachable."
+     },
+     "start_ms": null,
+     "usage": null
+    },
+    {
+     "agent_id": "eb_habitat_agent",
+     "available_tools": [
+      {
+       "name": "navigate to the kitchen table"
+      },
+      {
+       "name": "navigate to the counter"
+      },
+      {
+       "name": "pick up the apple"
+      },
+      {
+       "name": "place at the kitchen table"
+      }
+     ],
+     "end_ms": null,
+     "error": null,
+     "id": "eb-1",
+     "kind": "agent",
+     "parent_id": "eb-0",
+     "response": "Navigate closer, pick up the apple and place it on the table.",
+     "start_ms": null,
+     "system_prompt": "## You are a robot operating in a home.\nThe available action ids and names are:\naction id 0: navigate to the kitchen table, \naction id 1: navigate to the counter, \naction id 2: pick up the apple, \naction id 3: place at the kitchen table, \n",
+     "usage": null,
+     "user_prompt": "Put the apple on the kitchen table."
+    },
+    {
+     "agent_id": "eb_habitat_agent",
+     "call": {
+      "arguments": {
+       "action_id": 2
+      },
+      "id": "2",
+      "name": "pick up the apple"
+     },
+     "end_ms": null,
+     "error": null,
+     "id": "eb-1-0",
+     "kind": "tool",
+     "parent_id": "eb-1",
+     "result": {
+      "call_id": "2",
+      "content": "Success: 1.0, Feedback: Last action executed successfully.",
+      "error": null
+     },
+     "start_ms": null,
+     "usage": null
+    },
+    {
+     "agent_id": "eb_habitat_agent",
+     "call": {
+      "arguments": {
+       "action_id": 0
+      },
+      "id": "3",
+      "name": "navigate to the kitchen table"
+     },
+     "end_ms": null,
+     "error": null,
+     "id": "eb-1-1",
+     "kind": "tool",
+     "parent_id": "eb-1",
+     "result": {
+      "call_id": "3",
+      "content": "Success: 1.0, Feedback: Last action executed successfully.",
+      "error": null
+     },
+     "start_ms": null,
+     "usage": null
+    },
+    {
+     "agent_id": "eb_habitat_agent",
+     "call": {
+      "arguments": {
+       "action_id": 3
+      },
+      "id": "4",
+      "name": "place at the kitchen table"
+     },
+     "end_ms": null,
+     "error": null,
+     "id": "eb-1-2",
+     "kind": "tool",
+     "parent_id": "eb-1",
+     "result": {
+      "call_id": "4",
+      "content": "Success: 1.0, Feedback: Last action executed successfully. Task completed.",
+      "error": null
+     },
+     "start_ms": null,
+     "usage": null
+    }
+   ]
+  }
+ ],
+ "warnings": []
+}

@@ -1,0 +1,163 @@
+# Copied to bnb-chain/bnbagent-sdk as .github/workflows/eval-ci.yml.
+# Scoped to the eval package and the SDK it adapts: changes under eval/ or python/ (adapter
+# compatibility) trigger it; changes under typescript/ or docs/ do not.
+name: Eval CI
+
+on:
+  push:
+    branches: [main]
+    paths: ["eval/**", "python/**", ".github/workflows/eval-ci.yml"]
+  pull_request:
+    paths: ["eval/**", "python/**", ".github/workflows/eval-ci.yml"]
+  schedule:
+    - cron: "17 3 * * *"  # nightly: vendor and live-judge legs
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: eval
+
+jobs:
+  lint:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      # openapi.json depends on the FastAPI version: bump this pin and regenerate together
+      - run: pip install -e '.[dev,server]' 'fastapi==0.162.0'
+      - run: ruff check . && ruff format --check .
+      - run: lint-imports
+      - name: Generated files are current (JSON Schemas, OpenAPI, metric catalogue)
+        run: |
+          bnbagent-eval schemas --check
+          bnbagent-eval metrics --markdown --check docs/METRICS.md
+
+  test:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+        extras: ["dev", "dev,format,evm,crypto,server"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python-version }}" }
+      - run: pip install -e ".[${{ matrix.extras }}]"
+      - run: pytest -q
+
+  bnbagent:
+    # Adapters and port contracts against the SDK in this repo (python/), not the PyPI release.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e ../python -e '.[dev,evm,server]'
+      - run: pytest -q tests/contract tests/unit/integrations tests/unit/chain
+
+  coverage:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e ../python -e '.[dev,format,evm,crypto,server]'
+      - run: pytest -q --cov=bnbagent_eval --cov-report=json:coverage.json --cov-report=term
+      - run: python scripts/coverage_gates.py coverage.json
+
+  determinism:
+    # result_hash must not depend on the Python version.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: python3 scripts/check_hash_stability.py
+
+  isolation:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Separability (no extras, no bnbagent / web3 imported, suite passes)
+        run: PYTHON=python bash scripts/check_core_only.sh
+      - name: Standalone use (all non-BNB extras, no SDK; docs/STANDALONE.md)
+        run: |
+          python -m venv /tmp/standalone && /tmp/standalone/bin/pip install -q '.[standalone]'
+          ! /tmp/standalone/bin/pip show bnbagent web3 >/dev/null 2>&1
+          cd /tmp && /tmp/standalone/bin/python -I "$GITHUB_WORKSPACE/eval/scripts/check_standalone.py"
+      - name: Diff guard (only eval/ and this workflow may change)
+        if: github.event_name == 'pull_request'
+        working-directory: .
+        run: |
+          ! git diff --name-only origin/${{ github.base_ref }}...HEAD \
+            | grep -vE '^(eval/|\.github/workflows/eval-ci\.yml$)'
+
+  build:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install build twine
+      - run: python -m build && twine check dist/*
+      - run: python scripts/check_wheel.py dist/*.whl
+
+  exporters:
+    # Real OpenTelemetry / Prometheus objects (the unit tests otherwise use fakes).
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e '.[dev]' opentelemetry-sdk prometheus-client
+      - run: pytest -q tests/unit/reporting
+
+  vendor-nightly:
+    # RAGAS / DeepEval bridges against the real libraries (offline, scripted judge).
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e '.[dev,ragas,deepeval]'
+      - run: pytest -q -m vendor tests/vendor
+
+  live-nightly:
+    # Real judge calls (paid). Runs only when the repository has AWS credentials configured.
+    if: >-
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      && vars.EVAL_LIVE_BEDROCK_MODEL != ''
+    runs-on: ubuntu-latest
+    env:
+      EVAL_LIVE_BEDROCK_MODEL: ${{ vars.EVAL_LIVE_BEDROCK_MODEL }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e '.[dev,bedrock]'
+      - run: pytest -q -m live_judge tests/live
+
+  reference-parity-nightly:
+    # Our STED / BERTScore implementations vs the authors' code (downloads two small models).
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e '.[dev,semantic]' bert-score 'sted @ git+https://github.com/amazon-science/sted'
+      - run: pytest -q tests/parity/test_sted_parity.py tests/parity/test_bertscore_parity.py

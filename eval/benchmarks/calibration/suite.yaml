@@ -1,0 +1,7 @@
+# Judge calibration suite: judge metrics checked against human labels in cases.jsonl.
+name: calibration
+version: "1"
+metrics:
+  - id: rag.faithfulness
+  - id: quality.relevance
+  - id: quality.helpfulness

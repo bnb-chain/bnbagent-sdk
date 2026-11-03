@@ -1,0 +1,274 @@
+{
+  "$defs": {
+    "AgentSubject": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "type": "integer"
+        },
+        "agent_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "chain_id": {
+          "type": "integer"
+        },
+        "registry": {
+          "type": "string"
+        },
+        "type": {
+          "const": "agent",
+          "default": "agent"
+        }
+      },
+      "required": [
+        "chain_id",
+        "registry",
+        "agent_id"
+      ],
+      "title": "AgentSubject",
+      "type": "object"
+    },
+    "Attestation": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "type": "string"
+        },
+        "domain": {
+          "default": {},
+          "type": "object"
+        },
+        "evaluator": {
+          "type": "string"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "issued_at": {
+          "type": "integer"
+        },
+        "scheme": {
+          "enum": [
+            "eip712",
+            "eip191"
+          ]
+        },
+        "signature": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scheme",
+        "evaluator",
+        "digest",
+        "signature",
+        "issued_at"
+      ],
+      "title": "Attestation",
+      "type": "object"
+    },
+    "JobSubject": {
+      "additionalProperties": false,
+      "properties": {
+        "chain_id": {
+          "type": "integer"
+        },
+        "commerce": {
+          "type": "string"
+        },
+        "job_id": {
+          "type": "integer"
+        },
+        "output_hash": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "type": {
+          "const": "job",
+          "default": "job"
+        }
+      },
+      "required": [
+        "chain_id",
+        "commerce",
+        "job_id",
+        "provider",
+        "output_hash"
+      ],
+      "title": "JobSubject",
+      "type": "object"
+    },
+    "Verdict": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reasons": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "pass",
+            "fail",
+            "inconclusive",
+            "pending_human"
+          ]
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "Verdict",
+      "type": "object"
+    }
+  },
+  "$id": "urn:bnbagent-eval:schema:v1:EvalEvidenceV1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "description": "Evaluation evidence in DeliverableManifest.metadata['eval'] (ERC-8183).",
+  "properties": {
+    "aggregate": {
+      "properties": {
+        "cases": {
+          "type": "integer"
+        },
+        "error_rate": {
+          "type": "number"
+        },
+        "pass_rate": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "score": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "attestation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Attestation"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cases": {
+      "items": {
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "report": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "properties": {
+            "hash": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "uri": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "uri",
+            "hash"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "response_hash": {
+      "type": "string"
+    },
+    "result_hash": {
+      "type": "string"
+    },
+    "schema": {
+      "const": "bnbagent-eval/evidence/v1"
+    },
+    "stage": {
+      "enum": [
+        "dev",
+        "registration",
+        "pre_submit",
+        "review",
+        "vote"
+      ]
+    },
+    "subject": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/JobSubject"
+        },
+        {
+          "$ref": "#/$defs/AgentSubject"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "suite_hash": {
+      "type": "string"
+    },
+    "verdict": {
+      "$ref": "#/$defs/Verdict"
+    },
+    "voter_summary": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema",
+    "suite_hash",
+    "result_hash",
+    "verdict"
+  ],
+  "title": "EvalEvidenceV1",
+  "type": "object"
+}

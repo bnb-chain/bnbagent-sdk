@@ -1,0 +1,93 @@
+{
+ "task_id": 7,
+ "reward": 1.0,
+ "trial": 0,
+ "info": {
+  "task": {
+   "user_id": "user_0001",
+   "instruction": "Cancel reservation ABC123."
+  }
+ },
+ "traj": [
+  {
+   "role": "system",
+   "content": "# Airline Agent Policy\nYou can help users cancel reservations."
+  },
+  {
+   "role": "user",
+   "content": "Hi, I want to cancel my reservation ABC123."
+  },
+  {
+   "role": "assistant",
+   "content": "Sure. Could you confirm your user id?"
+  },
+  {
+   "role": "user",
+   "content": "It is user_0001."
+  },
+  {
+   "role": "assistant",
+   "content": null,
+   "tool_calls": [
+    {
+     "id": "call_a",
+     "type": "function",
+     "function": {
+      "name": "get_reservation_details",
+      "arguments": "{\"reservation_id\": \"ABC123\"}"
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_a",
+   "name": "get_reservation_details",
+   "content": "{\"reservation_id\": \"ABC123\", \"user_id\": \"user_0001\", \"status\": \"active\"}"
+  },
+  {
+   "role": "assistant",
+   "content": "Cancelling it now.",
+   "tool_calls": [
+    {
+     "id": "call_b",
+     "type": "function",
+     "function": {
+      "name": "cancel_reservation",
+      "arguments": "{\"reservation_id\": \"ABC123\"}"
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_b",
+   "name": "cancel_reservation",
+   "content": "Error: reservation cannot be cancelled online"
+  },
+  {
+   "role": "assistant",
+   "content": "I could not cancel it online; let me transfer you.",
+   "tool_calls": [
+    {
+     "id": "call_c",
+     "type": "function",
+     "function": {
+      "name": "transfer_to_human_agents",
+      "arguments": "{\"summary\": \"Cancel ABC123\"}"
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "call_c",
+   "name": "transfer_to_human_agents",
+   "content": "Transfer successful"
+  },
+  {
+   "role": "assistant",
+   "content": "You are being transferred to a human agent."
+  }
+ ]
+}

@@ -1,0 +1,761 @@
+[
+ {
+  "id": "32a4dc1d-ba63-42ab-bb23-f098a046f4dd",
+  "name": "ChatBedrock",
+  "run_type": "llm",
+  "start_time": "2025-11-27 05:48:40.929556",
+  "end_time": "2025-11-27 05:48:42.670036",
+  "extra": {
+   "metadata": {
+    "langgraph_step": 5,
+    "langgraph_node": "model",
+    "checkpoint_ns": "model:88b28fe0-c3e7-39e5-ea01-d4cb454def6a",
+    "ls_model_name": "anthropic.claude-3-5-sonnet-20241022-v2:0"
+   },
+   "invocation_params": {
+    "model_id": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "tools": [
+     {
+      "description": "Checks status of user package",
+      "input_schema": {
+       "properties": {
+        "user_name": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "user_name"
+       ],
+       "type": "object"
+      },
+      "name": "check_package_status"
+     },
+     {
+      "description": "Total cost of user package",
+      "input_schema": {
+       "properties": {},
+       "type": "object"
+      },
+      "name": "calculate_price"
+     }
+    ]
+   }
+  },
+  "error": null,
+  "inputs": {
+   "messages": [
+    [
+     {
+      "id": [
+       "langchain",
+       "schema",
+       "messages",
+       "SystemMessage"
+      ],
+      "kwargs": {
+       "content": "You are a helpful assistant, user will ask you about their package. You should first check it's status. If status is ready for pickup you should check cost. The name of the user is Bob",
+       "type": "system"
+      },
+      "lc": 1,
+      "type": "constructor"
+     },
+     {
+      "id": [
+       "langchain",
+       "schema",
+       "messages",
+       "HumanMessage"
+      ],
+      "kwargs": {
+       "content": "What is the status of my package?",
+       "id": "64a4880e-7a31-4826-9f52-ea7496f4a147",
+       "type": "human"
+      },
+      "lc": 1,
+      "type": "constructor"
+     },
+     {
+      "id": [
+       "langchain",
+       "schema",
+       "messages",
+       "AIMessage"
+      ],
+      "kwargs": {
+       "content": "I'll help you check the status of your package. Since I know your name is Bob, I can check this right away.",
+       "id": "lc_run--73b63db4-a578-4203-bebe-0415e8f79149-0",
+       "tool_calls": [
+        {
+         "args": {
+          "user_name": "Bob"
+         },
+         "id": "toolu_bdrk_011oma5ruJ3b7zaNqQsjQ5Cy",
+         "name": "check_package_status",
+         "type": "tool_call"
+        }
+       ],
+       "type": "ai"
+      },
+      "lc": 1,
+      "type": "constructor"
+     },
+     {
+      "id": [
+       "langchain",
+       "schema",
+       "messages",
+       "ToolMessage"
+      ],
+      "kwargs": {
+       "content": "Package is ready for pickup",
+       "id": "0165258d-41ec-48f7-a9b1-894bf85b070b",
+       "name": "check_package_status",
+       "status": "success",
+       "tool_call_id": "toolu_bdrk_011oma5ruJ3b7zaNqQsjQ5Cy",
+       "type": "tool"
+      },
+      "lc": 1,
+      "type": "constructor"
+     },
+     {
+      "id": [
+       "langchain",
+       "schema",
+       "messages",
+       "AIMessage"
+      ],
+      "kwargs": {
+       "content": "Good news! Your package is ready for pickup. Since the package is ready, let me also check the total cost for you.",
+       "id": "lc_run--dd4521f0-6e5f-4eea-a969-e9b0bbd5c381-0",
+       "tool_calls": [
+        {
+         "args": {},
+         "id": "toolu_bdrk_011b695ajE9AZsSLGEZ9xD7U",
+         "name": "calculate_price",
+         "type": "tool_call"
+        }
+       ],
+       "type": "ai"
+      },
+      "lc": 1,
+      "type": "constructor"
+     },
+     {
+      "id": [
+       "langchain",
+       "schema",
+       "messages",
+       "ToolMessage"
+      ],
+      "kwargs": {
+       "content": "Total cost is $100",
+       "id": "daeecd67-36bf-4336-aeef-e6b7dc5aade9",
+       "name": "calculate_price",
+       "status": "success",
+       "tool_call_id": "toolu_bdrk_011b695ajE9AZsSLGEZ9xD7U",
+       "type": "tool"
+      },
+      "lc": 1,
+      "type": "constructor"
+     }
+    ]
+   ]
+  },
+  "outputs": {
+   "generations": [
+    [
+     {
+      "text": "To summarize:\n- Your package is ready for pickup\n- The total cost is $100\n\nIs there anything else you would like to know about your package?",
+      "message": {
+       "kwargs": {
+        "content": "To summarize:\n- Your package is ready for pickup\n- The total cost is $100\n\nIs there anything else you would like to know about your package?",
+        "id": "lc_run--32a4dc1d-ba63-42ab-bb23-f098a046f4dd-0",
+        "tool_calls": [],
+        "type": "ai"
+       }
+      }
+     }
+    ]
+   ],
+   "llm_output": {
+    "model_id": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "stop_reason": "end_turn",
+    "usage": {
+     "cache_read_input_tokens": 0,
+     "cache_write_input_tokens": 0,
+     "completion_tokens": 38,
+     "prompt_tokens": 654,
+     "total_tokens": 692
+    }
+   },
+   "run": null,
+   "type": "LLMResult"
+  },
+  "parent_run_id": "ff801445-db1d-47ed-b3e6-e2bec4756f7f",
+  "trace_id": "443af897-8a98-45fa-957e-da78dde5e357",
+  "session_id": "00000000-0000-4000-8000-000000000001",
+  "status": "success",
+  "prompt_tokens": 654,
+  "completion_tokens": 38,
+  "total_cost": "0.002532"
+ },
+ {
+  "id": "ff801445-db1d-47ed-b3e6-e2bec4756f7f",
+  "name": "model",
+  "run_type": "chain",
+  "start_time": "2025-11-27 05:48:40.924801",
+  "end_time": "2025-11-27 05:48:42.670752",
+  "extra": {
+   "metadata": {
+    "langgraph_step": 5,
+    "langgraph_node": "model"
+   }
+  },
+  "error": null,
+  "inputs": {},
+  "outputs": {},
+  "parent_run_id": "443af897-8a98-45fa-957e-da78dde5e357",
+  "trace_id": "443af897-8a98-45fa-957e-da78dde5e357",
+  "session_id": "00000000-0000-4000-8000-000000000001",
+  "status": "success",
+  "prompt_tokens": 654,
+  "completion_tokens": 38,
+  "total_cost": "0.002532"
+ },
+ {
+  "id": "ad2d8a0a-6c01-4a00-9259-5499feff99d8",
+  "name": "calculate_price",
+  "run_type": "tool",
+  "start_time": "2025-11-27 05:48:40.921665",
+  "end_time": "2025-11-27 05:48:40.923117",
+  "extra": {
+   "metadata": {
+    "langgraph_step": 4,
+    "langgraph_node": "tools",
+    "checkpoint_ns": "tools:6c31d722-d731-ea61-9963-bcc610997e0f"
+   }
+  },
+  "error": null,
+  "inputs": {
+   "input": "{}"
+  },
+  "outputs": {
+   "output": {
+    "content": "Total cost is $100",
+    "name": "calculate_price",
+    "status": "success",
+    "tool_call_id": "toolu_bdrk_011b695ajE9AZsSLGEZ9xD7U",
+    "type": "tool"
+   }
+  },
+  "parent_run_id": "2d9d1ae2-b9be-4f40-9d93-a517f1e69d99",
+  "trace_id": "443af897-8a98-45fa-957e-da78dde5e357",
+  "session_id": "00000000-0000-4000-8000-000000000001",
+  "status": "success",
+  "prompt_tokens": 0,
+  "completion_tokens": 0,
+  "total_cost": null
+ },
+ {
+  "id": "2d9d1ae2-b9be-4f40-9d93-a517f1e69d99",
+  "name": "tools",
+  "run_type": "chain",
+  "start_time": "2025-11-27 05:48:40.920092",
+  "end_time": "2025-11-27 05:48:40.923978",
+  "extra": {
+   "metadata": {
+    "langgraph_step": 4,
+    "langgraph_node": "tools"
+   }
+  },
+  "error": null,
+  "inputs": {},
+  "outputs": {},
+  "parent_run_id": "443af897-8a98-45fa-957e-da78dde5e357",
+  "trace_id": "443af897-8a98-45fa-957e-da78dde5e357",
+  "session_id": "00000000-0000-4000-8000-000000000001",
+  "status": "success",
+  "prompt_tokens": 0,
+  "completion_tokens": 0,
+  "total_cost": null
+ },
+ {
+  "id": "dd4521f0-6e5f-4eea-a969-e9b0bbd5c381",
+  "name": "ChatBedrock",
+  "run_type": "llm",
+  "start_time": "2025-11-27 05:48:38.984603",
+  "end_time": "2025-11-27 05:48:40.918452",
+  "extra": {
+   "metadata": {
+    "langgraph_step": 3,
+    "langgraph_node": "model",
+    "checkpoint_ns": "model:b5ea30a2-6fb2-e83d-2fd8-fab962b007c4",
+    "ls_model_name": "anthropic.claude-3-5-sonnet-20241022-v2:0"
+   },
+   "invocation_params": {
+    "model_id": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "tools": [
+     {
+      "description": "Checks status of user package",
+      "input_schema": {
+       "properties": {
+        "user_name": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "user_name"
+       ],
+       "type": "object"
+      },
+      "name": "check_package_status"
+     },
+     {
+      "description": "Total cost of user package",
+      "input_schema": {
+       "properties": {},
+       "type": "object"
+      },
+      "name": "calculate_price"
+     }
+    ]
+   }
+  },
+  "error": null,
+  "inputs": {
+   "messages": [
+    [
+     {
+      "id": [
+       "langchain",
+       "schema",
+       "messages",
+       "SystemMessage"
+      ],
+      "kwargs": {
+       "content": "You are a helpful assistant, user will ask you about their package. You should first check it's status. If status is ready for pickup you should check cost. The name of the user is Bob",
+       "type": "system"
+      },
+      "lc": 1,
+      "type": "constructor"
+     },
+     {
+      "id": [
+       "langchain",
+       "schema",
+       "messages",
+       "HumanMessage"
+      ],
+      "kwargs": {
+       "content": "What is the status of my package?",
+       "id": "64a4880e-7a31-4826-9f52-ea7496f4a147",
+       "type": "human"
+      },
+      "lc": 1,
+      "type": "constructor"
+     },
+     {
+      "id": [
+       "langchain",
+       "schema",
+       "messages",
+       "AIMessage"
+      ],
+      "kwargs": {
+       "content": "I'll help you check the status of your package. Since I know your name is Bob, I can check this right away.",
+       "id": "lc_run--73b63db4-a578-4203-bebe-0415e8f79149-0",
+       "tool_calls": [
+        {
+         "args": {
+          "user_name": "Bob"
+         },
+         "id": "toolu_bdrk_011oma5ruJ3b7zaNqQsjQ5Cy",
+         "name": "check_package_status",
+         "type": "tool_call"
+        }
+       ],
+       "type": "ai"
+      },
+      "lc": 1,
+      "type": "constructor"
+     },
+     {
+      "id": [
+       "langchain",
+       "schema",
+       "messages",
+       "ToolMessage"
+      ],
+      "kwargs": {
+       "content": "Package is ready for pickup",
+       "id": "0165258d-41ec-48f7-a9b1-894bf85b070b",
+       "name": "check_package_status",
+       "status": "success",
+       "tool_call_id": "toolu_bdrk_011oma5ruJ3b7zaNqQsjQ5Cy",
+       "type": "tool"
+      },
+      "lc": 1,
+      "type": "constructor"
+     }
+    ]
+   ]
+  },
+  "outputs": {
+   "generations": [
+    [
+     {
+      "text": "Good news! Your package is ready for pickup. Since the package is ready, let me also check the total cost for you.",
+      "message": {
+       "kwargs": {
+        "content": "Good news! Your package is ready for pickup. Since the package is ready, let me also check the total cost for you.",
+        "id": "lc_run--dd4521f0-6e5f-4eea-a969-e9b0bbd5c381-0",
+        "tool_calls": [
+         {
+          "args": {},
+          "id": "toolu_bdrk_011b695ajE9AZsSLGEZ9xD7U",
+          "name": "calculate_price",
+          "type": "tool_call"
+         }
+        ],
+        "type": "ai"
+       }
+      }
+     }
+    ]
+   ],
+   "llm_output": {
+    "model_id": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "stop_reason": "tool_use",
+    "usage": {
+     "cache_read_input_tokens": 0,
+     "cache_write_input_tokens": 0,
+     "completion_tokens": 64,
+     "prompt_tokens": 574,
+     "total_tokens": 638
+    }
+   },
+   "run": null,
+   "type": "LLMResult"
+  },
+  "parent_run_id": "73a4769b-e5c0-4908-9849-71fb1799a8b2",
+  "trace_id": "443af897-8a98-45fa-957e-da78dde5e357",
+  "session_id": "00000000-0000-4000-8000-000000000001",
+  "status": "success",
+  "prompt_tokens": 574,
+  "completion_tokens": 64,
+  "total_cost": "0.002682"
+ },
+ {
+  "id": "73a4769b-e5c0-4908-9849-71fb1799a8b2",
+  "name": "model",
+  "run_type": "chain",
+  "start_time": "2025-11-27 05:48:38.979213",
+  "end_time": "2025-11-27 05:48:40.919268",
+  "extra": {
+   "metadata": {
+    "langgraph_step": 3,
+    "langgraph_node": "model"
+   }
+  },
+  "error": null,
+  "inputs": {},
+  "outputs": {},
+  "parent_run_id": "443af897-8a98-45fa-957e-da78dde5e357",
+  "trace_id": "443af897-8a98-45fa-957e-da78dde5e357",
+  "session_id": "00000000-0000-4000-8000-000000000001",
+  "status": "success",
+  "prompt_tokens": 574,
+  "completion_tokens": 64,
+  "total_cost": "0.002682"
+ },
+ {
+  "id": "bd7e656a-5059-4629-bc96-954365479acc",
+  "name": "check_package_status",
+  "run_type": "tool",
+  "start_time": "2025-11-27 05:48:38.975300",
+  "end_time": "2025-11-27 05:48:38.976513",
+  "extra": {
+   "metadata": {
+    "langgraph_step": 2,
+    "langgraph_node": "tools",
+    "checkpoint_ns": "tools:8d3d0761-41f8-f712-827c-6acf581b49fb"
+   }
+  },
+  "error": null,
+  "inputs": {
+   "input": "{'user_name': 'Bob'}"
+  },
+  "outputs": {
+   "output": {
+    "content": "Package is ready for pickup",
+    "name": "check_package_status",
+    "status": "success",
+    "tool_call_id": "toolu_bdrk_011oma5ruJ3b7zaNqQsjQ5Cy",
+    "type": "tool"
+   }
+  },
+  "parent_run_id": "d4160a4a-0c86-4af1-91ce-bf66b4b63953",
+  "trace_id": "443af897-8a98-45fa-957e-da78dde5e357",
+  "session_id": "00000000-0000-4000-8000-000000000001",
+  "status": "success",
+  "prompt_tokens": 0,
+  "completion_tokens": 0,
+  "total_cost": null
+ },
+ {
+  "id": "d4160a4a-0c86-4af1-91ce-bf66b4b63953",
+  "name": "tools",
+  "run_type": "chain",
+  "start_time": "2025-11-27 05:48:38.972892",
+  "end_time": "2025-11-27 05:48:38.978290",
+  "extra": {
+   "metadata": {
+    "langgraph_step": 2,
+    "langgraph_node": "tools"
+   }
+  },
+  "error": null,
+  "inputs": {},
+  "outputs": {},
+  "parent_run_id": "443af897-8a98-45fa-957e-da78dde5e357",
+  "trace_id": "443af897-8a98-45fa-957e-da78dde5e357",
+  "session_id": "00000000-0000-4000-8000-000000000001",
+  "status": "success",
+  "prompt_tokens": 0,
+  "completion_tokens": 0,
+  "total_cost": null
+ },
+ {
+  "id": "73b63db4-a578-4203-bebe-0415e8f79149",
+  "name": "ChatBedrock",
+  "run_type": "llm",
+  "start_time": "2025-11-27 05:48:36.310830",
+  "end_time": "2025-11-27 05:48:38.969957",
+  "extra": {
+   "metadata": {
+    "langgraph_step": 1,
+    "langgraph_node": "model",
+    "checkpoint_ns": "model:abf87b84-427a-0a63-e1de-b4bad39c52eb",
+    "ls_model_name": "anthropic.claude-3-5-sonnet-20241022-v2:0"
+   },
+   "invocation_params": {
+    "model_id": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "tools": [
+     {
+      "description": "Checks status of user package",
+      "input_schema": {
+       "properties": {
+        "user_name": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "user_name"
+       ],
+       "type": "object"
+      },
+      "name": "check_package_status"
+     },
+     {
+      "description": "Total cost of user package",
+      "input_schema": {
+       "properties": {},
+       "type": "object"
+      },
+      "name": "calculate_price"
+     }
+    ]
+   }
+  },
+  "error": null,
+  "inputs": {
+   "messages": [
+    [
+     {
+      "id": [
+       "langchain",
+       "schema",
+       "messages",
+       "SystemMessage"
+      ],
+      "kwargs": {
+       "content": "You are a helpful assistant, user will ask you about their package. You should first check it's status. If status is ready for pickup you should check cost. The name of the user is Bob",
+       "type": "system"
+      },
+      "lc": 1,
+      "type": "constructor"
+     },
+     {
+      "id": [
+       "langchain",
+       "schema",
+       "messages",
+       "HumanMessage"
+      ],
+      "kwargs": {
+       "content": "What is the status of my package?",
+       "id": "64a4880e-7a31-4826-9f52-ea7496f4a147",
+       "type": "human"
+      },
+      "lc": 1,
+      "type": "constructor"
+     }
+    ]
+   ]
+  },
+  "outputs": {
+   "generations": [
+    [
+     {
+      "text": "I'll help you check the status of your package. Since I know your name is Bob, I can check this right away.",
+      "message": {
+       "kwargs": {
+        "content": "I'll help you check the status of your package. Since I know your name is Bob, I can check this right away.",
+        "id": "lc_run--73b63db4-a578-4203-bebe-0415e8f79149-0",
+        "tool_calls": [
+         {
+          "args": {
+           "user_name": "Bob"
+          },
+          "id": "toolu_bdrk_011oma5ruJ3b7zaNqQsjQ5Cy",
+          "name": "check_package_status",
+          "type": "tool_call"
+         }
+        ],
+        "type": "ai"
+       }
+      }
+     }
+    ]
+   ],
+   "llm_output": {
+    "model_id": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "stop_reason": "tool_use",
+    "usage": {
+     "cache_read_input_tokens": 0,
+     "cache_write_input_tokens": 0,
+     "completion_tokens": 88,
+     "prompt_tokens": 470,
+     "total_tokens": 558
+    }
+   },
+   "run": null,
+   "type": "LLMResult"
+  },
+  "parent_run_id": "ffe2e29e-c955-44f7-a75c-fa61e36df201",
+  "trace_id": "443af897-8a98-45fa-957e-da78dde5e357",
+  "session_id": "00000000-0000-4000-8000-000000000001",
+  "status": "success",
+  "prompt_tokens": 470,
+  "completion_tokens": 88,
+  "total_cost": "0.00273"
+ },
+ {
+  "id": "ffe2e29e-c955-44f7-a75c-fa61e36df201",
+  "name": "model",
+  "run_type": "chain",
+  "start_time": "2025-11-27 05:48:36.308334",
+  "end_time": "2025-11-27 05:48:38.970851",
+  "extra": {
+   "metadata": {
+    "langgraph_step": 1,
+    "langgraph_node": "model"
+   }
+  },
+  "error": null,
+  "inputs": {},
+  "outputs": {},
+  "parent_run_id": "443af897-8a98-45fa-957e-da78dde5e357",
+  "trace_id": "443af897-8a98-45fa-957e-da78dde5e357",
+  "session_id": "00000000-0000-4000-8000-000000000001",
+  "status": "success",
+  "prompt_tokens": 470,
+  "completion_tokens": 88,
+  "total_cost": "0.00273"
+ },
+ {
+  "id": "443af897-8a98-45fa-957e-da78dde5e357",
+  "name": "LangGraph",
+  "run_type": "chain",
+  "start_time": "2025-11-27 05:48:36.144852",
+  "end_time": "2025-11-27 05:48:42.671419",
+  "extra": {
+   "metadata": {}
+  },
+  "error": null,
+  "inputs": {
+   "messages": [
+    [
+     "user",
+     "What is the status of my package?"
+    ]
+   ]
+  },
+  "outputs": {
+   "messages": [
+    {
+     "content": "What is the status of my package?",
+     "id": "64a4880e-7a31-4826-9f52-ea7496f4a147",
+     "type": "human"
+    },
+    {
+     "content": "I'll help you check the status of your package. Since I know your name is Bob, I can check this right away.",
+     "id": "lc_run--73b63db4-a578-4203-bebe-0415e8f79149-0",
+     "tool_calls": [
+      {
+       "args": {
+        "user_name": "Bob"
+       },
+       "id": "toolu_bdrk_011oma5ruJ3b7zaNqQsjQ5Cy",
+       "name": "check_package_status",
+       "type": "tool_call"
+      }
+     ],
+     "type": "ai"
+    },
+    {
+     "content": "Package is ready for pickup",
+     "id": "0165258d-41ec-48f7-a9b1-894bf85b070b",
+     "name": "check_package_status",
+     "status": "success",
+     "tool_call_id": "toolu_bdrk_011oma5ruJ3b7zaNqQsjQ5Cy",
+     "type": "tool"
+    },
+    {
+     "content": "Good news! Your package is ready for pickup. Since the package is ready, let me also check the total cost for you.",
+     "id": "lc_run--dd4521f0-6e5f-4eea-a969-e9b0bbd5c381-0",
+     "tool_calls": [
+      {
+       "args": {},
+       "id": "toolu_bdrk_011b695ajE9AZsSLGEZ9xD7U",
+       "name": "calculate_price",
+       "type": "tool_call"
+      }
+     ],
+     "type": "ai"
+    },
+    {
+     "content": "Total cost is $100",
+     "id": "daeecd67-36bf-4336-aeef-e6b7dc5aade9",
+     "name": "calculate_price",
+     "status": "success",
+     "tool_call_id": "toolu_bdrk_011b695ajE9AZsSLGEZ9xD7U",
+     "type": "tool"
+    },
+    {
+     "content": "To summarize:\n- Your package is ready for pickup\n- The total cost is $100\n\nIs there anything else you would like to know about your package?",
+     "id": "lc_run--32a4dc1d-ba63-42ab-bb23-f098a046f4dd-0",
+     "tool_calls": [],
+     "type": "ai"
+    }
+   ]
+  },
+  "parent_run_id": null,
+  "trace_id": "443af897-8a98-45fa-957e-da78dde5e357",
+  "session_id": "00000000-0000-4000-8000-000000000001",
+  "status": "success",
+  "prompt_tokens": 1698,
+  "completion_tokens": 190,
+  "total_cost": "0.007944"
+ }
+]

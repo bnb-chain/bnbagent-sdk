@@ -1,0 +1,109 @@
+{
+ "id": "native-session-1",
+ "traces": [
+  {
+   "id": "t1",
+   "steps": [
+    {
+     "agent_id": "wallet_agent",
+     "available_tools": [
+      {
+       "description": "Transfer BNB",
+       "name": "send_bnb"
+      }
+     ],
+     "end_ms": 3000.0,
+     "error": null,
+     "id": "a1",
+     "kind": "agent",
+     "parent_id": null,
+     "response": "Sent.",
+     "start_ms": 0.0,
+     "system_prompt": null,
+     "usage": null,
+     "user_prompt": "Send 0.1 BNB to the vault."
+    },
+    {
+     "agent_id": null,
+     "end_ms": 900.0,
+     "error": null,
+     "id": "l1",
+     "kind": "llm",
+     "messages": [
+      {
+       "content": "Send 0.1 BNB to the vault.",
+       "role": "user"
+      }
+     ],
+     "model": "example-model-v1",
+     "parent_id": "a1",
+     "response": null,
+     "start_ms": 10.0,
+     "tool_calls": [
+      {
+       "arguments": {
+        "to": "0x0000000000000000000000000000000000000001",
+        "value": "0.1"
+       },
+       "id": "c1",
+       "name": "send_bnb"
+      }
+     ],
+     "usage": {
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "cost_usd": null,
+      "input_tokens": 50,
+      "output_tokens": 12
+     }
+    },
+    {
+     "agent_id": null,
+     "call": {
+      "arguments": {
+       "to": "0x0000000000000000000000000000000000000001",
+       "value": "0.1"
+      },
+      "id": "c1",
+      "name": "send_bnb"
+     },
+     "end_ms": 2500.0,
+     "error": null,
+     "id": "tool1",
+     "kind": "tool",
+     "parent_id": "a1",
+     "result": {
+      "call_id": "c1",
+      "content": "ok",
+      "error": null
+     },
+     "start_ms": 1000.0,
+     "usage": null
+    },
+    {
+     "agent_id": null,
+     "block_number": null,
+     "calldata": "0x",
+     "chain_id": 97,
+     "decoded": null,
+     "end_ms": null,
+     "error": null,
+     "from_address": null,
+     "gas_used": null,
+     "id": "tx1",
+     "intent": null,
+     "kind": "tx",
+     "logs": [],
+     "parent_id": "tool1",
+     "start_ms": null,
+     "status": 1,
+     "to": "0x0000000000000000000000000000000000000001",
+     "tx_hash": null,
+     "usage": null,
+     "value": 100000000000000000
+    }
+   ]
+  }
+ ],
+ "warnings": []
+}

@@ -1,0 +1,1 @@
+"""format.* metrics: output structure."""

@@ -1,0 +1,140 @@
+{
+ "id": "session-0002",
+ "traces": [
+  {
+   "id": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+   "steps": [
+    {
+     "agent_id": "LangGraph_8e0af68e",
+     "available_tools": [
+      {
+       "description": "Calculate the body mass index.",
+       "name": "calculate_bmi",
+       "parameters": {
+        "properties": {
+         "height_m": {
+          "type": "number"
+         },
+         "weight_kg": {
+          "type": "number"
+         }
+        },
+        "type": "object"
+       }
+      }
+     ],
+     "end_ms": 1761971568000.0,
+     "error": null,
+     "id": "b000000000000001",
+     "kind": "agent",
+     "parent_id": null,
+     "response": "Your BMI is 22.9, which is in the normal range.",
+     "start_ms": 1761971559000.0,
+     "system_prompt": "You are a health assistant. Use the tools to answer.",
+     "usage": null,
+     "user_prompt": "Calculate my BMI if I weigh 70 kg and am 1.75 meters tall"
+    },
+    {
+     "agent_id": "LangGraph_8e0af68e",
+     "end_ms": 1761971561900.0,
+     "error": null,
+     "id": "b000000000000003",
+     "kind": "llm",
+     "messages": [
+      {
+       "content": "You are a health assistant. Use the tools to answer.",
+       "role": "system"
+      },
+      {
+       "content": "Calculate my BMI if I weigh 70 kg and am 1.75 meters tall",
+       "role": "user"
+      }
+     ],
+     "model": "example-model-v1",
+     "parent_id": "b000000000000001",
+     "response": "I'll calculate your BMI.",
+     "start_ms": 1761971559200.0,
+     "tool_calls": [
+      {
+       "arguments": {
+        "height_m": 1.75,
+        "weight_kg": 70
+       },
+       "id": "toolu_0001",
+       "name": "calculate_bmi"
+      }
+     ],
+     "usage": {
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "cost_usd": null,
+      "input_tokens": 120,
+      "output_tokens": 30
+     }
+    },
+    {
+     "agent_id": "LangGraph_8e0af68e",
+     "call": {
+      "arguments": {
+       "height_m": 1.75,
+       "weight_kg": 70
+      },
+      "id": "toolu_0001",
+      "name": "calculate_bmi"
+     },
+     "end_ms": 1761971562200.0,
+     "error": null,
+     "id": "b000000000000004",
+     "kind": "tool",
+     "parent_id": "b000000000000001",
+     "result": {
+      "call_id": "toolu_0001",
+      "content": "BMI: 22.9 (Normal weight).",
+      "error": null
+     },
+     "start_ms": 1761971562100.0,
+     "usage": null
+    },
+    {
+     "agent_id": "LangGraph_8e0af68e",
+     "end_ms": 1761971567900.0,
+     "error": null,
+     "id": "b000000000000005",
+     "kind": "llm",
+     "messages": [
+      {
+       "content": "You are a health assistant. Use the tools to answer.",
+       "role": "system"
+      },
+      {
+       "content": "Calculate my BMI if I weigh 70 kg and am 1.75 meters tall",
+       "role": "user"
+      },
+      {
+       "content": "I'll calculate your BMI.",
+       "role": "assistant"
+      },
+      {
+       "content": "BMI: 22.9 (Normal weight).",
+       "role": "tool",
+       "tool_call_id": "toolu_0001"
+      }
+     ],
+     "model": "example-model-v1",
+     "parent_id": "b000000000000001",
+     "response": "Your BMI is 22.9, which is in the normal range.",
+     "start_ms": 1761971562300.0,
+     "tool_calls": [],
+     "usage": {
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "cost_usd": null,
+      "input_tokens": 180,
+      "output_tokens": 20
+     }
+    }
+   ]
+  }
+ ],
+ "warnings": []
+}

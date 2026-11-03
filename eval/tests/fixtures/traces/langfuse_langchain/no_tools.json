@@ -1,0 +1,120 @@
+{
+ "id": "4c1f0c0de0000000000000000000a001",
+ "timestamp": "2025-11-26T06:35:19.038Z",
+ "name": "LangGraph",
+ "sessionId": "session-0007",
+ "observations": [
+  {
+   "id": "lc00000000000001",
+   "type": "SPAN",
+   "name": "LangGraph",
+   "startTime": "2025-11-26T06:35:19.040Z",
+   "endTime": "2025-11-26T06:35:21.400Z",
+   "input": {
+    "messages": [
+     {
+      "type": "human",
+      "content": "Which tools can you use?"
+     }
+    ]
+   },
+   "output": {
+    "messages": [
+     {
+      "type": "human",
+      "content": "Which tools can you use?"
+     },
+     {
+      "type": "ai",
+      "content": "I can check a package status and calculate the total cost."
+     }
+    ]
+   },
+   "parentObservationId": null,
+   "metadata": {}
+  },
+  {
+   "id": "lc00000000000002",
+   "type": "SPAN",
+   "name": "model",
+   "startTime": "2025-11-26T06:35:19.046Z",
+   "endTime": "2025-11-26T06:35:21.390Z",
+   "input": {
+    "messages": [
+     {
+      "type": "human",
+      "content": "Which tools can you use?"
+     }
+    ]
+   },
+   "output": {
+    "messages": [
+     {
+      "type": "ai",
+      "content": "I can check a package status and calculate the total cost."
+     }
+    ]
+   },
+   "parentObservationId": "lc00000000000001",
+   "metadata": {
+    "langgraph_step": 1,
+    "langgraph_node": "model",
+    "checkpoint_ns": "model:0001"
+   }
+  },
+  {
+   "id": "lc00000000000003",
+   "type": "GENERATION",
+   "name": "ChatBedrock",
+   "startTime": "2025-11-26T06:35:19.053Z",
+   "endTime": "2025-11-26T06:35:21.333Z",
+   "model": "example-model-v1",
+   "input": [
+    {
+     "role": "system",
+     "content": "You are a helpful package assistant."
+    },
+    {
+     "role": "user",
+     "content": "Which tools can you use?"
+    },
+    {
+     "role": "tool",
+     "content": {
+      "name": "check_package_status",
+      "description": "Checks status of user package",
+      "input_schema": {
+       "type": "object"
+      }
+     }
+    },
+    {
+     "role": "tool",
+     "content": {
+      "name": "calculate_price",
+      "description": "Total cost of user package",
+      "input_schema": {
+       "type": "object"
+      }
+     }
+    }
+   ],
+   "output": {
+    "role": "assistant",
+    "content": "I can check a package status and calculate the total cost."
+   },
+   "parentObservationId": "lc00000000000002",
+   "metadata": {
+    "langgraph_step": 1,
+    "langgraph_node": "model",
+    "checkpoint_ns": "model:0001"
+   },
+   "usageDetails": {
+    "input": 410,
+    "output": 18,
+    "total": 428
+   },
+   "level": "DEFAULT"
+  }
+ ]
+}

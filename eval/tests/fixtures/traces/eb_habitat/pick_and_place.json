@@ -1,0 +1,63 @@
+{
+ "instruction": "Put the apple on the kitchen table.",
+ "input": "## You are a robot operating in a home.\nThe available action ids and names are:\naction id 0: navigate to the kitchen table, \naction id 1: navigate to the counter, \naction id 2: pick up the apple, \naction id 3: place at the kitchen table, \n",
+ "trajectory": [
+  {
+   "language_plan": "Go to the counter and pick up the apple.",
+   "reasoning_and_reflection": "The apple is usually on the counter.",
+   "executable_plan": [
+    {
+     "step_id": 0,
+     "action": [
+      1,
+      "navigate to the counter"
+     ],
+     "action_success": 1.0,
+     "env_feedback": "Last action executed successfully."
+    },
+    {
+     "step_id": 1,
+     "action": [
+      2,
+      "pick up the apple"
+     ],
+     "action_success": 0.0,
+     "env_feedback": "Last action is invalid. The apple is not reachable."
+    }
+   ]
+  },
+  {
+   "language_plan": "Navigate closer, pick up the apple and place it on the table.",
+   "reasoning_and_reflection": "The pick failed; approach again.",
+   "executable_plan": [
+    {
+     "step_id": 2,
+     "action": [
+      2,
+      "pick up the apple"
+     ],
+     "action_success": 1.0,
+     "env_feedback": "Last action executed successfully."
+    },
+    {
+     "step_id": 3,
+     "action": [
+      0,
+      "navigate to the kitchen table"
+     ],
+     "action_success": 1.0,
+     "env_feedback": "Last action executed successfully."
+    },
+    {
+     "step_id": 4,
+     "action": [
+      3,
+      "place at the kitchen table"
+     ],
+     "action_success": 1.0,
+     "env_feedback": "Last action executed successfully. Task completed."
+    }
+   ]
+  }
+ ]
+}

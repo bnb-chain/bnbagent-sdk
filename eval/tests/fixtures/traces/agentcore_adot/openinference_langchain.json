@@ -1,0 +1,252 @@
+[
+ {
+  "scope": {
+   "name": "openinference.instrumentation.langchain",
+   "version": "0.0.0"
+  },
+  "traceId": "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2",
+  "spanId": "d000000000000001",
+  "parentSpanId": null,
+  "name": "LangGraph",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971559000000000,
+  "endTimeUnixNano": 1761971565000000000,
+  "attributes": {
+   "session.id": "session-0002",
+   "openinference.span.kind": "CHAIN"
+  },
+  "status": {
+   "code": "UNSET"
+  }
+ },
+ {
+  "scope": {
+   "name": "openinference.instrumentation.langchain",
+   "version": "0.0.0"
+  },
+  "traceId": "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2",
+  "spanId": "d000000000000002",
+  "parentSpanId": "d000000000000001",
+  "name": "model",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971559010000000,
+  "endTimeUnixNano": 1761971561000000000,
+  "attributes": {
+   "session.id": "session-0002",
+   "openinference.span.kind": "CHAIN",
+   "metadata": "{\"langgraph_step\": 1}"
+  },
+  "status": {
+   "code": "UNSET"
+  }
+ },
+ {
+  "scope": {
+   "name": "openinference.instrumentation.langchain",
+   "version": "0.0.0"
+  },
+  "traceId": "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2",
+  "spanId": "d000000000000003",
+  "parentSpanId": "d000000000000002",
+  "name": "ChatBedrock",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971559020000000,
+  "endTimeUnixNano": 1761971560900000000,
+  "attributes": {
+   "session.id": "session-0002",
+   "openinference.span.kind": "LLM",
+   "llm.model_name": "example-model-v1",
+   "llm.token_count.prompt": 210,
+   "llm.token_count.completion": 40,
+   "llm.tools.0.tool.json_schema": "{\"name\": \"check_package_status\", \"description\": \"Checks status of user package\", \"input_schema\": {\"type\": \"object\", \"properties\": {\"user_name\": {\"type\": \"string\"}}}}"
+  },
+  "status": {
+   "code": "UNSET"
+  }
+ },
+ {
+  "scope": {
+   "name": "openinference.instrumentation.langchain",
+   "version": "0.0.0"
+  },
+  "traceId": "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2",
+  "spanId": "d000000000000004",
+  "parentSpanId": "d000000000000001",
+  "name": "check_package_status",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971561100000000,
+  "endTimeUnixNano": 1761971561200000000,
+  "attributes": {
+   "session.id": "session-0002",
+   "openinference.span.kind": "TOOL"
+  },
+  "status": {
+   "code": "UNSET"
+  }
+ },
+ {
+  "scope": {
+   "name": "openinference.instrumentation.langchain",
+   "version": "0.0.0"
+  },
+  "traceId": "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2",
+  "spanId": "d000000000000005",
+  "parentSpanId": "d000000000000001",
+  "name": "model",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971561300000000,
+  "endTimeUnixNano": 1761971564900000000,
+  "attributes": {
+   "session.id": "session-0002",
+   "openinference.span.kind": "CHAIN",
+   "metadata": "{\"langgraph_step\": 3}"
+  },
+  "status": {
+   "code": "UNSET"
+  }
+ },
+ {
+  "scope": {
+   "name": "openinference.instrumentation.langchain",
+   "version": "0.0.0"
+  },
+  "traceId": "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2",
+  "spanId": "d000000000000006",
+  "parentSpanId": "d000000000000005",
+  "name": "ChatBedrock",
+  "kind": "INTERNAL",
+  "startTimeUnixNano": 1761971561310000000,
+  "endTimeUnixNano": 1761971564800000000,
+  "attributes": {
+   "session.id": "session-0002",
+   "openinference.span.kind": "LLM",
+   "llm.model_name": "example-model-v1",
+   "llm.token_count.prompt": 260,
+   "llm.token_count.completion": 12,
+   "llm.tools.0.tool.json_schema": "{\"name\": \"check_package_status\", \"description\": \"Checks status of user package\", \"input_schema\": {\"type\": \"object\", \"properties\": {\"user_name\": {\"type\": \"string\"}}}}"
+  },
+  "status": {
+   "code": "UNSET"
+  }
+ },
+ {
+  "scope": {
+   "name": "openinference.instrumentation.langchain"
+  },
+  "timeUnixNano": 1761971560900000000,
+  "body": {
+   "input": {
+    "messages": [
+     {
+      "content": "{\"messages\": [[{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"SystemMessage\"], \"kwargs\": {\"content\": \"You are a package assistant. Check the status before quoting a price.\", \"type\": \"system\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What is the status of my package?\", \"type\": \"human\"}}]]}",
+      "role": "user"
+     }
+    ]
+   },
+   "output": {
+    "messages": [
+     {
+      "content": "{\"generations\": [[{\"text\": \"Let me check that for you.\", \"message\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"Let me check that for you.\", \"type\": \"ai\", \"tool_calls\": [{\"name\": \"check_package_status\", \"args\": {\"user_name\": \"Bob\"}, \"id\": \"toolu_0002\"}]}}}]]}",
+      "role": "assistant"
+     }
+    ]
+   }
+  },
+  "attributes": {
+   "event.name": "openinference.instrumentation.langchain",
+   "session.id": "session-0002"
+  },
+  "traceId": "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2",
+  "spanId": "d000000000000003"
+ },
+ {
+  "scope": {
+   "name": "openinference.instrumentation.langchain"
+  },
+  "timeUnixNano": 1761971561200000000,
+  "body": {
+   "input": {
+    "messages": [
+     {
+      "content": "{'user_name': 'Bob'}",
+      "role": "user"
+     }
+    ]
+   },
+   "output": {
+    "messages": [
+     {
+      "content": "{\"content\": \"Package is ready for pickup\", \"tool_call_id\": \"toolu_0002\", \"status\": \"success\", \"name\": \"check_package_status\"}",
+      "role": "assistant"
+     }
+    ]
+   }
+  },
+  "attributes": {
+   "event.name": "openinference.instrumentation.langchain",
+   "session.id": "session-0002"
+  },
+  "traceId": "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2",
+  "spanId": "d000000000000004"
+ },
+ {
+  "scope": {
+   "name": "openinference.instrumentation.langchain"
+  },
+  "timeUnixNano": 1761971564800000000,
+  "body": {
+   "input": {
+    "messages": [
+     {
+      "content": "{\"messages\": [[{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"SystemMessage\"], \"kwargs\": {\"content\": \"You are a package assistant. Check the status before quoting a price.\", \"type\": \"system\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What is the status of my package?\", \"type\": \"human\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"Let me check that for you.\", \"type\": \"ai\", \"tool_calls\": [{\"name\": \"check_package_status\", \"args\": {\"user_name\": \"Bob\"}, \"id\": \"toolu_0002\"}]}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"Package is ready for pickup\", \"type\": \"tool\", \"tool_call_id\": \"toolu_0002\", \"status\": \"success\"}}]]}",
+      "role": "user"
+     }
+    ]
+   },
+   "output": {
+    "messages": [
+     {
+      "content": "{\"generations\": [[{\"text\": \"Your package is ready for pickup.\", \"message\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"Your package is ready for pickup.\", \"type\": \"ai\"}}}]]}",
+      "role": "assistant"
+     }
+    ]
+   }
+  },
+  "attributes": {
+   "event.name": "openinference.instrumentation.langchain",
+   "session.id": "session-0002"
+  },
+  "traceId": "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2",
+  "spanId": "d000000000000006"
+ },
+ {
+  "scope": {
+   "name": "openinference.instrumentation.langchain"
+  },
+  "timeUnixNano": 1761971565000000000,
+  "body": {
+   "input": {
+    "messages": [
+     {
+      "content": "{\"messages\": [{\"role\": \"user\", \"content\": \"What is the status of my package?\"}]}",
+      "role": "user"
+     }
+    ]
+   },
+   "output": {
+    "messages": [
+     {
+      "content": "{\"messages\": [{\"type\": \"human\", \"content\": \"What is the status of my package?\"}, {\"type\": \"ai\", \"content\": \"Let me check that for you.\"}, {\"type\": \"tool\", \"content\": \"Package is ready for pickup\"}, {\"type\": \"ai\", \"content\": \"Your package is ready for pickup.\"}]}",
+      "role": "assistant"
+     }
+    ]
+   }
+  },
+  "attributes": {
+   "event.name": "openinference.instrumentation.langchain",
+   "session.id": "session-0002"
+  },
+  "traceId": "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2",
+  "spanId": "d000000000000001"
+ }
+]
