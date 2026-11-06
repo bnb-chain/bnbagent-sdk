@@ -328,6 +328,11 @@ export class EVMWalletProvider extends WalletProvider {
 
   /** Sign a legacy (gasPrice) transaction. */
   override async signTransaction(tx: SignableTransaction): Promise<SignedTx> {
+    if (!Number.isSafeInteger(tx.chainId) || tx.chainId <= 0) {
+      throw new Error(
+        "A positive safe integer chainId is required for replay-protected transactions",
+      );
+    }
     const account = this.#requireAccount();
     // `SignableTransaction` carries the legacy fields + required chainId;
     // widen to viem's `TransactionSerializableLegacy` (its signing input
