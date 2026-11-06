@@ -31,20 +31,9 @@
  * Once `rejectVotes >= voteQuorum` for a disputed job, settles automatically
  * and prints the result.
  *
- * Adaptation note: the Python reference (`python/examples/voter/watch.py`)
- * subscribes directly to the `OptimisticPolicy` contract's `Disputed` /
- * `VoteCast` event logs via `erc8183.policy.contract.events...get_logs()`.
- * `PolicyClient`'s public surface in this SDK does not expose raw event-log
- * reads (`readEvents` is a `ContractBase`-internal seam used only by the
- * typed event helpers it already exposes), so this port polls job state
- * directly instead: `commerce.jobCounter()` discovers jobs created during the
- * run, then `policy.disputed()` is re-polled for each still-undisputed job on
- * EVERY tick (a dispute is raised long after creation, so a job cannot be
- * checked just once), and `policy.rejectVotes()` tracks quorum. Two behavioral
- * differences from the event-log version: it starts from the current job
- * counter (like the Python reference starting at the current block head), so a
- * dispute on a job created before startup is not caught; and detection lags by
- * up to one poll interval rather than firing on the event.
+ * Discovery replays Disputed events across the live dispute window at startup,
+ * then continues from the last successfully read block. Pages are bounded and
+ * a failed page is retried without advancing the cursor.
  *
  * Usage:
  *     cd typescript/examples/voter
@@ -57,6 +46,7 @@
 import { dirname } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { parseAbiItem } from "viem";
 import { DeliverableManifest } from "../../src/erc8183/index.js";
 import { ERC8183Client, EVMWalletProvider, loadEnv } from "../../src/index.js";
 import {
@@ -361,6 +351,51 @@ export async function requireLogRpc(client: ERC8183Client): Promise<void> {
   }
 }
 
+/** Earliest block whose timestamp is inside the live voting window. */
+export async function disputeWindowStart(
+  client: ERC8183Client,
+): Promise<bigint> {
+  const head = await client.publicClient.getBlockNumber();
+  const latest = await client.publicClient.getBlock({ blockNumber: head });
+  const window = await client.policy.disputeWindow();
+  const target = latest.timestamp > window ? latest.timestamp - window : 0n;
+  let low = 0n;
+  let high = head;
+  while (low < high) {
+    const middle = (low + high) / 2n;
+    const block = await client.publicClient.getBlock({ blockNumber: middle });
+    if (block.timestamp < target) low = middle + 1n;
+    else high = middle;
+  }
+  return low;
+}
+
+/** Replay a bounded page, including disputes on jobs created before startup. */
+export async function discoverDisputes(
+  client: ERC8183Client,
+  fromBlock: bigint,
+  watching: Set<number>,
+): Promise<bigint> {
+  const head = await client.publicClient.getBlockNumber();
+  if (fromBlock > head) return fromBlock;
+  const toBlock = fromBlock + 1999n < head ? fromBlock + 1999n : head;
+  const logs = await client.publicClient.getLogs({
+    address: client.policy.address,
+    event: parseAbiItem(
+      "event Disputed(uint256 indexed jobId, address indexed client)",
+    ),
+    fromBlock,
+    toBlock,
+    strict: true,
+  });
+  for (const log of logs) {
+    const id = log.args.jobId;
+    if (id !== undefined && id > 0n && id <= BigInt(Number.MAX_SAFE_INTEGER))
+      watching.add(Number(id));
+  }
+  return toBlock + 1n;
+}
+
 /**
  * One tick over the watched jobs. A disputed job leaves `watching` only once
  * `handle` succeeded, so a failure is retried on the next tick and never stops
@@ -446,27 +481,17 @@ async function main(): Promise<void> {
   const seenDisputed = new Set<number>();
   const downloadFailures = new Map<number, number>();
   const settled = new Set<number>();
-  // Jobs discovered but not yet observed disputed — re-polled EVERY tick, not
-  // just the tick they first appear. A dispute is raised long after a job is
-  // created (create -> fund -> submit -> dispute), so a job scanned once at
-  // creation is `disputed=false`; we must keep polling it until it flips.
   const watching = new Set<number>();
-  // Start from the current job counter so we only track jobs created during
-  // this run (mirrors the Python reference starting at the current block
-  // head) — this also bounds `watching` to new jobs instead of replaying all
-  // historical ones. A dispute on a job created before startup is not caught.
-  let lastCounter = await client.commerce.jobCounter();
+  let nextDisputeBlock = await disputeWindowStart(client);
 
   try {
     while (true) {
       try {
-        const counter = await client.commerce.jobCounter();
-        if (counter > lastCounter) {
-          for (let id = lastCounter + 1n; id <= counter; id++) {
-            watching.add(Number(id));
-          }
-          lastCounter = counter;
-        }
+        nextDisputeBlock = await discoverDisputes(
+          client,
+          nextDisputeBlock,
+          watching,
+        );
 
         await pollDisputedJobs(
           client,
