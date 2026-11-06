@@ -836,11 +836,41 @@ export class ERC8183JobOps {
       return { success: false, error: "No storage configured" };
     }
 
+    // Authenticate every source, including mutable local and cached URLs.
+    const authenticate = async (
+      data: Record<string, unknown>,
+    ): Promise<OpResult> => {
+      const commitment = await this.getJob(jobId);
+      if (!commitment.success) return { ...commitment };
+      try {
+        const client = await this.getClient();
+        const manifest = DeliverableManifest.fromDict(data);
+        if (
+          !manifest.verify(commitment.deliverable as `0x${string}`) ||
+          !manifest.verifyContext({
+            jobId,
+            chainId: client.network.chainId,
+            commerce: client.commerce.address,
+          })
+        ) {
+          throw new Error("Manifest commitment mismatch");
+        }
+        // HTTP endpoints add a transport wrapper; only authenticated fields escape.
+        return { ...manifest.toDict(), success: true };
+      } catch {
+        return {
+          success: false,
+          error: "Deliverable hash or job context mismatch",
+          error_code: "deliverable_invalid",
+          retryable: false,
+        };
+      }
+    };
     const url = this.deliverableUrls.get(jobId);
     if (url) {
       try {
         const data = await this.storage.download(url);
-        return { success: true, ...data };
+        return authenticate(data);
       } catch (error) {
         console.warn(
           `[ERC8183JobOps] get_response(${jobId}) download failed: ${describeError(error)}`,
@@ -856,7 +886,7 @@ export class ERC8183JobOps {
         // warn when a file exists but fails to read/parse.
         if (await this.storage.exists(filename)) {
           const data = await this.storage.download(filename);
-          return { success: true, ...data };
+          return authenticate(data);
         }
       } catch (error) {
         console.warn(
@@ -900,7 +930,7 @@ export class ERC8183JobOps {
       const deliverableUrl = await client.getDeliverableUrl(BigInt(jobId));
       if (deliverableUrl) {
         const data = await this.storage.download(deliverableUrl);
-        return { success: true, ...data };
+        return authenticate(data);
       }
     } catch (error) {
       if (error instanceof RpcRangeLimitError) {

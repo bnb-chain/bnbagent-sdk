@@ -187,12 +187,19 @@ def handle_disputed_job(
     print(f"  IPFS URL : {_printable(deliverable_url or '-')}")
 
     if manifest:
-        hash_ok = manifest.verify(job.deliverable)
+        hash_ok = manifest.verify(job.deliverable) and manifest.verify_context(
+            job_id=job_id,
+            chain_id=erc8183.network.chain_id,
+            commerce=erc8183.commerce.address,
+        )
         print(f"  hash ok  : {'✓' if hash_ok else '✗ MISMATCH'}")
-        print(f"\n--- Deliverable content (job_id={manifest.job_id}) ---")
-        content = manifest.response.get("content", "")
-        print(_printable(content))
-        print("---")
+        if hash_ok:
+            print(f"\n--- Deliverable content (job_id={manifest.job_id}) ---")
+            content = manifest.response.get("content", "")
+            print(_printable(content))
+            print("---")
+        else:
+            print("  [!] Manifest hash or job context mismatch; content is untrusted")
     elif unverified:
         print(f"  [!] deliverable not verified: {_printable(unverified)}")
         print(

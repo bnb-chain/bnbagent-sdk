@@ -560,11 +560,28 @@ class ERC8183JobOps:
     async def _get_response_uncached(self, job_id: int) -> dict[str, Any]:
         """Cache -> local file -> status check -> bounded on-chain URL lookup."""
 
+        async def authenticate(data):
+            commitment = await self.get_job(job_id)
+            if not commitment.get("success"):
+                return dict(commitment)
+            try:
+                client = self._get_client()
+                manifest = DeliverableManifest.from_dict(data)
+                committed = bytes.fromhex(commitment["deliverable"].removeprefix("0x"))
+                if not manifest.verify(committed) or not manifest.verify_context(
+                    job_id=job_id, chain_id=client.network.chain_id, commerce=client.commerce.address
+                ):
+                    raise ValueError("Manifest commitment mismatch")
+                return {**manifest.to_dict(), "success": True}
+            except (ValueError, KeyError, TypeError):
+                return {"success": False, "error": "Deliverable hash or job context mismatch",
+                        "error_code": "deliverable_invalid", "retryable": False}
+
         url = self._deliverable_urls.get(job_id)
         if url:
             try:
                 data = await self._storage.download(url)
-                return {"success": True, **data}
+                return await authenticate(data)
             except Exception as exc:
                 logger.warning(f"[ERC8183JobOps] get_response({job_id}) download failed: {exc}")
 
@@ -573,7 +590,7 @@ class ERC8183JobOps:
                 filepath = self._storage._base / f"erc8183-job-{job_id}.json"
                 if filepath.exists():
                     data = json.loads(filepath.read_text(encoding="utf-8"))
-                    return {"success": True, **data}
+                    return await authenticate(data)
             except Exception as exc:
                 logger.warning(f"[ERC8183JobOps] get_response({job_id}) file read failed: {exc}")
 
@@ -600,7 +617,7 @@ class ERC8183JobOps:
             deliverable_url = await asyncio.to_thread(erc8183.get_deliverable_url, job_id)
             if deliverable_url:
                 data = await self._storage.download(deliverable_url)
-                return {"success": True, **data}
+                return await authenticate(data)
         except RpcRangeLimitError as exc:
             logger.warning(f"[ERC8183JobOps] get_response({job_id}) rate-limited: {exc}")
             return {

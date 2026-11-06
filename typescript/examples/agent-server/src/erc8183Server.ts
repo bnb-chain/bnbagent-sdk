@@ -93,6 +93,7 @@ const HTTP_STATUS: Record<string, number> = {
   wrong_status: 409,
   description_invalid: 410,
   quote_invalid: 400,
+  deliverable_invalid: 409,
   submit_deadline_passed: 410,
   payload_too_large: 413,
   internal_error: 500,

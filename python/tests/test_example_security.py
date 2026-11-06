@@ -182,7 +182,7 @@ _MANIFEST = {
     "version": 1,
     "job_id": 7,
     "chain_id": 97,
-    "contracts": {},
+    "contracts": {"commerce": "0x" + "44" * 20},
     "response": {"content": "the work"},
     "metadata": {},
 }
@@ -198,6 +198,8 @@ def _voter_client(watch, *, deliverable_url=f"ipfs://{_CID}", submitted_ago=60, 
     from bnbagent.erc8183.types import Job, JobStatus
 
     client = MagicMock()
+    client.network.chain_id = 97
+    client.commerce.address = "0x" + "44" * 20
     client.policy.has_voted.return_value = False
     client.policy.dispute_window.return_value = window
     client.get_job.return_value = Job(
@@ -401,6 +403,12 @@ def test_voter_prompts_whatever_characters_the_provider_put_in_the_deliverable(
     watch = _load_example("voter/watch.py")
     client = _voter_client(watch, deliverable_url=deliverable_url)
     manifest = dict(_MANIFEST, response={"content": content})
+    from dataclasses import replace
+
+    client.get_job.return_value = replace(
+        client.get_job.return_value,
+        deliverable=watch.DeliverableManifest.from_dict(manifest).manifest_hash(),
+    )
     monkeypatch.setattr(
         watch, "fetch_manifest", lambda *_: watch.DeliverableManifest.from_dict(manifest)
     )

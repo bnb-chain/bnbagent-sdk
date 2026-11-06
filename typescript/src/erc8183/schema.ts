@@ -135,6 +135,20 @@ export class DeliverableManifest {
     return hash.toLowerCase() === onChainHex.toLowerCase();
   }
 
+  /** Bind a fetched manifest to the job and Commerce deployment being read. */
+  verifyContext(context: {
+    jobId: number;
+    chainId: number;
+    commerce: string;
+  }): boolean {
+    return (
+      this.jobId === context.jobId &&
+      this.chainId === context.chainId &&
+      typeof this.contracts?.commerce === "string" &&
+      this.contracts.commerce.toLowerCase() === context.commerce.toLowerCase()
+    );
+  }
+
   // ------------------------------------------------------------ serialisation
 
   toDict(): Record<string, unknown> {
