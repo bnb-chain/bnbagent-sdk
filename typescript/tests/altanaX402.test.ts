@@ -1307,16 +1307,16 @@ describe("outer Permit2 approval reset on revoke (SRC-1609, plan B)", () => {
     expect(sdkMocks.revokeSessionMock).toHaveBeenCalledTimes(1);
   });
 
-  it("skips the reset when the SDK has no x402 surface (no session can sign for Permit2)", async () => {
+  it("reports incomplete cleanup when the current SDK cannot reset pre-existing approvals", async () => {
     sdkMocks.x402Surface.enabled = false;
     const chain = permit2Chain([], {}, { [U_TOKEN]: 50n });
 
-    const result = await adminProvider().revokeSession(fakeSession(), {
-      client: chain.client,
-    });
-
-    expect(result.status).toBe("CONFIRMED");
-    expect(result.permit2Reset).toBeUndefined();
+    await expect(
+      adminProvider().revokeSession(fakeSession(), {
+        client: chain.client,
+      }),
+    ).rejects.toThrow(/revokeSession succeeded.*Permit2 cleanup failed/);
+    expect(sdkMocks.revokeSessionMock).toHaveBeenCalledTimes(1);
     expect(chain.readContract).not.toHaveBeenCalled();
   });
 });

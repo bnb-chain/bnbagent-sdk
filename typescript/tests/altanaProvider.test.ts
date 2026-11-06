@@ -573,7 +573,9 @@ describe("AltanaWalletProvider — session management", () => {
       nonceRetry: { delayMs: 0 },
     });
     const toRevoke = fakeSession();
-    const result = await provider.revokeSession(toRevoke);
+    const result = await provider.revokeSession(toRevoke, {
+      permit2Reset: false,
+    });
     expect(result.status).toBe("CONFIRMED");
     expect(
       (sdkMocks.revokeSessionMock.mock.calls[0]?.[0] as { session: unknown })
@@ -677,6 +679,7 @@ describe("AltanaWalletProvider — session management", () => {
     };
 
     const result = await provider.revokeSession(passkeySession, {
+      permit2Reset: false,
       client: reader.client,
     });
 
@@ -711,6 +714,7 @@ describe("AltanaWalletProvider — session management", () => {
     const provider = passkeyAdmin();
 
     await provider.revokeSession(P256_KEY, {
+      permit2Reset: false,
       client: keyStoreReader(false).client,
     });
 
@@ -748,7 +752,7 @@ describe("AltanaWalletProvider — session management", () => {
     const provider = passkeyAdmin();
     const secpKey = fakeSession().publicKey;
     expect(secpKey).toMatch(/^0x04[0-9a-f]{128}$/u);
-    await provider.revokeSession(secpKey);
+    await provider.revokeSession(secpKey, { permit2Reset: false });
     expect(sdkMocks.revokeSessionMock).toHaveBeenCalledTimes(1);
     expect(sdkMocks.executeMock).not.toHaveBeenCalled();
   });
