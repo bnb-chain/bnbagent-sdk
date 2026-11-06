@@ -33,6 +33,7 @@ import {
   type Hex,
   type TransactionSerializableLegacy,
   type TypedDataDomain,
+  getAddress,
   hashMessage,
   hashTypedData,
   keccak256,
@@ -88,9 +89,7 @@ export interface EVMWalletProviderOptions {
 
 function listKeystoreFiles(dir: string): string[] {
   if (!existsSync(dir) || !statSync(dir).isDirectory()) return [];
-  return readdirSync(dir).filter(
-    (f) => f.startsWith("0x") && f.endsWith(".json"),
-  );
+  return readdirSync(dir).filter((f) => /^0x[0-9a-fA-F]{40}\.json$/u.test(f));
 }
 
 /**
@@ -171,7 +170,14 @@ export class EVMWalletProvider extends WalletProvider {
   static keystoreExists(address?: string, walletsDir?: string): boolean {
     const dir = walletsDir ?? DEFAULT_WALLETS_DIR;
     if (!existsSync(dir) || !statSync(dir).isDirectory()) return false;
-    if (address) return existsSync(join(dir, `${address}.json`));
+    if (address) {
+      try {
+        getAddress(address); // Validate the selector while preserving its on-disk spelling.
+        return existsSync(join(dir, `${address}.json`));
+      } catch {
+        return false;
+      }
+    }
     return listKeystoreFiles(dir).length > 0;
   }
 
@@ -241,6 +247,7 @@ export class EVMWalletProvider extends WalletProvider {
   }
 
   #loadKeystore(address: string, password: string): void {
+    const selectedAddress = getAddress(address);
     const ksPath = join(this.#walletsDir, `${address}.json`);
     if (!existsSync(ksPath)) {
       throw new Error(`Keystore not found: ${ksPath}`);
@@ -250,7 +257,11 @@ export class EVMWalletProvider extends WalletProvider {
       const keystore = JSON.parse(raw) as KeystoreV3;
       const privateKeyBytes = decryptKeystoreV3(keystore, password);
       const pkHex = `0x${bytesToHex(privateKeyBytes)}` as Hex;
-      privateKeyToAccount(pkHex); // validate before retaining decrypted key material
+      if (privateKeyToAccount(pkHex).address !== selectedAddress) {
+        throw new Error(
+          "Keystore identity does not match the selected wallet address",
+        );
+      }
       this.#privateKeyHex = pkHex;
       this.#source = "loaded_keystore";
     } catch (e) {

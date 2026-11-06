@@ -227,7 +227,7 @@ describe("EVMWalletProvider — load from keystore", () => {
       () =>
         new EVMWalletProvider({
           password: PW,
-          address: "0xdead",
+          address: `0x${"dd".repeat(20)}`,
           walletsDir: wdir,
         }),
     ).toThrow(/Keystore not found/);
