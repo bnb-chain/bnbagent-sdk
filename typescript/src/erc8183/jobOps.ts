@@ -662,13 +662,13 @@ export class ERC8183JobOps {
           `erc8183-job-${jobId}.json`,
         );
         console.info(`[ERC8183JobOps] Deliverable uploaded: ${storageUrl}`);
-        this.deliverableUrls.set(jobId, storageUrl);
       }
 
       const publicUrl = this.publicDeliverableUrl(jobId, storageUrl);
       const result = await client.submit(BigInt(jobId), deliverable, {
         deliverable_url: publicUrl,
       });
+      if (storageUrl) this.deliverableUrls.set(jobId, storageUrl);
       console.info(
         `[ERC8183JobOps] submit(${jobId}) tx: ${result.transactionHash}`,
       );
@@ -836,35 +836,6 @@ export class ERC8183JobOps {
       return { success: false, error: "No storage configured" };
     }
 
-    const url = this.deliverableUrls.get(jobId);
-    if (url) {
-      try {
-        const data = await this.storage.download(url);
-        return { success: true, ...data };
-      } catch (error) {
-        console.warn(
-          `[ERC8183JobOps] get_response(${jobId}) download failed: ${describeError(error)}`,
-        );
-      }
-    }
-
-    if (this.storage instanceof LocalStorageProvider) {
-      const filename = `erc8183-job-${jobId}.json`;
-      try {
-        // Mirrors Python's `filepath.exists()` guard: a job whose result
-        // was never locally cached is the common case, not a failure — only
-        // warn when a file exists but fails to read/parse.
-        if (await this.storage.exists(filename)) {
-          const data = await this.storage.download(filename);
-          return { success: true, ...data };
-        }
-      } catch (error) {
-        console.warn(
-          `[ERC8183JobOps] get_response(${jobId}) file read failed: ${describeError(error)}`,
-        );
-      }
-    }
-
     const statusResult = await this.getJob(jobId);
     if (!statusResult.success) {
       if (statusResult.error_code === ERR_NOT_FOUND) return { ...statusResult };
@@ -895,6 +866,35 @@ export class ERC8183JobOps {
         error_code: ERR_NOT_FOUND,
       };
     }
+    const url = this.deliverableUrls.get(jobId);
+    if (url) {
+      try {
+        const data = await this.storage.download(url);
+        return { success: true, ...data };
+      } catch (error) {
+        console.warn(
+          `[ERC8183JobOps] get_response(${jobId}) download failed: ${describeError(error)}`,
+        );
+      }
+    }
+
+    if (this.storage instanceof LocalStorageProvider) {
+      const filename = `erc8183-job-${jobId}.json`;
+      try {
+        // Mirrors Python's `filepath.exists()` guard: a job whose result
+        // was never locally cached is the common case, not a failure — only
+        // warn when a file exists but fails to read/parse.
+        if (await this.storage.exists(filename)) {
+          const data = await this.storage.download(filename);
+          return { success: true, ...data };
+        }
+      } catch (error) {
+        console.warn(
+          `[ERC8183JobOps] get_response(${jobId}) file read failed: ${describeError(error)}`,
+        );
+      }
+    }
+
     try {
       const client = await this.getClient();
       const deliverableUrl = await client.getDeliverableUrl(BigInt(jobId));
