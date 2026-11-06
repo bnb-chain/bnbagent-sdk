@@ -359,6 +359,15 @@ def poll_once(
     state.last_block = to_block
 
 
+def initial_watch_state(erc8183) -> WatchState:
+    head = erc8183.w3.eth.block_number
+    cutoff = max(
+        0, int(erc8183.w3.eth.get_block(head)["timestamp"]) - erc8183.policy.dispute_window()
+    )
+    first = erc8183._first_block_at_or_after(cutoff, head)
+    return WatchState(last_block=max(-1, first - 1))
+
+
 def main() -> None:
     load_dotenv(ROOT / ".env")
 
@@ -395,7 +404,7 @@ def main() -> None:
     print(f"  margin   : {margin:.0f} s before a voting window closes")
     print("\nWatching for Disputed / VoteCast events (Ctrl+C to stop)...\n")
 
-    state = WatchState(last_block=erc8183.w3.eth.block_number)
+    state = initial_watch_state(erc8183)
     while True:
         try:
             poll_once(erc8183, voter, gateway, quorum, state)
