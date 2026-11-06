@@ -133,6 +133,8 @@ function fetchViaResolvedIp(params: {
   hostHeader: string;
   maxBytes: number;
   timeoutMs: number;
+  method?: "GET" | "POST";
+  body?: string;
 }): Promise<Buffer | null> {
   const {
     isHttps,
@@ -143,6 +145,8 @@ function fetchViaResolvedIp(params: {
     hostHeader,
     maxBytes,
     timeoutMs,
+    method = "GET",
+    body,
   } = params;
   return new Promise((resolve) => {
     let settled = false;
@@ -160,8 +164,17 @@ function fetchViaResolvedIp(params: {
         host: resolvedIp,
         port,
         path: path || "/",
-        method: "GET",
-        headers: { Host: hostHeader, "Accept-Encoding": "identity" },
+        method,
+        headers: {
+          Host: hostHeader,
+          "Accept-Encoding": "identity",
+          ...(body !== undefined
+            ? {
+                "Content-Type": "application/json",
+                "Content-Length": Buffer.byteLength(body),
+              }
+            : {}),
+        },
         timeout: timeoutMs,
         agent: false,
         // Connect to the DNS-resolved IP (preventing a rebind between the
@@ -217,7 +230,7 @@ function fetchViaResolvedIp(params: {
       req.destroy();
       finish(null);
     }, timeoutMs);
-    req.end();
+    req.end(body);
   });
 }
 
@@ -230,7 +243,12 @@ function fetchViaResolvedIp(params: {
  */
 export async function fetchPublicJson(
   agentUri: string,
-  opts: { maxBytes?: number; timeoutMs?: number } = {},
+  opts: {
+    maxBytes?: number;
+    timeoutMs?: number;
+    method?: "GET" | "POST";
+    body?: string;
+  } = {},
 ): Promise<Record<string, unknown> | null> {
   const maxBytes = opts.maxBytes ?? MAX_AGENT_URI_BYTES;
   const timeoutMs = opts.timeoutMs ?? HTTP_TIMEOUT_MS;
@@ -309,6 +327,8 @@ export async function fetchPublicJson(
       hostHeader,
       maxBytes,
       timeoutMs: deadline - performance.now(),
+      method: opts.method,
+      body: opts.body,
     });
     if (body === null) {
       return null;

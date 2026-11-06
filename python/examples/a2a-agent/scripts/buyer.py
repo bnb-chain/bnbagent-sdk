@@ -33,6 +33,8 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from dotenv import load_dotenv
 
+from bnbagent.utils.public_http import PublicHttpError, fetch_public_json
+
 load_dotenv(
     Path(__file__).resolve().parent.parent / os.path.basename(os.environ.get("ENV_FILE", ".env"))
 )
@@ -45,7 +47,6 @@ def discover_base_url() -> str:
     agent_id = os.getenv("AGENT_ID")
     if agent_id:
         from bnbagent import ERC8004Agent, EVMWalletProvider
-        from bnbagent.erc8004.agent_uri import AgentURIGenerator
 
         # Read-only lookup still needs a wallet for client construction; any key works.
         wallet = EVMWalletProvider(
@@ -54,7 +55,9 @@ def discover_base_url() -> str:
         )
         sdk = ERC8004Agent(wallet_provider=wallet, network=NETWORK)
         info = sdk.get_agent_info(int(agent_id))
-        registration = AgentURIGenerator.decode_registration_file_from_base64(info["agentURI"])
+        registration = sdk.parse_agent_uri(info["agentURI"])
+        if not isinstance(registration, dict):
+            raise ValueError("Invalid registration document")
         # The EIP-8004 registration-v1 file lists endpoints under "services".
         for ep in registration.get("services", []):
             if ep.get("name") == "A2A":
@@ -97,13 +100,24 @@ def resolve_message_url(base: str) -> str:
     """
     card_url = agent_card_url(base)
     try:
-        resp = httpx.get(card_url, timeout=10)
-        if resp.status_code == 200:
-            card = resp.json()
-            print(f"[card] {card['name']} — skills: {[s['id'] for s in card['skills']]}")
-            return card.get("url") or base
-        print(f"[discover] agent-card GET → HTTP {resp.status_code}; skipping discovery")
-    except httpx.HTTPError as exc:
+        if os.getenv("AGENT_ID"):
+            card = fetch_public_json(card_url, timeout=10)
+        else:
+            card = (
+                httpx.get(card_url, timeout=10, follow_redirects=False).raise_for_status().json()
+            )
+        target = card.get("url") or base
+        original, advertised = urlsplit(base), urlsplit(target)
+        if (
+            advertised.scheme not in {"http", "https"}
+            or advertised.username is not None
+            or advertised.password is not None
+            or (original.scheme, original.hostname, original.port)
+            != (advertised.scheme, advertised.hostname, advertised.port)
+        ):
+            raise ValueError("Agent card message URL must remain on its configured origin")
+        return target
+    except (httpx.HTTPError, PublicHttpError) as exc:
         print(f"[discover] agent-card GET failed ({exc}); skipping discovery")
     print(f"[discover] POSTing skills directly to {base} (POST-only endpoint, no GET-able card)")
     return base
@@ -124,7 +138,13 @@ def send_skill(message_url: str, data: dict) -> dict:
             }
         },
     }
-    return httpx.post(message_url, json=rpc, timeout=30).raise_for_status().json()
+    if os.getenv("AGENT_ID"):
+        return fetch_public_json(message_url, method="POST", json_body=rpc, timeout=30)
+    return (
+        httpx.post(message_url, json=rpc, timeout=30, follow_redirects=False)
+        .raise_for_status()
+        .json()
+    )
 
 
 def negotiate(message_url: str) -> dict:
