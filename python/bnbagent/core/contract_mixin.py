@@ -244,26 +244,27 @@ class ContractClientMixin:
                         "value": tx.get("value", 0),
                         "gas": tx.get("gas", gas),
                     }
-                    with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
-                        _future = _pool.submit(self.w3.eth.call, _call_params)
-                        try:
-                            _future.result(timeout=10)
-                        except _cf.TimeoutError:
+                    from bnbagent.core.preflight import submit_preflight
+
+                    _future = submit_preflight(self.w3.eth.call, _call_params)
+                    try:
+                        _future.result(timeout=10)
+                    except _cf.TimeoutError:
+                        logger.warning(
+                            f"[{class_name}] Pre-flight eth_call timed out, proceeding anyway"
+                        )
+                    except Exception as preflight_err:
+                        err_str = str(preflight_err)
+                        # Skip pre-flight if node returns opaque 0x (no revert data)
+                        if "'0x'" in err_str or err_str.strip().endswith(", '0x')"):
                             logger.warning(
-                                f"[{class_name}] Pre-flight eth_call timed out, proceeding anyway"
+                                f"[{class_name}] Pre-flight returned opaque 0x revert, "
+                                "proceeding to on-chain tx"
                             )
-                        except Exception as preflight_err:
-                            err_str = str(preflight_err)
-                            # Skip pre-flight if node returns opaque 0x (no revert data)
-                            if "'0x'" in err_str or err_str.strip().endswith(", '0x')"):
-                                logger.warning(
-                                    f"[{class_name}] Pre-flight returned opaque 0x revert, "
-                                    "proceeding to on-chain tx"
-                                )
-                            else:
-                                raise RuntimeError(
-                                    f"Transaction would revert: {preflight_err}"
-                                ) from preflight_err
+                        else:
+                            raise RuntimeError(
+                                f"Transaction would revert: {preflight_err}"
+                            ) from preflight_err
 
                 signed = self._wallet_provider.sign_transaction(tx)
                 raw_tx = _raw_bytes(signed)
