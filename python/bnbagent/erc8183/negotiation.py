@@ -919,6 +919,17 @@ class NegotiationHandler:
                 reason=f"Invalid request format: {e}",
             )
 
+        # HTTP callers also have a streamed body cap. Direct SDK callers must
+        # still be rejected before request hashing and remote signing.
+        if (
+            len(json.dumps(req.to_dict(), ensure_ascii=False).encode("utf-8"))
+            > MAX_DESCRIPTION_BYTES
+        ):
+            return self._reject(
+                request_data={},
+                reason_code=ReasonCode.TASK_TOO_LONG,
+                reason="Negotiation input exceeds the description byte limit",
+            )
         request_hash = self._ensure_hex_prefix(req.compute_hash())
 
         if self._require_quality_standards and not req.terms.quality_standards:
