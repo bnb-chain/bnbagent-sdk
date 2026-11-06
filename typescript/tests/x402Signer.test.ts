@@ -934,3 +934,33 @@ describe("quoteFromCli", () => {
     expect(quote.accepts).toEqual([]);
   });
 });
+
+describe("structural signer validity enforcement", () => {
+  it.each(["expired", "reversed", "too long", "missing"])(
+    "rejects %s authorizations before signing or budget reservation",
+    async (kind) => {
+      const { trackingSigner, signCalls } = makeTrackingSigner();
+      const p = payload({ fromAddr: trackingSigner.walletAddress });
+      const message: Record<string, unknown> = { ...p.message };
+      const now = Math.floor(Date.now() / 1000);
+      if (kind === "expired") {
+        message.validAfter = now - 120;
+        message.validBefore = now - 1;
+      }
+      if (kind === "reversed") {
+        message.validAfter = now + 120;
+        message.validBefore = now + 60;
+      }
+      if (kind === "too long") {
+        message.validAfter = now;
+        message.validBefore = now + 86400;
+      }
+      if (kind === "missing") message.validBefore = undefined;
+      await expect(
+        trackingSigner.signPayment({ ...p, message, expectedTo: p.message.to }),
+      ).rejects.toThrow(X402PolicyError);
+      expect(signCalls()).toBe(0);
+      expect(trackingSigner.budget.spent(U_MAINNET)).toBe(0n);
+    },
+  );
+});
