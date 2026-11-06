@@ -265,6 +265,24 @@ export class ERC8004Agent {
       throw new Error("Agent URI does not contain a name field");
     }
 
+    // Validate every field used by phase two before the irreversible write.
+    const services = agentData.services ?? [];
+    if (!Array.isArray(services)) throw new Error("services must be an array");
+    const endpoints = services.map((service) =>
+      AgentEndpoint.fromDict(service as Record<string, unknown>),
+    );
+    const supportedTrust =
+      agentData.supportedTrust ?? agentData.supportedTrusts ?? null;
+    if (endpoints.length > 0) {
+      this.generateAgentUri({
+        name: agentData.name as string,
+        description: (agentData.description as string) ?? "",
+        image: (agentData.image as string | undefined) ?? null,
+        endpoints,
+        supportedTrust: supportedTrust as string[] | null,
+      });
+    }
+
     const result = await this.contractInterface.registerAgent(
       agentUri,
       metadata,
@@ -274,29 +292,14 @@ export class ERC8004Agent {
     let finalAgentUri = agentUri;
     if (agentId !== null && agentId !== undefined) {
       try {
-        const services =
-          (agentData.services as Array<Record<string, unknown>>) ?? [];
-        const endpoints = services.map(
-          (svc) =>
-            new AgentEndpoint({
-              name: (svc.name as string) ?? "",
-              endpoint: (svc.endpoint as string) ?? "",
-              version: (svc.version as string | undefined) ?? null,
-            }),
-        );
-
         if (endpoints.length > 0) {
-          const supportedTrust =
-            (agentData.supportedTrust as string[] | undefined) ??
-            (agentData.supportedTrusts as string[] | undefined) ??
-            null;
           finalAgentUri = this.generateAgentUri({
             name: (agentData.name as string) ?? "",
             description: (agentData.description as string) ?? "",
             image: (agentData.image as string | undefined) ?? null,
             endpoints,
             agentId,
-            supportedTrust,
+            supportedTrust: supportedTrust as string[] | null,
           });
 
           await this.contractInterface.setAgentUri(agentId, finalAgentUri);
