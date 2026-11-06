@@ -10,14 +10,14 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import urlencode
 
-import requests
 from web3 import Web3
 
 from ..constants import SCAN_API_URL
 from ..core.paymaster import Paymaster
 from ..exceptions import ERC8004PartialRegistrationError, TransactionPendingError
-from ..utils.public_http import fetch_public_json
+from ..utils.public_http import PublicHttpError, fetch_public_json
 from ..wallets import WalletProvider
 from .agent_uri import AgentURIGenerator
 from .constants import get_erc8004_config
@@ -480,21 +480,17 @@ class ERC8004Agent:
         }
 
         try:
-            response = requests.get(
-                f"{SCAN_API_URL}/agents",
-                params=params,
+            data = fetch_public_json(
+                f"{SCAN_API_URL}/agents?{urlencode(params)}",
                 timeout=30,
             )
-            response.raise_for_status()
-
-            data = response.json()
             logger.debug(
                 f"Retrieved {len(data.get('items', []))} agents (total: {data.get('total', 0)})"
             )
 
             return data
 
-        except requests.exceptions.RequestException as e:
+        except PublicHttpError as e:
             logger.error(f"Failed to fetch agents from 8004scan: {str(e)}")
             raise ConnectionError(f"8004scan API request failed: {str(e)}") from e
 

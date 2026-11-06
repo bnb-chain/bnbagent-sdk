@@ -22,6 +22,7 @@ import {
   RelaySubmissionUnverifiedError,
   TransactionPendingError,
 } from "../errors.js";
+import { boundedJson } from "../utils/boundedJson.js";
 import { fetchPublicJson } from "../utils/publicHttp.js";
 import type { WalletProvider } from "../wallets/walletProvider.js";
 import { AgentURIGenerator } from "./agentUri.js";
@@ -345,6 +346,7 @@ export class ERC8004Agent {
     try {
       response = await fetch(`${SCAN_API_URL}/agents?${params.toString()}`, {
         signal: AbortSignal.timeout(30_000),
+        redirect: "error",
       });
     } catch (error) {
       throw new Error(`8004scan API request failed: ${describeError(error)}`, {
@@ -358,7 +360,7 @@ export class ERC8004Agent {
       );
     }
 
-    return (await response.json()) as Record<string, unknown>;
+    return boundedJson(response, 1024 * 1024);
   }
 
   /** Get a metadata value for an agent, decoded from bytes. */
