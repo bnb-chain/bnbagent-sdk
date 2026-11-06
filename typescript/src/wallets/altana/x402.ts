@@ -41,6 +41,7 @@ import { SessionBudgetTracker } from "../../x402/budget.js";
 import {
   X402AmountExceededError,
   X402NoPayableRouteError,
+  X402PolicyError,
   X402RecipientMismatchError,
 } from "../../x402/errors.js";
 import type {
@@ -306,6 +307,8 @@ export interface AltanaX402PayerOptions {
    * (same semantics as `TwakX402Payer`'s `expectedPayTo`).
    */
   expectedPayTo?: string;
+  /** Maximum remote lifetime for generic request(); default 3600s. Exact requests use their independently trusted route lifetime. */
+  maxTimeoutSeconds?: number;
   /** Fetch implementation override (tests). Defaults to `globalThis.fetch`. */
   fetchImpl?: typeof fetch;
 }
@@ -429,6 +432,7 @@ export class AltanaX402Payer implements X402Payer {
   readonly #expectedAsset: string | undefined;
   readonly #expectedPayTo: string | undefined;
   readonly #fetch: typeof fetch;
+  readonly #maxTimeoutSeconds: number;
 
   /** @internal Constructed by {@link AltanaWalletProvider.makeX402Payer}. */
   constructor(
@@ -443,6 +447,15 @@ export class AltanaX402Payer implements X402Payer {
     this.#expectedAsset = opts.expectedAsset;
     this.#expectedPayTo = opts.expectedPayTo;
     this.#fetch = opts.fetchImpl ?? globalThis.fetch;
+    this.#maxTimeoutSeconds = opts.maxTimeoutSeconds ?? 3600;
+    if (
+      !Number.isSafeInteger(this.#maxTimeoutSeconds) ||
+      this.#maxTimeoutSeconds <= 0
+    ) {
+      throw new X402PolicyError(
+        "maxTimeoutSeconds must be a positive safe integer",
+      );
+    }
   }
 
   /** Fetch the 402 challenge for `url` without paying (empty `accepts` when the endpoint answered non-402). */
@@ -681,6 +694,17 @@ export class AltanaX402Payer implements X402Payer {
       );
     }
     const { option } = route;
+    const timeout = route.raw.maxTimeoutSeconds ?? 3600;
+    if (
+      typeof timeout !== "number" ||
+      !Number.isSafeInteger(timeout) ||
+      timeout <= 0 ||
+      timeout > this.#maxTimeoutSeconds
+    ) {
+      throw new X402PolicyError(
+        "x402 route timeout exceeds the configured authorization lifetime",
+      );
+    }
     if (
       this.#expectedPayTo !== undefined &&
       option.payTo.toLowerCase() !== this.#expectedPayTo.toLowerCase()
