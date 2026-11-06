@@ -377,6 +377,23 @@ describe("AltanaX402Payer.request", () => {
     expect(result.success).toBe(true);
   });
 
+  it("rejects an excessive remote payment lifetime before signing", async () => {
+    const { impl } = fetchQueue(
+      json402({
+        ...CHALLENGE,
+        accepts: [{ ...PERMIT2_ENTRY, maxTimeoutSeconds: 86400 }],
+      }),
+    );
+    const payer = sessionProvider().makeX402Payer({
+      fetchImpl: impl,
+      maxTimeoutSeconds: 600,
+    });
+    await expect(
+      payer.request("https://api.example/paid", { maxPayment: 10000n }),
+    ).rejects.toThrow(/authorization lifetime/);
+    expect(sdkMocks.signX402PaymentMock).not.toHaveBeenCalled();
+  });
+
   it("fails with the exact upgrade hint on a pre-x402 SDK install", async () => {
     sdkMocks.x402Surface.enabled = false;
     const { impl } = fetchQueue(json402());
