@@ -1038,45 +1038,31 @@ class ERC8183JobOps:
 
         return {"success": True, "jobs": pending}
 
+    def _scan_page(self, counter: int, cursor_name: str) -> tuple[list[int], int]:
+        if counter <= 0:
+            return [], 0
+        cursor = getattr(self, cursor_name, 0)
+        if cursor >= counter:
+            cursor = 0
+        end = min(counter, cursor + 256)
+        return list(range(cursor + 1, end + 1)), end
+
+
     async def _startup_scan(self) -> dict[str, Any]:
-        erc8183 = self._get_client()
-        try:
-            counter = await asyncio.to_thread(erc8183.commerce.job_counter)
-        except Exception as exc:
-            logger.warning(f"[ERC8183JobOps] startup scan counter failed: {exc}")
-            self._startup_scan_done = True
-            return {"success": False, **_exc_error_fields(exc), "jobs": []}
-
-        if counter == 0:
-            self._startup_scan_done = True
-            return {"success": True, "jobs": []}
-
-        result = await self._multicall_scan(list(range(1, counter + 1)))
-        self._last_known_counter = counter
-        self._startup_scan_done = True
-        logger.info(
-            f"[ERC8183JobOps] Startup scan: {len(result['jobs'])} pending of {counter} total"
-            f" (agent={self.agent_address})"
-        )
-        return result
+        return await self.get_pending_jobs()
 
     async def get_pending_jobs(self) -> dict[str, Any]:
-        """Return funded, non-expired jobs assigned to this provider."""
+        """Scan one 256-job page per poll, cycling to revisit late funding.
+
+        Results cover the current page, rather than the entire chain history.
+        """
         try:
-            if not self._startup_scan_done:
-                return await self._startup_scan()
-
-            erc8183 = self._get_client()
-            counter = await asyncio.to_thread(erc8183.commerce.job_counter)
-            scan_set: set[int] = set()
-            if counter > self._last_known_counter:
-                scan_set.update(range(self._last_known_counter + 1, counter + 1))
-            scan_set.update(self._pending_open_ids)
-            if not scan_set:
-                return {"success": True, "jobs": []}
-
-            result = await self._multicall_scan(sorted(scan_set))
-            self._last_known_counter = counter
+            counter = await asyncio.to_thread(self._get_client().commerce.job_counter)
+            ids, cursor = self._scan_page(counter, "_pending_scan_cursor")
+            result = await self._multicall_scan(ids)
+            self._pending_scan_cursor = cursor
+            self._pending_open_ids.clear()
+            self._startup_scan_done = True
             return result
         except Exception as exc:
             logger.error(f"[ERC8183JobOps] get_pending_jobs failed: {exc}")
@@ -1085,9 +1071,9 @@ class ERC8183JobOps:
     async def get_submitted_jobs(self) -> dict[str, Any]:
         """Return SUBMITTED jobs assigned to this provider (opt-in auto-settle).
 
-        Unlike :meth:`get_pending_jobs` (FUNDED, incremental cursor), this does a
-        full scan each call — SUBMITTED jobs sit awaiting the dispute window, so
-        there is no monotonic cursor. Each dict includes ``submittedAt`` so the
+        Like :meth:`get_pending_jobs`, each call scans a bounded page and cycles
+        back through older jobs. SUBMITTED jobs may change without a new job id.
+        Each dict includes ``submittedAt`` so the
         caller can check the window exactly instead of approximating it with
         ``expiredAt``.
         """
@@ -1097,9 +1083,9 @@ class ERC8183JobOps:
             counter = await asyncio.to_thread(erc8183.commerce.job_counter)
             if counter == 0:
                 return {"success": True, "jobs": []}
-            jobs = await asyncio.to_thread(
-                erc8183.commerce.get_jobs_batch, list(range(1, counter + 1))
-            )
+            ids, cursor = self._scan_page(counter, "_submitted_scan_cursor")
+            jobs = await asyncio.to_thread(erc8183.commerce.get_jobs_batch, ids)
+            self._submitted_scan_cursor = cursor
             submitted = [
                 {
                     "jobId": job.id,
