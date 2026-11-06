@@ -423,12 +423,14 @@ class ERC8183JobOps:
             if self._storage:
                 storage_url = await self._storage.upload(data, f"erc8183-job-{job_id}.json")
                 logger.info(f"[ERC8183JobOps] Deliverable uploaded: {storage_url}")
-                self._deliverable_urls[job_id] = storage_url
 
             public_url = self._public_deliverable_url(job_id, storage_url)
             result = await asyncio.to_thread(
                 erc8183.submit, job_id, deliverable, {"deliverable_url": public_url}
             )
+            if storage_url:
+                self._deliverable_urls[job_id] = storage_url
+            self._response_misses.pop(job_id, None)
             logger.info(f"[ERC8183JobOps] submit({job_id}) tx: {result['transactionHash']}")
             return {
                 "success": True,
@@ -558,24 +560,7 @@ class ERC8183JobOps:
         return dict(await asyncio.shield(task))
 
     async def _get_response_uncached(self, job_id: int) -> dict[str, Any]:
-        """Cache -> local file -> status check -> bounded on-chain URL lookup."""
-
-        url = self._deliverable_urls.get(job_id)
-        if url:
-            try:
-                data = await self._storage.download(url)
-                return {"success": True, **data}
-            except Exception as exc:
-                logger.warning(f"[ERC8183JobOps] get_response({job_id}) download failed: {exc}")
-
-        if hasattr(self._storage, "_base"):
-            try:
-                filepath = self._storage._base / f"erc8183-job-{job_id}.json"
-                if filepath.exists():
-                    data = json.loads(filepath.read_text(encoding="utf-8"))
-                    return {"success": True, **data}
-            except Exception as exc:
-                logger.warning(f"[ERC8183JobOps] get_response({job_id}) file read failed: {exc}")
+        """Check on-chain ownership and lifecycle before local or cached storage."""
 
         status_result = await self.get_job(job_id)
         if not status_result.get("success"):
@@ -595,6 +580,23 @@ class ERC8183JobOps:
                 "error": f"Response not found for job {job_id}",
                 "error_code": ERR_NOT_FOUND,
             }
+        url = self._deliverable_urls.get(job_id)
+        if url:
+            try:
+                data = await self._storage.download(url)
+                return {"success": True, **data}
+            except Exception as exc:
+                logger.warning(f"[ERC8183JobOps] get_response({job_id}) download failed: {exc}")
+
+        if hasattr(self._storage, "_base"):
+            try:
+                filepath = self._storage._base / f"erc8183-job-{job_id}.json"
+                if filepath.exists():
+                    data = json.loads(filepath.read_text(encoding="utf-8"))
+                    return {"success": True, **data}
+            except Exception as exc:
+                logger.warning(f"[ERC8183JobOps] get_response({job_id}) file read failed: {exc}")
+
         try:
             erc8183 = self._get_client()
             deliverable_url = await asyncio.to_thread(erc8183.get_deliverable_url, job_id)
