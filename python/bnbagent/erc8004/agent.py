@@ -629,7 +629,18 @@ class ERC8004Agent:
         # Handle base64 data URI
         if agent_uri.startswith("data:application/json;base64,"):
             try:
-                return AgentURIGenerator.decode_registration_file_from_base64(agent_uri)
+                # Reject before decoding/allocation, then check actual UTF-8 bytes.
+                payload = agent_uri.split(",", 1)[1]
+                if len(payload) > 4 * ((1024 * 1024 + 2) // 3):
+                    return None
+                import base64
+                import json
+
+                decoded = base64.b64decode(payload, validate=True)
+                if len(decoded) > 1024 * 1024:
+                    return None
+                result = json.loads(decoded)
+                return result if isinstance(result, dict) else None
             except Exception:
                 return None
 
