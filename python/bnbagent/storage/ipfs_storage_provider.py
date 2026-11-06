@@ -174,6 +174,8 @@ class IPFSStorageProvider(StorageProvider):
 
     @classmethod
     def _extract_cid(cls, url: str) -> str:
+        if not isinstance(url, str) or len(url) > 4096:
+            raise StorageError("Invalid IPFS URL length")
         if url.startswith("ipfs://"):
             cid = url[7:]
         elif "/ipfs/" in url:
@@ -181,6 +183,6 @@ class IPFSStorageProvider(StorageProvider):
         else:
             cid = url
         cid = cid.strip("/")
-        if not cls._CID_RE.match(cid):
-            raise StorageError(f"Invalid IPFS CID format: {cid}")
+        if len(cid) > 128 or not cls._CID_RE.fullmatch(cid):
+            raise StorageError("Invalid IPFS CID format")
         return cid
