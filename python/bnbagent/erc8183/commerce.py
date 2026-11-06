@@ -97,6 +97,8 @@ class CommerceClient(ContractClientMixin):
         hook: str = ZERO_ADDRESS,
     ) -> dict[str, Any]:
         """Create a new job (``Open`` state) and return a dict with ``jobId``."""
+        if len(description.encode("utf-8")) > 4096:
+            raise ValueError("Job description exceeds 4096-byte limit")
         fn = self.contract.functions.createJob(
             Web3.to_checksum_address(provider),
             Web3.to_checksum_address(evaluator),
@@ -132,6 +134,8 @@ class CommerceClient(ContractClientMixin):
     ) -> dict[str, Any]:
         """Create an ``Open`` job bound to an explicitly selected token."""
         token_address = Web3.to_checksum_address(token)
+        if len(description.encode("utf-8")) > 4096:
+            raise ValueError("Job description exceeds 4096-byte limit")
         fn = self.contract.functions.createJobWithToken(
             Web3.to_checksum_address(provider),
             Web3.to_checksum_address(evaluator),

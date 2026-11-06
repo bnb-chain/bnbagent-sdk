@@ -715,7 +715,7 @@ export function buildJobDescription(
 
   const description = canonicalJson(content);
 
-  if (description.length > maxLength) {
+  if (Buffer.byteLength(description, "utf8") > maxLength) {
     throw new DescriptionTooLongError(
       `on-chain description is ${description.length} bytes, exceeds max_length=${maxLength}; shorten task_description / terms. Truncating would invalidate negotiation_hash / provider_sig.`,
     );
@@ -1339,6 +1339,24 @@ export class NegotiationHandler {
 
     let negotiationHash = "";
     let providerSig = "";
+
+    // Reject oversized terms before calling a potentially remote signer.
+    const preflightContent = buildDescriptionContent(
+      partialDict,
+      this.chainId,
+      this.verifyingContract,
+    );
+    if (
+      Buffer.byteLength(canonicalJson(preflightContent), "utf8") >
+      MAX_DESCRIPTION_BYTES
+    ) {
+      return this.reject({
+        requestData: req.toDict(),
+        requestHash,
+        reasonCode: ReasonCode.TASK_TOO_LONG,
+        reason: `task_description + terms exceed the on-chain description size limit (${MAX_DESCRIPTION_BYTES} bytes)`,
+      });
+    }
 
     if (this.walletProvider || this.quoteSigner) {
       try {
