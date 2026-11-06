@@ -259,16 +259,7 @@ export async function createErc8183Server(
       }),
     ),
 
-    route("POST", `${prefix}/negotiate`, async ({ res, body, clientIp }) => {
-      try {
-        await negotiateLimiter.check(clientIp);
-        await globalNegotiateLimiter.check("global");
-      } catch (error) {
-        if (error instanceof RateLimitExceeded) {
-          return sendJson(res, 429, { error: "Too many requests" });
-        }
-        throw error;
-      }
+    route("POST", `${prefix}/negotiate`, async ({ res, body }) => {
       if (
         typeof body !== "object" ||
         body === null ||
@@ -363,6 +354,18 @@ export async function createErc8183Server(
 
   const listener = makeRequestListener(routes, {
     trustedProxyIps: readIpSetEnv("ERC8183_TRUSTED_PROXY_IPS"),
+    beforeBody: async (_req, res, clientIp) => {
+      try {
+        await negotiateLimiter.check(clientIp);
+        await globalNegotiateLimiter.check("global");
+        return true;
+      } catch (error) {
+        if (!(error instanceof RateLimitExceeded)) throw error;
+        res.setHeader("Connection", "close");
+        sendJson(res, 429, { error: "Too many requests" });
+        return false;
+      }
+    },
   });
 
   // ── funded-job watcher ──

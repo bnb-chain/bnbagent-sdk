@@ -44,6 +44,7 @@ import {
   RateLimitExceeded,
   SlidingWindowLimiter,
 } from "../../../src/utils/index.js";
+import { HttpInputError, readJsonBody } from "../../agent-server/src/http.js";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url))); // examples/a2a-agent
 loadEnv(ROOT);
@@ -177,17 +178,6 @@ function extractDataPart(
   return null;
 }
 
-async function readBody(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(chunk as Buffer);
-  }
-  if (chunks.length === 0) {
-    return undefined;
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf-8"));
-}
-
 // ── Boot ──
 
 async function main(): Promise<void> {
@@ -266,11 +256,30 @@ async function main(): Promise<void> {
       return sendJson(res, 404, { error: "Not found" });
     }
 
+    const clientIp = req.socket.remoteAddress ?? "unknown";
+    try {
+      negotiateLimiter.check(clientIp);
+      globalNegotiateLimiter.check("global");
+    } catch (error) {
+      if (error instanceof RateLimitExceeded) {
+        res.setHeader("Connection", "close");
+        return rpcError(res, null, -32000, "Rate limited, retry later", 429);
+      }
+      throw error;
+    }
+
     let body: unknown;
     try {
-      body = await readBody(req);
-    } catch {
-      return rpcError(res, null, -32700, "Parse error", 400);
+      body = await readJsonBody(req);
+    } catch (error) {
+      res.setHeader("Connection", "close");
+      return rpcError(
+        res,
+        null,
+        -32700,
+        "Invalid request body",
+        error instanceof HttpInputError ? error.status : 400,
+      );
     }
     if (typeof body !== "object" || body === null) {
       return rpcError(res, null, -32600, "Invalid Request", 400);
@@ -301,16 +310,6 @@ async function main(): Promise<void> {
     const skill = data.skill;
 
     if (skill === "negotiate-erc8183-job") {
-      const clientIp = req.socket.remoteAddress ?? "unknown";
-      try {
-        negotiateLimiter.check(clientIp);
-        globalNegotiateLimiter.check("global");
-      } catch (error) {
-        if (error instanceof RateLimitExceeded) {
-          return rpcError(res, reqId, -32000, "Rate limited, retry later");
-        }
-        throw error;
-      }
       const terms = data.terms;
       const taskDescription = data.task_description;
       if (
