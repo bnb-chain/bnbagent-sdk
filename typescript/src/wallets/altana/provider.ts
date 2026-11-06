@@ -1180,8 +1180,8 @@ export class AltanaWalletProvider extends WalletProvider {
   /**
    * Post-revoke Permit2 work; the revoke itself already succeeded. Runs
    * the requested cleanup and, unless `permit2Reset: false`, resets the
-   * outer Permit2 approvals, in one batch. Nothing to do without the SDK's
-   * x402 surface, which a session needs to sign for Permit2 at all.
+   * outer Permit2 approvals, in one batch. If the installed SDK cannot
+   * perform cleanup, report the incomplete cleanup after revocation.
    */
   async #afterRevoke(
     label: string,
@@ -1195,16 +1195,8 @@ export class AltanaWalletProvider extends WalletProvider {
       return revoked;
     }
     try {
-      let permit2: `0x${string}`;
-      try {
-        const { module } = await this.#x402Sdk();
-        permit2 = toChecksumAddress(module.PERMIT2_ADDRESS);
-      } catch (error) {
-        if (cleanup === undefined) {
-          return revoked;
-        }
-        throw error;
-      }
+      const { module } = await this.#x402Sdk();
+      const permit2 = toChecksumAddress(module.PERMIT2_ADDRESS);
       const client =
         cleanup?.client ?? opts?.client ?? (await this.#readClient());
       let plan: ReturnType<typeof planPermit2Cleanup> = { lock: [], kept: [] };
