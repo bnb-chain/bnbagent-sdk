@@ -41,6 +41,7 @@ import { SessionBudgetTracker } from "../../x402/budget.js";
 import {
   X402AmountExceededError,
   X402NoPayableRouteError,
+  X402PaymentStateUnknownError,
   X402RecipientMismatchError,
 } from "../../x402/errors.js";
 import type {
@@ -604,6 +605,7 @@ export class AltanaX402Payer implements X402Payer {
       ...(resource !== undefined && resource !== null ? { resource } : {}),
     };
     this.#budget.reserve(expected.asset, expected.amount);
+    let paymentExposed = false;
     try {
       const { header: signedHeader } =
         await this.#provider._signX402Payment(requirement);
@@ -611,6 +613,7 @@ export class AltanaX402Payer implements X402Payer {
         x402Version: expected.x402Version,
         resource,
       });
+      paymentExposed = true;
       const paid = await this.#fetch(url, {
         ...init,
         headers: {
@@ -637,6 +640,13 @@ export class AltanaX402Payer implements X402Payer {
         ...(transaction ? { transaction } : {}),
       };
     } catch (error) {
+      if (paymentExposed) {
+        throw new X402PaymentStateUnknownError(
+          expected.asset,
+          expected.amount,
+          error,
+        );
+      }
       this.#budget.rollback(expected.asset, expected.amount);
       throw error;
     }
@@ -707,6 +717,7 @@ export class AltanaX402Payer implements X402Payer {
     };
 
     this.#budget.reserve(option.asset, option.amount);
+    let paymentExposed = false;
     try {
       const { header: signedHeader } =
         await this.#provider._signX402Payment(requirement);
@@ -714,6 +725,7 @@ export class AltanaX402Payer implements X402Payer {
         x402Version,
         resource,
       });
+      paymentExposed = true;
       const paid = await this.#fetch(url, {
         ...init,
         headers: {
@@ -737,9 +749,14 @@ export class AltanaX402Payer implements X402Payer {
         ...(transaction ? { transaction } : {}),
       };
     } catch (error) {
-      // The payment may not have settled; release the in-process
-      // reservation and let the caller retry (settled-but-failed-HTTP is
-      // observable on-chain via the bounded Permit2 allowance).
+      if (paymentExposed) {
+        throw new X402PaymentStateUnknownError(
+          option.asset,
+          option.amount,
+          error,
+        );
+      }
+      // Before transport begins, the authorization has not left this payer.
       this.#budget.rollback(option.asset, option.amount);
       throw error;
     }

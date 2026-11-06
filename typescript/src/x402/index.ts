@@ -4,6 +4,7 @@ export {
   X402AmountExceededError,
   X402BudgetExhaustedError,
   X402NoPayableRouteError,
+  X402PaymentStateUnknownError,
   X402PolicyError,
   X402RecipientMismatchError,
   X402SignerError,

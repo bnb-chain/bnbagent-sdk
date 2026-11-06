@@ -356,7 +356,7 @@ describe("AltanaX402Payer.request", () => {
     expect(sdkMocks.signX402PaymentMock).toHaveBeenCalledTimes(1);
   });
 
-  it("rolls the budget back when the paid retry fails", async () => {
+  it("retains the budget when the paid retry fails after exposing a signature", async () => {
     const { impl } = fetchQueue(
       json402(),
       new Response("boom", { status: 500 }),
@@ -370,11 +370,12 @@ describe("AltanaX402Payer.request", () => {
     await expect(
       payer.request("https://api.example/paid", { maxPayment: 10_000n }),
     ).rejects.toThrow(/paid retry failed: HTTP 500/);
-    // Reservation released: the full budget is available again.
-    const result = await payer.request("https://api.example/paid", {
-      maxPayment: 10_000n,
-    });
-    expect(result.success).toBe(true);
+    await expect(
+      payer.request("https://api.example/paid", {
+        maxPayment: 10_000n,
+      }),
+    ).rejects.toThrow(X402BudgetExhaustedError);
+    expect(sdkMocks.signX402PaymentMock).toHaveBeenCalledTimes(1);
   });
 
   it("fails with the exact upgrade hint on a pre-x402 SDK install", async () => {
@@ -562,6 +563,70 @@ describe("AltanaX402Payer.requestExact", () => {
       expect(sdkMocks.signX402PaymentMock).not.toHaveBeenCalled();
     },
   );
+
+  it.each(["http", "transport", "body"])(
+    "retains exact-route budget after a paid %s failure",
+    async (failure) => {
+      const tracker = new SessionBudgetTracker({ [USDC]: 5000n });
+      const paid =
+        failure === "http"
+          ? new Response("down", { status: 500 })
+          : jsonOk({ ok: true });
+      if (failure === "body")
+        vi.spyOn(paid, "text").mockRejectedValue(
+          new Error("body disconnected"),
+        );
+      const fetchImpl = vi.fn().mockResolvedValueOnce(
+        json402({
+          x402Version: 2,
+          resource: exactResource,
+          accepts: [exactEntry],
+        }),
+      );
+      if (failure === "transport")
+        fetchImpl.mockRejectedValueOnce(new Error("connection reset"));
+      else fetchImpl.mockResolvedValueOnce(paid);
+      const payer = sessionProvider().makeX402Payer({
+        fetchImpl,
+        sessionBudget: tracker,
+      });
+      await expect(
+        payer.requestExact("https://api.example/paid", {
+          expectedRoute,
+          maxPayment: 5000n,
+        }),
+      ).rejects.toMatchObject({
+        name: "X402PaymentStateUnknownError",
+        amount: 5000n,
+      });
+      expect(tracker.spent(USDC)).toBe(5000n);
+    },
+  );
+
+  it("releases exact-route budget when signing fails before transport", async () => {
+    sdkMocks.signX402PaymentMock.mockRejectedValueOnce(
+      new Error("sign failed"),
+    );
+    const tracker = new SessionBudgetTracker({ [USDC]: 5000n });
+    const { impl } = fetchQueue(
+      json402({
+        x402Version: 2,
+        resource: exactResource,
+        accepts: [exactEntry],
+      }),
+    );
+    const payer = sessionProvider().makeX402Payer({
+      fetchImpl: impl,
+      sessionBudget: tracker,
+    });
+    await expect(
+      payer.requestExact("https://api.example/paid", {
+        expectedRoute,
+        maxPayment: 5000n,
+      }),
+    ).rejects.toThrow("sign failed");
+    expect(tracker.spent(USDC)).toBe(0n);
+  });
 
   it("does not reserve session budget for a paid:false cache hit", async () => {
     const { impl } = fetchQueue(
