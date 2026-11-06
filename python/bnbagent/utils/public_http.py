@@ -122,7 +122,14 @@ def _resolve(host: str, port: int, deadline: float) -> str:
     return addresses[0]
 
 
-def fetch_public_json(url: str, *, max_bytes: int = 1024 * 1024, timeout: float = 15.0) -> dict:
+def fetch_public_json(
+    url: str,
+    *,
+    max_bytes: int = 1024 * 1024,
+    timeout: float = 15.0,
+    method: str = "GET",
+    json_body: dict | None = None,
+) -> dict:
     """Fetch one JSON object; no redirects, proxies, credentials or decompression.
 
     DNS, connect, TLS and streamed reads share an overall deadline. The socket
@@ -136,6 +143,13 @@ def fetch_public_json(url: str, *, max_bytes: int = 1024 * 1024, timeout: float 
         or timeout <= 0
     ):
         raise PublicHttpError("Invalid public download limits")
+    if method not in {"GET", "POST"}:
+        raise PublicHttpError("Unsupported public HTTP method")
+    encoded_body = None
+    if json_body is not None:
+        encoded_body = json.dumps(json_body, separators=(",", ":")).encode("utf-8")
+        if len(encoded_body) > max_bytes:
+            raise PublicHttpError("Public request exceeds the size limit")
     conn = None
     sock = None
     timer = None
@@ -188,9 +202,11 @@ def fetch_public_json(url: str, *, max_bytes: int = 1024 * 1024, timeout: float 
             path += f"?{parsed.query}"
         sock.settimeout(_remaining(deadline))
         conn.request(
-            "GET",
+            method,
             path,
+            body=encoded_body,
             headers={
+                "Content-Type": "application/json",
                 "Host": authority,
                 "Accept": "application/json",
                 "Accept-Encoding": "identity",
