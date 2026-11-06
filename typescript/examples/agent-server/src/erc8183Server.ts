@@ -338,7 +338,15 @@ export async function createErc8183Server(
       },
     ),
 
-    route("GET", `${prefix}/job/:id`, async ({ res, params }) => {
+    route("GET", `${prefix}/job/:id`, async ({ res, params, clientIp }) => {
+      try {
+        await responseLimiter.check(clientIp);
+        await globalResponseLimiter.check("global");
+      } catch (error) {
+        if (error instanceof RateLimitExceeded)
+          return sendJson(res, 429, { error: "Too many requests" });
+        throw error;
+      }
       const result = await jobOps.getJob(Number(params.id));
       sendJson(res, result.success ? 200 : httpStatus(result, 500), result);
     }),
