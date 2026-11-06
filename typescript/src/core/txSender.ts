@@ -253,12 +253,14 @@ export async function waitForReceipt(
         return;
       }
       client.getTransaction({ hash }).then(
-        () => {
-          if (!settled) {
+        (transaction) => {
+          if (!settled && transaction != null) {
             transactionSeen = true;
             if (unseenAbortTimer) {
               clearTimeout(unseenAbortTimer);
             }
+          } else {
+            scheduleNextTransactionPresencePoll();
           }
         },
         () => {
@@ -274,6 +276,10 @@ export async function waitForReceipt(
       client.getTransactionReceipt({ hash }).then(
         (receipt) => {
           if (settled) {
+            return;
+          }
+          if (receipt == null) {
+            scheduleNextReceiptPoll();
             return;
           }
           settled = true;
