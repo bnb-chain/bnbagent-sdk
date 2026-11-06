@@ -24,6 +24,7 @@ from typing import Any
 from eth_account import Account
 from eth_account.messages import encode_defunct
 from eth_account.signers.local import LocalAccount
+from web3 import Web3
 
 from ..signing import SigningPolicy
 from ..signing import check as _policy_check
@@ -134,6 +135,8 @@ class EVMWalletProvider(WalletProvider):
         if not d.is_dir():
             return False
         if address:
+            if not isinstance(address, str) or not Web3.is_address(address):
+                raise ValueError("Wallet address must be a 20-byte EVM address")
             return (d / f"{address}.json").is_file()
         return any(d.glob("0x*.json"))
 
@@ -196,6 +199,9 @@ class EVMWalletProvider(WalletProvider):
 
     def _load_keystore(self, address: str, password: str) -> None:
         """Load and decrypt a keystore file by address."""
+        if not isinstance(address, str) or not Web3.is_address(address):
+            raise ValueError("Wallet address must be a 20-byte EVM address")
+        expected = Web3.to_checksum_address(address)
         ks_path = self._wallets_dir / f"{address}.json"
         if not ks_path.is_file():
             raise ValueError(f"Keystore not found: {ks_path}")
@@ -204,7 +210,10 @@ class EVMWalletProvider(WalletProvider):
             with open(ks_path) as f:
                 keystore = json.load(f)
             private_key = Account.decrypt(keystore, password)
-            self._account = Account.from_key(private_key)
+            account = Account.from_key(private_key)
+            if account.address != expected:
+                raise ValueError("Keystore identity does not match selected wallet address")
+            self._account = account
             self._source = "loaded_keystore"
             logger.info("Wallet loaded from keystore: %s", self._account.address)
         except ValueError as e:
