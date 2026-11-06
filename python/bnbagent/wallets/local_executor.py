@@ -396,7 +396,7 @@ class LocalExecutor(IntentExecutor):
                 raw_transaction = _raw_transaction_bytes(signed_txn)
                 local_hash, local_hash_hex = _signed_transaction_hash(raw_transaction)
                 try:
-                    returned_hash = self.web3.eth.send_raw_transaction(raw_transaction)
+                    self.web3.eth.send_raw_transaction(raw_transaction)
                 except Exception as send_err:
                     if _is_ambiguous_broadcast_error(send_err):
                         nonce_mgr.mark_broadcast(nonce, local_hash_hex)
@@ -407,12 +407,10 @@ class LocalExecutor(IntentExecutor):
                             send_err,
                             local_hash_hex,
                         )
-                        return _BroadcastAttempt(
-                            nonce, nonce_mgr, local_hash, local_hash_hex
-                        )
+                        return _BroadcastAttempt(nonce, nonce_mgr, local_hash, local_hash_hex)
                     raise
-                tx_hash = bytes(returned_hash)
-                tx_hash_hex = _hex_hash(tx_hash)
+                tx_hash = local_hash
+                tx_hash_hex = local_hash_hex
                 nonce_mgr.mark_broadcast(nonce, local_hash_hex)
                 logger.debug(f"Transaction sent via Web3: {tx_hash_hex}")
                 return _BroadcastAttempt(nonce, nonce_mgr, tx_hash, tx_hash_hex)

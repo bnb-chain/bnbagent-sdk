@@ -148,7 +148,7 @@ def test_not_sponsorable_falls_back_to_self_pay(caplog):
 
     pm.eth_sendRawTransaction.assert_not_called()  # paymaster NOT used to send
     web3.eth.send_raw_transaction.assert_called_once()  # self-paid
-    assert result["transactionHash"] == "0x" + "ab" * 32
+    assert result["transactionHash"] == Web3.to_hex(Web3.keccak(b"\x00" * 32))
     assert "not sponsorable" in caplog.text
 
 
@@ -162,7 +162,7 @@ def test_issponsorable_error_falls_back_to_self_pay():
 
     pm.eth_sendRawTransaction.assert_not_called()
     web3.eth.send_raw_transaction.assert_called_once()
-    assert result["transactionHash"] == "0x" + "ab" * 32
+    assert result["transactionHash"] == Web3.to_hex(Web3.keccak(b"\x00" * 32))
 
 
 def test_create_job_with_token_calldata_enters_existing_sponsorship_path():
@@ -208,7 +208,7 @@ def test_paymaster_nonce_error_falls_back_to_self_pay():
 
     pm.isSponsorable.assert_not_called()  # never reached
     web3.eth.send_raw_transaction.assert_called_once()  # self-paid
-    assert result["transactionHash"] == "0x" + "ab" * 32
+    assert result["transactionHash"] == Web3.to_hex(Web3.keccak(b"\x00" * 32))
 
 
 def test_no_paymaster_self_pays():
@@ -216,7 +216,7 @@ def test_no_paymaster_self_pays():
     ex = LocalExecutor(web3=web3, wallet_provider=wallet, paymaster=None)
     result = ex._execute_function(fn, description="register_job")
     web3.eth.send_raw_transaction.assert_called_once()
-    assert result["transactionHash"] == "0x" + "ab" * 32
+    assert result["transactionHash"] == Web3.to_hex(Web3.keccak(b"\x00" * 32))
 
 
 def test_preflight_revert_propagates_does_not_self_pay():

@@ -6,6 +6,7 @@ import concurrent.futures
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
+from web3 import Web3
 
 from bnbagent.erc8004.contract import ContractInterface
 from bnbagent.wallets.local_executor import LocalExecutor
@@ -342,7 +343,7 @@ class TestReceiptTimeoutPending:
         with pytest.raises(TransactionPendingError) as ei:
             ci._execute_transaction(fn, description="set agent URI")
 
-        assert ei.value.tx_hash == "0x" + "cd" * 32
+        assert ei.value.tx_hash == Web3.to_hex(Web3.keccak(b"\xab" * 32))
         assert ei.value.timeout_seconds == get_default_receipt_timeout()
 
     def test_set_agent_uri_propagates_pending_not_runtimeerror(self):
