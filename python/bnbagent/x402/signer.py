@@ -23,7 +23,8 @@ from typing import Any
 
 from web3 import Web3
 
-from ..signing import PolicyViolation
+from ..signing import PolicyViolation, SigningPolicy
+from ..signing.checks import check
 from ..signing.policy import EIP3009_CANONICAL_FIELDS
 from ..wallets import TypedDataSigner, UnsupportedWalletOperation
 from ..wallets.capabilities import SIGN_TYPED_DATA
@@ -96,6 +97,8 @@ class X402Signer:
         *,
         max_value_per_call: dict[str, int] | None = None,
         session_budget: dict[str, int] | None = None,
+        max_validity_window_seconds: int = 600,
+        max_future_validity_seconds: int = 900,
     ) -> None:
         """
         Args:
@@ -119,6 +122,10 @@ class X402Signer:
             session_budget: ``{token_address: total_base_units}`` cap on
                 cumulative spend across all sign_payment calls in this
                 signer's lifetime. Independent of per-call cap.
+            max_validity_window_seconds: Maximum validBefore-validAfter (default 600).
+                Checked here even when the structural wallet has no SigningPolicy.
+            max_future_validity_seconds: Maximum validBefore-now (default 900).
+                A concrete wallet may apply a stricter independent policy.
         """
         # Composition-time gate (design §3.3.2 gate 1): a capability-aware
         # wallet that cannot sign EIP-712 is rejected immediately, with a
@@ -138,6 +145,13 @@ class X402Signer:
                     "kinds that sign payments internally, e.g. twak)"
                 ),
             )
+        for ceiling in (max_validity_window_seconds, max_future_validity_seconds):
+            if type(ceiling) is not int or ceiling <= 0:
+                raise ValueError("Validity ceilings must be positive integers")
+        self._validity_policy = SigningPolicy.strict_default().extend(
+            max_validity_window_seconds=max_validity_window_seconds,
+            max_future_validity_seconds=max_future_validity_seconds,
+        )
         self._wallet = wallet
         self._max_value: dict[str, int] = {}
         if max_value_per_call:
@@ -290,6 +304,19 @@ class X402Signer:
                 f"message['from']={msg_from_cs} does not match wallet "
                 f"{wallet_cs} — refusing to sign"
             )
+
+        # Structural signers need the same validity guard as concrete wallets.
+        try:
+            check(
+                self._validity_policy.extend(
+                    domain_allowlist={(int(domain["chainId"]), verifying)},
+                ),
+                domain,
+                types,
+                message,
+            )
+        except PolicyViolation as exc:
+            raise X402PolicyError(str(exc)) from exc
 
         # ── L2 session budget (atomic reserve; rollback on any failure) ──
         # reserve() does the check+increment under a single lock so two

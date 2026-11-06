@@ -458,7 +458,7 @@ function checkFieldShape(
   }
 }
 
-function checkValidity(
+export function checkValidity(
   policy: SigningPolicy,
   primaryType: string,
   message: Record<string, unknown>,
