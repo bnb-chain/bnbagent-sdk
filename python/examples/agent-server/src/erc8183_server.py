@@ -248,7 +248,13 @@ def _create_erc8183_routes(
     )
 
     @router.get("/job/{job_id}")
-    async def get_job(job_id: int):
+    async def get_job(job_id: int, request: Request):
+        client_ip = request.client.host if request.client else "unknown"
+        try:
+            await _check_limiter(response_limiter, client_ip)
+            await _check_limiter(global_response_limiter, "global")
+        except RateLimitExceeded:
+            raise HTTPException(status_code=429, detail="Too many requests") from None
         result = await state.job_ops.get_job(job_id)
         if not result.get("success"):
             return JSONResponse(result, status_code=_http_status(result, 500))

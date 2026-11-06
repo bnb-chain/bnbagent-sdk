@@ -129,6 +129,8 @@ global_negotiate_limiter = SlidingWindowLimiter(
     window_seconds=_rate_window,
     max_keys=1,
 )
+read_limiter = SlidingWindowLimiter(max_requests=60, window_seconds=60, max_keys=10_000)
+global_read_limiter = SlidingWindowLimiter(max_requests=300, window_seconds=60, max_keys=1)
 if (
     os.getenv("ENV") or os.getenv("ENVIRONMENT") or os.getenv("NODE_ENV") or ""
 ).strip().lower() in {
@@ -267,8 +269,13 @@ async def a2a_endpoint(request: Request):
         return {"jsonrpc": "2.0", "id": req_id, "result": _agent_message(envelope)}
 
     if skill == "erc8183-job-status":
+        try:
+            read_limiter.check(request.client.host if request.client else "unknown")
+            global_read_limiter.check("global")
+        except RateLimitExceeded:
+            return _rpc_error(req_id, -32000, "Rate limited, retry later", status=429)
         job_id = data.get("job_id")
-        if not isinstance(job_id, int):
+        if type(job_id) is not int or not 0 < job_id < 2**256:
             return _rpc_error(req_id, -32602, "erc8183-job-status requires an integer 'job_id'")
         try:
             job = client.get_job(job_id)
