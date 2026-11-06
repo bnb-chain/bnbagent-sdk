@@ -169,9 +169,14 @@ export function makeRequestListener(
         continue;
       }
       const params: Record<string, string> = {};
-      r.keys.forEach((key, i) => {
-        params[key] = decodeURIComponent(match[i + 1] ?? "");
-      });
+      try {
+        r.keys.forEach((key, i) => {
+          params[key] = decodeURIComponent(match[i + 1] ?? "");
+        });
+      } catch {
+        sendJson(res, 400, { error: "Invalid route encoding" });
+        return;
+      }
       const body =
         method === "POST" || method === "PUT" || method === "PATCH"
           ? await readJsonBody(req)
