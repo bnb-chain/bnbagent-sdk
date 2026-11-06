@@ -22,6 +22,21 @@ def _make_provider():
     )
 
 
+def _stream_client(response):
+    async def chunks(*, chunk_size):
+        yield json.dumps(response.json()).encode()
+
+    response.aiter_bytes = chunks
+    client = AsyncMock()
+    context = AsyncMock()
+    context.__aenter__.return_value = response
+    context.__aexit__.return_value = False
+    client.stream = MagicMock(return_value=context)
+    client.__aenter__.return_value = client
+    client.__aexit__.return_value = False
+    return client
+
+
 class TestIPFSStorageProvider:
     @pytest.mark.asyncio
     async def test_upload_posts_to_pinata(self):
@@ -30,10 +45,7 @@ class TestIPFSStorageProvider:
         mock_response.json.return_value = {"IpfsHash": VALID_CID}
         mock_response.raise_for_status = MagicMock()
 
-        mock_client = AsyncMock()
-        mock_client.post.return_value = mock_response
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client = _stream_client(mock_response)
 
         with patch(
             "bnbagent.storage.ipfs_storage_provider.httpx.AsyncClient", return_value=mock_client
@@ -41,8 +53,8 @@ class TestIPFSStorageProvider:
             url = await provider.upload({"test": "data"})
 
         assert url == f"ipfs://{VALID_CID}"
-        mock_client.post.assert_called_once()
-        call_kwargs = mock_client.post.call_args
+        mock_client.stream.assert_called_once()
+        call_kwargs = mock_client.stream.call_args
         assert "Bearer test-jwt-token" in str(call_kwargs)
 
     @pytest.mark.asyncio
@@ -52,10 +64,7 @@ class TestIPFSStorageProvider:
         mock_response.json.return_value = {"IpfsHash": VALID_CID}
         mock_response.raise_for_status = MagicMock()
 
-        mock_client = AsyncMock()
-        mock_client.post.return_value = mock_response
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client = _stream_client(mock_response)
 
         with patch(
             "bnbagent.storage.ipfs_storage_provider.httpx.AsyncClient", return_value=mock_client
@@ -71,17 +80,14 @@ class TestIPFSStorageProvider:
         mock_response.json.return_value = {"IpfsHash": VALID_CID_2}
         mock_response.raise_for_status = MagicMock()
 
-        mock_client = AsyncMock()
-        mock_client.post.return_value = mock_response
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client = _stream_client(mock_response)
 
         with patch(
             "bnbagent.storage.ipfs_storage_provider.httpx.AsyncClient", return_value=mock_client
         ):
             _url = await provider.upload({"data": 1}, filename="job-5.json")
 
-        call_kwargs = mock_client.post.call_args
+        call_kwargs = mock_client.stream.call_args
         payload = json.loads(call_kwargs[1]["content"])
         assert payload["pinataMetadata"]["name"] == "job-5"
 
@@ -104,10 +110,7 @@ class TestIPFSStorageProvider:
         mock_response.json.return_value = {"unexpected": "response"}
         mock_response.raise_for_status = MagicMock()
 
-        mock_client = AsyncMock()
-        mock_client.post.return_value = mock_response
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client = _stream_client(mock_response)
 
         with patch(
             "bnbagent.storage.ipfs_storage_provider.httpx.AsyncClient", return_value=mock_client
@@ -179,10 +182,7 @@ class TestIPFSStorageProvider:
         mock_response.json.return_value = {"cid": VALID_CID_3}
         mock_response.raise_for_status = MagicMock()
 
-        mock_client = AsyncMock()
-        mock_client.post.return_value = mock_response
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client = _stream_client(mock_response)
 
         with patch(
             "bnbagent.storage.ipfs_storage_provider.httpx.AsyncClient", return_value=mock_client
