@@ -166,6 +166,16 @@ def _resolve_deliverable(client: ERC8183Client, job_id: int) -> tuple[str | None
     try:
         fetch_url = public_gateway_url(url, gateway)
         data = fetch_public_json(fetch_url, max_bytes=8 * 1024 * 1024, timeout=15)
+        from bnbagent.erc8183.schema import DeliverableManifest
+
+        manifest = DeliverableManifest.from_dict(data)
+        job = client.get_job(job_id)
+        if not manifest.verify(job.deliverable) or not manifest.verify_context(
+            job_id=job_id,
+            chain_id=client.network.chain_id,
+            commerce=client.commerce.address,
+        ):
+            raise ValueError("Deliverable hash or job context mismatch")
         text = json.dumps(data, ensure_ascii=False, indent=2)
         if len(text) > 2048:
             text = text[:2048] + "\n... (truncated — see URL above for full content)"

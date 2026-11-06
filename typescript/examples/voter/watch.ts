@@ -271,10 +271,21 @@ export async function handleDisputedJob(
 
   if (manifest) {
     const hashOk = manifest.verify(job.deliverable);
+    const contextOk = manifest.verifyContext({
+      jobId,
+      chainId: client.network.chainId,
+      commerce: client.commerce.address,
+    });
     console.log(`  hash ok  : ${hashOk ? "yes" : "NO — MISMATCH"}`);
-    console.log(`\n--- Deliverable content (job_id=${manifest.jobId}) ---`);
-    console.log(printable(manifest.response.content));
-    console.log("---");
+    if (hashOk && contextOk) {
+      console.log(`\n--- Deliverable content (job_id=${manifest.jobId}) ---`);
+      console.log(printable(manifest.response.content));
+      console.log("---");
+    } else {
+      console.log(
+        "  [!] deliverable hash or job context mismatch; content is not authenticated for this job",
+      );
+    }
   } else if (unverified) {
     console.log(`  [!] deliverable not verified: ${printable(unverified)}`);
     console.log(

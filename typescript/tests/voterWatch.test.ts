@@ -41,7 +41,7 @@ const MANIFEST = {
   version: 1,
   job_id: 7,
   chain_id: 97,
-  contracts: {},
+  contracts: { commerce: `0x${"dd".repeat(20)}` },
   response: { content: "the work" },
   metadata: {},
 };
@@ -97,7 +97,8 @@ function fakeClient(
       })),
       getLogs: vi.fn(async () => []),
     },
-    network: { rpcUrl: "https://rpc.example" },
+    network: { rpcUrl: "https://rpc.example", chainId: 97 },
+    commerce: { address: `0x${"dd".repeat(20)}` },
   };
 }
 
@@ -204,6 +205,13 @@ describe("handleDisputedJob", () => {
       // printed above the content.
       servePublic(async () => ({ ...MANIFEST, response: { content } }));
       const client = fakeClient({ deliverableUrl });
+      client.getJob.mockResolvedValue({
+        ...(await client.getJob()),
+        deliverable: DeliverableManifest.fromDict({
+          ...MANIFEST,
+          response: { content },
+        }).manifestHash(),
+      });
       const log = vi.spyOn(console, "log").mockImplementation(() => {});
       const rl = prompt("r");
 

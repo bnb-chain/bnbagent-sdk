@@ -12,6 +12,7 @@ import {
 } from "../src/erc8183/jobOps.js";
 import { NegotiationHandler } from "../src/erc8183/negotiation.js";
 import { PolicyClient } from "../src/erc8183/policy.js";
+import { DeliverableManifest } from "../src/erc8183/schema.js";
 import { JobStatus } from "../src/erc8183/types.js";
 import { RpcRangeLimitError } from "../src/errors.js";
 import type { StorageProvider } from "../src/storage/storageProvider.js";
@@ -34,6 +35,17 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
+function manifestData(id: number, content = "ready") {
+  return {
+    version: 1,
+    job_id: id,
+    chain_id: 97,
+    contracts: { commerce: ME },
+    response: { content },
+    metadata: {},
+  };
+}
+
 async function setup(
   status = JobStatus.SUBMITTED,
   options: Partial<ERC8183JobOpsCreateOpts> = {},
@@ -48,34 +60,44 @@ async function setup(
     }),
   });
   const commerce = new CommerceClient(rpc.client, ME);
-  const getJob = vi.spyOn(commerce, "getJob").mockResolvedValue({
-    id: 1n,
-    client: ME,
-    provider: ME,
-    evaluator: ME,
-    hook: ME,
-    description: "",
-    budget: 1n,
-    expiredAt: 9999999999n,
-    submittedAt:
-      status === JobStatus.OPEN || status === JobStatus.FUNDED
-        ? 0n
-        : SUBMITTED_AT,
-    deliverable: `0x${"00".repeat(32)}`,
-    status,
-  });
+  let content = "ready";
+  const getJob = vi
+    .spyOn(commerce, "getJob")
+    .mockImplementation(async (id) => ({
+      id,
+      client: ME,
+      provider: ME,
+      evaluator: ME,
+      hook: ME,
+      description: "",
+      budget: 1n,
+      expiredAt: 9999999999n,
+      submittedAt:
+        status === JobStatus.OPEN || status === JobStatus.FUNDED
+          ? 0n
+          : SUBMITTED_AT,
+      deliverable: DeliverableManifest.fromDict(
+        manifestData(Number(id), content),
+      ).manifestHash(),
+      status,
+    }));
   const policy = new PolicyClient(rpc.client, ME);
   const client = Object.assign(
     Object.create(ERC8183Client.prototype) as ERC8183Client,
     {
       client: rpc.client,
+      network: { chainId: 97 },
       commerce,
       policy,
     },
   );
   vi.spyOn(ERC8183Client, "create").mockResolvedValue(client);
   const storage = {
-    download: vi.fn().mockResolvedValue({ response: "ready" }),
+    download: vi
+      .fn()
+      .mockImplementation(async (url: string) =>
+        manifestData(Number(/-(\d+)$/.exec(url)?.[1] ?? 1), content),
+      ),
     upload: vi.fn(),
     exists: vi.fn(),
   } as unknown as StorageProvider;
@@ -87,18 +109,28 @@ async function setup(
   const logs = () => rpc.calls.filter((call) => call.method === "eth_getLogs");
   const blockReads = () =>
     rpc.calls.filter((call) => call.method === "eth_getBlockByNumber");
-  return { rpc, client, getJob, policy, ops, storage, logs, blockReads };
+  return {
+    rpc,
+    client,
+    getJob,
+    policy,
+    ops,
+    storage,
+    logs,
+    blockReads,
+    setContent: (value: string) => {
+      content = value;
+    },
+  };
 }
 
 describe("response lookup RPC budgets", () => {
   it("evicts success payloads by byte size below the entry ceiling", async () => {
-    const { ops, client, storage } = await setup();
-    vi.spyOn(client, "getDeliverableUrl").mockResolvedValue(
-      "ipfs://large-result",
+    const { ops, client, storage, setContent } = await setup();
+    vi.spyOn(client, "getDeliverableUrl").mockImplementation(
+      async (id) => `ipfs://large-result-${id}`,
     );
-    vi.mocked(storage.download).mockResolvedValue({
-      response: "x".repeat(6 * 1024 * 1024),
-    });
+    setContent("x".repeat(6 * 1024 * 1024));
     for (const id of [1, 2, 3, 1])
       expect((await ops.getResponse(id)).success).toBe(true);
     expect(storage.download).toHaveBeenCalledTimes(4);
@@ -118,10 +150,12 @@ describe("response lookup RPC budgets", () => {
     const { ops, client, storage } = await setup(JobStatus.SUBMITTED, {
       responseCacheMaxEntries: 2,
     });
-    vi.spyOn(client, "getDeliverableUrl").mockResolvedValue("ipfs://result");
+    vi.spyOn(client, "getDeliverableUrl").mockImplementation(
+      async (id) => `ipfs://result-${id}`,
+    );
     const result = await ops.getResponse(1);
     result.response = "mutated";
-    expect((await ops.getResponse(1)).response).toBe("ready");
+    expect((await ops.getResponse(1)).response).toEqual({ content: "ready" });
     expect(storage.download).toHaveBeenCalledTimes(1);
     for (const id of [2, 3, 1]) await ops.getResponse(id);
     expect(storage.download).toHaveBeenCalledTimes(4);
