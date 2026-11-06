@@ -223,6 +223,13 @@ export function encryptKeystoreV3(
   privateKey: Uint8Array,
   password: string,
 ): KeystoreV3 {
+  if (!(privateKey instanceof Uint8Array) || privateKey.length !== 32) {
+    throw new Error("Private key must be exactly 32 bytes");
+  }
+  // Validate the scalar before performing the expensive password KDF.
+  const account = privateKeyToAccount(
+    `0x${bytesToHex(privateKey)}` as `0x${string}`,
+  );
   const salt = randomBytes(16);
   const dk = scrypt(passwordBytes(password), salt, {
     N: SCRYPT_N,
@@ -234,11 +241,6 @@ export function encryptKeystoreV3(
   const iv = randomBytes(16);
   const ciphertext = ctr(encryptionKey, iv).encrypt(privateKey);
   const mac = computeMac(dk, ciphertext);
-
-  // Derive the address for the informational `address` field.
-  const account = privateKeyToAccount(
-    `0x${bytesToHex(privateKey)}` as `0x${string}`,
-  );
 
   return {
     version: 3,
