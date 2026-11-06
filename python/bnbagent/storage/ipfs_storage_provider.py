@@ -114,13 +114,23 @@ class IPFSStorageProvider(StorageProvider):
             )
 
         async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(self._pinning_url, content=encoded, headers=headers)
-            resp.raise_for_status()
-            result = resp.json()
+            async with client.stream(
+                "POST", self._pinning_url, content=encoded, headers=headers
+            ) as resp:
+                resp.raise_for_status()
+                body = bytearray()
+                async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
+                    if len(body) + len(chunk) > 64 * 1024:
+                        raise StorageError("IPFS pinning response exceeds byte limit")
+                    body.extend(chunk)
+                result = json.loads(body)
+                if not isinstance(result, dict):
+                    raise StorageError("Unexpected pinning response")
 
         cid = result.get("IpfsHash") or result.get("cid")
-        if not cid:
-            raise StorageError(f"Unexpected pinning response: {result}")
+        if not isinstance(cid, str):
+            raise StorageError("Unexpected pinning response: missing CID")
+        cid = self._extract_cid(cid)
 
         ipfs_url = f"ipfs://{cid}"
         logger.info(f"[IPFSStorageProvider] Uploaded {pin_name} to {ipfs_url}")
