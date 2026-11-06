@@ -79,6 +79,21 @@ export class X402NoPayableRouteError extends X402SignerError {
   }
 }
 
+/** A signed payment was exposed; its reservation stays held pending reconciliation. */
+export class X402PaymentStateUnknownError extends X402SignerError {
+  constructor(
+    readonly asset: string,
+    readonly amount: bigint,
+    cause: unknown,
+  ) {
+    super(
+      `${cause instanceof Error ? cause.message : String(cause)}; payment state is unknown and budget remains reserved`,
+      { cause },
+    );
+    this.name = "X402PaymentStateUnknownError";
+  }
+}
+
 /** A wallet cannot pay the requested method for the exact expected asset. */
 export class UnsupportedWalletRouteError extends X402SignerError {
   readonly walletKind: string;

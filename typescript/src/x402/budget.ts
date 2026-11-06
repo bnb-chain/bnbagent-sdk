@@ -13,8 +13,9 @@
  * with no `await` between the check and the increment, so no interleaving
  * point exists for a second caller to observe stale `spent`. The caller
  * does the slow work (signing) *after* `reserve` returns and calls
- * `rollback` if anything fails — preserving the "rejected signs never
- * consume budget" invariant.
+ * `rollback` if signing fails before the authorization leaves the payer.
+ * Once a signature is exposed, transport or response failures must retain
+ * the reservation until trusted settlement reconciliation.
  *
  * Port of `python/bnbagent/x402/budget.py` (the thread-`Lock`-guarded
  * critical section there becomes "no `await` inside the critical section"
@@ -78,7 +79,7 @@ export class SessionBudgetTracker {
    * `spent` value, so two `signPayment` calls racing on the same token
    * cannot both observe the pre-increment `spent` and overspend the cap.
    * The caller performs the slow work (signing) after this returns and
-   * calls {@link rollback} on failure to release the reservation.
+   * calls {@link rollback} only for a failure before signature exposure.
    *
    * @throws {X402BudgetExhaustedError} If the reservation would exceed the
    *   cap, or if `amount` is negative.
