@@ -105,7 +105,7 @@ class Paymaster:
         self.paymaster_url = paymaster_url
         self.debug = debug
 
-        logger.debug(f"Initialized Paymaster with URL: {paymaster_url}")
+        logger.debug("Initialized Paymaster with URL: %s", _redact_url_tokens(paymaster_url))
 
     def _make_rpc_request(
         self,
@@ -140,7 +140,9 @@ class Paymaster:
         merged_headers.setdefault("Content-Type", "application/json")
 
         try:
-            logger.debug(f"Making RPC request: {method} to {self.paymaster_url}")
+            logger.debug(
+                "Making RPC request: %s to %s", method, _redact_url_tokens(self.paymaster_url)
+            )
             response = requests.post(
                 self.paymaster_url,
                 headers=merged_headers,

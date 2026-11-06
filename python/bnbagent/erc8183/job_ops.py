@@ -437,7 +437,7 @@ class ERC8183JobOps:
                 "deliverable": Web3.to_hex(deliverable),
             }
         except Exception as exc:
-            logger.error(f"[ERC8183JobOps] submit({job_id}) failed: {exc}")
+            logger.error(f"[ERC8183JobOps] submit({job_id}) failed: {type(exc).__name__}")
             return {"success": False, **_exc_error_fields(exc)}
 
     # ------------------------------------------------------------------ reads
@@ -460,7 +460,7 @@ class ERC8183JobOps:
                 "deliverable": Web3.to_hex(job.deliverable),
             }
         except Exception as exc:
-            logger.error(f"[ERC8183JobOps] get_job({job_id}) failed: {exc}")
+            logger.error(f"[ERC8183JobOps] get_job({job_id}) failed: {type(exc).__name__}")
             # Return a generic message — the raw exception can embed the RPC
             # URL (and its API key) on transport errors. Classify here so
             # callers still get the right status without parsing the message.
@@ -566,7 +566,7 @@ class ERC8183JobOps:
                 data = await self._storage.download(url)
                 return {"success": True, **data}
             except Exception as exc:
-                logger.warning(f"[ERC8183JobOps] get_response({job_id}) download failed: {exc}")
+                logger.warning(f"[ERC8183JobOps] get_response({job_id}) download failed: {type(exc).__name__}")
 
         if hasattr(self._storage, "_base"):
             try:
@@ -575,7 +575,7 @@ class ERC8183JobOps:
                     data = json.loads(filepath.read_text(encoding="utf-8"))
                     return {"success": True, **data}
             except Exception as exc:
-                logger.warning(f"[ERC8183JobOps] get_response({job_id}) file read failed: {exc}")
+                logger.warning(f"[ERC8183JobOps] get_response({job_id}) file read failed: {type(exc).__name__}")
 
         status_result = await self.get_job(job_id)
         if not status_result.get("success"):
@@ -602,7 +602,7 @@ class ERC8183JobOps:
                 data = await self._storage.download(deliverable_url)
                 return {"success": True, **data}
         except RpcRangeLimitError as exc:
-            logger.warning(f"[ERC8183JobOps] get_response({job_id}) rate-limited: {exc}")
+            logger.warning(f"[ERC8183JobOps] get_response({job_id}) rate-limited: {type(exc).__name__}")
             return {
                 "success": False,
                 "error": (
@@ -614,7 +614,7 @@ class ERC8183JobOps:
             }
         except Exception as exc:
             logger.warning(
-                f"[ERC8183JobOps] get_response({job_id}) on-chain fallback failed: {exc}"
+                f"[ERC8183JobOps] get_response({job_id}) on-chain fallback failed: {type(exc).__name__}"
             )
 
         # A job that has been submitted on-chain MUST have a JobInitialised
@@ -732,7 +732,7 @@ class ERC8183JobOps:
             except Exception as exc:
                 logger.warning(
                     f"[ERC8183JobOps] dispute_window lookup failed; proceeding without "
-                    f"submit-deadline check: {exc}"
+                    f"submit-deadline check: {type(exc).__name__}"
                 )
 
             try:
@@ -979,7 +979,7 @@ class ERC8183JobOps:
                 "warnings": warnings if warnings else None,
             }
         except Exception as exc:
-            logger.error(f"[ERC8183JobOps] verify_job({job_id}) failed: {exc}")
+            logger.error(f"[ERC8183JobOps] verify_job({job_id}) failed: {type(exc).__name__}")
             # The content checks above return a permanent quote_invalid without
             # raising. What reaches here is the chain's or the network's: only a
             # revert is deterministic, anything else may pass on a retry, which
@@ -1043,7 +1043,7 @@ class ERC8183JobOps:
         try:
             counter = await asyncio.to_thread(erc8183.commerce.job_counter)
         except Exception as exc:
-            logger.warning(f"[ERC8183JobOps] startup scan counter failed: {exc}")
+            logger.warning(f"[ERC8183JobOps] startup scan counter failed: {type(exc).__name__}")
             self._startup_scan_done = True
             return {"success": False, **_exc_error_fields(exc), "jobs": []}
 
@@ -1079,7 +1079,7 @@ class ERC8183JobOps:
             self._last_known_counter = counter
             return result
         except Exception as exc:
-            logger.error(f"[ERC8183JobOps] get_pending_jobs failed: {exc}")
+            logger.error(f"[ERC8183JobOps] get_pending_jobs failed: {type(exc).__name__}")
             return {"success": False, **_exc_error_fields(exc), "jobs": []}
 
     async def get_submitted_jobs(self) -> dict[str, Any]:
@@ -1121,7 +1121,7 @@ class ERC8183JobOps:
             ]
             return {"success": True, "jobs": submitted}
         except Exception as exc:
-            logger.error(f"[ERC8183JobOps] get_submitted_jobs failed: {exc}")
+            logger.error(f"[ERC8183JobOps] get_submitted_jobs failed: {type(exc).__name__}")
             return {"success": False, **_exc_error_fields(exc), "jobs": []}
 
 
@@ -1232,9 +1232,9 @@ async def funded_job_watcher(
                         continue
                     await _fire(job)
             else:
-                logger.warning("[funded_job_watcher] poll error: %s", result.get("error"))
+                logger.warning("[funded_job_watcher] poll error: %s", result.get("error_code"))
         except Exception as exc:
-            logger.error("[funded_job_watcher] iteration failed: %s", exc)
+            logger.error("[funded_job_watcher] iteration failed: %s", type(exc).__name__)
 
         if stop is not None:
             try:
