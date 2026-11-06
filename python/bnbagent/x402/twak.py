@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 from web3 import Web3
@@ -60,6 +61,7 @@ class TwakX402Payer:
         *,
         expected_pay_to: str,
         expected_asset: str,
+        expected_network: str | None = None,
         session_budget: SessionBudgetTracker | None = None,
         max_timeout_seconds: int = DEFAULT_MAX_TIMEOUT_SECONDS,
     ) -> None:
@@ -73,18 +75,24 @@ class TwakX402Payer:
                 must byte-equal this address.
             expected_asset: Trusted payment-token anchor. The quoted
                 ``asset`` must equal this address.
+            expected_network: Optional caller-selected CAIP-2 chain anchor. TWAK's
+                HTTP payment engine is independent of the provider wallet chain.
             max_timeout_seconds: Reject challenges claiming a payment
                 window wider than this (default 3600s, design F-2).
         """
+        if expected_network is not None and (
+            not isinstance(expected_network, str)
+            or not re.fullmatch(r"eip155:[1-9][0-9]*", expected_network)
+        ):
+            raise ValueError("expected_network must be a canonical EVM CAIP-2 network")
         self._provider = provider
         self._session_budget = session_budget
         self._expected_pay_to = Web3.to_checksum_address(expected_pay_to)
         self._expected_asset = Web3.to_checksum_address(expected_asset)
         self._max_timeout_seconds = max_timeout_seconds
+        self._expected_network = expected_network
 
-    def quote(
-        self, url: str, *, method: str = "GET", body: str | None = None
-    ) -> X402Quote:
+    def quote(self, url: str, *, method: str = "GET", body: str | None = None) -> X402Quote:
         """Fetch the 402 challenge for ``url``.
 
         Read-only: never triggers wallet creation (design F-3 — the
@@ -148,12 +156,14 @@ class TwakX402Payer:
                 )
         option = next((o for o in candidates if o.preferred), candidates[0])
 
+        if self._expected_network is not None and option.network != self._expected_network:
+            raise X402PolicyError("Quoted network does not match expected_network")
+
         # --- five-point precheck on the quoted terms (design §3.2) -------
         # 1. payTo: byte-equal vs the caller's committed recipient.
         if option.pay_to.lower() != self._expected_pay_to.lower():
             raise X402RecipientMismatchError(
-                f"quoted payTo {option.pay_to} != expected "
-                f"{self._expected_pay_to}"
+                f"quoted payTo {option.pay_to} != expected {self._expected_pay_to}"
             )
         # 2. asset: for EIP-3009 the asset address IS the EIP-712 domain
         #    verifyingContract — this is the SigningPolicy domain allowlist

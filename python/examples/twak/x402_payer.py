@@ -94,6 +94,7 @@ def free_mode(wallet: TWAKProvider, tracker: SessionBudgetTracker) -> int:
         session_budget=tracker,
         expected_pay_to=ONESOURCE_PAY_TO,
         expected_asset=BASE_USDC,
+        expected_network="eip155:8453",
     )
     failures = 0
 
@@ -124,7 +125,7 @@ def free_mode(wallet: TWAKProvider, tracker: SessionBudgetTracker) -> int:
     except RuntimeError as e:
         detail = str(e)
         if "none on chains this client supports" in detail:
-            print("  -> CLI exited non-zero with: \"…none on chains this client")
+            print('  -> CLI exited non-zero with: "…none on chains this client')
             print("     supports.\" — the endpoint's (testnet) routes were all")
             print("     filtered; there is no payable route for this wallet.")
         else:
@@ -150,6 +151,7 @@ def free_mode(wallet: TWAKProvider, tracker: SessionBudgetTracker) -> int:
         session_budget=tracker,
         expected_pay_to="0x" + "42" * 20,  # deliberately not the seller
         expected_asset=BASE_USDC,
+        expected_network="eip155:8453",
     )
     try:
         strict_payer.request(ONESOURCE_URL, max_payment=0)
@@ -178,6 +180,7 @@ def paid_mode(
     body: str | None,
     expected_pay_to: str,
     expected_asset: str,
+    expected_network: str,
 ) -> int:
     banner("PAID MODE — THIS SPENDS REAL FUNDS")
     print("  !! You passed --pay. twak will sign and settle a REAL x402")
@@ -190,6 +193,7 @@ def paid_mode(
         session_budget=tracker,
         expected_pay_to=expected_pay_to,
         expected_asset=expected_asset,
+        expected_network=expected_network,
     )
 
     # Show the terms first, then pay. request() re-quotes and prechecks the
@@ -208,10 +212,7 @@ def paid_mode(
     print(f"  transaction : {result.transaction} (best-effort from the body)")
     print(f"  response    : {str(result.response)[:200]}")
     if result.asset:
-        print(
-            f"  session budget debit: {tracker.spent(result.asset)} atomic of "
-            f"{result.asset}"
-        )
+        print(f"  session budget debit: {tracker.spent(result.asset)} atomic of {result.asset}")
     return 0
 
 
@@ -221,7 +222,9 @@ def main() -> int:
     )
     parser.add_argument("--pay", metavar="URL", help="actually PAY this endpoint")
     parser.add_argument(
-        "--max-payment", type=int, metavar="ATOMIC",
+        "--max-payment",
+        type=int,
+        metavar="ATOMIC",
         help="hard per-payment cap in atomic token units (required with --pay)",
     )
     parser.add_argument("--method", default="GET", help="HTTP method (default GET)")
@@ -233,6 +236,9 @@ def main() -> int:
     parser.add_argument(
         "--expected-asset",
         help="trusted payment-token address (required with --pay)",
+    )
+    parser.add_argument(
+        "--expected-network", help="trusted CAIP-2 payment network (required with --pay)"
     )
     args = parser.parse_args()
 
@@ -252,14 +258,20 @@ def main() -> int:
     if args.pay:
         if args.max_payment is None:
             parser.error("--pay requires --max-payment <atomic units>")
-        if not args.expected_pay_to or not args.expected_asset:
-            parser.error("--pay requires --expected-pay-to and --expected-asset")
+        if not args.expected_pay_to or not args.expected_asset or not args.expected_network:
+            parser.error(
+                "--pay requires --expected-pay-to, --expected-asset and --expected-network"
+            )
         return paid_mode(
-            wallet, tracker,
-            url=args.pay, max_payment=args.max_payment,
-            method=args.method, body=args.body,
+            wallet,
+            tracker,
+            url=args.pay,
+            max_payment=args.max_payment,
+            method=args.method,
+            body=args.body,
             expected_pay_to=args.expected_pay_to,
             expected_asset=args.expected_asset,
+            expected_network=args.expected_network,
         )
     return free_mode(wallet, tracker)
 

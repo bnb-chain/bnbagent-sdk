@@ -1040,6 +1040,20 @@ function x402Router(): string[][] {
 }
 
 describe("TwakX402Payer", () => {
+  it("rejects a route on a different explicitly trusted network before requesting payment", async () => {
+    const calls = x402Router();
+    const payer = new TWAKProvider().makeX402Payer({
+      ...PAYER_OPTS,
+      expectedNetwork: "eip155:97",
+    });
+    await expect(
+      payer.request("https://api.example/paid", { maxPayment: 5000n }),
+    ).rejects.toThrow(/quoted network/);
+    expect(
+      calls.filter((c) => c[0] === "x402" && c[1] === "request"),
+    ).toHaveLength(0);
+  });
+
   it("does not claim atomic exact-route payment support", () => {
     const payer = new TWAKProvider().makeX402Payer(PAYER_OPTS);
     expect("requestExact" in payer).toBe(false);
