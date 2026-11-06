@@ -383,6 +383,11 @@ export class TurnkeyWalletProvider extends WalletProvider {
    * `tx.chainId` is refused before the billable API call.
    */
   override async signTransaction(tx: SignableTransaction): Promise<SignedTx> {
+    if (!Number.isSafeInteger(tx.chainId) || tx.chainId <= 0) {
+      throw new Error(
+        "A positive safe integer chainId is required for replay-protected transactions",
+      );
+    }
     if (
       this.#expectedChainId !== undefined &&
       tx.chainId !== this.#expectedChainId

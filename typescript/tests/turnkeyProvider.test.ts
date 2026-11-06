@@ -478,6 +478,18 @@ describe("signTypedData (EIP-712)", () => {
 });
 
 describe("signTransaction", () => {
+  it.each([undefined, 0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects invalid chainId %s before initializing the billed account",
+    async (chainId) => {
+      const provider = new TurnkeyWalletProvider(BASE_OPTS);
+      await expect(
+        provider.signTransaction({ chainId } as never),
+      ).rejects.toThrow(/chainId is required/);
+      expect(tkMocks.createAccountCalls).toHaveLength(0);
+      expect(tkMocks.recorded.transactions).toHaveLength(0);
+    },
+  );
+
   const legacyTx = {
     chainId: 97,
     to: getAddress(`0x${"55".repeat(20)}`),
