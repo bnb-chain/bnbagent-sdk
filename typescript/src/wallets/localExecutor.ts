@@ -379,6 +379,15 @@ export class LocalExecutor implements IntentExecutor {
       }
       throw error;
     }
+    if (
+      typeof rawHash !== "string" ||
+      !/^(?:0x)?[0-9a-fA-F]{64}$/u.test(rawHash)
+    ) {
+      console.warn(
+        "[LocalExecutor] paymaster returned a malformed transaction hash; tracking the signed hash",
+      );
+      return { hash: signedTxHash, tx };
+    }
     const relayHash = normalizeHash(rawHash);
     if (relayHash.toLowerCase() !== signedTxHash.toLowerCase()) {
       console.warn(
@@ -451,7 +460,22 @@ export class LocalExecutor implements IntentExecutor {
       selfPayHash = await this.client.sendRawTransaction({
         serializedTransaction: signed.rawTransaction,
       });
+      if (
+        typeof selfPayHash !== "string" ||
+        !/^0x[0-9a-fA-F]{64}$/u.test(selfPayHash) ||
+        selfPayHash.toLowerCase() !==
+          keccak256(signed.rawTransaction).toLowerCase()
+      ) {
+        throw new TransactionPendingError(
+          keccak256(signed.rawTransaction),
+          0,
+          `RPC transaction hash does not match signed bytes (expected ${keccak256(signed.rawTransaction)}); broadcast state is unknown`,
+        );
+      }
     } catch (error) {
+      if (error instanceof TransactionPendingError) {
+        throw error;
+      }
       if (isInsufficientFundsError(error)) {
         throw new RelayFallbackFailedError(
           relayHash,
@@ -548,6 +572,17 @@ export class LocalExecutor implements IntentExecutor {
       receipt = null;
     }
     if (receipt) {
+      if (
+        typeof receipt.transactionHash !== "string" ||
+        !/^0x[0-9a-fA-F]{64}$/u.test(receipt.transactionHash) ||
+        receipt.transactionHash.toLowerCase() !== relayHash.toLowerCase()
+      ) {
+        throw new TransactionPendingError(
+          relayHash,
+          timeoutSeconds,
+          `RPC receipt hash does not match the requested transaction ${relayHash}`,
+        );
+      }
       if (receipt.status === "reverted") {
         throw new Error(
           `Transaction reverted on-chain: ${receipt.transactionHash}`,

@@ -42,7 +42,7 @@ const CONTRACT_ADDRESS = getAddress(
   "0x2222222222222222222222222222222222222222",
 );
 const WALLET_ADDRESS = getAddress("0x1111111111111111111111111111111111111111");
-const FAKE_RAW_TX = "0xdeadbeef";
+const FAKE_RAW_TX = "0xfeedbeef";
 // What an HONEST relay returns from eth_sendRawTransaction: the keccak256 of
 // the signed raw tx it was handed. LocalExecutor cross-checks the relay's
 // answer against this, so the default fake paymaster must echo the
@@ -84,9 +84,10 @@ class StubWallet extends WalletProvider {
     tx: TransactionRequestLegacy,
   ): Promise<SignedTx> {
     this.signedTxs.push(tx);
+    const rawTransaction = tx.gasPrice === 0n ? FAKE_RAW_TX : "0xdeadbeef";
     return {
-      rawTransaction: FAKE_RAW_TX,
-      hash: FAKE_TX_HASH,
+      rawTransaction,
+      hash: keccak256(rawTransaction),
       r: "0x00",
       s: "0x00",
       v: 27n,
@@ -617,6 +618,34 @@ describe("LocalExecutor: sponsored path", () => {
 describe("LocalExecutor: relay hash consistency", () => {
   const DIVERGENT_HASH: `0x${string}` = `0x${"ef".repeat(32)}`;
 
+  it.each([null, 0, {}, "invalid"])(
+    "tracks the signed identity when the relay returns malformed hash %s",
+    async (rawHash) => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const mock = mockPublicClient();
+      const { paymaster } = makeFakePaymaster({
+        ethSendRawTransaction: async () => rawHash as never,
+      });
+      const wallet = new StubWallet();
+      const executor = new LocalExecutor({
+        client: mock.client,
+        walletProvider: wallet,
+        paymaster,
+      });
+      await expect(executor.execute(makeIntent())).resolves.toMatchObject({
+        transactionHash: PAYMASTER_TX_HASH,
+        status: 1,
+      });
+      expect(wallet.signedTxs).toHaveLength(1);
+      expect(sendRawCount(mock)).toBe(0);
+      expect(
+        mock.calls
+          .filter((call) => call.method === "eth_getTransactionReceipt")
+          .every((call) => call.params[0] === PAYMASTER_TX_HASH),
+      ).toBe(true);
+    },
+  );
+
   it("warns and tracks the signed-tx hash when the relay returns a different hash", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const mock = mockPublicClient();
@@ -851,6 +880,37 @@ describe("LocalExecutor: self-pay fallback after unverified relay", () => {
       effectiveGasPrice: "0x3b9aca00",
     };
   }
+
+  it.each([null, "invalid", `0x${"bb".repeat(32)}`])(
+    "preserves signed fallback identity for malformed RPC result %s",
+    async (rpcHash) => {
+      vi.useFakeTimers();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const mock = mockPublicClient({
+        eth_getTransactionReceipt: () => {
+          throw new Error("not found");
+        },
+        eth_sendRawTransaction: () => rpcHash,
+      });
+      const wallet = new StubWallet();
+      const { paymaster } = makeFakePaymaster();
+      const executor = new LocalExecutor({
+        client: mock.client,
+        walletProvider: wallet,
+        paymaster,
+        receiptTimeout: 1,
+        confirmTxUnseen: async () => "confirmed-unseen",
+      });
+      const pending = executor.execute(makeIntent()).catch((error) => error);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await pending).toMatchObject({
+        name: "TransactionPendingError",
+        txHash: FAKE_TX_HASH,
+      });
+      expect(sendRawCount(mock)).toBe(1);
+      expect(wallet.signedTxs).toHaveLength(2);
+    },
+  );
 
   it("re-signs the same nonce and self-pays when the relay never lands", async () => {
     vi.useFakeTimers();
