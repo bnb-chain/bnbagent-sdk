@@ -85,7 +85,7 @@ class TestEVMWalletProvider:
     def test_nonexistent_address_fails(self, wdir):
         wdir.mkdir(parents=True, exist_ok=True)
         with pytest.raises(ValueError, match="Keystore not found"):
-            EVMWalletProvider(password=PW, address="0xdead", wallets_dir=wdir)
+            EVMWalletProvider(password=PW, address="0x" + "de" * 20, wallets_dir=wdir)
 
     # ── Static helpers ──
 
@@ -94,7 +94,7 @@ class TestEVMWalletProvider:
         w = EVMWalletProvider(password=PW, private_key=PK, wallets_dir=wdir)
         assert EVMWalletProvider.keystore_exists(wallets_dir=wdir)
         assert EVMWalletProvider.keystore_exists(address=w.address, wallets_dir=wdir)
-        assert not EVMWalletProvider.keystore_exists(address="0xdead", wallets_dir=wdir)
+        assert not EVMWalletProvider.keystore_exists(address="0x" + "de" * 20, wallets_dir=wdir)
 
     def test_list_wallets(self, wdir):
         assert EVMWalletProvider.list_wallets(wdir) == []
