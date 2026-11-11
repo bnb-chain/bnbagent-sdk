@@ -1,0 +1,27 @@
+name: Release workflow regressions
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the publishing npm version
+        run: npm install --global npm@11.15.0 --ignore-scripts
+      - name: Test trusted publishing programs without remote writes
+        run: python3 -m unittest discover -s .github/tests -v
