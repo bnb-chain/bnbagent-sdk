@@ -1,0 +1,10 @@
+# Enforce these owners through the default branch's required owner-review rule.
+/.github/ @jardenx @aiden-cao @robot-ux
+/typescript/scripts/release* @jardenx @aiden-cao @robot-ux
+/typescript/package.json @jardenx @aiden-cao @robot-ux
+/typescript/pnpm-lock.yaml @jardenx @aiden-cao @robot-ux
+/typescript/tsup.config.ts @jardenx @aiden-cao @robot-ux
+/python/hatch_build.py @jardenx @aiden-cao @robot-ux
+/python/pyproject.toml @jardenx @aiden-cao @robot-ux
+/python/uv.lock @jardenx @aiden-cao @robot-ux
+/python/bnbagent/_version.py @jardenx @aiden-cao @robot-ux

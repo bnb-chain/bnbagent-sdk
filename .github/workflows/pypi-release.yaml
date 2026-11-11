@@ -3,6 +3,10 @@ name: Release bnbagent to PyPI
 on:
   workflow_dispatch:
     inputs:
+      source_ref:
+        description: 'Test PyPI source branch or SHA (production always uses the dispatch commit)'
+        required: false
+        type: string
       version:
         description: 'Version to release (e.g., 0.1.0)'
         required: true
@@ -17,34 +21,69 @@ concurrency:
   group: pypi-release
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
-  release:
-    name: Build and Publish to PyPI
+  build:
+    name: Build and verify Python distributions
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      id-token: write  # Required for trusted publishing to PyPI
+      contents: read
+    outputs:
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      artifact_id: ${{ steps.archive.outputs.artifact-id }}
     defaults:
       run:
         working-directory: python  # Python project lives under python/ (polyglot monorepo)
 
     steps:
+      - name: Authorize release actors
+        if: inputs.release_to_prod
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ACTOR_ID: ${{ github.actor_id }}
+          RELEASE_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          # Immutable GitHub IDs: jardenx, aiden-cao, robot-ux.
+          allowed_release_actor() {
+            case "$1" in
+              274764117|104969608|81206731) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          if ! allowed_release_actor "$RELEASE_ACTOR_ID"; then
+            echo "Release initiator is not an approved publisher" >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TRIGGERING_ACTOR" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]; then
+            echo "Invalid triggering actor" >&2
+            exit 1
+          fi
+          TRIGGERING_ID="$(gh api --method GET "users/$RELEASE_TRIGGERING_ACTOR" --jq '.id')"
+          if ! allowed_release_actor "$TRIGGERING_ID"; then
+            echo "Release rerunner is not an approved publisher" >&2
+            exit 1
+          fi
+
       - name: Validate release inputs
         env:
           VERSION: ${{ inputs.version }}
           RELEASE_TO_PROD: ${{ inputs.release_to_prod }}
-          REF_NAME: ${{ github.ref_name }}
+          REF_NAME: ${{ github.ref }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         working-directory: .
         run: |
           set -euo pipefail
+          if [[ "$REF_NAME" != "refs/heads/$DEFAULT_BRANCH" ]]; then
+            echo "Dispatch the trusted workflow from $DEFAULT_BRANCH; use source_ref for Test PyPI" >&2
+            exit 1
+          fi
           if [[ "$RELEASE_TO_PROD" == "true" ]]; then
             if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               echo "Production version must be X.Y.Z, got: $VERSION" >&2
-              exit 1
-            fi
-            if [[ "$REF_NAME" != "$DEFAULT_BRANCH" ]]; then
-              echo "Production releases must be dispatched from $DEFAULT_BRANCH, got: $REF_NAME" >&2
               exit 1
             fi
           else
@@ -57,10 +96,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.release_to_prod && github.sha || inputs.source_ref || github.sha }}
           fetch-depth: 0  # Fetch all history for tags and branch reachability
           persist-credentials: false
 
       - name: Verify commit belongs to a repository branch
+        id: source
         # fetch-depth: 0 already fetched every branch into refs/remotes/origin;
         # a later git fetch would have no credentials (persist-credentials: false).
         working-directory: .
@@ -71,6 +112,7 @@ jobs:
             exit 1
           fi
           HEAD_SHA="$(git rev-parse --verify HEAD)"
+          echo "source_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
           if [[ -z "$(git branch -r --contains "$HEAD_SHA" 'origin/*')" ]]; then
             echo "Refusing release: $HEAD_SHA is not reachable from any branch of $GITHUB_REPOSITORY" >&2
             exit 1
@@ -195,6 +237,7 @@ jobs:
       - name: Verify built wheel, sdist, ABIs, and smoke install
         env:
           VERSION: ${{ inputs.version }}
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
         run: |
           set -euo pipefail
           python - <<'PYTHON'
@@ -241,7 +284,7 @@ jobs:
                       f"Wheel METADATA mismatch: Name={meta.get('Name')!r}, Version={meta.get('Version')!r}"
                   )
               wheel_abis = {
-                  posixpath.basename(n): hashlib.sha256(zf.read(n)).hexdigest()
+                  n.removeprefix("bnbagent/abis/"): hashlib.sha256(zf.read(n)).hexdigest()
                   for n in names
                   if n.startswith("bnbagent/abis/") and n.endswith(".json")
               }
@@ -252,6 +295,7 @@ jobs:
           with tarfile.open(expected_sdist, "r:gz") as tf:
               seen_tar = set()
               pkg_info_bytes = None
+              sdist_abis = {}
               for member in tf.getmembers():
                   if not (member.isreg() or member.isdir()):
                       raise SystemExit(
@@ -268,10 +312,17 @@ jobs:
                   if norm in seen_tar:
                       raise SystemExit(f"Duplicate tar member in sdist: {norm}")
                   seen_tar.add(norm)
+                  abi_prefix = f"bnbagent-{version}/bnbagent/abis/"
+                  if member.isreg() and norm.startswith(abi_prefix) and norm.endswith(".json"):
+                      f = tf.extractfile(member)
+                      assert f is not None
+                      sdist_abis[norm.removeprefix(abi_prefix)] = hashlib.sha256(f.read()).hexdigest()
                   if norm == f"bnbagent-{version}/PKG-INFO":
                       f = tf.extractfile(member)
                       assert f is not None
                       pkg_info_bytes = f.read()
+              if sdist_abis != repo_abis:
+                  raise SystemExit("sdist ABIs do not match repo-root ../abis/*.json")
               if pkg_info_bytes is None:
                   raise SystemExit("Missing PKG-INFO in sdist")
               pkg_info = Parser().parsestr(pkg_info_bytes.decode("utf-8"))
@@ -279,17 +330,53 @@ jobs:
                   raise SystemExit(
                       f"sdist PKG-INFO mismatch: Name={pkg_info.get('Name')!r}, Version={pkg_info.get('Version')!r}"
                   )
+
+          manifest = {
+              "version": version,
+              "source_sha": os.environ.get("SOURCE_SHA", ""),
+              "abis": repo_abis,
+              "files": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in actual_files},
+          }
+          Path("release-manifest.json").write_text(__import__("json").dumps(manifest, sort_keys=True))
+          PYTHON
+
+          # Rebuild from the source archive outside the checkout. The installed
+          # package must work without the repo-root ABI directory.
+          REBUILD_DIR="$(mktemp -d)"
+          tar -xzf "$PWD/dist/bnbagent-${VERSION}.tar.gz" -C "$REBUILD_DIR"
+          uv build --wheel --out-dir "$REBUILD_DIR/wheels" "$REBUILD_DIR/bnbagent-${VERSION}"
+          REBUILD_DIR="$REBUILD_DIR" python - <<'PYTHON'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import zipfile
+
+          expected = json.loads(Path("release-manifest.json").read_text())["abis"]
+          wheels = list((Path(os.environ["REBUILD_DIR"]) / "wheels").glob("*.whl"))
+          if len(wheels) != 1:
+              raise SystemExit("Expected one rebuilt wheel")
+          with zipfile.ZipFile(wheels[0]) as wheel:
+              names = wheel.namelist()
+              if len(names) != len(set(names)):
+                  raise SystemExit("Duplicate entry in rebuilt wheel")
+              actual = {n.removeprefix("bnbagent/abis/"): hashlib.sha256(wheel.read(n)).hexdigest()
+                        for n in names if n.startswith("bnbagent/abis/") and n.endswith(".json")}
+          if actual != expected:
+              raise SystemExit("Rebuilt wheel ABI mismatch")
           PYTHON
 
           # Runtime deps come from the lockfile; the artifact itself is installed
           # without resolution. Import from outside python/ in isolated mode so
           # the source tree cannot shadow the installed package.
           SMOKE_DIR="$(mktemp -d)"
+          cp release-manifest.json "$SMOKE_DIR/"
           uv export --frozen --no-dev --no-emit-project --format requirements-txt \
             -o "$SMOKE_DIR/requirements.txt" >/dev/null
           for ARTIFACT in \
             "$PWD/dist/bnbagent-${VERSION}-py3-none-any.whl" \
-            "$PWD/dist/bnbagent-${VERSION}.tar.gz"; do
+            "$PWD/dist/bnbagent-${VERSION}.tar.gz" \
+            "$REBUILD_DIR"/wheels/*.whl; do
             SMOKE_VENV="$(mktemp -d)/venv"
             uv venv "$SMOKE_VENV"
             uv pip install --python "$SMOKE_VENV/bin/python" --require-hashes \
@@ -303,6 +390,16 @@ jobs:
 
           import bnbagent
           import bnbagent.erc8183
+          import hashlib
+          import json
+          from importlib.resources import files
+          from bnbagent.core.abis import load_abi
+
+          expected = json.loads(Path("release-manifest.json").read_text())["abis"]
+          for name, digest in expected.items():
+              content = files("bnbagent").joinpath("abis", name).read_bytes()
+              assert hashlib.sha256(content).hexdigest() == digest, name
+              assert load_abi(name) == json.loads(content), name
 
           assert bnbagent.__version__ == os.environ["VERSION"], bnbagent.__version__
           venv = Path(os.environ["SMOKE_VENV"]).resolve()
@@ -311,162 +408,380 @@ jobs:
             )
           done
 
+      - name: Stage verified Python release
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pypi-release"
+          cp -R dist "$RUNNER_TEMP/pypi-release/"
+          cp release-manifest.json "$RUNNER_TEMP/pypi-release/"
+          if [[ -f "$GITHUB_WORKSPACE/RELEASE_NOTES.md" ]]; then
+            cp "$GITHUB_WORKSPACE/RELEASE_NOTES.md" "$RUNNER_TEMP/pypi-release/"
+          fi
+          python - <<'PYTHON'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = json.loads(Path("release-manifest.json").read_text())
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write(f"### Python build: {manifest['version']}\n\nSource: {manifest['source_sha']}\n\n")
+              for name, digest in manifest["files"].items():
+                  summary.write(f"- {name}: SHA-256 `{digest}`\n")
+          PYTHON
+
+      - name: Upload verified Python release
+        id: archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: pypi-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pypi-release/
+          if-no-files-found: error
+
+  version-commit:
+    if: inputs.release_to_prod
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      commit_sha: ${{ steps.commit.outputs.commit_sha }}
+    steps:
+      - name: Authorize release actors
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ACTOR_ID: ${{ github.actor_id }}
+          RELEASE_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          # Immutable GitHub IDs: jardenx, aiden-cao, robot-ux.
+          allowed_release_actor() {
+            case "$1" in
+              274764117|104969608|81206731) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          if ! allowed_release_actor "$RELEASE_ACTOR_ID"; then
+            echo "Release initiator is not an approved publisher" >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TRIGGERING_ACTOR" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]; then
+            echo "Invalid triggering actor" >&2
+            exit 1
+          fi
+          TRIGGERING_ID="$(gh api --method GET "users/$RELEASE_TRIGGERING_ACTOR" --jq '.id')"
+          if ! allowed_release_actor "$TRIGGERING_ID"; then
+            echo "Release rerunner is not an approved publisher" >&2
+            exit 1
+          fi
+
       - name: Commit version update through the GitHub API
-        if: success() && inputs.release_to_prod
-        id: version_commit
+        id: commit
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
+          SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+          BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          if git diff --quiet HEAD -- bnbagent/_version.py; then
-            echo "Version file already up to date; nothing to commit"
-            echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # GitHub signs this commit; no bot GPG private key is needed.
-          COMMIT_REQUEST="$(mktemp)"
-          trap 'rm -f "$COMMIT_REQUEST"' EXIT
-          python - <<'PYTHON' > "$COMMIT_REQUEST"
+          python - <<'PYTHON'
           import base64
           import json
           import os
+          import re
           import subprocess
-          import sys
-          from pathlib import Path
 
-          mutation = """
-          mutation($input: CreateCommitOnBranchInput!) {
-            createCommitOnBranch(input: $input) {
-              commit { oid signature { isValid wasSignedByGitHub } }
-            }
-          }
-          """
-          payload = {
-              "branch": {
-                  "repositoryNameWithOwner": os.environ["GITHUB_REPOSITORY"],
-                  "branchName": os.environ["GITHUB_REF_NAME"],
-              },
-              "expectedHeadOid": subprocess.check_output(
-                  ["git", "rev-parse", "HEAD"], text=True
-              ).strip(),
-              "message": {"headline": f'chore: bump version to {os.environ["VERSION"]}'},
-              "fileChanges": {
-                  "additions": [{
-                      "path": "python/bnbagent/_version.py",
-                      "contents": base64.b64encode(Path("bnbagent/_version.py").read_bytes()).decode(),
-                  }],
-              },
-          }
-          json.dump({"query": mutation, "variables": {"input": payload}}, sys.stdout)
+          version, sha = os.environ["VERSION"], os.environ["SOURCE_SHA"]
+          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+              raise SystemExit("Invalid version commit identity")
+          if sha != os.environ["GITHUB_SHA"]:
+              raise SystemExit("Production source differs from the dispatch commit")
+          repo = os.environ["GITHUB_REPOSITORY"]
+          original = json.loads(subprocess.check_output(["gh", "api", f"repos/{repo}/contents/python/bnbagent/_version.py?ref={sha}"], text=True))
+          content = base64.b64decode(original["content"]).decode()
+          updated, count = re.subn(r'^__version__\s*=\s*"[^"]*"', f'__version__ = "{version}"', content, count=1, flags=re.MULTILINE)
+          if count != 1:
+              raise SystemExit("Expected one __version__ assignment")
+          if updated != content:
+              query = "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid signature { isValid wasSignedByGitHub } } } }"
+              payload = {"query": query, "variables": {"input": {
+                  "branch": {"repositoryNameWithOwner": repo, "branchName": os.environ["BRANCH"]},
+                  "expectedHeadOid": sha,
+                  "message": {"headline": f"chore: bump version to {version}"},
+                  "fileChanges": {"additions": [{"path": "python/bnbagent/_version.py", "contents": base64.b64encode(updated.encode()).decode()}]},
+              }}}
+              result = json.loads(subprocess.check_output(["gh", "api", "graphql", "--input", "-"], input=json.dumps(payload), text=True))
+              commit = (result.get("data") or {}).get("createCommitOnBranch", {}).get("commit") or {}
+              signature = commit.get("signature") or {}
+              if result.get("errors") or signature.get("isValid") is not True or signature.get("wasSignedByGitHub") is not True:
+                  raise SystemExit("GitHub did not return a verified version commit")
+              sha = commit.get("oid", "")
+          if not re.fullmatch(r"[0-9a-f]{40}", sha):
+              raise SystemExit("Invalid released commit SHA")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"commit_sha={sha}\n")
           PYTHON
-          COMMIT_RESPONSE="$(gh api graphql --input "$COMMIT_REQUEST")"
-          if ! VERSION_COMMIT_SHA="$(jq -er '
-            .data.createCommitOnBranch.commit
-            | select(.signature.isValid == true and .signature.wasSignedByGitHub == true)
-            | .oid | select(test("^[0-9a-f]{40}$"))
-          ' <<< "$COMMIT_RESPONSE")"; then
-            echo "GitHub did not return a verified version commit; refusing to tag" >&2
-            exit 1
-          fi
-          echo "commit_sha=$VERSION_COMMIT_SHA" >> "$GITHUB_OUTPUT"
 
-      - name: Check whether the version is already on PyPI with matching digests
-        # Recovery path: if a previous run published to PyPI but failed before
-        # the tag/Release, skip the duplicate upload only when the remote
-        # wheel and sdist SHA-256 digests match our locally verified artifacts.
-        if: ${{ inputs.release_to_prod }}
-        id: pypi
+  publish:
+    # Test PyPI intentionally has no version commit; failed production commits
+    # must never be treated as a skipped Test PyPI dependency.
+    if: >-
+      always() && !cancelled() && needs.build.result == 'success' &&
+      ((!inputs.release_to_prod && needs.version-commit.result == 'skipped') ||
+       (inputs.release_to_prod && needs.version-commit.result == 'success'))
+    needs: [build, version-commit]
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.release_to_prod && 'pypi' || 'testpypi' }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Authorize release actors
+        if: inputs.release_to_prod
+        working-directory: .
         env:
-          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ACTOR_ID: ${{ github.actor_id }}
+          RELEASE_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         run: |
           set -euo pipefail
-          EXISTS="$(
-            python - <<'PYTHON'
+          # Immutable GitHub IDs: jardenx, aiden-cao, robot-ux.
+          allowed_release_actor() {
+            case "$1" in
+              274764117|104969608|81206731) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          if ! allowed_release_actor "$RELEASE_ACTOR_ID"; then
+            echo "Release initiator is not an approved publisher" >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TRIGGERING_ACTOR" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]; then
+            echo "Invalid triggering actor" >&2
+            exit 1
+          fi
+          TRIGGERING_ID="$(gh api --method GET "users/$RELEASE_TRIGGERING_ACTOR" --jq '.id')"
+          if ! allowed_release_actor "$TRIGGERING_ID"; then
+            echo "Release rerunner is not an approved publisher" >&2
+            exit 1
+          fi
+
+      - name: Download verified Python release
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          merge-multiple: true
+          path: package
+
+      - name: Revalidate Python release before upload
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+        working-directory: package
+        run: |
+          set -euo pipefail
+          python - <<'PYTHON'
           import hashlib
-          import json
           import os
-          import urllib.error
-          import urllib.request
+          import posixpath
+          import tarfile
+          import zipfile
+          from email.parser import Parser
           from pathlib import Path
 
           version = os.environ["VERSION"]
-          url = f"https://pypi.org/pypi/bnbagent/{version}/json"
-          try:
-              with urllib.request.urlopen(url, timeout=15) as resp:
-                  data = json.loads(resp.read().decode("utf-8"))
-          except urllib.error.HTTPError as exc:
-              if exc.code == 404:
-                  print("false")
-                  raise SystemExit(0)
-              raise
+          dist_dir = Path("dist")
+          expected_wheel = dist_dir / f"bnbagent-{version}-py3-none-any.whl"
+          expected_sdist = dist_dir / f"bnbagent-{version}.tar.gz"
 
-          local_digests = {
-              p.name: hashlib.sha256(p.read_bytes()).hexdigest()
-              for p in Path("dist").iterdir()
-              if p.is_file()
-          }
-          remote_urls = data.get("urls") or []
-          remote_digests = {
-              entry.get("filename"): (entry.get("digests") or {}).get("sha256")
-              for entry in remote_urls
-          }
-          if remote_digests != local_digests:
+          actual_files = sorted(p for p in dist_dir.iterdir() if p.is_file())
+          if actual_files != sorted([expected_wheel, expected_sdist]):
               raise SystemExit(
-                  f"Refusing to skip bnbagent {version}: PyPI digests {remote_digests} do not match local dist {local_digests}"
+                  f"Unexpected files in dist/: {[p.name for p in actual_files]}"
               )
-          print("true")
+
+          import json
+          import re
+          manifest = json.loads(Path("release-manifest.json").read_text())
+          if not re.fullmatch(r"[0-9a-f]{40}", os.environ["SOURCE_SHA"]):
+              raise SystemExit("Invalid build SHA")
+          if manifest["version"] != version or manifest["source_sha"] != os.environ["SOURCE_SHA"]:
+              raise SystemExit("Release manifest identity mismatch")
+          actual_digests = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in actual_files}
+          if actual_digests != manifest["files"]:
+              raise SystemExit("Release artifact digest mismatch")
+          repo_abis = manifest["abis"]
+          if not repo_abis:
+              raise SystemExit("No ABI files found in ../abis")
+
+          # 1. Inspect wheel (.whl)
+          with zipfile.ZipFile(expected_wheel, "r") as zf:
+              names = zf.namelist()
+              if len(names) != len(set(names)):
+                  raise SystemExit("Duplicate entry names in wheel")
+              for name in names:
+                  if name.startswith("/") or ".." in name.split("/"):
+                      raise SystemExit(f"Unsafe path in wheel: {name}")
+              metadata_path = f"bnbagent-{version}.dist-info/METADATA"
+              if metadata_path not in names:
+                  raise SystemExit(f"Missing {metadata_path} in wheel")
+              meta = Parser().parsestr(zf.read(metadata_path).decode("utf-8"))
+              if meta.get("Name") != "bnbagent" or meta.get("Version") != version:
+                  raise SystemExit(
+                      f"Wheel METADATA mismatch: Name={meta.get('Name')!r}, Version={meta.get('Version')!r}"
+                  )
+              wheel_abis = {
+                  n.removeprefix("bnbagent/abis/"): hashlib.sha256(zf.read(n)).hexdigest()
+                  for n in names
+                  if n.startswith("bnbagent/abis/") and n.endswith(".json")
+              }
+              if wheel_abis != repo_abis:
+                  raise SystemExit("Wheel ABIs do not match repo-root ../abis/*.json")
+
+          # 2. Inspect sdist (.tar.gz)
+          with tarfile.open(expected_sdist, "r:gz") as tf:
+              seen_tar = set()
+              pkg_info_bytes = None
+              sdist_abis = {}
+              for member in tf.getmembers():
+                  if not (member.isreg() or member.isdir()):
+                      raise SystemExit(
+                          f"Disallowed tar member type for {member.name!r}: {member.type!r}"
+                      )
+                  if member.name.startswith("/") or ".." in member.name.split("/"):
+                      raise SystemExit(f"Unsafe path in sdist: {member.name}")
+                  norm = posixpath.normpath(member.name)
+                  if not (
+                      norm == f"bnbagent-{version}"
+                      or norm.startswith(f"bnbagent-{version}/")
+                  ):
+                      raise SystemExit(f"Unexpected root in sdist: {norm}")
+                  if norm in seen_tar:
+                      raise SystemExit(f"Duplicate tar member in sdist: {norm}")
+                  seen_tar.add(norm)
+                  abi_prefix = f"bnbagent-{version}/bnbagent/abis/"
+                  if member.isreg() and norm.startswith(abi_prefix) and norm.endswith(".json"):
+                      f = tf.extractfile(member)
+                      assert f is not None
+                      sdist_abis[norm.removeprefix(abi_prefix)] = hashlib.sha256(f.read()).hexdigest()
+                  if norm == f"bnbagent-{version}/PKG-INFO":
+                      f = tf.extractfile(member)
+                      assert f is not None
+                      pkg_info_bytes = f.read()
+              if sdist_abis != repo_abis:
+                  raise SystemExit("sdist ABIs do not match repo-root ../abis/*.json")
+              if pkg_info_bytes is None:
+                  raise SystemExit("Missing PKG-INFO in sdist")
+              pkg_info = Parser().parsestr(pkg_info_bytes.decode("utf-8"))
+              if pkg_info.get("Name") != "bnbagent" or pkg_info.get("Version") != version:
+                  raise SystemExit(
+                      f"sdist PKG-INFO mismatch: Name={pkg_info.get('Name')!r}, Version={pkg_info.get('Version')!r}"
+                  )
           PYTHON
-          )"
-          if [[ "$EXISTS" == "true" ]]; then
-            echo "bnbagent $VERSION is already on PyPI with matching SHA-256 digests; skipping upload"
-          fi
-          echo "exists=$EXISTS" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether the version is already on PyPI with matching digests
+        if: inputs.release_to_prod
+        id: pypi
+        env:
+          VERSION: ${{ inputs.version }}
+        working-directory: package
+        run: |
+          set -euo pipefail
+          python - <<'PYTHON'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import urllib.error
+          import urllib.request
+
+          version = os.environ["VERSION"]
+          try:
+              with urllib.request.urlopen(f"https://pypi.org/pypi/bnbagent/{version}/json", timeout=15) as response:
+                  data = json.load(response)
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  raise
+              exists = False
+          else:
+              local = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in Path("dist").iterdir()}
+              remote = {entry["filename"]: entry["digests"]["sha256"] for entry in data.get("urls", [])}
+              if local != remote:
+                  raise SystemExit("Existing PyPI version has different digests")
+              exists = True
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"exists={str(exists).lower()}\n")
+          PYTHON
 
       - name: Publish to Production PyPI
-        if: ${{ inputs.release_to_prod && steps.pypi.outputs.exists != 'true' }}
+        if: inputs.release_to_prod && steps.pypi.outputs.exists != 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: ./python/dist/
+          packages-dir: package/dist/
           print-hash: true
-          password: ${{ secrets.PYPI_API_TOKEN }}
-          # Uses trusted publishing (OIDC) - no token needed
-          # Configure OIDC in PyPI account settings: https://pypi.org/manage/account/publishing/
 
       - name: Publish to Test PyPI
-        if: ${{ !inputs.release_to_prod }}
+        if: '!inputs.release_to_prod'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: ./python/dist/
-          print-hash: true
+          packages-dir: package/dist/
           repository-url: https://test.pypi.org/legacy/
-          password: ${{ secrets.TEST_PYPI_API_TOKEN }}
-          # For Test PyPI, you can use trusted publishing or API token
-          # If using API token, set TEST_PYPI_API_TOKEN secret
+          print-hash: true
 
-      - name: Create Git tag and GitHub Release
-        # Through the API: checkout dropped its credentials, so git push would
-        # fail. The tag ref is created first because gh release create ignores
-        # --target when the tag already exists; creating the ref fails if it does.
-        if: success() && inputs.release_to_prod
+  github-release:
+    if: inputs.release_to_prod
+    needs: [build, version-commit, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Authorize release actors
+        working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
-          TARGET_TAG: ${{ steps.tags.outputs.target_tag }}
-          RELEASE_SHA: ${{ steps.version_commit.outputs.commit_sha }}
+          RELEASE_ACTOR_ID: ${{ github.actor_id }}
+          RELEASE_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          # Immutable GitHub IDs: jardenx, aiden-cao, robot-ux.
+          allowed_release_actor() {
+            case "$1" in
+              274764117|104969608|81206731) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          if ! allowed_release_actor "$RELEASE_ACTOR_ID"; then
+            echo "Release initiator is not an approved publisher" >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TRIGGERING_ACTOR" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]; then
+            echo "Invalid triggering actor" >&2
+            exit 1
+          fi
+          TRIGGERING_ID="$(gh api --method GET "users/$RELEASE_TRIGGERING_ACTOR" --jq '.id')"
+          if ! allowed_release_actor "$TRIGGERING_ID"; then
+            echo "Release rerunner is not an approved publisher" >&2
+            exit 1
+          fi
+
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          merge-multiple: true
+          path: release-notes
+
+      - name: Create Git tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ needs.version-commit.outputs.commit_sha }}
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          if [[ ! "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Unexpected release commit: $RELEASE_SHA" >&2
-            exit 1
-          fi
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          TARGET_TAG="bnbagent-v$VERSION"
           gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
-            -f "ref=refs/tags/$TARGET_TAG" \
-            -f "sha=$RELEASE_SHA" >/dev/null
-          gh release create "$TARGET_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --verify-tag \
-            --title "bnbagent v$VERSION" \
-            --notes-file "$GITHUB_WORKSPACE/RELEASE_NOTES.md" \
-            --latest
+            -f "ref=refs/tags/$TARGET_TAG" -f "sha=$RELEASE_SHA" >/dev/null
+          gh release create "$TARGET_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "bnbagent v$VERSION" --notes-file release-notes/RELEASE_NOTES.md --latest

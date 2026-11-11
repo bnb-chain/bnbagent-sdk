@@ -49,15 +49,44 @@ jobs:
     name: Validate protected dispatch
     runs-on: ubuntu-latest
     steps:
+      - name: Authorize release actors
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ACTOR_ID: ${{ github.actor_id }}
+          RELEASE_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          # Immutable GitHub IDs: jardenx, aiden-cao, robot-ux.
+          allowed_release_actor() {
+            case "$1" in
+              274764117|104969608|81206731) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          if ! allowed_release_actor "$RELEASE_ACTOR_ID"; then
+            echo "Release initiator is not an approved publisher" >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TRIGGERING_ACTOR" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]; then
+            echo "Invalid triggering actor" >&2
+            exit 1
+          fi
+          TRIGGERING_ID="$(gh api --method GET "users/$RELEASE_TRIGGERING_ACTOR" --jq '.id')"
+          if ! allowed_release_actor "$TRIGGERING_ID"; then
+            echo "Release rerunner is not an approved publisher" >&2
+            exit 1
+          fi
+
       - name: Require the default-branch workflow
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          REF_NAME: ${{ github.ref_name }}
+          REF_NAME: ${{ github.ref }}
           RELEASE_TYPE: ${{ inputs.release_type }}
           SOURCE_REF: ${{ inputs.source_ref }}
         run: |
           set -euo pipefail
-          if [[ "$REF_NAME" != "$DEFAULT_BRANCH" ]]; then
+          if [[ "$REF_NAME" != "refs/heads/$DEFAULT_BRANCH" ]]; then
             echo "Run this workflow from the protected default branch: $DEFAULT_BRANCH" >&2
             exit 1
           fi
@@ -353,6 +382,9 @@ jobs:
 
   package:
     name: Build and verify the alpha tarball
+    outputs:
+      integrity: ${{ steps.pack.outputs.integrity }}
+      artifact_id: ${{ steps.archive.outputs.artifact-id }}
     if: inputs.release_type == 'alpha'
     needs: resolve
     runs-on: ubuntu-latest
@@ -410,6 +442,7 @@ jobs:
           exit "$FAILED"
 
       - name: Pack and verify the installable tarball
+        id: pack
         env:
           ALPHA_VERSION: ${{ needs.resolve.outputs.alpha_version }}
         run: |
@@ -445,10 +478,18 @@ jobs:
           node -e \
             "require('@bnbagent/sdk'); require('@bnbagent/sdk/erc8004')"
 
+          CLEAN_TARBALL="$CLEAN_TARBALL" node -e 'const fs=require("node:fs"),c=require("node:crypto"); console.log("integrity=sha512-"+c.createHash("sha512").update(fs.readFileSync(process.env.CLEAN_TARBALL)).digest("base64"))' >> "$GITHUB_OUTPUT"
+          {
+            echo "### npm alpha build: $ALPHA_VERSION"
+            echo "Source: $(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"
+            echo "SHA-512 (hex): $(shasum -a 512 "$CLEAN_TARBALL" | cut -d ' ' -f 1)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload verified tarball
+        id: archive
         uses: actions/upload-artifact@v4
         with:
-          name: bnbagent-sdk-${{ needs.resolve.outputs.alpha_version }}
+          name: bnbagent-sdk-${{ needs.resolve.outputs.alpha_version }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/npm-clean/*.tgz
           if-no-files-found: error
           retention-days: 7
@@ -456,314 +497,37 @@ jobs:
   alpha-publish:
     name: Publish alpha to npm
     if: >-
-      always() &&
+      always() && !cancelled() &&
       inputs.release_type == 'alpha' &&
       needs.resolve.result == 'success' &&
       needs.package.result == 'success' &&
       (needs.verify.result == 'success' || needs.verify.result == 'skipped')
-    needs:
-      - resolve
-      - verify
-      - package
-    runs-on: ubuntu-latest
-    environment: npm-publish
+    needs: [resolve, verify, package]
     permissions:
       contents: read
       id-token: write
-    steps:
-      - name: Download verified tarball
-        uses: actions/download-artifact@v4
-        with:
-          name: bnbagent-sdk-${{ needs.resolve.outputs.alpha_version }}
-          path: package
-
-      - name: Setup Node 24
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          registry-url: https://registry.npmjs.org
-
-      - name: Install OIDC-capable npm
-        run: npm install --global npm@11.15.0
-
-      - name: Verify artifact identity and repack clean archive
-        id: artifact
-        env:
-          ALPHA_VERSION: ${{ needs.resolve.outputs.alpha_version }}
-        run: |
-          set -euo pipefail
-          # Absolute path: npm parses a bare "package/x.tgz" argument as a
-          # GitHub owner/repo shorthand, not a file.
-          mapfile -t TARBALLS < <(find "$PWD/package" -maxdepth 1 -type f -name '*.tgz')
-          if [[ "${#TARBALLS[@]}" -ne 1 ]]; then
-            echo "Expected exactly one tarball, found ${#TARBALLS[@]}" >&2
-            exit 1
-          fi
-          RAW_TARBALL="$PWD/package/bnbagent-sdk-$ALPHA_VERSION.tgz"
-          if [[ "${TARBALLS[0]}" != "$RAW_TARBALL" ]]; then
-            echo "Unexpected tarball filename: ${TARBALLS[0]}" >&2
-            exit 1
-          fi
-          CLEAN_TARBALL="$RUNNER_TEMP/bnbagent-sdk-$ALPHA_VERSION.clean.tgz"
-          INTEGRITY="$(
-            RAW_TARBALL="$RAW_TARBALL" \
-            CLEAN_TARBALL="$CLEAN_TARBALL" \
-            EXPECTED_VERSION="$ALPHA_VERSION" \
-            EXPECTED_REPO="https://github.com/$GITHUB_REPOSITORY.git" \
-            node <<'NODE'
-          const { createHash } = require("node:crypto");
-          const { readFileSync, writeFileSync } = require("node:fs");
-          const posix = require("node:path/posix");
-          const { gunzipSync, gzipSync } = require("node:zlib");
-
-          const rawBuf = gunzipSync(readFileSync(process.env.RAW_TARBALL));
-          if (rawBuf.length === 0 || rawBuf.length % 512 !== 0) {
-            throw new Error(`Invalid tar length: ${rawBuf.length}`);
-          }
-          const readAscii = (b) => {
-            const z = b.indexOf(0);
-            return (z >= 0 ? b.subarray(0, z) : b).toString("utf8");
-          };
-          const parseOctal = (b, f) => {
-            const s = readAscii(b).trim();
-            if (!s) return 0;
-            if (!/^[0-7]+$/.test(s)) throw new Error(`Bad octal ${f}: ${s}`);
-            return Number.parseInt(s, 8);
-          };
-          const isZero = (b) => b.every((x) => x === 0);
-          const encodeHeader = (name, mode, size) => {
-            const nb = Buffer.from(name, "utf8");
-            if (nb.length === 0 || nb.length > 100) throw new Error(`Path length: ${name}`);
-            const h = Buffer.alloc(512, 0);
-            nb.copy(h, 0);
-            h.write(`${(mode & 0o7777).toString(8).padStart(7, "0")}\0`, 100, "ascii");
-            h.write("0000000\0", 108, "ascii");
-            h.write("0000000\0", 116, "ascii");
-            h.write(`${size.toString(8).padStart(11, "0")}\0`, 124, "ascii");
-            h.write("00000000000\0", 136, "ascii");
-            h.write("0", 156, "ascii");
-            h.write("ustar\0", 257, "ascii");
-            h.write("00", 263, "ascii");
-            h.fill(0x20, 148, 156);
-            let sum = 0;
-            for (let i = 0; i < 512; i++) sum += h[i];
-            h.write(`${sum.toString(8).padStart(6, "0")}\0 `, 148, "ascii");
-            return h;
-          };
-
-          const seen = new Set();
-          const files = [];
-          let manifest = null;
-          let off = 0;
-          let eof = false;
-          while (off < rawBuf.length) {
-            const hdr = rawBuf.subarray(off, off + 512);
-            if (isZero(hdr)) {
-              eof = true;
-              off += 512;
-              continue;
-            }
-            if (eof) throw new Error("Trailing non-zero block after EOF");
-            const storedSum = parseOctal(hdr.subarray(148, 156), "checksum");
-            let calcSum = 0;
-            for (let i = 0; i < 512; i++) calcSum += i >= 148 && i < 156 ? 0x20 : hdr[i];
-            if (storedSum !== calcSum) throw new Error("Header checksum mismatch");
-
-            const tb = hdr[156];
-            const tf = tb === 0 ? "\0" : String.fromCharCode(tb);
-            if (tf !== "0" && tf !== "\0" && tf !== "5") {
-              throw new Error(`Disallowed tar typeflag: ${JSON.stringify(tf)}`);
-            }
-            if (hdr.subarray(257, 265).toString("latin1") !== "ustar\u000000") {
-              throw new Error("Tar entry header is not POSIX ustar");
-            }
-            if (!isZero(hdr.subarray(345, 500))) {
-              throw new Error("Tar entry uses the ustar prefix field");
-            }
-            const rawPath = readAscii(hdr.subarray(0, 100));
-            if (!rawPath || rawPath.startsWith("/") || rawPath.split("/").some((s) => s === ".." || s === ".")) {
-              throw new Error(`Unsafe tar path: ${rawPath}`);
-            }
-            const norm = posix.normalize(rawPath).replace(/\/+$/, "");
-            if (norm !== "package" && !norm.startsWith("package/")) {
-              throw new Error(`Unexpected root in tar path: ${norm}`);
-            }
-            const size = parseOctal(hdr.subarray(124, 136), "size");
-            const mode = parseOctal(hdr.subarray(100, 108), "mode") || 0o644;
-            if (tf === "5" && size !== 0) throw new Error("Non-zero directory size");
-            const dataStart = off + 512;
-            const paddedEnd = dataStart + Math.ceil(size / 512) * 512;
-            if (paddedEnd > rawBuf.length) throw new Error("Truncated tar entry");
-            if (seen.has(norm)) throw new Error(`Duplicate tar entry: ${norm}`);
-            seen.add(norm);
-            if (tf !== "5") {
-              const data = Buffer.from(rawBuf.subarray(dataStart, dataStart + size));
-              if (norm === "package/package.json") {
-                manifest = JSON.parse(data.toString("utf8"));
-              }
-              files.push({ path: norm, mode, data });
-            }
-            off = paddedEnd;
-          }
-
-          if (!manifest || typeof manifest !== "object") throw new Error("Missing package/package.json");
-          if (manifest.name !== "@bnbagent/sdk") throw new Error(`Unexpected name: ${manifest.name}`);
-          if (manifest.version !== process.env.EXPECTED_VERSION) {
-            throw new Error(`Unexpected version: ${manifest.version}`);
-          }
-          if (manifest.repository?.url !== process.env.EXPECTED_REPO) {
-            throw new Error(`Unexpected repository.url: ${manifest.repository?.url}`);
-          }
-          if (Object.hasOwn(manifest, "publishConfig")) {
-            throw new Error("Tarball package.json must not contain publishConfig");
-          }
-          const cleanManifest = { ...manifest };
-          delete cleanManifest.publishConfig;
-          delete cleanManifest.scripts;
-          const cleanManifestBuf = Buffer.from(`${JSON.stringify(cleanManifest, null, 2)}\n`, "utf8");
-          const outChunks = [];
-          for (const f of files) {
-            const d = f.path === "package/package.json" ? cleanManifestBuf : f.data;
-            outChunks.push(encodeHeader(f.path, f.mode, d.length), d);
-            const pad = (512 - (d.length % 512)) % 512;
-            if (pad) outChunks.push(Buffer.alloc(pad, 0));
-          }
-          outChunks.push(Buffer.alloc(1024, 0));
-          const cleanTgz = gzipSync(Buffer.concat(outChunks));
-          writeFileSync(process.env.CLEAN_TARBALL, cleanTgz);
-          process.stdout.write(`sha512-${createHash("sha512").update(cleanTgz).digest("base64")}`);
-          NODE
-          )"
-          echo "tarball=$CLEAN_TARBALL" >> "$GITHUB_OUTPUT"
-          echo "integrity=$INTEGRITY" >> "$GITHUB_OUTPUT"
-
-      - name: Read registry state
-        id: registry
-        env:
-          ALPHA_VERSION: ${{ needs.resolve.outputs.alpha_version }}
-        run: |
-          set -euo pipefail
-          TAGS="$(npm dist-tag ls "@bnbagent/sdk" --registry=https://registry.npmjs.org 2>/dev/null || true)"
-          ALPHA_TAG="$(awk '$1 == "alpha:" { print $2 }' <<<"$TAGS")"
-          LATEST_TAG="$(awk '$1 == "latest:" { print $2 }' <<<"$TAGS")"
-
-          if [[ "$ALPHA_TAG" == "$ALPHA_VERSION" ]]; then
-            EXISTS=true
-          else
-            EXACT="$(
-              npm view "@bnbagent/sdk@$ALPHA_VERSION" version --registry=https://registry.npmjs.org --prefer-online 2>/dev/null || true
-            )"
-            if [[ "$EXACT" == "$ALPHA_VERSION" ]]; then
-              EXISTS=true
-            else
-              EXISTS=false
-            fi
-          fi
-
-          echo "exists=$EXISTS" >> "$GITHUB_OUTPUT"
-          echo "latest=$LATEST_TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Publish under the alpha dist-tag
-        if: steps.registry.outputs.exists != 'true'
-        env:
-          # workflow_dispatch runs from main while source_ref may be another
-          # commit, so alpha provenance would identify the dispatcher commit.
-          NPM_CONFIG_PROVENANCE: "false"
-          TARBALL: ${{ steps.artifact.outputs.tarball }}
-        # Step env keys are case-insensitive, so lowercase proxy variables can
-        # only be cleared from the shell.
-        run: >-
-          env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY
-          -u http_proxy -u https_proxy -u all_proxy
-          -u NPM_CONFIG_PROXY -u NPM_CONFIG_HTTPS_PROXY
-          -u npm_config_proxy -u npm_config_https_proxy
-          npm publish "$TARBALL"
-          --access public
-          --tag alpha
-          --ignore-scripts
-          --registry=https://registry.npmjs.org
-          --strict-ssl=true
-          --json
-
-      - name: Check prerelease dist-tags
-        env:
-          ALPHA_VERSION: ${{ needs.resolve.outputs.alpha_version }}
-          TARGET_VERSION: ${{ inputs.target_version }}
-          EXPECTED_INTEGRITY: ${{ steps.artifact.outputs.integrity }}
-          PREVIOUS_LATEST: ${{ steps.registry.outputs.latest }}
-        run: |
-          set -euo pipefail
-          TAGS="$(npm dist-tag ls "@bnbagent/sdk" --registry=https://registry.npmjs.org 2>/dev/null || true)"
-          ALPHA_TAG="$(awk '$1 == "alpha:" { print $2 }' <<<"$TAGS")"
-          LATEST_TAG="$(awk '$1 == "latest:" { print $2 }' <<<"$TAGS")"
-
-          if [[ "$ALPHA_TAG" != "$ALPHA_VERSION" ]]; then
-            echo "::warning::npm accepted the publish, but the public alpha tag is still propagating"
-          fi
-          if [[ "$LATEST_TAG" == "$ALPHA_VERSION" ]]; then
-            echo "Refusing to leave an alpha version under latest" >&2
-            exit 1
-          fi
-          if [[ -n "$PREVIOUS_LATEST" && "$LATEST_TAG" != "$PREVIOUS_LATEST" ]]; then
-            echo "latest changed from $PREVIOUS_LATEST to $LATEST_TAG" >&2
-            exit 1
-          fi
-          STABLE_CHECK="$(npm view "@bnbagent/sdk@$TARGET_VERSION" version --registry=https://registry.npmjs.org 2>/dev/null || true)"
-          if [[ "$STABLE_CHECK" == "$TARGET_VERSION" ]]; then
-            echo "Refusing alpha run: stable version $TARGET_VERSION appeared on npm" >&2
-            exit 1
-          fi
-          REMOTE_INTEGRITY="$(npm view "@bnbagent/sdk@$ALPHA_VERSION" dist.integrity --registry=https://registry.npmjs.org 2>/dev/null || true)"
-          if [[ -n "$REMOTE_INTEGRITY" && "$REMOTE_INTEGRITY" != "$EXPECTED_INTEGRITY" ]]; then
-            echo "Published integrity $REMOTE_INTEGRITY does not match expected $EXPECTED_INTEGRITY" >&2
-            exit 1
-          fi
-
-      - name: Check public metadata without blocking publication
-        env:
-          ALPHA_VERSION: ${{ needs.resolve.outputs.alpha_version }}
-        run: |
-          EXACT="$(
-            npm view "@bnbagent/sdk@$ALPHA_VERSION" version 2>/dev/null || true
-          )"
-          if [[ "$EXACT" != "$ALPHA_VERSION" ]]; then
-            echo "::warning::@bnbagent/sdk@$ALPHA_VERSION is published but public metadata is still propagating"
-          fi
-
-      - name: Write install summary
-        env:
-          ALPHA_VERSION: ${{ needs.resolve.outputs.alpha_version }}
-          CI_RUN_URL: ${{ needs.resolve.outputs.ci_run_url }}
-          REUSE_CI: ${{ needs.resolve.outputs.reuse_ci }}
-          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
-        run: |
-          {
-            echo "## @bnbagent/sdk alpha package"
-            echo
-            echo "- Version: \`$ALPHA_VERSION\`"
-            echo "- Source commit: \`$SOURCE_SHA\`"
-            if [[ "$REUSE_CI" == "true" ]]; then
-              echo "- Verification: reused [successful CI]($CI_RUN_URL) for the exact source commit"
-            else
-              echo "- Verification: fresh parallel checks in this workflow"
-            fi
-            echo "- Dist-tag: \`alpha\`"
-            echo "- Provenance: disabled because source_ref may differ from the dispatcher commit"
-            echo
-            echo '```bash'
-            echo "pnpm add -E @bnbagent/sdk@$ALPHA_VERSION"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+    uses: ./.github/workflows/npm-publish-artifact.yml
+    with:
+      artifact_id: ${{ needs.package.outputs.artifact_id }}
+      version: ${{ needs.resolve.outputs.alpha_version }}
+      channel: alpha
+      source_sha: ${{ needs.resolve.outputs.source_sha }}
+      integrity: ${{ needs.package.outputs.integrity }}
 
   production:
-    name: Publish production to npm
+    name: Build production npm artifact
     if: inputs.release_type == 'production'
     needs: validate
     runs-on: ubuntu-latest
-    environment: npm-publish
     permissions:
-      contents: write
-      id-token: write
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.version.outputs.commit }}
+      source_sha: ${{ steps.handoff.outputs.source_sha }}
+      integrity: ${{ steps.handoff.outputs.integrity }}
+      artifact_id: ${{ steps.archive.outputs.artifact-id }}
+      version_artifact_id: ${{ steps.version_files.outputs.artifact-id }}
     defaults:
       run:
         working-directory: typescript
@@ -771,7 +535,7 @@ jobs:
       - name: Checkout main
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -784,12 +548,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "24"
-          registry-url: https://registry.npmjs.org
           cache: pnpm
           cache-dependency-path: typescript/pnpm-lock.yaml
-
-      - name: Install OIDC-capable npm
-        run: npm install --global npm@11.15.0
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -826,19 +586,17 @@ jobs:
             echo '```'
           } >> RELEASE_NOTES.md
 
-      - name: Commit version bump through the GitHub API
-        id: commit
-        if: steps.version.outputs.commit == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          V: ${{ steps.version.outputs.version }}
-        run: pnpm exec tsx scripts/release.ts commit "$V" >> "$GITHUB_OUTPUT"
+      - name: Capture version files before packaging changes
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/npm-version"
+          cp package.json pnpm-lock.yaml "$RUNNER_TEMP/npm-version/"
 
       - name: Freeze workspace dependencies for publishing
         run: pnpm exec tsx scripts/release.ts freeze
 
       - name: Align package metadata with the publishing repository
-        # Apply metadata after the version commit, to the package being published.
+        # Apply metadata after capturing the version files for the API commit.
         run: |
           npm pkg set "repository.url=https://github.com/$GITHUB_REPOSITORY.git"
           npm pkg delete publishConfig
@@ -885,55 +643,215 @@ jobs:
             "require('@bnbagent/sdk'); require('@bnbagent/sdk/erc8004')"
           echo "tarball=$CLEAN_TARBALL" >> "$GITHUB_OUTPUT"
 
-      - name: Publish stable package with provenance
+      - name: Prepare production handoff
+        id: handoff
         env:
           TARBALL: ${{ steps.pack.outputs.tarball }}
-        # Step env keys are case-insensitive, so lowercase proxy variables can
-        # only be cleared from the shell.
-        run: >-
-          env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY
-          -u http_proxy -u https_proxy -u all_proxy
-          -u NPM_CONFIG_PROXY -u NPM_CONFIG_HTTPS_PROXY
-          -u npm_config_proxy -u npm_config_https_proxy
-          pnpm exec tsx scripts/release.ts publish --tag latest --tarball "$TARBALL"
+          V: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/npm-release"
+          cp "$TARBALL" "$RUNNER_TEMP/npm-release/bnbagent-sdk-$V.tgz"
+          cp RELEASE_NOTES.md "$RUNNER_TEMP/npm-version/"
+          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          node -e 'const fs=require("node:fs"),c=require("node:crypto"); console.log("integrity=sha512-"+c.createHash("sha512").update(fs.readFileSync(process.env.TARBALL)).digest("base64"))' >> "$GITHUB_OUTPUT"
+          {
+            echo "### npm production build: $V"
+            echo "Source: $(git rev-parse HEAD)"
+            echo "SHA-512 (hex): $(shasum -a 512 "$TARBALL" | cut -d ' ' -f 1)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload production tarball
+        id: archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-production-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/npm-release/*.tgz
+          if-no-files-found: error
+
+      - name: Upload production version files and notes
+        id: version_files
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-version-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/npm-version/
+          if-no-files-found: error
+
+  version-commit:
+    name: Commit production version through trusted API logic
+    needs: production
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      commit_sha: ${{ steps.commit.outputs.commit_sha }}
+    steps:
+      - name: Authorize release actors
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ACTOR_ID: ${{ github.actor_id }}
+          RELEASE_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          # Immutable GitHub IDs: jardenx, aiden-cao, robot-ux.
+          allowed_release_actor() {
+            case "$1" in
+              274764117|104969608|81206731) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          if ! allowed_release_actor "$RELEASE_ACTOR_ID"; then
+            echo "Release initiator is not an approved publisher" >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TRIGGERING_ACTOR" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]; then
+            echo "Invalid triggering actor" >&2
+            exit 1
+          fi
+          TRIGGERING_ID="$(gh api --method GET "users/$RELEASE_TRIGGERING_ACTOR" --jq '.id')"
+          if ! allowed_release_actor "$TRIGGERING_ID"; then
+            echo "Release rerunner is not an approved publisher" >&2
+            exit 1
+          fi
+
+      - name: Download version files
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.production.outputs.version_artifact_id }}
+          merge-multiple: true
+          path: version-files
+
+      - name: Commit version bump through the GitHub API
+        id: commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ needs.production.outputs.version }}
+          SOURCE_SHA: ${{ needs.production.outputs.source_sha }}
+          COMMIT: ${{ needs.production.outputs.commit }}
+          BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          python - <<'PYTHON'
+          import base64
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+
+          def api(endpoint, *args):
+              return json.loads(subprocess.check_output(["gh", "api", endpoint, *args], text=True))
+
+          version, sha = os.environ["V"], os.environ["SOURCE_SHA"]
+          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+              raise SystemExit("Invalid version commit identity")
+          if sha != os.environ["GITHUB_SHA"]:
+              raise SystemExit("Production source differs from the dispatch commit")
+          if os.environ["COMMIT"] not in ("true", "false"):
+              raise SystemExit("Invalid commit selection")
+          repo = os.environ["GITHUB_REPOSITORY"]
+          original = api(f"repos/{repo}/contents/typescript/package.json?ref={sha}")
+          manifest = json.loads(base64.b64decode(original["content"]))
+          manifest["version"] = version
+          staged = json.loads(Path("version-files/package.json").read_text())
+          if staged != manifest:
+              raise SystemExit("Version artifact changes fields other than version")
+          # This single-package lockfile has no root package version field.
+          # Reject lockfile drift instead of committing arbitrary build output.
+          lock = api(f"repos/{repo}/contents/typescript/pnpm-lock.yaml?ref={sha}")
+          if Path("version-files/pnpm-lock.yaml").read_bytes() != base64.b64decode(lock["content"]):
+              raise SystemExit("Release preparation changed lockfile; commit dependency changes separately")
+          if os.environ["COMMIT"] == "true":
+              query = "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid signature { isValid wasSignedByGitHub } } } }"
+              payload = {"query": query, "variables": {"input": {
+                  "branch": {"repositoryNameWithOwner": repo, "branchName": os.environ["BRANCH"]},
+                  "expectedHeadOid": sha,
+                  "message": {"headline": f"chore(release): v{version} [skip ci]"},
+                  "fileChanges": {"additions": [{"path": "typescript/package.json", "contents": base64.b64encode((json.dumps(manifest, indent=2) + "\n").encode()).decode()}]},
+              }}}
+              response = subprocess.check_output(["gh", "api", "graphql", "--input", "-"], input=json.dumps(payload), text=True)
+              result = json.loads(response)
+              commit = (result.get("data") or {}).get("createCommitOnBranch", {}).get("commit") or {}
+              signature = commit.get("signature") or {}
+              if result.get("errors") or signature.get("isValid") is not True or signature.get("wasSignedByGitHub") is not True:
+                  raise SystemExit("GitHub did not return a verified version commit")
+              sha = commit.get("oid", "")
+          else:
+              if json.loads(base64.b64decode(original["content"])) != manifest:
+                  raise SystemExit("No-commit release changes package version")
+          if not re.fullmatch(r"[0-9a-f]{40}", sha):
+              raise SystemExit("Invalid released commit SHA")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"commit_sha={sha}\n")
+          PYTHON
+
+  production-publish:
+    needs: [production, version-commit]
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/npm-publish-artifact.yml
+    with:
+      artifact_id: ${{ needs.production.outputs.artifact_id }}
+      version: ${{ needs.production.outputs.version }}
+      channel: latest
+      source_sha: ${{ needs.production.outputs.source_sha }}
+      integrity: ${{ needs.production.outputs.integrity }}
+
+  production-release:
+    needs: [production, version-commit, production-publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Authorize release actors
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ACTOR_ID: ${{ github.actor_id }}
+          RELEASE_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          # Immutable GitHub IDs: jardenx, aiden-cao, robot-ux.
+          allowed_release_actor() {
+            case "$1" in
+              274764117|104969608|81206731) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          if ! allowed_release_actor "$RELEASE_ACTOR_ID"; then
+            echo "Release initiator is not an approved publisher" >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TRIGGERING_ACTOR" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]; then
+            echo "Invalid triggering actor" >&2
+            exit 1
+          fi
+          TRIGGERING_ID="$(gh api --method GET "users/$RELEASE_TRIGGERING_ACTOR" --jq '.id')"
+          if ! allowed_release_actor "$TRIGGERING_ID"; then
+            echo "Release rerunner is not an approved publisher" >&2
+            exit 1
+          fi
+
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.production.outputs.version_artifact_id }}
+          merge-multiple: true
+          path: release-notes
 
       - name: Create Git tag and GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          V: ${{ steps.version.outputs.version }}
-          COMMIT_SHA: ${{ steps.commit.outputs.commit_sha }}
-        # Tag carries the full npm coordinate so it cannot collide with the
-        # Python component's bnbagent-vX.Y.Z line. Both components explicitly
-        # mark their newest stable as Latest (most-recent-stable policy).
-        # The tag ref is created first because gh release create ignores
-        # --target when the tag already exists; creating the ref fails if it does.
+          V: ${{ needs.production.outputs.version }}
+          RELEASE_SHA: ${{ needs.version-commit.outputs.commit_sha }}
         run: |
           set -euo pipefail
-          RELEASE_SHA="${COMMIT_SHA:-$(git rev-parse HEAD)}"
-          if [[ ! "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Unexpected release commit: $RELEASE_SHA" >&2
-            exit 1
-          fi
+          [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           TAG="@bnbagent/sdk@v$V"
           gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
-            -f "ref=refs/tags/$TAG" \
-            -f "sha=$RELEASE_SHA" >/dev/null
-          gh release create "$TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --verify-tag \
-            --title "@bnbagent/sdk v$V" \
-            --notes-file RELEASE_NOTES.md \
-            --latest
-
-      - name: Write release summary
-        env:
-          V: ${{ steps.version.outputs.version }}
-        run: |
-          {
-            echo "## @bnbagent/sdk production package"
-            echo
-            echo "- Version: \`$V\`"
-            echo "- Dist-tag: \`latest\`"
-            echo "- GitHub Release: \`@bnbagent/sdk@v$V\`"
-            echo "- Provenance: enabled by npm trusted publishing"
-          } >> "$GITHUB_STEP_SUMMARY"
+            -f "ref=refs/tags/$TAG" -f "sha=$RELEASE_SHA" >/dev/null
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "@bnbagent/sdk v$V" --notes-file release-notes/RELEASE_NOTES.md --latest

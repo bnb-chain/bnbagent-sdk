@@ -1,0 +1,346 @@
+name: Publish verified npm artifact
+
+on:
+  workflow_call:
+    inputs:
+      artifact_id:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      channel:
+        required: true
+        type: string
+      source_sha:
+        required: true
+        type: string
+      integrity:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Authorize release actors
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ACTOR_ID: ${{ github.actor_id }}
+          RELEASE_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          # Immutable GitHub IDs: jardenx, aiden-cao, robot-ux.
+          allowed_release_actor() {
+            case "$1" in
+              274764117|104969608|81206731) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          if ! allowed_release_actor "$RELEASE_ACTOR_ID"; then
+            echo "Release initiator is not an approved publisher" >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TRIGGERING_ACTOR" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]; then
+            echo "Invalid triggering actor" >&2
+            exit 1
+          fi
+          TRIGGERING_ID="$(gh api --method GET "users/$RELEASE_TRIGGERING_ACTOR" --jq '.id')"
+          if ! allowed_release_actor "$TRIGGERING_ID"; then
+            echo "Release rerunner is not an approved publisher" >&2
+            exit 1
+          fi
+
+      - name: Validate publish identity
+        env:
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          EXPECTED_INTEGRITY: ${{ inputs.integrity }}
+          ARTIFACT_ID: ${{ inputs.artifact_id }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == "refs/heads/$DEFAULT_BRANCH" ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]]
+          [[ "$EXPECTED_INTEGRITY" =~ ^sha512-[A-Za-z0-9+/]{86}==$ ]]
+          case "$CHANNEL" in
+            alpha) [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]] ;;
+            latest) [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ;;
+            *) exit 1 ;;
+          esac
+
+      - name: Download verified tarball
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ inputs.artifact_id }}
+          merge-multiple: true
+          path: package
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Create isolated npm command
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/npm-safe" <<'PYTHON'
+          #!/usr/bin/env python3
+          import os
+          from pathlib import Path
+          import shutil
+          import sys
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "npm-isolated"
+          root.mkdir(exist_ok=True)
+          for filename in ("user.npmrc", "global.npmrc"):
+              (root / filename).write_text("")
+          (root / "package.json").write_text('{"private":true}')
+          env = {key: value for key, value in os.environ.items()
+                 if not key.lower().startswith("npm_config_")
+                 and key.lower() not in {"http_proxy", "https_proxy", "all_proxy", "no_proxy",
+                                         "node_options", "node_path", "node_extra_ca_certs",
+                                         "node_tls_reject_unauthorized", "ssl_cert_file", "ssl_cert_dir",
+                                         "node_auth_token", "npm_token"}}
+          command = shutil.which("npm", path=env.get("PATH"))
+          if not command:
+              raise SystemExit("npm is unavailable")
+          os.chdir(root)
+          os.execvpe(command, [command, *sys.argv[1:],
+              "--userconfig=" + str(root / "user.npmrc"),
+              "--globalconfig=" + str(root / "global.npmrc"),
+              "--registry=https://registry.npmjs.org/",
+              "--@bnbagent:registry=https://registry.npmjs.org/",
+              "--strict-ssl=true", "--ignore-scripts", "--proxy=null", "--https-proxy=null"], env)
+          PYTHON
+          chmod +x "$RUNNER_TEMP/npm-safe"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Install OIDC-capable npm
+        run: npm-safe install --global npm@11.15.0
+
+      - name: Verify artifact identity and repack clean archive
+        id: artifact
+        env:
+          VERSION: ${{ inputs.version }}
+          EXPECTED_INTEGRITY: ${{ inputs.integrity }}
+        run: |
+          set -euo pipefail
+          # Absolute path: npm parses a bare "package/x.tgz" argument as a
+          # GitHub owner/repo shorthand, not a file.
+          mapfile -t TARBALLS < <(find "$PWD/package" -maxdepth 1 -type f -name '*.tgz')
+          if [[ "${#TARBALLS[@]}" -ne 1 ]]; then
+            echo "Expected exactly one tarball, found ${#TARBALLS[@]}" >&2
+            exit 1
+          fi
+          RAW_TARBALL="$PWD/package/bnbagent-sdk-$VERSION.tgz"
+          if [[ "${TARBALLS[0]}" != "$RAW_TARBALL" ]]; then
+            echo "Unexpected tarball filename: ${TARBALLS[0]}" >&2
+            exit 1
+          fi
+          ACTUAL_INTEGRITY="$(node -e 'const fs=require("node:fs"),c=require("node:crypto");process.stdout.write("sha512-"+c.createHash("sha512").update(fs.readFileSync(process.argv[1])).digest("base64"))' "$RAW_TARBALL")"
+          [[ "$ACTUAL_INTEGRITY" == "$EXPECTED_INTEGRITY" ]] || { echo "Artifact digest mismatch" >&2; exit 1; }
+          CLEAN_TARBALL="$RUNNER_TEMP/bnbagent-sdk-$VERSION.clean.tgz"
+          INTEGRITY="$(
+            RAW_TARBALL="$RAW_TARBALL" \
+            CLEAN_TARBALL="$CLEAN_TARBALL" \
+            EXPECTED_VERSION="$VERSION" \
+            EXPECTED_REPO="https://github.com/$GITHUB_REPOSITORY.git" \
+            node <<'NODE'
+          const { createHash } = require("node:crypto");
+          const { readFileSync, writeFileSync } = require("node:fs");
+          const posix = require("node:path/posix");
+          const { gunzipSync, gzipSync } = require("node:zlib");
+
+          const rawBuf = gunzipSync(readFileSync(process.env.RAW_TARBALL));
+          if (rawBuf.length === 0 || rawBuf.length % 512 !== 0) {
+            throw new Error(`Invalid tar length: ${rawBuf.length}`);
+          }
+          const readAscii = (b) => {
+            const z = b.indexOf(0);
+            return (z >= 0 ? b.subarray(0, z) : b).toString("utf8");
+          };
+          const parseOctal = (b, f) => {
+            const s = readAscii(b).trim();
+            if (!s) return 0;
+            if (!/^[0-7]+$/.test(s)) throw new Error(`Bad octal ${f}: ${s}`);
+            return Number.parseInt(s, 8);
+          };
+          const isZero = (b) => b.every((x) => x === 0);
+          const encodeHeader = (name, mode, size) => {
+            const nb = Buffer.from(name, "utf8");
+            if (nb.length === 0 || nb.length > 100) throw new Error(`Path length: ${name}`);
+            const h = Buffer.alloc(512, 0);
+            nb.copy(h, 0);
+            h.write(`${(mode & 0o7777).toString(8).padStart(7, "0")}\0`, 100, "ascii");
+            h.write("0000000\0", 108, "ascii");
+            h.write("0000000\0", 116, "ascii");
+            h.write(`${size.toString(8).padStart(11, "0")}\0`, 124, "ascii");
+            h.write("00000000000\0", 136, "ascii");
+            h.write("0", 156, "ascii");
+            h.write("ustar\0", 257, "ascii");
+            h.write("00", 263, "ascii");
+            h.fill(0x20, 148, 156);
+            let sum = 0;
+            for (let i = 0; i < 512; i++) sum += h[i];
+            h.write(`${sum.toString(8).padStart(6, "0")}\0 `, 148, "ascii");
+            return h;
+          };
+
+          const seen = new Set();
+          const files = [];
+          let manifest = null;
+          let off = 0;
+          let eof = false;
+          while (off < rawBuf.length) {
+            const hdr = rawBuf.subarray(off, off + 512);
+            if (isZero(hdr)) {
+              eof = true;
+              off += 512;
+              continue;
+            }
+            if (eof) throw new Error("Trailing non-zero block after EOF");
+            const storedSum = parseOctal(hdr.subarray(148, 156), "checksum");
+            let calcSum = 0;
+            for (let i = 0; i < 512; i++) calcSum += i >= 148 && i < 156 ? 0x20 : hdr[i];
+            if (storedSum !== calcSum) throw new Error("Header checksum mismatch");
+
+            const tb = hdr[156];
+            const tf = tb === 0 ? "\0" : String.fromCharCode(tb);
+            if (tf !== "0" && tf !== "\0" && tf !== "5") {
+              throw new Error(`Disallowed tar typeflag: ${JSON.stringify(tf)}`);
+            }
+            if (hdr.subarray(257, 265).toString("latin1") !== "ustar\u000000") {
+              throw new Error("Tar entry header is not POSIX ustar");
+            }
+            if (!isZero(hdr.subarray(345, 500))) {
+              throw new Error("Tar entry uses the ustar prefix field");
+            }
+            const rawPath = readAscii(hdr.subarray(0, 100));
+            if (!rawPath || rawPath.startsWith("/") || rawPath.split("/").some((s) => s === ".." || s === ".")) {
+              throw new Error(`Unsafe tar path: ${rawPath}`);
+            }
+            const norm = posix.normalize(rawPath).replace(/\/+$/, "");
+            if (norm !== "package" && !norm.startsWith("package/")) {
+              throw new Error(`Unexpected root in tar path: ${norm}`);
+            }
+            const size = parseOctal(hdr.subarray(124, 136), "size");
+            const mode = parseOctal(hdr.subarray(100, 108), "mode") || 0o644;
+            if (tf === "5" && size !== 0) throw new Error("Non-zero directory size");
+            const dataStart = off + 512;
+            const paddedEnd = dataStart + Math.ceil(size / 512) * 512;
+            if (paddedEnd > rawBuf.length) throw new Error("Truncated tar entry");
+            if (seen.has(norm)) throw new Error(`Duplicate tar entry: ${norm}`);
+            seen.add(norm);
+            if (tf !== "5") {
+              const data = Buffer.from(rawBuf.subarray(dataStart, dataStart + size));
+              if (norm === "package/package.json") {
+                manifest = JSON.parse(data.toString("utf8"));
+              }
+              files.push({ path: norm, mode, data });
+            }
+            off = paddedEnd;
+          }
+
+          if (!manifest || typeof manifest !== "object") throw new Error("Missing package/package.json");
+          if (manifest.name !== "@bnbagent/sdk") throw new Error(`Unexpected name: ${manifest.name}`);
+          if (manifest.version !== process.env.EXPECTED_VERSION) {
+            throw new Error(`Unexpected version: ${manifest.version}`);
+          }
+          if (manifest.repository?.url !== process.env.EXPECTED_REPO) {
+            throw new Error(`Unexpected repository.url: ${manifest.repository?.url}`);
+          }
+          if (Object.hasOwn(manifest, "publishConfig")) {
+            throw new Error("Tarball package.json must not contain publishConfig");
+          }
+          const cleanManifest = { ...manifest };
+          delete cleanManifest.publishConfig;
+          delete cleanManifest.scripts;
+          const cleanManifestBuf = Buffer.from(`${JSON.stringify(cleanManifest, null, 2)}\n`, "utf8");
+          const outChunks = [];
+          for (const f of files) {
+            const d = f.path === "package/package.json" ? cleanManifestBuf : f.data;
+            outChunks.push(encodeHeader(f.path, f.mode, d.length), d);
+            const pad = (512 - (d.length % 512)) % 512;
+            if (pad) outChunks.push(Buffer.alloc(pad, 0));
+          }
+          outChunks.push(Buffer.alloc(1024, 0));
+          const cleanTgz = gzipSync(Buffer.concat(outChunks));
+          writeFileSync(process.env.CLEAN_TARBALL, cleanTgz);
+          process.stdout.write(`sha512-${createHash("sha512").update(cleanTgz).digest("base64")}`);
+          NODE
+          )"
+          echo "tarball=$CLEAN_TARBALL" >> "$GITHUB_OUTPUT"
+          echo "integrity=$INTEGRITY" >> "$GITHUB_OUTPUT"
+
+      - name: Verify registry state and publish identical archive
+        env:
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+          TARBALL: ${{ steps.artifact.outputs.tarball }}
+          EXPECTED_INTEGRITY: ${{ steps.artifact.outputs.integrity }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const { execFileSync } = require("node:child_process");
+          const { readFileSync } = require("node:fs");
+          const { createHash } = require("node:crypto");
+          const { setTimeout } = require("node:timers/promises");
+          const { VERSION: version, CHANNEL: channel, TARBALL: tarball, EXPECTED_INTEGRITY: expected } = process.env;
+          const pkg = "@bnbagent/sdk";
+          function npm(args) {
+            return execFileSync("npm-safe", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+          }
+          function view(spec, field) {
+            try { return JSON.parse(npm(["view", spec, field, "--json", "--prefer-online"])); }
+            catch (error) {
+              let response;
+              try { response = JSON.parse(String(error.stdout)); } catch {}
+              if (response?.error?.code === "E404") return undefined;
+              throw error;
+            }
+          }
+          async function main() {
+            const before = view(pkg, "dist-tags") ?? {};
+            const stable = version.split("-alpha.")[0];
+            if (channel === "alpha" && view(`${pkg}@${stable}`, "version")) {
+              throw new Error("Stable version already exists");
+            }
+            const existing = view(`${pkg}@${version}`, "dist.integrity");
+            if (existing !== undefined && existing !== expected) {
+              throw new Error("Existing npm version has different integrity");
+            }
+            if (existing === undefined) {
+              const actual = "sha512-" + createHash("sha512").update(readFileSync(tarball)).digest("base64");
+              if (actual !== expected) throw new Error("Archive changed after verification");
+              process.stdout.write(npm(["publish", tarball, "--access=public", `--tag=${channel}`,
+                `--provenance=${channel === "latest"}`, "--json"]));
+            }
+            for (let attempt = 0; attempt < 12; attempt++) {
+              const integrity = view(`${pkg}@${version}`, "dist.integrity");
+              const tags = view(pkg, "dist-tags") ?? {};
+              if (integrity !== undefined && integrity !== expected) throw new Error("Published integrity mismatch");
+              if (channel === "alpha") {
+                if (tags.latest !== before.latest) throw new Error("Alpha changed latest dist-tag");
+                if (view(`${pkg}@${stable}`, "version")) throw new Error("Stable version appeared during alpha publication");
+              }
+              if (integrity === expected && (tags[channel] === version || (channel === "alpha" && existing !== undefined))) return;
+              if (existing !== undefined && tags[channel] !== version) {
+                throw new Error("Existing version has a different dist-tag; manual recovery required");
+              }
+              await setTimeout(5000);
+            }
+            throw new Error("Published version or dist-tag not visible; refusing release creation");
+          }
+          main().catch((error) => { console.error(error); process.exitCode = 1; });
+          NODE
