@@ -5,22 +5,39 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
+from web3 import Web3
 
 from bnbagent.erc8183.client import ERC8183Client
 from bnbagent.erc8183.job_ops import ERC8183JobOps
+from bnbagent.erc8183.schema import DeliverableManifest
 from bnbagent.erc8183.types import JobStatus
-from tests.test_erc8183_job_ops import ME, _inject_client
+from tests.test_erc8183_job_ops import COMMERCE, ME, _inject_client
 
 
 def make_ops(**kwargs):
     storage = MagicMock(spec=["download", "upload"])
-    storage.download = AsyncMock(return_value={"response": "ready"})
     ops = ERC8183JobOps(provider_address=ME, storage_provider=storage, **kwargs)
     client = _inject_client(ops)
     client.get_deliverable_url.return_value = None
-    ops.get_job = AsyncMock(
-        return_value={"success": True, "status": JobStatus.SUBMITTED, "provider": ME}
-    )
+
+    async def status(job_id):
+        data = DeliverableManifest(
+            version=1,
+            job_id=job_id,
+            chain_id=97,
+            contracts={"commerce": COMMERCE},
+            response={"content": "ready"},
+        ).to_dict()
+        storage.download.return_value = data
+        return {
+            "success": True,
+            "status": JobStatus.SUBMITTED,
+            "provider": ME,
+            "deliverable": Web3.to_hex(DeliverableManifest.from_dict(data).manifest_hash()),
+        }
+
+    storage.download = AsyncMock()
+    ops.get_job = AsyncMock(side_effect=status)
     return ops, client
 
 
@@ -33,7 +50,7 @@ async def test_repeated_miss_only_resolves_once():
 
 async def test_foreign_provider_is_rejected_before_url_lookup_or_download():
     ops, client = make_ops()
-    ops.get_job.return_value["provider"] = "0x" + "22" * 20
+    ops.get_job = AsyncMock(return_value={"success": True, "provider": "0x" + "22" * 20})
     assert (await ops.get_response(1))["error_code"] == "not_found"
     client.get_deliverable_url.assert_not_called()
     ops._storage.download.assert_not_awaited()
@@ -43,8 +60,8 @@ async def test_success_cache_is_bounded_and_returns_independent_data():
     ops, client = make_ops(response_cache_max_entries=2)
     client.get_deliverable_url.return_value = "ipfs://result"
     first = await ops.get_response(1)
-    first["response"] = "mutated"
-    assert (await ops.get_response(1))["response"] == "ready"
+    first["response"]["content"] = "mutated"
+    assert (await ops.get_response(1))["response"]["content"] == "ready"
     ops._storage.download.assert_awaited_once()
     for job_id in (2, 3, 1):
         await ops.get_response(job_id)
@@ -56,7 +73,20 @@ async def test_success_cache_is_bounded_and_returns_independent_data():
 async def test_success_cache_evicts_by_bytes_below_the_entry_limit():
     ops, client = make_ops()
     client.get_deliverable_url.return_value = "ipfs://large-result"
-    ops._storage.download.return_value = {"response": "x" * (6 * 1024 * 1024)}
+    base_status = ops.get_job.side_effect
+
+    async def large_status(job_id):
+        await base_status(job_id)
+        data = ops._storage.download.return_value
+        data["response"]["content"] = "x" * (6 * 1024 * 1024)
+        return {
+            "success": True,
+            "status": JobStatus.SUBMITTED,
+            "provider": ME,
+            "deliverable": Web3.to_hex(DeliverableManifest.from_dict(data).manifest_hash()),
+        }
+
+    ops.get_job = AsyncMock(side_effect=large_status)
     for job_id in (1, 2, 3, 1):
         assert (await ops.get_response(job_id))["success"]
     assert ops._storage.download.await_count == 4
@@ -72,7 +102,7 @@ async def test_concurrent_queries_share_one_resolution():
 
 async def test_unsubmitted_job_does_not_scan_logs():
     ops, client = make_ops()
-    ops.get_job.return_value = {"success": True, "status": JobStatus.FUNDED}
+    ops.get_job = AsyncMock(return_value={"success": True, "status": JobStatus.FUNDED})
     assert (await ops.get_response(1))["error_code"] == "not_found"
     client.get_deliverable_url.assert_not_called()
 
@@ -108,7 +138,12 @@ async def test_cancelled_caller_does_not_cancel_shared_lookup():
     async def status(_):
         entered.set()
         await release.wait()
-        return {"success": True, "status": JobStatus.SUBMITTED, "provider": ME}
+        return {
+            "success": True,
+            "status": JobStatus.SUBMITTED,
+            "provider": ME,
+            "deliverable": "0x" + "00" * 32,
+        }
 
     ops.get_job = status
     first = asyncio.create_task(ops.get_response(1))
@@ -136,7 +171,12 @@ async def test_different_jobs_cannot_exceed_inflight_limit():
         if calls == 2:
             entered.set()
         await release.wait()
-        return {"success": True, "status": JobStatus.SUBMITTED, "provider": ME}
+        return {
+            "success": True,
+            "status": JobStatus.SUBMITTED,
+            "provider": ME,
+            "deliverable": "0x" + "00" * 32,
+        }
 
     ops.get_job = status
     running = [asyncio.create_task(ops.get_response(i)) for i in (1, 2)]

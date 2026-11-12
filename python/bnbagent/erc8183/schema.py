@@ -79,6 +79,19 @@ class DeliverableManifest:
         """Return ``True`` if ``on_chain_hash`` matches ``manifest_hash()``."""
         return self.manifest_hash() == on_chain_hash
 
+    def verify_context(self, *, job_id: int, chain_id: int, commerce: str) -> bool:
+        """Bind an authenticated manifest to the job being retrieved/reviewed."""
+        return (
+            type(self.job_id) is int
+            and self.job_id == job_id
+            and type(self.chain_id) is int
+            and self.chain_id == chain_id
+            and isinstance(self.contracts, dict)
+            and isinstance(self.contracts.get("commerce"), str)
+            and self.contracts["commerce"].lower() == commerce.lower()
+        )
+
+
     # ---------------------------------------------------------- serialisation
 
     def to_dict(self) -> dict[str, Any]:

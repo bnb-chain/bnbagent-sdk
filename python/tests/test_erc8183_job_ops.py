@@ -67,6 +67,7 @@ def _inject_client(ops):
     client = MagicMock()
     client.address = ME
     client.network.chain_id = 97
+    client.commerce.address = COMMERCE
     client.payment_token = TOKEN
     client.job_payment_token.return_value = TOKEN
     client.router.address = EVALUATOR
