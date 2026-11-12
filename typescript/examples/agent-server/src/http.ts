@@ -72,20 +72,72 @@ export function sendJson(
   res.end(payload);
 }
 
-/** Read the full request body and parse it as JSON (`undefined` on empty/invalid). */
-async function readJsonBody(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(chunk as Buffer);
+export class HttpInputError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
   }
-  if (chunks.length === 0) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf-8"));
-  } catch {
-    return undefined;
-  }
+}
+
+/** Bound streamed requests as well as Content-Length; deadline covers the body. */
+export function readJsonBody(
+  req: IncomingMessage,
+  maxBytes = 64 * 1024,
+  timeoutMs = 10_000,
+): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    const finish = (error?: Error) => {
+      clearTimeout(timer);
+      req.removeListener("data", onData);
+      req.removeListener("end", onEnd);
+      req.removeListener("error", onError);
+      req.removeListener("aborted", onAborted);
+      if (error) {
+        req.pause();
+        reject(error);
+        return;
+      }
+      try {
+        resolve(
+          size
+            ? JSON.parse(Buffer.concat(chunks, size).toString("utf8"))
+            : undefined,
+        );
+      } catch {
+        reject(new HttpInputError("Invalid JSON", 400));
+      }
+    };
+    const onData = (value: Buffer | string) => {
+      const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+      size += chunk.length;
+      if (size > maxBytes)
+        return finish(
+          new HttpInputError("Request body exceeds byte limit", 413),
+        );
+      chunks.push(chunk);
+    };
+    const onEnd = () => finish();
+    const onError = () =>
+      finish(new HttpInputError("Request body unavailable", 400));
+    const onAborted = () => finish(new HttpInputError("Request aborted", 400));
+    const timer = setTimeout(
+      () => finish(new HttpInputError("Request body timed out", 408)),
+      timeoutMs,
+    );
+    const length = req.headers["content-length"];
+    if (length && (!/^\d+$/.test(length) || Number(length) > maxBytes)) {
+      finish(new HttpInputError("Request body exceeds byte limit", 413));
+      return;
+    }
+    req.on("data", onData);
+    req.once("end", onEnd);
+    req.once("error", onError);
+    req.once("aborted", onAborted);
+  });
 }
 
 function normalizeIp(value: string): string {
@@ -138,6 +190,12 @@ export function clientIpOf(
 export interface RequestListenerOptions {
   /** Exact socket peer IPs allowed to supply `X-Forwarded-For`. */
   trustedProxyIps?: ReadonlySet<string>;
+  /** Admission check runs before buffering or parsing mutation bodies. */
+  beforeBody?: (
+    req: IncomingMessage,
+    res: ServerResponse,
+    clientIp: string,
+  ) => Promise<boolean> | boolean;
 }
 
 /**
@@ -172,21 +230,30 @@ export function makeRequestListener(
       r.keys.forEach((key, i) => {
         params[key] = decodeURIComponent(match[i + 1] ?? "");
       });
-      const body =
-        method === "POST" || method === "PUT" || method === "PATCH"
-          ? await readJsonBody(req)
-          : undefined;
+      const clientIp = clientIpOf(req, trustedProxyIps);
       try {
+        if (
+          (method === "POST" || method === "PUT" || method === "PATCH") &&
+          options.beforeBody &&
+          !(await options.beforeBody(req, res, clientIp))
+        )
+          return;
+        const body =
+          method === "POST" || method === "PUT" || method === "PATCH"
+            ? await readJsonBody(req)
+            : undefined;
         await r.handler({
           req,
           res,
           params,
           body,
-          clientIp: clientIpOf(req, trustedProxyIps),
+          clientIp,
         });
       } catch (error) {
         if (!res.headersSent) {
-          sendJson(res, 500, {
+          if (error instanceof HttpInputError)
+            res.setHeader("Connection", "close");
+          sendJson(res, error instanceof HttpInputError ? error.status : 500, {
             error: error instanceof Error ? error.message : "Internal error",
             error_code: "internal_error",
           });

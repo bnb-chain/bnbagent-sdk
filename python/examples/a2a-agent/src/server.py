@@ -47,6 +47,7 @@ load_dotenv(
 from bnbagent import EVMWalletProvider  # noqa: E402
 from bnbagent.erc8183 import ERC8183Client, NegotiationHandler  # noqa: E402
 from bnbagent.utils import RateLimitExceeded, SlidingWindowLimiter  # noqa: E402
+from bnbagent.utils.request_body import RequestBodyTooLarge, read_json_body  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("a2a-agent")
@@ -220,8 +221,17 @@ def _extract_data_part(message: dict[str, Any]) -> dict[str, Any] | None:
 
 @app.post("/a2a")
 async def a2a_endpoint(request: Request):
+    client_ip = request.client.host if request.client else "unknown"
     try:
-        body = await request.json()
+        negotiate_limiter.check(client_ip)
+        global_negotiate_limiter.check("global")
+    except RateLimitExceeded:
+        return _rpc_error(None, -32000, "Rate limited, retry later", status=429)
+
+    try:
+        body = await read_json_body(request)
+    except RequestBodyTooLarge:
+        return _rpc_error(None, -32600, "Request body too large", status=413)
     except Exception:
         return _rpc_error(None, -32700, "Parse error", status=400)
 
@@ -239,12 +249,6 @@ async def a2a_endpoint(request: Request):
     skill = data.get("skill")
 
     if skill == "negotiate-erc8183-job":
-        client_ip = request.client.host if request.client else "unknown"
-        try:
-            negotiate_limiter.check(client_ip)
-            global_negotiate_limiter.check("global")
-        except RateLimitExceeded:
-            return _rpc_error(req_id, -32000, "Rate limited, retry later")
         terms = data.get("terms")
         task_description = data.get("task_description")
         if not isinstance(terms, dict) or not isinstance(task_description, str):

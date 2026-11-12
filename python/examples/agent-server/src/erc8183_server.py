@@ -29,6 +29,7 @@ from bnbagent.erc8183.config import ERC8183_ENV_PREFIX, ERC8183Config
 from bnbagent.erc8183.negotiation import NegotiationHandler
 from bnbagent.storage import LocalStorageProvider, StorageProvider
 from bnbagent.utils import RateLimiter, RateLimitExceeded, SlidingWindowLimiter
+from bnbagent.utils.request_body import RequestBodyTooLarge, read_json_body
 
 logger = logging.getLogger(__name__)
 
@@ -297,7 +298,9 @@ def _create_erc8183_routes(
             raise HTTPException(status_code=429, detail="Too many requests") from None
 
         try:
-            body = await request.json()
+            body = await read_json_body(request)
+        except RequestBodyTooLarge:
+            return JSONResponse({"error": "Request body too large"}, status_code=413)
         except Exception:
             return JSONResponse({"error": "Invalid JSON"}, status_code=400)
         if not isinstance(body, dict) or "terms" not in body:
