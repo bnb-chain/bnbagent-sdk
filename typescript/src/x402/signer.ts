@@ -21,8 +21,9 @@
 
 import { getAddress as toChecksumAddress } from "viem";
 
+import { checkValidity } from "../signing/checks.js";
 import { PolicyViolation } from "../signing/errors.js";
-import { EIP3009_CANONICAL_FIELDS } from "../signing/policy.js";
+import { EIP3009_CANONICAL_FIELDS, SigningPolicy } from "../signing/policy.js";
 import { describeValue, summarizeParserError } from "../utils/errorMessages.js";
 import { SIGN_TYPED_DATA } from "../wallets/capabilities.js";
 import { UnsupportedWalletOperation } from "../wallets/errors.js";
@@ -139,6 +140,10 @@ export interface X402SignerOptions {
    * request-scoped signer instances. Independent of the per-call cap.
    */
   sessionBudget?: Record<string, bigint> | SessionBudgetTracker;
+  /** Maximum authorization window, including for structural signers (default 600s). */
+  maxValidityWindowSeconds?: number;
+  /** Maximum future expiry (default 900s). */
+  maxFutureValiditySeconds?: number;
 }
 
 /** Arguments to {@link X402Signer.signPayment}. */
@@ -182,6 +187,7 @@ export class X402Signer {
   readonly #wallet: TypedDataSigner;
   readonly #maxValue = new Map<string, bigint>();
   readonly #budget: SessionBudgetTracker;
+  readonly #validityPolicy: SigningPolicy;
 
   /**
    * @param wallet The underlying wallet. Anything matching the narrow
@@ -213,6 +219,20 @@ export class X402Signer {
       });
     }
     this.#wallet = wallet;
+    for (const limit of [
+      opts.maxValidityWindowSeconds,
+      opts.maxFutureValiditySeconds,
+    ]) {
+      if (limit !== undefined && (!Number.isSafeInteger(limit) || limit <= 0)) {
+        throw new X402PolicyError(
+          "Validity limits must be positive safe integers",
+        );
+      }
+    }
+    this.#validityPolicy = new SigningPolicy({
+      maxValidityWindowSeconds: opts.maxValidityWindowSeconds,
+      maxFutureValiditySeconds: opts.maxFutureValiditySeconds,
+    });
     if (opts.maxValuePerCall) {
       for (const [addr, cap] of Object.entries(opts.maxValuePerCall)) {
         this.#maxValue.set(toChecksumAddress(addr as `0x${string}`), cap);
@@ -303,6 +323,25 @@ export class X402Signer {
     if (!hasCanonicalEip3009Fields(types)) {
       throw new X402PolicyError(
         "types.TransferWithAuthorization does not match the canonical EIP-3009 field shape (from address, to address, value uint256, validAfter uint256, validBefore uint256, nonce bytes32)",
+      );
+    }
+
+    try {
+      checkValidity(
+        this.#validityPolicy,
+        "TransferWithAuthorization",
+        message,
+        expected.chainId,
+        verifying,
+        undefined,
+      );
+    } catch (cause) {
+      if (cause instanceof PolicyViolation) {
+        throw new X402PolicyError(cause.message, { cause });
+      }
+      throw new X402PolicyError(
+        "Payment authorization has an invalid validity window",
+        { cause: summarizeParserError(cause) },
       );
     }
 
