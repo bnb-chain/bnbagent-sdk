@@ -276,6 +276,19 @@ describe("registerAgent", () => {
     expect(result.agentURI).toBeDefined();
   });
 
+  it.each([
+    { services: "invalid" },
+    { services: [{ name: "A2A", endpoint: "file:///private" }] },
+  ])(
+    "rejects invalid complete registration before the mint: %j",
+    async (fields) => {
+      const agent = await createTestAgent();
+      const uri = `data:application/json;base64,${Buffer.from(JSON.stringify({ name: "agent", description: "test", ...fields })).toString("base64")}`;
+      await expect(agent.registerAgent(uri)).rejects.toThrow();
+      expect(mockContract.registerAgent).not.toHaveBeenCalled();
+    },
+  );
+
   it("forwards metadata to the contract layer", async () => {
     const agent = await createTestAgent();
     const uri = agent.generateAgentUri({
