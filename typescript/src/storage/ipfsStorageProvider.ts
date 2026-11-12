@@ -208,8 +208,8 @@ export class IPFSStorageProvider extends StorageProvider {
       cid = url;
     }
     cid = cid.replace(/^\/+|\/+$/g, "");
-    if (!CID_RE.test(cid)) {
-      throw new StorageError(`Invalid IPFS CID format: ${cid}`);
+    if (typeof cid !== "string" || cid.length > 128 || !CID_RE.test(cid)) {
+      throw new StorageError("Invalid IPFS CID format");
     }
     return cid;
   }
