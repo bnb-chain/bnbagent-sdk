@@ -68,6 +68,8 @@ export interface TwakX402PayerOptions {
    * SigningPolicy domain allowlist relocated to the quote terms).
    */
   expectedAsset: string;
+  /** Optional trusted CAIP-2 network. x402 can pay on a different chain from the wallet's intent chain. */
+  expectedNetwork?: string;
   /** Reject challenges claiming a wider payment window (default 3600s). */
   maxTimeoutSeconds?: number;
 }
@@ -82,6 +84,7 @@ export class TwakX402Payer implements X402Payer {
   readonly #expectedPayTo: `0x${string}`;
   readonly #expectedAsset: `0x${string}`;
   readonly #maxTimeoutSeconds: number;
+  readonly #expectedNetwork: string | undefined;
 
   constructor(provider: TWAKProvider, opts: TwakX402PayerOptions) {
     if (opts === undefined) {
@@ -98,6 +101,15 @@ export class TwakX402Payer implements X402Payer {
           : new SessionBudgetTracker(opts.sessionBudget);
     this.#expectedPayTo = getAddress(opts.expectedPayTo);
     this.#expectedAsset = getAddress(opts.expectedAsset);
+    if (
+      opts.expectedNetwork !== undefined &&
+      !/^eip155:[1-9][0-9]*$/u.test(opts.expectedNetwork)
+    ) {
+      throw new X402PolicyError(
+        "expectedNetwork must be an EVM CAIP-2 network",
+      );
+    }
+    this.#expectedNetwork = opts.expectedNetwork;
     this.#maxTimeoutSeconds =
       opts.maxTimeoutSeconds ?? DEFAULT_MAX_TIMEOUT_SECONDS;
   }
@@ -174,6 +186,14 @@ export class TwakX402Payer implements X402Payer {
       );
     }
     const option = candidates.find((o) => o.preferred) ?? candidates[0];
+    if (
+      this.#expectedNetwork !== undefined &&
+      option.network !== this.#expectedNetwork
+    ) {
+      throw new X402PolicyError(
+        `quoted network ${option.network} != expected ${this.#expectedNetwork}`,
+      );
+    }
 
     // --- five-point precheck on the quoted terms -----------------------
     // 1. payTo: byte-equal vs the caller's committed recipient.
