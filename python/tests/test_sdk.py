@@ -5,9 +5,9 @@ Test cases for ERC8004Agent SDK based on examples/basic_usage.py
 from unittest.mock import Mock, patch
 
 import pytest
-import requests
 
 from bnbagent import AgentEndpoint, ERC8004Agent
+from bnbagent.utils.public_http import PublicHttpError
 
 
 class TestERC8004Agent:
@@ -350,7 +350,7 @@ class TestERC8004Agent:
 
     def test_get_all_agents(self, sdk):
         """Test get_all_agents API call"""
-        with patch("bnbagent.erc8004.agent.requests.get") as mock_get:
+        with patch("bnbagent.erc8004.agent.fetch_public_json") as mock_get:
             mock_response = Mock()
             mock_response.json.return_value = {
                 "items": [
@@ -362,7 +362,7 @@ class TestERC8004Agent:
                 "offset": 0,
             }
             mock_response.raise_for_status = Mock()
-            mock_get.return_value = mock_response
+            mock_get.return_value = mock_response.json.return_value
 
             result = sdk.get_all_agents(limit=10, offset=0)
 
@@ -372,7 +372,7 @@ class TestERC8004Agent:
 
     def test_get_all_agents_with_pagination(self, sdk):
         """Test get_all_agents with pagination parameters"""
-        with patch("bnbagent.erc8004.agent.requests.get") as mock_get:
+        with patch("bnbagent.erc8004.agent.fetch_public_json") as mock_get:
             mock_response = Mock()
             mock_response.json.return_value = {
                 "items": [{"token_id": 11, "name": "Agent 11"}],
@@ -381,7 +381,7 @@ class TestERC8004Agent:
                 "offset": 10,
             }
             mock_response.raise_for_status = Mock()
-            mock_get.return_value = mock_response
+            mock_get.return_value = mock_response.json.return_value
 
             result = sdk.get_all_agents(limit=5, offset=10)
 
@@ -389,30 +389,30 @@ class TestERC8004Agent:
             assert result["limit"] == 5
             mock_get.assert_called_once()
             call_args = mock_get.call_args
-            assert call_args[1]["params"]["limit"] == 5
-            assert call_args[1]["params"]["offset"] == 10
+            assert "limit=5" in call_args[0][0]
+            assert "offset=10" in call_args[0][0]
 
     def test_get_all_agents_connection_error(self, sdk):
         """Test get_all_agents handles connection errors"""
-        with patch("bnbagent.erc8004.agent.requests.get") as mock_get:
-            mock_get.side_effect = requests.exceptions.ConnectionError("Network error")
+        with patch("bnbagent.erc8004.agent.fetch_public_json") as mock_get:
+            mock_get.side_effect = PublicHttpError("Network error")
 
             with pytest.raises(ConnectionError, match="8004scan API request failed"):
                 sdk.get_all_agents()
 
     def test_get_all_agents_uses_network_chain_id(self, sdk):
         """Test get_all_agents uses chain_id from network config"""
-        with patch("bnbagent.erc8004.agent.requests.get") as mock_get:
+        with patch("bnbagent.erc8004.agent.fetch_public_json") as mock_get:
             mock_response = Mock()
             mock_response.json.return_value = {"items": [], "total": 0}
             mock_response.raise_for_status = Mock()
-            mock_get.return_value = mock_response
+            mock_get.return_value = mock_response.json.return_value
 
             sdk.get_all_agents()
 
             call_args = mock_get.call_args
             # Should use chain_id from network config (97 for bsc-testnet)
-            assert call_args[1]["params"]["chain_id"] == 97
+            assert "chain_id=97" in call_args[0][0]
 
     def test_get_local_agent_info_not_found(self, sdk):
         """Test get_local_agent_info returns None for non-existent agent"""
