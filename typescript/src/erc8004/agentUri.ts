@@ -157,7 +157,15 @@ export const AgentURIGenerator = {
     const stripped = base64Str.startsWith(DATA_URI_PREFIX)
       ? base64Str.slice(DATA_URI_PREFIX.length)
       : base64Str;
-    const json = Buffer.from(stripped, "base64").toString("utf-8");
-    return JSON.parse(json);
+    const maxBytes = 1024 * 1024;
+    if (stripped.length > 4 * Math.ceil(maxBytes / 3))
+      throw new Error("Agent registration exceeds byte limit");
+    const bytes = Buffer.from(stripped, "base64");
+    if (bytes.length > maxBytes)
+      throw new Error("Agent registration exceeds byte limit");
+    const data: unknown = JSON.parse(bytes.toString("utf-8"));
+    if (!data || typeof data !== "object" || Array.isArray(data))
+      throw new Error("Agent registration must be an object");
+    return data as Record<string, unknown>;
   },
 };
