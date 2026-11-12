@@ -37,7 +37,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -104,44 +103,11 @@ def provision_credentials(home: Path) -> str:
 
 
 def create_throwaway_wallet(provider: TWAKProvider, home: Path) -> str:
-    """Create the tempdir wallet, preferring the SDK path.
+    """Create the tempdir wallet through the password-safe SDK entry point.
 
-    ``create_wallet()`` keeps the password OFF argv (INV-1) and expects twak
-    to resolve it from TWAK_WALLET_PASSWORD / the keychain. The shipped
-    CLI, however, hard-requires ``--password`` on argv for ``wallet create``
-    (env resolution only covers *unlock*; gaps S-8, re-verified unchanged on
-    v0.19.0) — so the SDK call currently fails. We try it first (so this script
-    self-heals when either side fixes the mismatch) and fall back to driving
-    the CLI directly.
-    The fallback puts the throwaway password on argv — acceptable for a
-    demo wallet in a tempdir, never for a real one.
+    A CLI version requiring passwords in argv is unsupported; upgrade it.
     """
-    try:
-        return provider.create_wallet(no_keychain=True, skip_password_check=True)
-    except RuntimeError as e:
-        print("  [note] SDK create_wallet() failed against this CLI build:")
-        print(f"         {str(e)[:120]}...")
-        print("         (twak requires --password on argv for create — gaps S-8;")
-        print("          falling back to a direct CLI create — demo wallet only)")
-    proc = subprocess.run(  # noqa: S603 - fixed arg list, no shell
-        [
-            TWAK_BIN,
-            "wallet",
-            "create",
-            "--password",
-            os.environ["TWAK_WALLET_PASSWORD"],
-            "--no-keychain",
-            "--skip-password-check",
-            "--json",
-        ],
-        capture_output=True,
-        text=True,
-        env={**os.environ, "HOME": str(home)},
-        timeout=120,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"twak wallet create failed: {proc.stderr or proc.stdout}")
-    return provider.address  # resolved via `twak wallet address` (env password)
+    return provider.create_wallet(no_keychain=True, skip_password_check=True)
 
 
 # ── (a) custody ────────────────────────────────────────────────────────────
