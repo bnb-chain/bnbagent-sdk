@@ -6,7 +6,7 @@
  */
 
 import { canonicalJson, keccakOfCanonicalJson } from "../core/canonicalJson.js";
-import type { AgentEndpoint } from "./models.js";
+import { AgentEndpoint } from "./models.js";
 
 const DATA_URI_PREFIX = "data:application/json;base64,";
 
@@ -37,7 +37,7 @@ function endpointToDict(
     return (endpoint as AgentEndpoint).toDict();
   }
   if (endpoint && typeof endpoint === "object") {
-    return endpoint as Record<string, unknown>;
+    return AgentEndpoint.fromDict(endpoint as Record<string, unknown>).toDict();
   }
   throw new TypeError(
     `Expected AgentEndpoint or object, got ${typeof endpoint}`,
