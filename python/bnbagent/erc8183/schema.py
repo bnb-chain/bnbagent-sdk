@@ -212,6 +212,8 @@ class JobDescription:
         Returns ``None`` if the JSON has no ``version`` field.
         Raises ``ValueError`` if the version is present but unsupported.
         """
+        if len(description.encode("utf-8")) > 4096:
+            raise ValueError("Job description exceeds 4096-byte limit")
         if not description or not description.strip().startswith("{"):
             return None
         try:
