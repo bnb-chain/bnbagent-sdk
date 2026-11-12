@@ -400,9 +400,6 @@ export class ERC8183JobOps {
 
   private client: ERC8183Client | null = null;
   private readonly deliverableUrls = new Map<number, string>();
-  private lastKnownCounter = 0;
-  private startupScanDone = false;
-  private readonly pendingOpenIds = new Set<number>();
 
   private constructor(opts: {
     walletProvider: WalletProvider | null;
@@ -1386,7 +1383,6 @@ export class ERC8183JobOps {
       }
       const id = Number(job.id);
       if (job.provider.toLowerCase() !== me) {
-        this.pendingOpenIds.delete(id);
         continue;
       }
       if (job.status === JobStatus.FUNDED && job.expiredAt > now) {
@@ -1404,77 +1400,38 @@ export class ERC8183JobOps {
           hook: job.hook,
           deliverable: job.deliverable,
         });
-        this.pendingOpenIds.delete(id);
-      } else if (job.status === JobStatus.OPEN) {
-        this.pendingOpenIds.add(id);
-      } else {
-        this.pendingOpenIds.delete(id);
       }
     }
 
     return { success: true, jobs: pending };
   }
 
-  private async startupScan(): Promise<OpResult> {
-    const client = await this.getClient();
-    let counter: bigint;
-    try {
-      counter = await client.commerce.jobCounter();
-    } catch (error) {
-      console.warn(
-        `[ERC8183JobOps] startup scan counter failed: ${describeError(error)}`,
-      );
-      this.startupScanDone = true;
-      return { success: false, ...excErrorFields(error), jobs: [] };
-    }
+  private pendingScanCursor = 0n;
+  private submittedScanCursor = 0n;
 
-    if (counter === 0n) {
-      this.startupScanDone = true;
-      return { success: true, jobs: [] };
-    }
-
-    const ids = Array.from({ length: Number(counter) }, (_, i) => i + 1);
-    const result = await this.multicallScan(ids);
-    this.lastKnownCounter = Number(counter);
-    this.startupScanDone = true;
-    console.info(
-      `[ERC8183JobOps] Startup scan: ${(result.jobs as unknown[]).length} pending of ${counter} total` +
-        ` (agent=${this.agentAddressValue})`,
-    );
-    return result;
+  private scanPage(
+    counter: bigint,
+    cursor: bigint,
+  ): { ids: bigint[]; cursor: bigint } {
+    if (counter < 0n || counter > BigInt(Number.MAX_SAFE_INTEGER))
+      throw new Error("Job counter exceeds supported safe integer range");
+    const first = cursor >= counter ? 1n : cursor + 1n;
+    const end = first + 255n < counter ? first + 255n : counter;
+    const ids: bigint[] = [];
+    for (let id = first; id <= end; id++) ids.push(id);
+    return { ids, cursor: end };
   }
 
-  /** Return funded, non-expired jobs assigned to this provider. */
+  /** Scan at most 256 jobs per call, cycling history to discover late funding. */
   async getPendingJobs(): Promise<OpResult> {
     try {
-      if (!this.startupScanDone) {
-        return await this.startupScan();
-      }
-
       const client = await this.getClient();
       const counter = await client.commerce.jobCounter();
-      const scanSet = new Set<number>();
-      if (Number(counter) > this.lastKnownCounter) {
-        for (let i = this.lastKnownCounter + 1; i <= Number(counter); i++) {
-          scanSet.add(i);
-        }
-      }
-      for (const id of this.pendingOpenIds) {
-        scanSet.add(id);
-      }
-      if (scanSet.size === 0) {
-        return { success: true, jobs: [] };
-      }
-
-      const result = await this.multicallScan(
-        [...scanSet].sort((a, b) => a - b),
-      );
-      this.lastKnownCounter = Number(counter);
+      const page = this.scanPage(counter, this.pendingScanCursor);
+      const result = await this.multicallScan(page.ids.map(Number));
+      this.pendingScanCursor = page.cursor;
       return result;
     } catch (error) {
-      console.error(
-        `[ERC8183JobOps] get_pending_jobs failed: ${describeError(error)}`,
-      );
       return { success: false, ...excErrorFields(error), jobs: [] };
     }
   }
@@ -1482,9 +1439,9 @@ export class ERC8183JobOps {
   /**
    * Return SUBMITTED jobs assigned to this provider (opt-in auto-settle).
    *
-   * Unlike {@link getPendingJobs} (FUNDED, incremental cursor), this does a
-   * full scan each call — SUBMITTED jobs sit awaiting the dispute window, so
-   * there is no monotonic cursor. Each entry includes `submittedAt` so the
+   * Like {@link getPendingJobs}, each call scans at most 256 jobs and its
+   * independent cursor cycles history. Call repeatedly to visit all pages.
+   * Each entry includes `submittedAt` so the
    * caller can check the window exactly instead of approximating it with
    * `expiredAt`.
    */
@@ -1496,10 +1453,9 @@ export class ERC8183JobOps {
       if (counter === 0n) {
         return { success: true, jobs: [] };
       }
-      const ids = Array.from({ length: Number(counter) }, (_, i) =>
-        BigInt(i + 1),
-      );
-      const jobs = await client.commerce.getJobsBatch(ids);
+      const page = this.scanPage(counter, this.submittedScanCursor);
+      const jobs = await client.commerce.getJobsBatch(page.ids);
+      this.submittedScanCursor = page.cursor;
       const submitted = jobs
         .filter(
           (job) =>

@@ -1271,9 +1271,7 @@ describe("ERC8183JobOps.getPendingJobs", () => {
     client.commerce.jobCounter.mockResolvedValue(0n);
     const result = await ops.getPendingJobs();
     expect(result).toEqual({ success: true, jobs: [] });
-    expect(
-      (ops as unknown as { startupScanDone: boolean }).startupScanDone,
-    ).toBe(true);
+    expect(client.commerce.getJobsBatch).not.toHaveBeenCalled();
   });
 
   it("filters the startup scan to funded jobs owned by this agent", async () => {
@@ -1308,7 +1306,7 @@ describe("ERC8183JobOps.getPendingJobs", () => {
     expect(ids).toEqual([1]);
   });
 
-  it("cursors on subsequent calls: only scans new ids + tracked OPEN ids", async () => {
+  it("cycles bounded pages so an older OPEN job can be discovered after funding", async () => {
     const ops = await makeOps();
     const client = injectClient(ops);
     client.commerce.jobCounter.mockResolvedValue(2n);
@@ -1318,9 +1316,6 @@ describe("ERC8183JobOps.getPendingJobs", () => {
     ]);
     const first = await ops.getPendingJobs();
     expect((first.jobs as OpResult[]).map((j) => j.jobId)).toEqual([2]);
-    expect(
-      (ops as unknown as { pendingOpenIds: Set<number> }).pendingOpenIds,
-    ).toEqual(new Set([1]));
 
     // Second call: counter unchanged (no new ids), but id 1 (OPEN) is
     // still tracked and re-scanned.
@@ -1329,11 +1324,8 @@ describe("ERC8183JobOps.getPendingJobs", () => {
       makeJob({ id: 1n, provider: ME, status: JobStatus.FUNDED }),
     ]);
     const second = await ops.getPendingJobs();
-    expect(client.commerce.getJobsBatch).toHaveBeenLastCalledWith([1n]);
+    expect(client.commerce.getJobsBatch).toHaveBeenLastCalledWith([1n, 2n]);
     expect((second.jobs as OpResult[]).map((j) => j.jobId)).toEqual([1]);
-    expect(
-      (ops as unknown as { pendingOpenIds: Set<number> }).pendingOpenIds,
-    ).toEqual(new Set());
   });
 });
 
