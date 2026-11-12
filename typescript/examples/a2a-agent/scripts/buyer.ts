@@ -28,13 +28,15 @@ import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { getAddress } from "viem";
-import { AgentURIGenerator, ERC8004Agent } from "../../../src/erc8004/index.js";
+import { ERC8004Agent } from "../../../src/erc8004/index.js";
 import {
   ERC8183Client,
   buildJobDescription,
   verifyQuoteSignature,
 } from "../../../src/erc8183/index.js";
 import { EVMWalletProvider, loadEnv } from "../../../src/index.js";
+import { boundedJson } from "../../../src/utils/boundedJson.js";
+import { fetchPublicJson } from "../../../src/utils/publicHttp.js";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url))); // examples/a2a-agent
 loadEnv(ROOT);
@@ -44,6 +46,7 @@ const NETWORK = process.env.NETWORK ?? "bsc-testnet";
 interface SellerDiscovery {
   baseUrl: string;
   expectedProvider?: string;
+  publicOnly: boolean;
 }
 
 /** Seller endpoint + trusted wallet anchor from ERC-8004 discovery. */
@@ -66,9 +69,10 @@ async function discoverSeller(): Promise<SellerDiscovery> {
       network: NETWORK,
     });
     const info = await sdk.getAgentInfo(Number(agentId));
-    const registration = AgentURIGenerator.decodeRegistrationFileFromBase64(
+    const registration = await ERC8004Agent.parseAgentUri(
       info.agentURI as string,
     );
+    if (!registration) throw new Error("Invalid agent registration");
     const services =
       (registration.services as { name?: string; endpoint?: string }[]) ?? [];
     for (const ep of services) {
@@ -77,6 +81,7 @@ async function discoverSeller(): Promise<SellerDiscovery> {
         return {
           baseUrl: ep.endpoint,
           expectedProvider: String(info.agentWallet),
+          publicOnly: true,
         };
       }
     }
@@ -88,6 +93,7 @@ async function discoverSeller(): Promise<SellerDiscovery> {
       "",
     ),
     expectedProvider: process.env.EXPECTED_PROVIDER_ADDRESS,
+    publicOnly: false,
   };
 }
 
@@ -115,12 +121,17 @@ function agentCardUrl(base: string): string {
  * failed discovery is expected there — fall back to POSTing skill payloads
  * straight to the base invoke URL instead of hard-failing (BUG-025).
  */
-async function resolveMessageUrl(base: string): Promise<string> {
+async function resolveMessageUrl(
+  base: string,
+  publicOnly: boolean,
+): Promise<string> {
   const cardUrl = agentCardUrl(base);
   try {
-    const resp = await fetch(cardUrl, { signal: AbortSignal.timeout(10_000) });
-    if (resp.ok) {
-      const card = (await resp.json()) as {
+    const data = publicOnly
+      ? await fetchPublicJson(cardUrl)
+      : await requestA2AJson(cardUrl);
+    if (data) {
+      const card = data as {
         name: string;
         url: string;
         skills: { id: string }[];
@@ -128,11 +139,12 @@ async function resolveMessageUrl(base: string): Promise<string> {
       console.log(
         `[card] ${card.name} — skills: ${card.skills.map((s) => s.id).join(", ")}`,
       );
-      return card.url ?? base;
+      const advertised = new URL(card.url ?? base, base);
+      if (!publicOnly && advertised.origin !== new URL(base).origin)
+        throw new Error("Agent card URL must keep the configured origin");
+      return advertised.toString();
     }
-    console.warn(
-      `[discover] agent-card GET → HTTP ${resp.status}; skipping discovery`,
-    );
+    console.warn("[discover] agent-card unavailable; skipping discovery");
   } catch (error) {
     console.warn(
       `[discover] agent-card GET failed (${
@@ -144,6 +156,29 @@ async function resolveMessageUrl(base: string): Promise<string> {
     `[discover] POSTing skills directly to ${base} (POST-only endpoint, no GET-able card)`,
   );
   return base;
+}
+
+/** Operator-selected origins can be private; redirects never expand that authority. */
+async function requestA2AJson(
+  url: string,
+  body?: string,
+): Promise<Record<string, unknown>> {
+  const parsed = new URL(url);
+  if (
+    !["http:", "https:"].includes(parsed.protocol) ||
+    parsed.username ||
+    parsed.password
+  )
+    throw new Error("Invalid A2A URL");
+  const response = await fetch(parsed, {
+    method: body === undefined ? "GET" : "POST",
+    body,
+    headers: body === undefined ? {} : { "content-type": "application/json" },
+    redirect: "error",
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) throw new Error(`A2A HTTP ${response.status}`);
+  return boundedJson(response, 1024 * 1024);
 }
 
 interface Quote {
@@ -160,9 +195,10 @@ interface RpcReply {
 }
 
 /** POST a single-skill A2A `message/send` and return the parsed JSON-RPC reply. */
-async function sendSkill(
+export async function sendSkill(
   messageUrl: string,
   data: Record<string, unknown>,
+  publicOnly = false,
 ): Promise<RpcReply> {
   const rpc = {
     jsonrpc: "2.0",
@@ -177,24 +213,34 @@ async function sendSkill(
       },
     },
   };
-  const resp = await fetch(messageUrl, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(rpc),
-    signal: AbortSignal.timeout(30_000),
-  });
-  return (await resp.json()) as RpcReply;
+  const body = JSON.stringify(rpc);
+  const result = publicOnly
+    ? await fetchPublicJson(messageUrl, {
+        method: "POST",
+        body,
+        timeoutMs: 30_000,
+      })
+    : await requestA2AJson(messageUrl, body);
+  if (!result) throw new Error("A2A request refused or failed");
+  return result as RpcReply;
 }
 
-async function negotiate(messageUrl: string): Promise<Quote> {
-  const reply = await sendSkill(messageUrl, {
-    skill: "negotiate-erc8183-job",
-    task_description: "Summarize the latest BNB Chain ecosystem news",
-    terms: {
-      deliverables: "One markdown summary of the latest BNB Chain news",
-      quality_standards: "At least 5 sourced items, no older than 48h",
+async function negotiate(
+  messageUrl: string,
+  publicOnly: boolean,
+): Promise<Quote> {
+  const reply = await sendSkill(
+    messageUrl,
+    {
+      skill: "negotiate-erc8183-job",
+      task_description: "Summarize the latest BNB Chain ecosystem news",
+      terms: {
+        deliverables: "One markdown summary of the latest BNB Chain news",
+        quality_standards: "At least 5 sourced items, no older than 48h",
+      },
     },
-  });
+    publicOnly,
+  );
   if (reply.error) {
     throw new Error(`A2A error: ${reply.error.message}`);
   }
@@ -331,11 +377,19 @@ export async function fundJob(
  *     to trigger delivery, then polls the CHAIN for the job reaching SUBMITTED
  *     to read the deliverable_url. There is no server-side job-query endpoint.
  */
-async function checkStatus(messageUrl: string, jobId: bigint): Promise<void> {
-  const reply = await sendSkill(messageUrl, {
-    skill: "erc8183-job-status",
-    job_id: Number(jobId),
-  });
+async function checkStatus(
+  messageUrl: string,
+  jobId: bigint,
+  publicOnly: boolean,
+): Promise<void> {
+  const reply = await sendSkill(
+    messageUrl,
+    {
+      skill: "erc8183-job-status",
+      job_id: Number(jobId),
+    },
+    publicOnly,
+  );
   if (reply.error) {
     console.warn(`[status] lookup failed: ${reply.error.message}`);
     return;
@@ -346,11 +400,14 @@ async function checkStatus(messageUrl: string, jobId: bigint): Promise<void> {
 
 async function main(): Promise<void> {
   const discovery = await discoverSeller();
-  const messageUrl = await resolveMessageUrl(discovery.baseUrl);
-  const quote = await negotiate(messageUrl);
+  const messageUrl = await resolveMessageUrl(
+    discovery.baseUrl,
+    discovery.publicOnly,
+  );
+  const quote = await negotiate(messageUrl, discovery.publicOnly);
   const jobId = await fundJob(quote, discovery.expectedProvider);
   if (jobId !== null) {
-    await checkStatus(messageUrl, jobId);
+    await checkStatus(messageUrl, jobId, discovery.publicOnly);
   }
 }
 
