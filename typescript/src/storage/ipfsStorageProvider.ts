@@ -11,6 +11,7 @@
 
 import { getEnv } from "../core/envUtil.js";
 import { StorageError } from "../errors.js";
+import { boundedJson } from "../utils/boundedJson.js";
 import { StorageProvider } from "./storageProvider.js";
 
 const DEFAULT_PINNING_URL = "https://api.pinata.cloud/pinning/pinJSONToIPFS";
@@ -104,13 +105,14 @@ export class IPFSStorageProvider extends StorageProvider {
       headers,
       body,
       signal: AbortSignal.timeout(60_000),
+      redirect: "error",
     });
     if (!resp.ok) {
       throw new StorageError(
         `Pinning request failed: ${resp.status} ${resp.statusText}`,
       );
     }
-    const result = (await resp.json()) as Record<string, unknown>;
+    const result = await boundedJson(resp, 64 * 1024);
     const cid =
       (result.IpfsHash as string | undefined) ??
       (result.cid as string | undefined);
@@ -120,7 +122,7 @@ export class IPFSStorageProvider extends StorageProvider {
       );
     }
 
-    const ipfsUrl = `ipfs://${cid}`;
+    const ipfsUrl = `ipfs://${IPFSStorageProvider.extractCid(cid)}`;
     return ipfsUrl;
   }
 
