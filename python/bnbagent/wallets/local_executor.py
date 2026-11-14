@@ -131,31 +131,30 @@ class LocalExecutor(IntentExecutor):
             "value": transaction.get("value", 0),
             "gas": transaction.get("gas", 2_000_000),
         }
-        with _cf.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(self.web3.eth.call, call_params)
-            try:
-                future.result(timeout=10)
-            except _cf.TimeoutError:
+        from bnbagent.core.preflight import submit_preflight
+
+        future = submit_preflight(self.web3.eth.call, call_params)
+        try:
+            future.result(timeout=10)
+        except _cf.TimeoutError:
+            logger.warning(
+                "[LocalExecutor] Pre-flight eth_call timed out for %s, proceeding",
+                description,
+            )
+        except Exception as preflight_err:
+            err_str = str(preflight_err)
+            if "'0x'" in err_str or err_str.strip().endswith(", '0x')"):
                 logger.warning(
-                    "[LocalExecutor] Pre-flight eth_call timed out for %s, proceeding",
+                    "[LocalExecutor] Pre-flight returned opaque 0x revert for %s, proceeding",
                     description,
                 )
-            except Exception as preflight_err:
-                err_str = str(preflight_err)
-                if "'0x'" in err_str or err_str.strip().endswith(", '0x')"):
-                    logger.warning(
-                        "[LocalExecutor] Pre-flight returned opaque 0x revert for %s, proceeding",
-                        description,
-                    )
-                else:
-                    logger.error(
-                        "[LocalExecutor] Pre-flight revert for %s: %s",
-                        description,
-                        preflight_err,
-                    )
-                    raise RuntimeError(
-                        f"Transaction would revert: {preflight_err}"
-                    ) from preflight_err
+            else:
+                logger.error(
+                    "[LocalExecutor] Pre-flight revert for %s: %s",
+                    description,
+                    preflight_err,
+                )
+                raise RuntimeError(f"Transaction would revert: {preflight_err}") from preflight_err
 
     def _execute_function(
         self,
