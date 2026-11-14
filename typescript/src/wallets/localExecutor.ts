@@ -561,8 +561,7 @@ export class LocalExecutor implements IntentExecutor {
     }
     let seen = false;
     try {
-      await this.client.getTransaction({ hash: relayHash });
-      seen = true;
+      seen = (await this.client.getTransaction({ hash: relayHash })) != null;
     } catch {
       seen = false;
     }
