@@ -10,6 +10,7 @@ falls back to ``DEFAULT_GAS_FALLBACK`` when estimation is unavailable.
 from unittest.mock import MagicMock, patch
 
 import pytest
+from web3 import Web3
 from web3.exceptions import ContractLogicError
 
 from bnbagent.core.contract_mixin import DEFAULT_GAS_FALLBACK, ContractClientMixin
@@ -83,9 +84,7 @@ class TestGasEstimation:
 
     def test_genuine_revert_propagates(self, client):
         fn = _make_fn()
-        fn.estimate_gas.side_effect = ContractLogicError(
-            "execution reverted: NotProvider"
-        )
+        fn.estimate_gas.side_effect = ContractLogicError("execution reverted: NotProvider")
         with pytest.raises(RuntimeError, match="Transaction would revert"):
             client._send_tx(fn)
         fn.build_transaction.assert_not_called()
@@ -94,9 +93,7 @@ class TestGasEstimation:
         # Some nodes return no revert data; str() of the error ends with
         # ", '0x')" — the same escape hatch the pre-flight uses.
         fn = _make_fn()
-        fn.estimate_gas.side_effect = ContractLogicError(
-            ("execution reverted", "0x")
-        )
+        fn.estimate_gas.side_effect = ContractLogicError(("execution reverted", "0x"))
         result = client._send_tx(fn)
         assert result["status"] == 1
         assert _built_gas(fn) == DEFAULT_GAS_FALLBACK
@@ -116,9 +113,7 @@ class TestExecuteIntent:
         with pytest.raises(RuntimeError, match="read-only"):
             client._execute_intent(Intent(name="x.y", call=MagicMock()))
 
-    def test_executor_built_via_make_executor_with_execution_context(
-        self, client, mock_web3
-    ):
+    def test_executor_built_via_make_executor_with_execution_context(self, client, mock_web3):
         executor = MagicMock()
         executor.execute.return_value = {"transactionHash": "0xabc", "receipt": None}
         client._wallet_provider.make_executor.return_value = executor
@@ -190,7 +185,6 @@ class TestSendTxReceiptTimeoutPending:
         from web3.exceptions import TimeExhausted
 
         from bnbagent import TransactionPendingError
-        from tests.conftest import FAKE_TX_HASH
 
         mock_web3.eth.wait_for_transaction_receipt.side_effect = TimeExhausted(
             "not in the chain after 300 seconds"
@@ -199,7 +193,7 @@ class TestSendTxReceiptTimeoutPending:
         with pytest.raises(TransactionPendingError) as ei:
             client._send_tx(fn)
 
-        assert ei.value.tx_hash == FAKE_TX_HASH
+        assert ei.value.tx_hash == Web3.to_hex(Web3.keccak(b"\x00" * 32))
         # broadcast happened exactly once — no retry of an in-flight tx
         assert mock_web3.eth.send_raw_transaction.call_count == 1
 
@@ -223,13 +217,9 @@ class TestSendTxNonceLifecycle:
             0,
         ]
 
-    def test_send_time_429_tracks_local_hash_without_rebroadcast(
-        self, client, mock_web3
-    ):
+    def test_send_time_429_tracks_local_hash_without_rebroadcast(self, client, mock_web3):
         fn = _make_fn()
-        mock_web3.eth.send_raw_transaction.side_effect = Exception(
-            "HTTP 429: too many requests"
-        )
+        mock_web3.eth.send_raw_transaction.side_effect = Exception("HTTP 429: too many requests")
 
         result = client._send_tx(fn)
 
@@ -272,9 +262,7 @@ class TestNonceTooLowResync:
 
         assert result["status"] == 1
         assert mock_web3.eth.send_raw_transaction.call_count == 2
-        assert [
-            call.args[0]["nonce"] for call in fn.build_transaction.call_args_list
-        ] == [2, 5]
+        assert [call.args[0]["nonce"] for call in fn.build_transaction.call_args_list] == [2, 5]
         # the rejected nonce was released, not pinned BROADCAST
         nonce_mgr = NonceManager.for_account(mock_web3, FAKE_ADDRESS)
         assert nonce_mgr.broadcast_hash(2) is None

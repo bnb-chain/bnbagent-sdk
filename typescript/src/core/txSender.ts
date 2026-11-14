@@ -276,6 +276,10 @@ export async function waitForReceipt(
           if (settled) {
             return;
           }
+          if (receipt == null) {
+            scheduleNextReceiptPoll();
+            return;
+          }
           settled = true;
           clearTimeout(timer);
           clearAuxTimers();
@@ -356,6 +360,17 @@ export async function waitForReceiptAndInterpret(
     throw error;
   }
 
+  if (
+    typeof receipt.transactionHash !== "string" ||
+    !/^0x[0-9a-fA-F]{64}$/u.test(receipt.transactionHash) ||
+    receipt.transactionHash.toLowerCase() !== hash.toLowerCase()
+  ) {
+    throw new TransactionPendingError(
+      hash,
+      timeoutSeconds,
+      `RPC receipt hash does not match the requested transaction ${hash}`,
+    );
+  }
   if (receipt.status === "reverted") {
     throw new Error(
       `Transaction reverted on-chain: ${receipt.transactionHash}`,
@@ -492,9 +507,21 @@ export async function sendSelfPayTx(
       // the same operation to be signed again at a different nonce.
       const localHash = keccak256(signed.rawTransaction);
       try {
-        txHash = await client.sendRawTransaction({
+        const rpcHash = await client.sendRawTransaction({
           serializedTransaction: signed.rawTransaction,
         });
+        if (
+          typeof rpcHash !== "string" ||
+          !/^0x[0-9a-fA-F]{64}$/u.test(rpcHash) ||
+          rpcHash.toLowerCase() !== localHash.toLowerCase()
+        ) {
+          throw new TransactionPendingError(
+            localHash,
+            0,
+            `RPC transaction hash does not match signed bytes (expected ${localHash}); broadcast state is unknown`,
+          );
+        }
+        txHash = localHash;
       } catch (error) {
         if (!isAmbiguousBroadcast(error)) {
           throw error;

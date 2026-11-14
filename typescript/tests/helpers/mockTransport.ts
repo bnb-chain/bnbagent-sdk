@@ -13,6 +13,7 @@ import {
   type Transport,
   createPublicClient,
   custom,
+  keccak256,
 } from "viem";
 
 /** A single JSON-RPC method handler. Returns the *unwrapped* RPC result. */
@@ -25,8 +26,8 @@ export interface RecordedCall {
   params: readonly unknown[];
 }
 
-/** `sendRawTransaction`'s canonical mock result: `0x` + `"de"` x32. */
-export const FAKE_TX_HASH: `0x${string}` = `0x${"de".repeat(32)}`;
+/** Hash of the signed bytes used by the default stub wallets. */
+export const FAKE_TX_HASH: `0x${string}` = keccak256("0xdeadbeef");
 
 /** `eth_chainId`'s default mock result — deliberately not a real BNB Chain id. */
 export const FAKE_CHAIN_ID = 12345;
@@ -50,12 +51,12 @@ export function defaultMockHandlers(): MockHandlers {
     eth_estimateGas: () => toHex(100_000n),
     eth_call: () => "0x",
     eth_getTransactionCount: () => toHex(0),
-    eth_sendRawTransaction: () => FAKE_TX_HASH,
-    eth_getTransactionReceipt: () => ({
+    eth_sendRawTransaction: (params) => keccak256(params[0] as `0x${string}`),
+    eth_getTransactionReceipt: (params) => ({
       status: "0x1",
       blockNumber: "0x1",
       blockHash: `0x${"aa".repeat(32)}`,
-      transactionHash: FAKE_TX_HASH,
+      transactionHash: params[0] ?? FAKE_TX_HASH,
       transactionIndex: "0x0",
       from: `0x${"11".repeat(20)}`,
       to: `0x${"22".repeat(20)}`,

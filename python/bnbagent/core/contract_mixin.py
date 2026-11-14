@@ -285,6 +285,8 @@ class ContractClientMixin:
                         raise
                 else:
                     nonce_mgr.mark_broadcast(nonce, local_hash_hex)
+                    # RPC return values cannot substitute another transaction.
+                    tx_hash = local_hash
                 timeout = get_default_receipt_timeout()
                 try:
                     receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=timeout)
